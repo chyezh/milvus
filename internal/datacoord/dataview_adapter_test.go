@@ -159,15 +159,12 @@ func TestServerCreateCollectionDataViewReturnsEmptyWithoutDataViewManager(t *tes
 }
 
 func TestServerDropCollectionDataViewDelegatesToDataViewManager(t *testing.T) {
-	catalog := &testDataViewReferenceCatalog{markerPresent: make(map[int64]struct{})}
-	dataViews := &testDataViewReferenceDataViews{
-		dataViewFn: func(context.Context, int64, *viewpb.DataVersion) (*viewpb.DataViewOfCollection, error) {
-			return nil, nil
-		},
+	catalog := &testDataViewLifecycleCatalog{markerPresent: make(map[int64]struct{})}
+	dataViews := &testDataViewLifecycleDataViews{
 		garbageCollectFn: func(context.Context, int64, []*viewpb.DataVersion, int) error { return nil },
 		dropCollectionFn: func(context.Context, int64) (*viewpb.DataVersion, error) { return nil, nil },
 	}
-	server := &Server{dataViewReferences: newTestDataViewReferenceManager(t, catalog, dataViews, func(int64) bool { return true })}
+	server := &Server{dataViewLifecycle: newTestDataViewLifecycle(t, catalog, dataViews)}
 
 	err := server.DropCollectionDataView(context.Background(), 10)
 

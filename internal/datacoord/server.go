@@ -48,7 +48,6 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/dependency"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
-	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/kv"
 	"github.com/milvus-io/milvus/pkg/v3/metrics"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
@@ -111,7 +110,7 @@ type Server struct {
 	metaRootPath              string
 	meta                      *meta
 	dataViewManager           DataViewManager
-	dataViewReferences        *dataViewReferenceManager
+	dataViewLifecycle         *dataViewLifecycle
 	queryViewLoadInfoNotifier QueryViewLoadInfoNotifier
 	segmentManager            Manager
 	allocator                 allocator.Allocator
@@ -492,7 +491,7 @@ func (s *Server) initGarbageCollection(cli storage.ChunkManager) {
 		scanInterval:     Params.DataCoordCfg.GCScanIntervalInHour.GetAsDuration(time.Hour),
 		missingTolerance: Params.DataCoordCfg.GCMissingTolerance.GetAsDuration(time.Second),
 		dropTolerance:    Params.DataCoordCfg.GCDropTolerance.GetAsDuration(time.Second),
-		dataViewGC:       s.dataViewReferences,
+		dataViewGC:       s.dataViewLifecycle,
 	})
 }
 
@@ -662,7 +661,7 @@ func (s *Server) initMeta(chunkManager storage.ChunkManager) error {
 		if err := s.meta.reloadCollectionsFromRootcoord(s.ctx, s.broker); err != nil {
 			return err
 		}
-		s.dataViewReferences, err = recoverDataViewReferenceManager(
+		s.dataViewLifecycle, err = recoverDataViewLifecycle(
 			s.ctx,
 			catalog,
 			s.dataViewManager,
@@ -675,7 +674,7 @@ func (s *Server) initMeta(chunkManager storage.ChunkManager) error {
 		// DDL trim intent from RootCoord is applied before reconciling segments.
 		repairCollectionIDs := make([]int64, 0, len(s.meta.recoveredCollectionIDs))
 		for _, collectionID := range s.meta.recoveredCollectionIDs {
-			if !s.dataViewReferences.IsTerminal(collectionID) {
+			if !s.dataViewLifecycle.IsTerminal(collectionID) {
 				repairCollectionIDs = append(repairCollectionIDs, collectionID)
 			}
 		}
@@ -686,8 +685,6 @@ func (s *Server) initMeta(chunkManager storage.ChunkManager) error {
 	}
 	return retry.Do(s.ctx, reloadEtcdFn, retry.Attempts(connMetaMaxRetryTime))
 }
-
-var _ qviews.DataViewReferenceManager = (*Server)(nil)
 
 func (s *Server) initAnalyzeInspector() {
 	if s.analyzeInspector == nil {

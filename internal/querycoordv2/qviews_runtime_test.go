@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus/internal/dataview"
 	metastoremocks "github.com/milvus-io/milvus/internal/metastore/mocks"
 	qnmanager "github.com/milvus-io/milvus/internal/querynodev2/client/manager"
 	"github.com/milvus-io/milvus/internal/views/coord/balancer"
@@ -74,29 +75,34 @@ func TestNewQViewsRuntimeRecoversLoadConfigAndQueryViews(t *testing.T) {
 	assert.Contains(t, runtime.shardViewRegistry.Snapshot().StatsMap(), shardID)
 }
 
-type fakeRuntimeDataViewReferences struct {
-	recovered []qviews.DataVersion
+type fakeRuntimeDataViewRef struct {
+	dereferenced bool
 }
 
-func (r *fakeRuntimeDataViewReferences) PinDataView(context.Context, int64, qviews.DataVersion) error {
-	return nil
+func (*fakeRuntimeDataViewRef) DataView() *dataview.DataView { return nil }
+
+func (r *fakeRuntimeDataViewRef) Deref() { r.dereferenced = true }
+
+type fakeRuntimeDataViewManager struct {
+	versions []qviews.DataVersion
+	refs     []*fakeRuntimeDataViewRef
 }
 
-func (r *fakeRuntimeDataViewReferences) RecoverDataViewReference(_ context.Context, _ int64, version qviews.DataVersion) (bool, error) {
-	r.recovered = append(r.recovered, version)
-	return true, nil
+func (m *fakeRuntimeDataViewManager) Get(_ context.Context, _ int64, version qviews.DataVersion) (dataview.DataViewRef, error) {
+	m.versions = append(m.versions, version)
+	ref := &fakeRuntimeDataViewRef{}
+	m.refs = append(m.refs, ref)
+	return ref, nil
 }
 
-func (r *fakeRuntimeDataViewReferences) UnpinDataView(int64, qviews.DataVersion) {}
-
-func TestQViewsRuntimePassesReferenceManagerToRegistry(t *testing.T) {
+func TestQViewsRuntimeDataViewRefUsesExactManagerGetForRecovery(t *testing.T) {
 	ctx := context.Background()
 	catalog := metastoremocks.NewQueryCoordCatalog(t)
 	catalog.EXPECT().GetCollections(mock.Anything).Return(nil, nil).Once()
 	catalog.EXPECT().GetPartitions(mock.Anything, mock.Anything).
 		Return(map[int64][]*querypb.PartitionLoadInfo{}, nil).Once()
 	catalog.EXPECT().GetReplicas(mock.Anything).Return(nil, nil).Once()
-	refs := &fakeRuntimeDataViewReferences{}
+	dataViews := &fakeRuntimeDataViewManager{}
 
 	_, err := newQViewsRuntime(ctx, qviewsRuntimeDependencies{
 		queryCoordCatalog: catalog,
@@ -107,10 +113,10 @@ func TestQViewsRuntimePassesReferenceManagerToRegistry(t *testing.T) {
 		queryNodeClient:      &fakeRuntimeQueryNodeClient{},
 		resourceGroupManager: &fakeRuntimeResourceGroupManager{},
 		dataViewProvider:     &fakeRuntimeDataViewProvider{},
-		dataViewReferences:   refs,
+		dataViewManager:      dataViews,
 	})
 	require.NoError(t, err)
-	require.Equal(t, []qviews.DataVersion{{StreamingVersion: 1, CompactVersion: 1}}, refs.recovered)
+	require.Equal(t, []qviews.DataVersion{{StreamingVersion: 1, CompactVersion: 1}}, dataViews.versions)
 }
 
 func TestQViewsRuntimeLoadManagerTriggersBalancer(t *testing.T) {

@@ -26,7 +26,6 @@ import (
 	"github.com/milvus-io/milvus/internal/dataview"
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/views/coord/balancer"
-	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
@@ -68,37 +67,17 @@ func (s *Server) CreateCollectionDataView(ctx context.Context, collectionID int6
 }
 
 func (s *Server) DropCollectionDataView(ctx context.Context, collectionID int64) error {
-	if s.dataViewReferences == nil {
+	if s.dataViewLifecycle == nil {
 		return nil
 	}
-	return s.dataViewReferences.DropCollection(ctx, collectionID)
+	return s.dataViewLifecycle.DropCollection(ctx, collectionID)
 }
 
 func (s *Server) FinalizeDropCollectionDataView(ctx context.Context, collectionID int64) error {
-	if s.dataViewReferences == nil {
+	if s.dataViewLifecycle == nil {
 		return nil
 	}
-	return s.dataViewReferences.FinalizeDropCollection(ctx, collectionID)
-}
-
-func (s *Server) PinDataView(ctx context.Context, collectionID int64, version qviews.DataVersion) error {
-	if s.dataViewReferences == nil {
-		return merr.WrapErrServiceNotReadyMsg("data view reference manager is not initialized")
-	}
-	return s.dataViewReferences.PinDataView(ctx, collectionID, version)
-}
-
-func (s *Server) RecoverDataViewReference(ctx context.Context, collectionID int64, version qviews.DataVersion) (bool, error) {
-	if s.dataViewReferences == nil {
-		return false, merr.WrapErrServiceNotReadyMsg("data view reference manager is not initialized")
-	}
-	return s.dataViewReferences.RecoverDataViewReference(ctx, collectionID, version)
-}
-
-func (s *Server) UnpinDataView(collectionID int64, version qviews.DataVersion) {
-	if s.dataViewReferences != nil {
-		s.dataViewReferences.UnpinDataView(collectionID, version)
-	}
+	return s.dataViewLifecycle.FinalizeDropCollection(ctx, collectionID)
 }
 
 func (s *Server) Snapshot(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewOfCollection, error) {
@@ -109,6 +88,13 @@ func (s *Server) Snapshot(ctx context.Context, collectionIDs []int64) ([]*viewpb
 }
 
 func (s *Server) DataViewProvider() balancer.DataViewProvider {
+	return s.dataViewManager
+}
+
+func (s *Server) DataViewManager() dataview.ReferenceManager {
+	if s.dataViewLifecycle != nil {
+		return s.dataViewLifecycle
+	}
 	return s.dataViewManager
 }
 

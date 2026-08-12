@@ -29,6 +29,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus/internal/metastore"
+	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
@@ -1865,6 +1866,37 @@ func TestDataViewManagerGarbageCollectRetainsLatestAndProtectedViews(t *testing.
 	views, err = catalog.ListDataViews(ctx, 2)
 	require.NoError(t, err)
 	require.Len(t, views, 1)
+}
+
+func TestDataViewManagerGarbageCollectHonorsManagerOwnedRefs(t *testing.T) {
+	ctx := context.Background()
+	manager, catalog, _ := newTestDataViewManager()
+	catalog.views = append(
+		catalog.views,
+		&viewpb.DataViewOfCollection{
+			CollectionId: 1,
+			DataVersion:  &viewpb.DataVersion{StreamingVersion: 1},
+		},
+		&viewpb.DataViewOfCollection{
+			CollectionId: 1,
+			DataVersion:  &viewpb.DataVersion{StreamingVersion: 2},
+		},
+	)
+	manager.recoverCollectionFromDataViews(1, catalog.views)
+
+	ref, err := manager.Get(ctx, 1, qviews.DataVersion{StreamingVersion: 1})
+	require.NoError(t, err)
+	require.NoError(t, manager.GarbageCollect(ctx, 1, nil, 1))
+	views, err := catalog.ListDataViews(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, views, 2, "live manager-owned ref must protect the old DataView")
+
+	ref.Deref()
+	require.NoError(t, manager.GarbageCollect(ctx, 1, nil, 1))
+	views, err = catalog.ListDataViews(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	require.EqualValues(t, 2, views[0].GetDataVersion().GetStreamingVersion())
 }
 
 func TestDataViewManagerDoesNotBlockOtherCollections(t *testing.T) {

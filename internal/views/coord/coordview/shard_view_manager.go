@@ -5,6 +5,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/milvus-io/milvus/internal/dataview"
 	"github.com/milvus-io/milvus/internal/views/coord/coordview/syncer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	qvobserve "github.com/milvus-io/milvus/internal/views/qviews/observe"
@@ -32,12 +33,12 @@ type ShardViewManager struct {
 	onEmpty        func(qviews.ShardID, *ShardViewManager)
 
 	// All active views keyed by version for O(1) lookup.
-	views map[qviews.QueryViewVersion]*CoordQueryViewStateMachine
+	views map[qviews.QueryViewVersion]*managedQueryView
 
 	// Fast pointers to the unique Preparing/Ready and Up views.
 	// Invariant: at most one of each at any time.
-	preparingView *CoordQueryViewStateMachine // Preparing or Ready state; nil if none
-	upView        *CoordQueryViewStateMachine // Up state; nil if none
+	preparingView *managedQueryView // Preparing or Ready state; nil if none
+	upView        *managedQueryView // Up state; nil if none
 
 	// Accumulates persist and sync operations within a single lock-hold scope.
 	// The accumulated effects are moved into one immutable dirtyViewEvent before
@@ -45,15 +46,30 @@ type ShardViewManager struct {
 	// Must only be accessed under m.mu.
 	pendingPersists []*viewpb.QueryViewOfShard
 	pendingSyncs    []syncEntry
-	pendingRemovals []*CoordQueryViewStateMachine
+	pendingRemovals []*managedQueryView
 
-	dataViewReferences qviews.DataViewReferenceManager
-	pinnedReferences   map[qviews.QueryViewVersion]struct{}
+	dataViews DataViewManager
+}
+
+// DataViewManager is kept as a package alias for callers during the ownership
+// migration; the contract itself lives with DataView.
+type DataViewManager = dataview.ReferenceManager
+
+type managedQueryView struct {
+	stateMachine *CoordQueryViewStateMachine
+	dataViewRef  dataview.DataViewRef
+}
+
+func (v *managedQueryView) State() qviews.QueryViewState     { return v.stateMachine.State() }
+func (v *managedQueryView) View() *viewpb.QueryViewOfShard   { return v.stateMachine.View() }
+func (v *managedQueryView) Version() qviews.QueryViewVersion { return v.stateMachine.Version() }
+func (v *managedQueryView) QNReadySegments() map[int64][]int64 {
+	return v.stateMachine.QNReadySegments()
 }
 
 // syncEntry pairs a state machine with its per-node views for deferred event submission.
 type syncEntry struct {
-	sm    *CoordQueryViewStateMachine
+	view  *managedQueryView
 	views []qviews.QueryViewAtWorkNode
 }
 
@@ -70,37 +86,36 @@ func newShardViewManager(
 	shardID qviews.ShardID,
 	eventSubmitter dirtyViewEventSubmitter,
 	recoveredViews []*viewpb.QueryViewOfShard,
-	dataViewReferences ...qviews.DataViewReferenceManager,
+	dataViews ...DataViewManager,
 ) *ShardViewManager {
-	refs := dataViewReferenceManagerOrNoop(dataViewReferences)
 	m := &ShardViewManager{
-		ctx:                ctx,
-		shardID:            shardID,
-		eventSubmitter:     eventSubmitter,
-		views:              make(map[qviews.QueryViewVersion]*CoordQueryViewStateMachine, len(recoveredViews)),
-		dataViewReferences: refs,
-		pinnedReferences:   make(map[qviews.QueryViewVersion]struct{}),
+		ctx:            ctx,
+		shardID:        shardID,
+		eventSubmitter: eventSubmitter,
+		views:          make(map[qviews.QueryViewVersion]*managedQueryView, len(recoveredViews)),
+		dataViews:      dataViewManagerOrNoop(dataViews),
 	}
 
 	// Recover state machines from persisted views.
-	recovered := make([]*CoordQueryViewStateMachine, 0, len(recoveredViews))
+	recovered := make([]*managedQueryView, 0, len(recoveredViews))
 	for _, view := range recoveredViews {
 		sm := RecoverCoordQueryViewStateMachine(view)
-		recovered = append(recovered, sm)
-		m.views[sm.Version()] = sm
+		managed := &managedQueryView{stateMachine: sm, dataViewRef: noopDataViewRef{}}
+		recovered = append(recovered, managed)
+		m.views[sm.Version()] = managed
 	}
 
 	// Sort by version ascending (older versions first) so that
 	// processStateMachine sees older views before newer ones,
 	// correctly setting preparingView/upView pointers.
 	sort.Slice(recovered, func(i, j int) bool {
-		return recovered[j].Version().GT(recovered[i].Version())
+		return recovered[j].stateMachine.Version().GT(recovered[i].stateMachine.Version())
 	})
 
 	// Process each recovered view: handle Unrecoverable and push initial syncs.
 	// processStateMachine sets preparingView/upView as views are processed.
-	for _, sm := range recovered {
-		m.processStateMachine(sm)
+	for _, managed := range recovered {
+		m.processStateMachine(managed)
 	}
 	m.submitDirtyEvent(m.consumeDirtyEventLocked())
 	return m
@@ -112,69 +127,78 @@ func RecoverShardViewManager(
 	ctx context.Context,
 	shardID qviews.ShardID,
 	eventSubmitter dirtyViewEventSubmitter,
-	dataViewReferences qviews.DataViewReferenceManager,
+	dataViews DataViewManager,
 	recoveredViews []*viewpb.QueryViewOfShard,
 ) (*ShardViewManager, error) {
 	m := &ShardViewManager{
-		ctx:                ctx,
-		shardID:            shardID,
-		eventSubmitter:     eventSubmitter,
-		views:              make(map[qviews.QueryViewVersion]*CoordQueryViewStateMachine, len(recoveredViews)),
-		dataViewReferences: dataViewReferenceManagerOrNoop([]qviews.DataViewReferenceManager{dataViewReferences}),
-		pinnedReferences:   make(map[qviews.QueryViewVersion]struct{}),
+		ctx:            ctx,
+		shardID:        shardID,
+		eventSubmitter: eventSubmitter,
+		views:          make(map[qviews.QueryViewVersion]*managedQueryView, len(recoveredViews)),
+		dataViews:      dataViewManagerOrNoop([]DataViewManager{dataViews}),
 	}
 
-	recovered := make([]*CoordQueryViewStateMachine, 0, len(recoveredViews))
+	recovered := make([]*managedQueryView, 0, len(recoveredViews))
 	for _, view := range recoveredViews {
 		version := qviews.FromProtoQueryViewVersion(view.GetMeta().GetVersion())
-		pinned, err := m.dataViewReferences.RecoverDataViewReference(
+		ref, err := m.dataViews.Get(
 			ctx,
 			view.GetMeta().GetCollectionId(),
 			version.DataVersion,
 		)
-		if err != nil {
-			m.unpinAllReferences()
+		sm := RecoverCoordQueryViewStateMachine(view)
+		if err != nil && !dataview.IsUnavailableDataViewError(err) {
+			m.derefAllReferences()
 			return nil, err
 		}
-
-		sm := RecoverCoordQueryViewStateMachine(view)
-		if pinned {
-			m.pinnedReferences[version] = struct{}{}
-		} else {
-			m.prepareTerminalRecovery(sm)
+		if err != nil {
+			// A durable QueryView whose exact DataView is no longer available
+			// cannot become active again. Rebuild it with a no-op ref and drive
+			// the normal terminal cleanup state machine instead.
+			prepareTerminalRecovery(sm)
+			ref = noopDataViewRef{}
 		}
-		recovered = append(recovered, sm)
-		m.views[version] = sm
+		managed := &managedQueryView{stateMachine: sm, dataViewRef: ref}
+		recovered = append(recovered, managed)
+		m.views[version] = managed
 	}
 
 	sort.Slice(recovered, func(i, j int) bool {
-		return recovered[j].Version().GT(recovered[i].Version())
+		return recovered[j].stateMachine.Version().GT(recovered[i].stateMachine.Version())
 	})
-	for _, sm := range recovered {
-		m.processStateMachine(sm)
+	for _, managed := range recovered {
+		m.processStateMachine(managed)
 	}
 	m.advanceUnrecoverableToDropping()
 	m.submitDirtyEvent(m.consumeDirtyEventLocked())
 	return m, nil
 }
 
-type noopDataViewReferenceManager struct{}
-
-func (noopDataViewReferenceManager) PinDataView(context.Context, int64, qviews.DataVersion) error {
-	return nil
-}
-
-func (noopDataViewReferenceManager) RecoverDataViewReference(context.Context, int64, qviews.DataVersion) (bool, error) {
-	return true, nil
-}
-
-func (noopDataViewReferenceManager) UnpinDataView(int64, qviews.DataVersion) {}
-
-func dataViewReferenceManagerOrNoop(references []qviews.DataViewReferenceManager) qviews.DataViewReferenceManager {
-	if len(references) == 0 || references[0] == nil {
-		return noopDataViewReferenceManager{}
+func prepareTerminalRecovery(sm *CoordQueryViewStateMachine) {
+	switch sm.State() {
+	case qviews.QueryViewStatePreparing, qviews.QueryViewStateReady:
+		sm.EnterUnrecoverable()
+	case qviews.QueryViewStateUp:
+		sm.EnterDown()
 	}
-	return references[0]
+}
+
+type noopDataViewManager struct{}
+
+func (noopDataViewManager) Get(context.Context, int64, qviews.DataVersion) (dataview.DataViewRef, error) {
+	return noopDataViewRef{}, nil
+}
+
+type noopDataViewRef struct{}
+
+func (noopDataViewRef) DataView() *dataview.DataView { return nil }
+func (noopDataViewRef) Deref()                       {}
+
+func dataViewManagerOrNoop(dataViews []DataViewManager) DataViewManager {
+	if len(dataViews) == 0 || dataViews[0] == nil {
+		return noopDataViewManager{}
+	}
+	return dataViews[0]
 }
 
 func (m *ShardViewManager) SetStatsObserver(observer func(qviews.ShardID, *ShardStats)) {
@@ -210,7 +234,8 @@ func (m *ShardViewManager) statsLocked() *ShardStats {
 		Segments: make(map[int64]*SegmentStats),
 	}
 
-	for _, sm := range m.views {
+	for _, managed := range m.views {
+		sm := managed.stateMachine
 		baseState, ok := segmentStateFromViewState(sm.State())
 		if !ok {
 			continue
@@ -311,13 +336,19 @@ func segmentSet(segments []int64) map[int64]bool {
 //
 // Validation: The new DataVersion must not be lower than any existing view's DataVersion.
 func (m *ShardViewManager) AddPreparing(ctx context.Context, builder *qviews.QueryViewAtCoordBuilder) error {
-	m.mu.Lock()
-
 	newDV := builder.DataVersion()
+	collectionID := builder.CollectionID()
+	ref, err := m.dataViews.Get(ctx, collectionID, newDV)
+	if err != nil {
+		return err
+	}
+
+	m.mu.Lock()
 
 	// Validate no DataVersion rollback.
 	if err := m.validateDataVersionLocked(newDV); err != nil {
 		m.mu.Unlock()
+		ref.Deref()
 		return err
 	}
 
@@ -326,24 +357,22 @@ func (m *ShardViewManager) AddPreparing(ctx context.Context, builder *qviews.Que
 	qv := m.nextQueryVersion(newDV)
 	builder.SetQueryVersion(qv)
 	view := builder.Build()
-	sm := NewCoordQueryViewStateMachine(view)
-	if err := m.dataViewReferences.PinDataView(ctx, view.GetMeta().GetCollectionId(), newDV); err != nil {
-		m.mu.Unlock()
-		return err
+	managed := &managedQueryView{
+		stateMachine: NewCoordQueryViewStateMachine(view),
+		dataViewRef:  ref,
 	}
-	m.pinnedReferences[sm.Version()] = struct{}{}
 
 	// Preempt existing Preparing/Ready view.
 	if m.preparingView != nil {
 		key := m.keyForStateMachine(m.preparingView)
-		before := m.preparingView.State()
-		m.preparingView.EnterUnrecoverable()
+		before := m.preparingView.stateMachine.State()
+		m.preparingView.stateMachine.EnterUnrecoverable()
 		qvobserve.Observe(ctx, qvobserve.CoordViewPreemptedEvent{
 			ViewStateTransition: qvobserve.ViewStateTransition{
 				CollectionID: m.collectionIDForStateMachine(m.preparingView),
 				View:         key,
 				From:         before,
-				To:           m.preparingView.State(),
+				To:           m.preparingView.stateMachine.State(),
 			},
 			PreemptingDataVersion: newDV,
 		})
@@ -355,16 +384,16 @@ func (m *ShardViewManager) AddPreparing(ctx context.Context, builder *qviews.Que
 	// Dropping so their Dropped sync is batched with the new Preparing sync.
 	m.advanceUnrecoverableToDropping()
 
-	m.views[sm.Version()] = sm
-	m.preparingView = sm
+	m.views[managed.stateMachine.Version()] = managed
+	m.preparingView = managed
 	qvobserve.Observe(ctx, qvobserve.CoordViewCreatedEvent{
-		CollectionID: m.collectionIDForStateMachine(sm),
-		View:         m.keyForStateMachine(sm),
-		State:        sm.State(),
+		CollectionID: collectionID,
+		View:         m.keyForStateMachine(managed),
+		State:        managed.stateMachine.State(),
 	})
 
 	// Process: collect persist, sync, and post-persist effects.
-	m.processStateMachine(sm)
+	m.processStateMachine(managed)
 
 	// Move all accumulated effects into one shard-scoped event.
 	event := m.consumeDirtyEventLocked()
@@ -386,14 +415,14 @@ func (m *ShardViewManager) RequestRelease(ctx context.Context) error {
 
 	if m.preparingView != nil {
 		key := m.keyForStateMachine(m.preparingView)
-		before := m.preparingView.State()
-		m.preparingView.EnterUnrecoverable()
+		before := m.preparingView.stateMachine.State()
+		m.preparingView.stateMachine.EnterUnrecoverable()
 		qvobserve.Observe(ctx, qvobserve.CoordViewReleaseRequestedEvent{
 			ViewStateTransition: qvobserve.ViewStateTransition{
 				CollectionID: m.collectionIDForStateMachine(m.preparingView),
 				View:         key,
 				From:         before,
-				To:           m.preparingView.State(),
+				To:           m.preparingView.stateMachine.State(),
 			},
 		})
 		m.processStateMachine(m.preparingView)
@@ -402,14 +431,14 @@ func (m *ShardViewManager) RequestRelease(ctx context.Context) error {
 
 	if m.upView != nil {
 		key := m.keyForStateMachine(m.upView)
-		before := m.upView.State()
-		m.upView.EnterDown()
+		before := m.upView.stateMachine.State()
+		m.upView.stateMachine.EnterDown()
 		qvobserve.Observe(ctx, qvobserve.CoordViewReleaseRequestedEvent{
 			ViewStateTransition: qvobserve.ViewStateTransition{
 				CollectionID: m.collectionIDForStateMachine(m.upView),
 				View:         key,
 				From:         before,
-				To:           m.upView.State(),
+				To:           m.upView.stateMachine.State(),
 			},
 		})
 		m.processStateMachine(m.upView)
@@ -434,7 +463,8 @@ func (m *ShardViewManager) RequestRelease(ctx context.Context) error {
 // Also maintains preparingView/upView pointers on state transitions.
 //
 // Must be called under m.mu.
-func (m *ShardViewManager) processStateMachine(sm *CoordQueryViewStateMachine) {
+func (m *ShardViewManager) processStateMachine(managed *managedQueryView) {
+	sm := managed.stateMachine
 	for {
 		// 1. ConsumeFlush persist effect → collect into pending batch.
 		flush := sm.ConsumeFlush()
@@ -444,34 +474,34 @@ func (m *ShardViewManager) processStateMachine(sm *CoordQueryViewStateMachine) {
 
 		// 2. ConsumeFlush sync effects → collect into pending batch.
 		if len(flush.Sync) > 0 {
-			m.pendingSyncs = append(m.pendingSyncs, syncEntry{sm: sm, views: flush.Sync})
+			m.pendingSyncs = append(m.pendingSyncs, syncEntry{view: managed, views: flush.Sync})
 		}
 
 		// 3. Handle cascading effects based on current state.
 		switch sm.State() {
 		case qviews.QueryViewStatePreparing, qviews.QueryViewStateReady:
-			m.preparingView = sm
+			m.preparingView = managed
 			return
 
 		case qviews.QueryViewStateUp:
-			if m.preparingView == sm {
+			if m.preparingView == managed {
 				m.preparingView = nil
 			}
-			m.downOlderUpView(sm)
-			m.upView = sm
+			m.downOlderUpView(managed)
+			m.upView = managed
 			return
 
 		case qviews.QueryViewStateDown:
-			if m.upView == sm {
+			if m.upView == managed {
 				m.upView = nil
 			}
 			return
 
 		case qviews.QueryViewStateUnrecoverable:
-			if m.preparingView == sm {
+			if m.preparingView == managed {
 				m.preparingView = nil
 			}
-			if m.upView == sm {
+			if m.upView == managed {
 				m.upView = nil
 			}
 			// Stay Unrecoverable; wait for AddPreparing or RequestRelease
@@ -483,8 +513,8 @@ func (m *ShardViewManager) processStateMachine(sm *CoordQueryViewStateMachine) {
 			return
 
 		case qviews.QueryViewStateDropped:
-			if !m.hasPendingRemoval(sm) {
-				m.pendingRemovals = append(m.pendingRemovals, sm)
+			if !m.hasPendingRemoval(managed) {
+				m.pendingRemovals = append(m.pendingRemovals, managed)
 			}
 			return
 
@@ -500,20 +530,21 @@ func (m *ShardViewManager) processStateMachine(sm *CoordQueryViewStateMachine) {
 //
 // Must be called under m.mu.
 func (m *ShardViewManager) advanceUnrecoverableToDropping() {
-	for _, sm := range m.views {
+	for _, managed := range m.views {
+		sm := managed.stateMachine
 		if sm.State() == qviews.QueryViewStateUnrecoverable {
-			key := m.keyForStateMachine(sm)
+			key := m.keyForStateMachine(managed)
 			before := sm.State()
 			sm.EnterDropping()
 			qvobserve.Observe(m.ctx, qvobserve.CoordViewAdvancedFromUnrecoverableEvent{
 				ViewStateTransition: qvobserve.ViewStateTransition{
-					CollectionID: m.collectionIDForStateMachine(sm),
+					CollectionID: m.collectionIDForStateMachine(managed),
 					View:         key,
 					From:         before,
 					To:           sm.State(),
 				},
 			})
-			m.processStateMachine(sm)
+			m.processStateMachine(managed)
 		}
 	}
 }
@@ -521,17 +552,17 @@ func (m *ShardViewManager) advanceUnrecoverableToDropping() {
 // downOlderUpView transitions the current Up view to Down if it differs from newUp.
 //
 // Must be called under m.mu.
-func (m *ShardViewManager) downOlderUpView(newUp *CoordQueryViewStateMachine) {
+func (m *ShardViewManager) downOlderUpView(newUp *managedQueryView) {
 	if m.upView != nil && m.upView != newUp {
 		key := m.keyForStateMachine(m.upView)
-		before := m.upView.State()
-		m.upView.EnterDown()
+		before := m.upView.stateMachine.State()
+		m.upView.stateMachine.EnterDown()
 		qvobserve.Observe(m.ctx, qvobserve.CoordViewHandoffToNewUpEvent{
 			ViewStateTransition: qvobserve.ViewStateTransition{
 				CollectionID: m.collectionIDForStateMachine(m.upView),
 				View:         key,
 				From:         before,
-				To:           m.upView.State(),
+				To:           m.upView.stateMachine.State(),
 			},
 			NewUpView: m.keyForStateMachine(newUp),
 		})
@@ -549,7 +580,7 @@ func (m *ShardViewManager) consumeDirtyEventLocked() dirtyViewEvent {
 		persists: m.pendingPersists,
 	}
 	for _, entry := range m.pendingSyncs {
-		version := entry.sm.Version()
+		version := entry.view.stateMachine.Version()
 		for _, view := range entry.views {
 			var onQueryNodeLost func(qviews.QueryNode)
 			if _, ok := view.WorkNode().(qviews.QueryNode); ok {
@@ -562,8 +593,8 @@ func (m *ShardViewManager) consumeDirtyEventLocked() dirtyViewEvent {
 			})
 		}
 	}
-	for _, sm := range m.pendingRemovals {
-		target := sm
+	for _, managed := range m.pendingRemovals {
+		target := managed
 		event.afterPersist = append(event.afterPersist, func() {
 			m.finalizeRemoval(target)
 		})
@@ -582,18 +613,19 @@ func (m *ShardViewManager) makeOnSyncResponse(version qviews.QueryViewVersion, t
 	return func(resp qviews.QueryViewAtWorkNode) bool {
 		m.mu.Lock()
 
-		sm, ok := m.views[version]
+		managed, ok := m.views[version]
 		if !ok {
 			m.mu.Unlock()
 			return true // view already removed, stop tracking
 		}
 
+		sm := managed.stateMachine
 		before := sm.State()
 		sm.OnNodeStateReported(resp)
 		qvobserve.Observe(m.ctx, qvobserve.CoordViewReportAppliedEvent{
 			ViewStateTransition: qvobserve.ViewStateTransition{
-				CollectionID: m.collectionIDForStateMachine(sm),
-				View:         m.keyForStateMachine(sm),
+				CollectionID: m.collectionIDForStateMachine(managed),
+				View:         m.keyForStateMachine(managed),
 				From:         before,
 				To:           sm.State(),
 			},
@@ -601,7 +633,7 @@ func (m *ShardViewManager) makeOnSyncResponse(version qviews.QueryViewVersion, t
 			ReportedState:        resp.State(),
 			ResourceReadyPercent: resourceReadyPercent(resp),
 		})
-		m.processStateMachine(sm)
+		m.processStateMachine(managed)
 		event := m.consumeDirtyEventLocked()
 		m.publishStatsLocked()
 
@@ -636,13 +668,14 @@ func (m *ShardViewManager) makeOnQueryNodeLost(version qviews.QueryViewVersion) 
 	return func(node qviews.QueryNode) {
 		m.mu.Lock()
 
-		sm, ok := m.views[version]
+		managed, ok := m.views[version]
 		if !ok {
 			m.mu.Unlock()
 			return // view already removed
 		}
 
-		key := m.keyForStateMachine(sm)
+		sm := managed.stateMachine
+		key := m.keyForStateMachine(managed)
 		before := sm.State()
 		qvobserve.Observe(m.ctx, qvobserve.CoordQueryNodeLostDetectedEvent{
 			Node: node,
@@ -650,14 +683,14 @@ func (m *ShardViewManager) makeOnQueryNodeLost(version qviews.QueryViewVersion) 
 		sm.OnQueryNodeLost(node)
 		qvobserve.Observe(m.ctx, qvobserve.CoordViewQueryNodeLostAppliedEvent{
 			ViewStateTransition: qvobserve.ViewStateTransition{
-				CollectionID: m.collectionIDForStateMachine(sm),
+				CollectionID: m.collectionIDForStateMachine(managed),
 				View:         key,
 				From:         before,
 				To:           sm.State(),
 			},
 			Node: node,
 		})
-		m.processStateMachine(sm)
+		m.processStateMachine(managed)
 		event := m.consumeDirtyEventLocked()
 		m.publishStatsLocked()
 		m.mu.Unlock()
@@ -671,15 +704,15 @@ func (m *ShardViewManager) submitDirtyEvent(event dirtyViewEvent) {
 	}
 }
 
-func (m *ShardViewManager) keyForStateMachine(sm *CoordQueryViewStateMachine) qviews.QueryViewKey {
+func (m *ShardViewManager) keyForStateMachine(managed *managedQueryView) qviews.QueryViewKey {
 	return qviews.QueryViewKey{
 		ShardID:          m.shardID,
-		QueryViewVersion: sm.Version(),
+		QueryViewVersion: managed.stateMachine.Version(),
 	}
 }
 
-func (m *ShardViewManager) collectionIDForStateMachine(sm *CoordQueryViewStateMachine) int64 {
-	return sm.View().GetMeta().GetCollectionId()
+func (m *ShardViewManager) collectionIDForStateMachine(managed *managedQueryView) int64 {
+	return managed.stateMachine.View().GetMeta().GetCollectionId()
 }
 
 func resourceReadyPercent(report qviews.QueryViewAtWorkNode) int64 {
@@ -704,26 +737,26 @@ func (m *ShardViewManager) publishStatsLocked() {
 // fast pointers that reference it.
 //
 // Must be called under m.mu.
-func (m *ShardViewManager) removeView(target *CoordQueryViewStateMachine) {
+func (m *ShardViewManager) removeView(target *managedQueryView) {
 	if m.preparingView == target {
 		m.preparingView = nil
 	}
 	if m.upView == target {
 		m.upView = nil
 	}
-	delete(m.views, target.Version())
+	delete(m.views, target.stateMachine.Version())
 }
 
 // finalizeRemoval releases a DataView reference only after the corresponding
 // Dropped QueryView state has been persisted by DirtyViewFlushScheduler.
-func (m *ShardViewManager) finalizeRemoval(target *CoordQueryViewStateMachine) {
+func (m *ShardViewManager) finalizeRemoval(target *managedQueryView) {
 	m.mu.Lock()
-	if m.views[target.Version()] != target {
+	if m.views[target.stateMachine.Version()] != target {
 		m.mu.Unlock()
 		return
 	}
 	m.removeView(target)
-	m.unpinReference(target)
+	target.dataViewRef.Deref()
 	m.publishStatsLocked()
 	empty := len(m.views) == 0
 	onEmpty := m.onEmpty
@@ -734,40 +767,18 @@ func (m *ShardViewManager) finalizeRemoval(target *CoordQueryViewStateMachine) {
 	}
 }
 
-func (m *ShardViewManager) hasPendingRemoval(target *CoordQueryViewStateMachine) bool {
-	for _, sm := range m.pendingRemovals {
-		if sm == target {
+func (m *ShardViewManager) hasPendingRemoval(target *managedQueryView) bool {
+	for _, managed := range m.pendingRemovals {
+		if managed == target {
 			return true
 		}
 	}
 	return false
 }
 
-func (m *ShardViewManager) unpinReference(sm *CoordQueryViewStateMachine) {
-	version := sm.Version()
-	if _, ok := m.pinnedReferences[version]; !ok {
-		return
-	}
-	delete(m.pinnedReferences, version)
-	m.dataViewReferences.UnpinDataView(m.collectionIDForStateMachine(sm), version.DataVersion)
-}
-
-func (m *ShardViewManager) unpinAllReferences() {
-	for version := range m.pinnedReferences {
-		sm := m.views[version]
-		if sm != nil {
-			m.dataViewReferences.UnpinDataView(m.collectionIDForStateMachine(sm), version.DataVersion)
-		}
-		delete(m.pinnedReferences, version)
-	}
-}
-
-func (m *ShardViewManager) prepareTerminalRecovery(sm *CoordQueryViewStateMachine) {
-	switch sm.State() {
-	case qviews.QueryViewStatePreparing, qviews.QueryViewStateReady:
-		sm.EnterUnrecoverable()
-	case qviews.QueryViewStateUp:
-		sm.EnterDown()
+func (m *ShardViewManager) derefAllReferences() {
+	for _, managed := range m.views {
+		managed.dataViewRef.Deref()
 	}
 }
 
@@ -776,7 +787,8 @@ func (m *ShardViewManager) prepareTerminalRecovery(sm *CoordQueryViewStateMachin
 //
 // Must be called under m.mu.
 func (m *ShardViewManager) validateDataVersionLocked(newDV qviews.DataVersion) error {
-	for _, sm := range m.views {
+	for _, managed := range m.views {
+		sm := managed.stateMachine
 		if sm.Version().DataVersion.GT(newDV) {
 			return errDataVersionRollback
 		}
@@ -790,7 +802,8 @@ func (m *ShardViewManager) validateDataVersionLocked(newDV qviews.DataVersion) e
 // Must be called under m.mu.
 func (m *ShardViewManager) nextQueryVersion(newDV qviews.DataVersion) int64 {
 	var maxQV int64
-	for _, sm := range m.views {
+	for _, managed := range m.views {
+		sm := managed.stateMachine
 		v := sm.Version()
 		if v.DataVersion.EQ(newDV) && v.QueryVersion > maxQV {
 			maxQV = v.QueryVersion

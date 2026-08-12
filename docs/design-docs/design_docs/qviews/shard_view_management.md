@@ -176,11 +176,12 @@ func (m *ShardViewManager) AddPreparing(
 func (m *ShardViewManager) RequestRelease(ctx context.Context) error
 ```
 
-`AddPreparing` assigns QueryVersion automatically, rejects DataVersion rollback,
-and preempts an existing Preparing or Ready view. `RequestRelease` starts the
-normal teardown of all views in the shard. Both methods mutate state under
-`m.mu`, atomically consume the resulting effects into one `dirtyViewEvent`,
-release the lock, and submit that event to the Scheduler.
+`AddPreparing` acquires the exact immutable `dataview.DataViewRef` for the
+builder's DataVersion before entering the manager lock, then assigns
+QueryVersion, rejects DataVersion rollback, and preempts an existing Preparing
+or Ready view. `RequestRelease` starts the normal teardown of all views in the
+shard. State transitions and event construction happen under `m.mu`; the
+DataView lookup and scheduler submission happen after unlocking.
 
 ## 4. Internal Flow
 
@@ -293,15 +294,17 @@ Callbacks for an already removed view stop tracking without creating new work.
 
 ### 4.7 AddPreparing
 
-1. Validate the new DataVersion against all resident views.
-2. Preempt an existing Preparing or Ready view by entering Unrecoverable.
-3. Advance Unrecoverable views to Dropping so their Dropped sync can be batched
+1. Acquire the exact DataViewRef for the requested DataVersion without holding
+   `m.mu`; a failed lookup leaves the builder and resident views unchanged.
+2. Validate the new DataVersion against all resident views.
+3. Preempt an existing Preparing or Ready view by entering Unrecoverable.
+4. Advance Unrecoverable views to Dropping so their Dropped sync can be batched
    with the replacement Preparing sync.
-4. Assign `max(QueryVersion for the same DataVersion) + 1`, or 1 when the
+5. Assign `max(QueryVersion for the same DataVersion) + 1`, or 1 when the
    DataVersion is new.
-5. Build and register the new state machine.
-6. Update in-memory pointers and stats.
-7. Emit one shard event, unlock, and submit it.
+6. Build and register the new state machine together with the owned DataViewRef.
+7. Update in-memory pointers and stats.
+8. Emit one shard event, unlock, and submit it.
 
 ### 4.8 RequestRelease
 
@@ -316,7 +319,13 @@ Cleanup continues asynchronously through reliable node callbacks.
 ## 5. Recovery and Shutdown
 
 During recovery, persisted views are grouped by `ShardID` and reconstructed as
-state machines. Recovered Preparing and Down views create pending sync effects.
+state machines. Each view reacquires its exact `dataview.DataViewRef` through
+the same `Get` API used by normal construction. If that exact view is
+unavailable, recovery drives Preparing/Ready views through Unrecoverable and
+Up views through Down so durable cleanup can continue. Other errors, including
+catalog/system `ServiceNotReady`, abort recovery and release every reference
+acquired by the failed attempt. Recovered Preparing and Down views create
+pending sync effects.
 The Registry holds all emitted events inside one Begin/Commit window. Before
 committing that window, it records each manager's initial stats, builds the
 collection and node indexes, and installs the manager stats observer. It then

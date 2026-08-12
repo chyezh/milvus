@@ -2927,25 +2927,21 @@ func Test_initGarbageCollection(t *testing.T) {
 	})
 }
 
-func TestServerGarbageCollectionReferences(t *testing.T) {
-	dataViews := &testDataViewReferenceDataViews{
-		dataViewFn: func(context.Context, int64, *viewpb.DataVersion) (*viewpb.DataViewOfCollection, error) {
-			return nil, nil
-		},
+func TestServerGarbageCollectionDataViewLifecycle(t *testing.T) {
+	dataViews := &testDataViewLifecycleDataViews{
 		garbageCollectFn: func(context.Context, int64, []*viewpb.DataVersion, int) error { return nil },
 		dropCollectionFn: func(context.Context, int64) (*viewpb.DataVersion, error) { return nil, nil },
 	}
 	server := CreateServer(context.Background(), dependency.NewDefaultFactory(true))
-	server.dataViewReferences = newTestDataViewReferenceManager(t,
-		&testDataViewReferenceCatalog{markerPresent: make(map[int64]struct{})},
+	server.dataViewLifecycle = newTestDataViewLifecycle(t,
+		&testDataViewLifecycleCatalog{markerPresent: make(map[int64]struct{})},
 		dataViews,
-		func(int64) bool { return true },
 	)
 
 	server.initGarbageCollection(nil)
 	defer server.garbageCollector.close()
 
-	assert.Same(t, server.dataViewReferences, server.garbageCollector.option.dataViewGC)
+	assert.Same(t, server.dataViewLifecycle, server.garbageCollector.option.dataViewGC)
 }
 
 func TestLoadCollectionFromRootCoord(t *testing.T) {

@@ -22,6 +22,7 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/milvus-io/milvus/internal/coordinator/snmanager"
+	"github.com/milvus-io/milvus/internal/dataview"
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/metastore/kv/queryview"
 	qnmanager "github.com/milvus-io/milvus/internal/querynodev2/client/manager"
@@ -65,7 +66,7 @@ type qviewsRuntimeDependencies struct {
 	queryNodeClient      nodeview.QueryNodeClient
 	resourceGroupManager nodeview.ResourceGroupManager
 	dataViewProvider     balancer.DataViewProvider
-	dataViewReferences   qviews.DataViewReferenceManager
+	dataViewManager      dataview.ReferenceManager
 
 	queryNodeManager            qnmanager.ManagerClient
 	streamingCoordClient        streamingcoordclient.Client
@@ -87,9 +88,6 @@ func newQViewsRuntime(ctx context.Context, deps qviewsRuntimeDependencies) (*qvi
 	}
 	if deps.dataViewProvider == nil {
 		deps.dataViewProvider = emptyDataViewProvider{}
-	}
-	if deps.dataViewReferences == nil {
-		deps.dataViewReferences = noopDataViewReferences{}
 	}
 
 	if deps.queryNodeClient == nil {
@@ -120,7 +118,7 @@ func newQViewsRuntime(ctx context.Context, deps qviewsRuntimeDependencies) (*qvi
 		return nil, err
 	}
 	reliableSyncer := syncer.NewReliableSyncer(deps.viewSyncClient)
-	shardViewRegistry, err := coordview.RecoverShardViewRegistry(ctx, deps.queryViewCatalog, reliableSyncer, deps.dataViewReferences)
+	shardViewRegistry, err := coordview.RecoverShardViewRegistry(ctx, deps.queryViewCatalog, reliableSyncer, deps.dataViewManager)
 	if err != nil {
 		_ = reliableSyncer.Close()
 		return nil, err
@@ -225,23 +223,15 @@ func newDefaultQViewsRuntimeDependencies(
 		streamingNodeHandler:        streamingNodeHandler,
 		streamingNodeViewSyncClient: streamingNodeHandler.QueryViewSyncClient(),
 	}
-	if references, ok := mixCoord.(qviews.DataViewReferenceManager); ok {
-		deps.dataViewReferences = references
+	if dataViews, ok := mixCoord.(dataViewManagerSource); ok {
+		deps.dataViewManager = dataViews.DataViewManager()
 	}
 	return deps
 }
 
-type noopDataViewReferences struct{}
-
-func (noopDataViewReferences) PinDataView(context.Context, int64, qviews.DataVersion) error {
-	return nil
+type dataViewManagerSource interface {
+	DataViewManager() dataview.ReferenceManager
 }
-
-func (noopDataViewReferences) RecoverDataViewReference(context.Context, int64, qviews.DataVersion) (bool, error) {
-	return true, nil
-}
-
-func (noopDataViewReferences) UnpinDataView(int64, qviews.DataVersion) {}
 
 type dataViewProviderSource interface {
 	DataViewProvider() balancer.DataViewProvider

@@ -18,6 +18,7 @@ package dataview
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -1065,6 +1066,11 @@ func (m *dataViewManager) GarbageCollect(ctx context.Context, collectionID int64
 	for _, version := range protected {
 		protectedSet[dataVersionKey(version)] = struct{}{}
 	}
+	for version, count := range state.refs {
+		if count > 0 {
+			protectedSet[dataVersionKey(version.IntoProto())] = struct{}{}
+		}
+	}
 	for idx, view := range views {
 		version := view.GetDataVersion()
 		if idx < retainLatest {
@@ -1254,18 +1260,41 @@ func newDataViewRef(state *collectionDataViewState, view *DataView) DataViewRef 
 }
 
 func unavailableDataViewError(collectionID int64, version qviews.DataVersion) error {
-	return merr.WrapErrServiceNotReadyMsg(
-		"data view %s of collection %d is no longer available",
-		version.String(),
-		collectionID,
-	)
+	return &dataViewUnavailableError{collectionID: collectionID, version: version}
+}
+
+type dataViewUnavailableError struct {
+	collectionID int64
+	version      qviews.DataVersion
+	latest       bool
+}
+
+func (e *dataViewUnavailableError) Error() string {
+	if e.latest {
+		return fmt.Sprintf("latest published data view of collection %d is no longer available", e.collectionID)
+	}
+	return fmt.Sprintf("data view %s of collection %d is no longer available", e.version.String(), e.collectionID)
+}
+
+func (*dataViewUnavailableError) Unwrap() error { return merr.ErrServiceNotReady }
+
+// IsUnavailableDataViewError reports whether err means the exact requested
+// DataView is absent or the collection has already become terminal. Other
+// service-not-ready failures, such as a catalog outage, are not matched.
+func IsUnavailableDataViewError(err error) bool {
+	var target *dataViewUnavailableError
+	return errors.As(err, &target)
+}
+
+// NewUnavailableDataViewError reports that an exact immutable DataView cannot
+// be referenced. It is exposed for reference-manager implementations and tests;
+// callers should branch with IsUnavailableDataViewError.
+func NewUnavailableDataViewError(collectionID int64, version qviews.DataVersion) error {
+	return unavailableDataViewError(collectionID, version)
 }
 
 func unavailableLatestDataViewError(collectionID int64) error {
-	return merr.WrapErrServiceNotReadyMsg(
-		"latest published data view of collection %d is no longer available",
-		collectionID,
-	)
+	return &dataViewUnavailableError{collectionID: collectionID, latest: true}
 }
 
 func (m *dataViewManager) listStates() []*collectionDataViewState {

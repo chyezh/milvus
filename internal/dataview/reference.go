@@ -16,12 +16,22 @@
 
 package dataview
 
-import "sync"
+import (
+	"context"
+	"sync"
+
+	"github.com/milvus-io/milvus/internal/views/qviews"
+)
 
 // DataViewRef protects one exact immutable DataView until Deref is called.
 type DataViewRef interface {
 	DataView() *DataView
 	Deref()
+}
+
+// ReferenceManager acquires references to exact immutable DataViews.
+type ReferenceManager interface {
+	Get(ctx context.Context, collectionID int64, version qviews.DataVersion) (DataViewRef, error)
 }
 
 type dataViewRef struct {

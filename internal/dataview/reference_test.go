@@ -198,6 +198,11 @@ func dataViewStateDropped(t *testing.T, manager *dataViewManager, collectionID i
 func requireUnavailableDataViewError(t *testing.T, err error) {
 	t.Helper()
 	require.ErrorIs(t, err, merr.ErrServiceNotReady)
+	require.True(t, IsUnavailableDataViewError(err))
 	require.True(t, merr.IsRetryableErr(err))
 	require.Equal(t, merr.SystemError, merr.GetErrorType(err))
+}
+
+func TestIsUnavailableDataViewErrorDoesNotMatchGenericServiceNotReady(t *testing.T) {
+	require.False(t, IsUnavailableDataViewError(merr.WrapErrServiceNotReadyMsg("catalog unavailable")))
 }

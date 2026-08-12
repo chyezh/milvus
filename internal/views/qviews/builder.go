@@ -55,6 +55,11 @@ func (b *QueryViewAtCoordBuilder) DataVersion() DataVersion {
 	return b.dataVersion
 }
 
+// CollectionID returns the collection whose DataView this builder represents.
+func (b *QueryViewAtCoordBuilder) CollectionID() int64 {
+	return b.collectionID
+}
+
 // SetQueryVersion sets the query version for load-level redistribution.
 func (b *QueryViewAtCoordBuilder) SetQueryVersion(queryVersion int64) *QueryViewAtCoordBuilder {
 	b.queryVersion = queryVersion
