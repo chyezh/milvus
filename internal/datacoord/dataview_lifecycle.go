@@ -24,7 +24,6 @@ import (
 	"github.com/milvus-io/milvus/internal/dataview"
 	"github.com/milvus-io/milvus/internal/views/coord/balancer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
-	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
 type dataViewDropMarkerCatalog interface {
@@ -38,7 +37,7 @@ type dataViewLifecycleDataViews interface {
 	DataViewSnapshotRefForCollections(context.Context, map[int64]struct{}) (balancer.DataViewSnapshotRef, error)
 	SegmentSnapshot(context.Context, []int64) balancer.SegmentSnapshot
 	GarbageCollect(ctx context.Context, collectionID int64, retainLatest int) error
-	OnDropCollection(ctx context.Context, collectionID int64) (*viewpb.DataVersion, error)
+	MarkCollectionTerminal(ctx context.Context, collectionID int64) error
 }
 
 type dataViewDropFinalizer interface {
@@ -182,8 +181,7 @@ func (m *dataViewLifecycle) DropCollection(ctx context.Context, collectionID int
 		return err
 	}
 	state.terminal = true
-	_, err := m.dataViews.OnDropCollection(ctx, collectionID)
-	return err
+	return m.dataViews.MarkCollectionTerminal(ctx, collectionID)
 }
 
 func (m *dataViewLifecycle) FinalizeDropCollection(ctx context.Context, collectionID int64) error {

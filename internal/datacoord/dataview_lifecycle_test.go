@@ -196,8 +196,9 @@ func (m *testDataViewLifecycleDataViews) GarbageCollect(ctx context.Context, col
 	return m.garbageCollectFn(ctx, collectionID, retainLatest)
 }
 
-func (m *testDataViewLifecycleDataViews) OnDropCollection(ctx context.Context, collectionID int64) (*viewpb.DataVersion, error) {
-	return m.dropCollectionFn(ctx, collectionID)
+func (m *testDataViewLifecycleDataViews) MarkCollectionTerminal(ctx context.Context, collectionID int64) error {
+	_, err := m.dropCollectionFn(ctx, collectionID)
+	return err
 }
 
 func (m *testDataViewLifecycleDataViews) Get(ctx context.Context, collectionID int64, version qviews.DataVersion) (dataview.DataViewRef, error) {

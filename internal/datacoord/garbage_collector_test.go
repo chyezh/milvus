@@ -178,14 +178,14 @@ type fakeGCDataViewCall struct {
 	retainLatest int
 }
 
-func (m *fakeGCDataViewManager) OnCreateCollection(ctx context.Context, event CreateCollectionDataViewEvent) (*viewpb.DataVersion, error) {
+func (m *fakeGCDataViewManager) InitializeCollection(ctx context.Context, event dataview.CollectionInitialization) (*viewpb.DataVersion, error) {
 	m.createEvents = append(m.createEvents, event)
 	return nil, nil
 }
 
-func (m *fakeGCDataViewManager) OnDropCollection(ctx context.Context, collectionID int64) (*viewpb.DataVersion, error) {
+func (m *fakeGCDataViewManager) MarkCollectionTerminal(ctx context.Context, collectionID int64) error {
 	m.droppedCollections = append(m.droppedCollections, collectionID)
-	return nil, nil
+	return nil
 }
 
 func (m *fakeGCDataViewManager) Get(

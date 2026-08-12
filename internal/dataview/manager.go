@@ -61,8 +61,8 @@ type Manager interface {
 	CommitStreamingView(ctx context.Context, collectionID int64, mutation PublishedMutation) (*viewpb.DataVersion, error)
 	CommitRewrite(ctx context.Context, collectionID int64, mutation PublishedMutation) (*viewpb.DataVersion, error)
 	CommitSegmentTrim(ctx context.Context, collectionID int64, resolveTargets SegmentTrimTargetResolver, finalize SegmentTrimFinalize) (*viewpb.DataVersion, error)
-	OnCreateCollection(ctx context.Context, event CreateCollectionDataViewEvent) (*viewpb.DataVersion, error)
-	OnDropCollection(ctx context.Context, collectionID int64) (*viewpb.DataVersion, error)
+	InitializeCollection(ctx context.Context, initialization CollectionInitialization) (*viewpb.DataVersion, error)
+	MarkCollectionTerminal(ctx context.Context, collectionID int64) error
 
 	Get(ctx context.Context, collectionID int64, version qviews.DataVersion) (DataViewRef, error)
 	LatestPublished(ctx context.Context, collectionID int64) (DataViewRef, error)
@@ -73,7 +73,7 @@ type Manager interface {
 	GarbageCollect(ctx context.Context, collectionID int64, retainLatest int) error
 }
 
-type CreateCollectionDataViewEvent struct {
+type CollectionInitialization struct {
 	CollectionID int64
 	VChannels    []string
 }
@@ -348,8 +348,8 @@ func RecoverManager(ctx context.Context, catalog RecoveryCatalog, segments Segme
 	return manager, nil
 }
 
-func (m *dataViewManager) OnCreateCollection(ctx context.Context, event CreateCollectionDataViewEvent) (*viewpb.DataVersion, error) {
-	state := m.getOrCreateState(event.CollectionID)
+func (m *dataViewManager) InitializeCollection(ctx context.Context, initialization CollectionInitialization) (*viewpb.DataVersion, error) {
+	state := m.getOrCreateState(initialization.CollectionID)
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	if state.dropped {
@@ -362,7 +362,7 @@ func (m *dataViewManager) OnCreateCollection(ctx context.Context, event CreateCo
 	}
 
 	if catalog, ok := m.catalog.(publishedDataViewCatalog); ok {
-		durable, err := catalog.GetDataViewVersionState(ctx, event.CollectionID)
+		durable, err := catalog.GetDataViewVersionState(ctx, initialization.CollectionID)
 		if err != nil {
 			return nil, err
 		}
@@ -374,19 +374,19 @@ func (m *dataViewManager) OnCreateCollection(ctx context.Context, event CreateCo
 				return dataVersionFromView(state.published), nil
 			}
 			if durable.GetPublishedDataVersion() == nil {
-				persistedViews, err := catalog.ListDataViews(ctx, event.CollectionID)
+				persistedViews, err := catalog.ListDataViews(ctx, initialization.CollectionID)
 				if err != nil {
 					return nil, err
 				}
 				if len(persistedViews) > 0 {
 					return nil, merr.WrapErrServiceNotReadyMsg(
 						"collection %d has DataView snapshots but no durable published head",
-						event.CollectionID,
+						initialization.CollectionID,
 					)
 				}
 			}
 		} else {
-			persistedViews, err := catalog.ListDataViews(ctx, event.CollectionID)
+			persistedViews, err := catalog.ListDataViews(ctx, initialization.CollectionID)
 			if err != nil {
 				return nil, err
 			}
@@ -394,11 +394,11 @@ func (m *dataViewManager) OnCreateCollection(ctx context.Context, event CreateCo
 				state.published = canonicalDataViewClone(latestPersisted)
 				return dataVersionFromView(state.published), nil
 			}
-			state.versionState = &viewpb.CollectionDataVersionState{CollectionId: event.CollectionID}
+			state.versionState = &viewpb.CollectionDataVersionState{CollectionId: initialization.CollectionID}
 			state.publicationRecovered = true
 		}
 	} else {
-		persistedViews, err := m.catalog.ListDataViews(ctx, event.CollectionID)
+		persistedViews, err := m.catalog.ListDataViews(ctx, initialization.CollectionID)
 		if err != nil {
 			return nil, err
 		}
@@ -409,12 +409,12 @@ func (m *dataViewManager) OnCreateCollection(ctx context.Context, event CreateCo
 		}
 	}
 
-	view := buildEmptyDataView(event.CollectionID, event.VChannels)
+	view := buildEmptyDataView(initialization.CollectionID, initialization.VChannels)
 	view.DataVersion = &viewpb.DataVersion{StreamingVersion: 1}
 	toPersist := cloneDataViewWithoutDeleteTimetick(view)
 	if catalog, ok := m.catalog.(publishedDataViewCatalog); ok {
 		if state.versionState == nil {
-			state.versionState = &viewpb.CollectionDataVersionState{CollectionId: event.CollectionID}
+			state.versionState = &viewpb.CollectionDataVersionState{CollectionId: initialization.CollectionID}
 		}
 		if err := m.persistPublishedLocked(ctx, state, catalog, toPersist); err != nil {
 			return nil, err
@@ -424,21 +424,21 @@ func (m *dataViewManager) OnCreateCollection(ctx context.Context, event CreateCo
 		if err := m.catalog.SaveDataView(ctx, toPersist); err != nil {
 			return nil, err
 		}
-		m.invalidateRetainedMembership(event.CollectionID)
+		m.invalidateRetainedMembership(initialization.CollectionID)
 		state.published = canonicalDataViewClone(toPersist)
 		state.published = m.withDeleteTimetick(ctx, state.published)
 	}
 	return dataVersionFromView(state.published), nil
 }
 
-func (m *dataViewManager) OnDropCollection(ctx context.Context, collectionID int64) (*viewpb.DataVersion, error) {
+func (m *dataViewManager) MarkCollectionTerminal(ctx context.Context, collectionID int64) error {
 	state := m.getOrCreateState(collectionID)
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
 	state.published = nil
 	state.dropped = true
-	return nil, nil
+	return nil
 }
 
 func (m *dataViewManager) FinalizeDropCollection(ctx context.Context, collectionID int64) error {

@@ -179,7 +179,7 @@ func TestGetStreamingNodeQueryViewResourcesUsesExactDataViewRef(t *testing.T) {
 	}
 
 	realManager := newDataViewManager(meta.catalog, meta)
-	_, err = realManager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+	_, err = realManager.InitializeCollection(ctx, CreateCollectionDataViewEvent{
 		CollectionID: 1,
 		VChannels:    []string{"ch-1", "ch-2"},
 	})
@@ -220,7 +220,7 @@ func TestGetStreamingNodeQueryViewResourcesUnavailableDataView(t *testing.T) {
 	meta, err := newMemoryMeta(t)
 	require.NoError(t, err)
 	manager := newDataViewManager(meta.catalog, meta)
-	version, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{CollectionID: 1, VChannels: []string{"ch-1"}})
+	version, err := manager.InitializeCollection(ctx, CreateCollectionDataViewEvent{CollectionID: 1, VChannels: []string{"ch-1"}})
 	require.NoError(t, err)
 	server := &Server{meta: meta, dataViewManager: manager}
 	server.stateCode.Store(commonpb.StateCode_Healthy)
@@ -236,7 +236,7 @@ func TestGetStreamingNodeQueryViewResourcesUnavailableDataView(t *testing.T) {
 	})
 
 	t.Run("terminal collection", func(t *testing.T) {
-		_, err := manager.OnDropCollection(ctx, 1)
+		err := manager.MarkCollectionTerminal(ctx, 1)
 		require.NoError(t, err)
 		resp, err := server.GetStreamingNodeQueryViewResources(ctx, &datapb.GetStreamingNodeQueryViewResourcesRequest{
 			CollectionId: 1,
@@ -253,7 +253,7 @@ func TestGetStreamingNodeQueryViewResourcesRejectsMissingShard(t *testing.T) {
 	meta, err := newMemoryMeta(t)
 	require.NoError(t, err)
 	manager := newDataViewManager(meta.catalog, meta)
-	version, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{CollectionID: 1, VChannels: []string{"ch-1"}})
+	version, err := manager.InitializeCollection(ctx, CreateCollectionDataViewEvent{CollectionID: 1, VChannels: []string{"ch-1"}})
 	require.NoError(t, err)
 	server := &Server{meta: meta, dataViewManager: manager}
 	server.stateCode.Store(commonpb.StateCode_Healthy)
@@ -481,7 +481,7 @@ func (s *ServerSuite) TestSaveBinlogPath_SaveDroppedSegment() {
 	s.testServer.meta.AddCollection(&collectionInfo{ID: 0})
 	manager := newDataViewManager(s.testServer.meta.catalog, s.testServer.meta)
 	s.testServer.dataViewManager = manager
-	_, err := manager.OnCreateCollection(context.Background(), CreateCollectionDataViewEvent{
+	_, err := manager.InitializeCollection(context.Background(), CreateCollectionDataViewEvent{
 		CollectionID: 0,
 		VChannels:    []string{"ch1"},
 	})
@@ -778,7 +778,7 @@ func (s *ServerSuite) TestSaveBinlogPathsEmptyFlushCompletesAssignedVersionAndRe
 	manager := newDataViewManager(s.testServer.meta.catalog, s.testServer.meta)
 	s.testServer.dataViewManager = manager
 	s.testServer.meta.AddCollection(&collectionInfo{ID: 1, VChannelNames: []string{"ch-1"}})
-	_, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+	_, err := manager.InitializeCollection(ctx, CreateCollectionDataViewEvent{
 		CollectionID: 1,
 		VChannels:    []string{"ch-1"},
 	})
@@ -852,7 +852,7 @@ func (s *ServerSuite) TestSaveBinlogPathsEmptyFlushRetryCompletesFailedPublicati
 	manager := newDataViewManager(catalog, s.testServer.meta)
 	s.testServer.dataViewManager = manager
 	s.testServer.meta.AddCollection(&collectionInfo{ID: 1, VChannelNames: []string{"ch-1"}})
-	_, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+	_, err := manager.InitializeCollection(ctx, CreateCollectionDataViewEvent{
 		CollectionID: 1,
 		VChannels:    []string{"ch-1"},
 	})
@@ -927,7 +927,7 @@ func (s *ServerSuite) TestSaveBinlogPathsExplicitDroppedNonEmptyFlushCompletesAs
 	manager := newDataViewManager(s.testServer.meta.catalog, s.testServer.meta)
 	s.testServer.dataViewManager = manager
 	s.testServer.meta.AddCollection(&collectionInfo{ID: 1, VChannelNames: []string{"ch-1"}})
-	_, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+	_, err := manager.InitializeCollection(ctx, CreateCollectionDataViewEvent{
 		CollectionID: 1,
 		VChannels:    []string{"ch-1"},
 	})
@@ -1017,7 +1017,7 @@ func (s *ServerSuite) TestSaveBinlogPathsDroppedRetryUsesDurableAssignedSnapshot
 	manager := newDataViewManager(s.testServer.meta.catalog, s.testServer.meta)
 	s.testServer.dataViewManager = manager
 	s.testServer.meta.AddCollection(&collectionInfo{ID: 1, VChannelNames: []string{"ch-1"}})
-	_, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+	_, err := manager.InitializeCollection(ctx, CreateCollectionDataViewEvent{
 		CollectionID: 1,
 		VChannels:    []string{"ch-1"},
 	})
@@ -1073,7 +1073,7 @@ func (s *ServerSuite) TestSaveBinlogPathsDroppedNonEmptyRetryRejectsOrphanAssign
 	manager := newDataViewManager(s.testServer.meta.catalog, s.testServer.meta)
 	s.testServer.dataViewManager = manager
 	s.testServer.meta.AddCollection(&collectionInfo{ID: 1, VChannelNames: []string{"ch-1"}})
-	_, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+	_, err := manager.InitializeCollection(ctx, CreateCollectionDataViewEvent{
 		CollectionID: 1,
 		VChannels:    []string{"ch-1"},
 	})
@@ -3657,7 +3657,7 @@ func TestServer_NotifyDropPartitionDoesNotFinalizeLaterCollectionBeforeItsDataVi
 	manager := newDataViewManager(meta.catalog, meta)
 	meta.dataViewManager = manager
 	for collectionID, channel := range map[int64]string{1: "ch-1", 2: "ch-2"} {
-		_, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+		_, err := manager.InitializeCollection(ctx, CreateCollectionDataViewEvent{
 			CollectionID: collectionID,
 			VChannels:    []string{channel},
 		})
@@ -3717,7 +3717,7 @@ func TestServer_DropSegmentsByTimeDoesNotFinalizeOtherCollection(t *testing.T) {
 			Partitions:    []int64{10},
 			VChannelNames: []string{"ch-0"},
 		})
-		_, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+		_, err := manager.InitializeCollection(ctx, CreateCollectionDataViewEvent{
 			CollectionID: collectionID,
 			VChannels:    []string{"ch-0"},
 		})
@@ -3832,7 +3832,7 @@ func newDDLTrimDataViewTest(t *testing.T) (*meta, DataViewManager, *failPublishe
 	catalog := &failPublishedDataViewCatalog{DataCoordCatalog: meta.catalog}
 	manager := newDataViewManager(catalog, meta)
 	meta.dataViewManager = manager
-	_, err = manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+	_, err = manager.InitializeCollection(ctx, CreateCollectionDataViewEvent{
 		CollectionID: 1,
 		VChannels:    []string{"ch-0"},
 	})
@@ -7296,7 +7296,7 @@ func TestHandleCommitVchannelRPC_PublishesOnlyFinalSortedImportMembership(t *tes
 		IsImporting:   true,
 	})))
 	manager := newDataViewManager(meta.catalog, meta)
-	_, err = manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{CollectionID: 100, VChannels: []string{"vchan-0"}})
+	_, err = manager.InitializeCollection(ctx, CreateCollectionDataViewEvent{CollectionID: 100, VChannels: []string{"vchan-0"}})
 	require.NoError(t, err)
 	meta.dataViewManager = manager
 	server := &Server{importMeta: importMeta, meta: meta, dataViewManager: manager}

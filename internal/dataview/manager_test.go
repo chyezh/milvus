@@ -323,7 +323,7 @@ func TestDataViewManagerOnCreateCollectionCreatesEmptyVisibleView(t *testing.T) 
 	ctx := context.Background()
 	manager, catalog, _ := newTestDataViewManager()
 
-	version, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+	version, err := manager.InitializeCollection(ctx, CollectionInitialization{
 		CollectionID: 1,
 		VChannels:    []string{"ch-1", "ch-0"},
 	})
@@ -357,14 +357,14 @@ func TestDataViewManagerOnCreateCollectionCreatesEmptyVisibleView(t *testing.T) 
 func TestDataViewManagerOnCreateCollectionIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	manager, catalog, _ := newTestDataViewManager()
-	event := CreateCollectionDataViewEvent{
+	event := CollectionInitialization{
 		CollectionID: 1,
 		VChannels:    []string{"ch-0"},
 	}
 
-	first, err := manager.OnCreateCollection(ctx, event)
+	first, err := manager.InitializeCollection(ctx, event)
 	require.NoError(t, err)
-	second, err := manager.OnCreateCollection(ctx, event)
+	second, err := manager.InitializeCollection(ctx, event)
 	require.NoError(t, err)
 
 	requireDataVersion(t, first, 1, 0)
@@ -381,7 +381,7 @@ func TestDataViewManagerOnCreateCollectionReusesPersistedView(t *testing.T) {
 		Shards:       []*viewpb.DataViewOfShard{{Vchannel: "ch-0"}},
 	})
 
-	version, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+	version, err := manager.InitializeCollection(ctx, CollectionInitialization{
 		CollectionID: 1,
 		VChannels:    []string{"ch-0"},
 	})
@@ -408,7 +408,7 @@ func TestDataViewManagerOnCreateCollectionDoesNotPublishOrphanSnapshot(t *testin
 		},
 	}
 
-	_, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+	_, err := manager.InitializeCollection(ctx, CollectionInitialization{
 		CollectionID: 1,
 		VChannels:    []string{"ch-0"},
 	})
@@ -1127,7 +1127,7 @@ func TestRecoverManagerUsesDurablePublishedHeadInsteadOfNewerOrphan(t *testing.T
 	require.Equal(t, int64(1), ref.DataView().Version().StreamingVersion)
 	require.Equal(t, []int64{100}, ref.DataView().SegmentIDs("ch-1", 10))
 
-	version, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{CollectionID: 1, VChannels: []string{"ch-1"}})
+	version, err := manager.InitializeCollection(ctx, CollectionInitialization{CollectionID: 1, VChannels: []string{"ch-1"}})
 	require.NoError(t, err)
 	requireDataVersion(t, version, 1, 0)
 }
@@ -1496,7 +1496,7 @@ func TestRecoverManagerDoesNotBackfillHeadWhenDurableStateAlreadyExists(t *testi
 
 	manager, err := RecoverManager(ctx, catalog, store)
 	require.NoError(t, err)
-	_, err = manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{CollectionID: 1, VChannels: []string{"ch-1"}})
+	_, err = manager.InitializeCollection(ctx, CollectionInitialization{CollectionID: 1, VChannels: []string{"ch-1"}})
 	require.Error(t, err)
 	require.Nil(t, catalog.versionStates[1].GetPublishedDataVersion())
 	_, err = manager.LatestPublished(ctx, 1)
@@ -1655,7 +1655,7 @@ func TestDataViewManagerDropCollectionDropsStateAndCatalog(t *testing.T) {
 	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
 	require.NoError(t, noErrorVersion(manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})))
 
-	require.NoError(t, noErrorVersion(manager.OnDropCollection(ctx, 1)))
+	require.NoError(t, manager.MarkCollectionTerminal(ctx, 1))
 	require.NotEmpty(t, catalog.views)
 	require.NoError(t, manager.FinalizeDropCollection(ctx, 1))
 	require.Empty(t, catalog.views)

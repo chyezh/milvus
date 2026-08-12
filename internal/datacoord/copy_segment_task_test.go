@@ -798,7 +798,7 @@ func (s *CopySegmentTaskSuite) TestQueryTaskOnWorker_RawPublicationFailureRemain
 	s.NoError(copyMeta.AddJob(context.Background(), newTestCopyJob(100, datapb.CopySegmentJobState_CopySegmentJobExecuting)))
 	catalog := &failPublishedDataViewCatalog{DataCoordCatalog: m.catalog}
 	manager := newDataViewManager(catalog, m)
-	_, err := manager.OnCreateCollection(context.Background(), CreateCollectionDataViewEvent{
+	_, err := manager.InitializeCollection(context.Background(), CreateCollectionDataViewEvent{
 		CollectionID: 100,
 		VChannels:    []string{"ch1"},
 	})
@@ -848,7 +848,7 @@ func (s *CopySegmentTaskSuite) TestQueryTaskOnWorker_PostRestartPublicationSnaps
 	s.NoError(copyMeta.AddJob(context.Background(), newTestCopyJob(100, datapb.CopySegmentJobState_CopySegmentJobExecuting)))
 	catalog := &failPublishedDataViewCatalog{DataCoordCatalog: m.catalog}
 	manager := newDataViewManager(catalog, m)
-	_, err := manager.OnCreateCollection(context.Background(), CreateCollectionDataViewEvent{
+	_, err := manager.InitializeCollection(context.Background(), CreateCollectionDataViewEvent{
 		CollectionID: 100,
 		VChannels:    []string{"ch1"},
 	})
@@ -921,7 +921,7 @@ func (s *CopySegmentTaskSuite) TestSyncCopySegmentTask_AddOnlyPublishesStreaming
 	task := createTestCopyTask(100, 2001).(*copySegmentTask)
 	copyMeta, m := newCopySegmentTaskTestMeta(s.T(), task)
 	manager := newDataViewManager(m.catalog, m)
-	_, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{CollectionID: 100, VChannels: []string{"ch1"}})
+	_, err := manager.InitializeCollection(ctx, CreateCollectionDataViewEvent{CollectionID: 100, VChannels: []string{"ch1"}})
 	s.NoError(err)
 	m.dataViewManager = manager
 	s.NoError(m.AddSegment(ctx, newTestCopySegment(2001)))

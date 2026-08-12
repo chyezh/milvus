@@ -33,7 +33,7 @@ import (
 
 type (
 	DataViewManager               = dataview.Manager
-	CreateCollectionDataViewEvent = dataview.CreateCollectionDataViewEvent
+	CreateCollectionDataViewEvent = dataview.CollectionInitialization
 	SegmentMembership             = dataview.SegmentMembership
 	SegmentTrimTargetResolver     = dataview.SegmentTrimTargetResolver
 	SegmentTrimFinalize           = dataview.SegmentTrimFinalize
@@ -52,7 +52,7 @@ func (s *Server) CreateCollectionDataView(ctx context.Context, collectionID int6
 	if s.dataViewManager == nil {
 		return nil, nil
 	}
-	return s.dataViewManager.OnCreateCollection(ctx, dataview.CreateCollectionDataViewEvent{
+	return s.dataViewManager.InitializeCollection(ctx, dataview.CollectionInitialization{
 		CollectionID: collectionID,
 		VChannels:    vchannels,
 	})

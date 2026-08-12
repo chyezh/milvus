@@ -100,7 +100,7 @@ func TestDataViewRefSurvivesTerminalCollection(t *testing.T) {
 	ref, err := manager.Get(ctx, 1, domainVersion)
 	require.NoError(t, err)
 
-	_, err = manager.OnDropCollection(ctx, 1)
+	err = manager.MarkCollectionTerminal(ctx, 1)
 	require.NoError(t, err)
 	require.Equal(t, []int64{100}, ref.DataView().SegmentIDs("ch-1", 10))
 
@@ -125,7 +125,7 @@ func TestDataViewRefRepairDoesNotReopenTerminalCollection(t *testing.T) {
 	manager := recovered.(*dataViewManager)
 	domainVersion := qviews.FromProtoDataVersion(version)
 
-	_, err = manager.OnDropCollection(ctx, 1)
+	err = manager.MarkCollectionTerminal(ctx, 1)
 	require.NoError(t, err)
 	require.True(t, dataViewStateDropped(t, manager, 1))
 	_, err = manager.Get(ctx, 1, domainVersion)
@@ -143,10 +143,10 @@ func TestDataViewRefLateCreateDoesNotReopenTerminalCollection(t *testing.T) {
 	version, err := manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})
 	require.NoError(t, err)
 	domainVersion := qviews.FromProtoDataVersion(version)
-	_, err = manager.OnDropCollection(ctx, 1)
+	err = manager.MarkCollectionTerminal(ctx, 1)
 	require.NoError(t, err)
 
-	lateVersion, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+	lateVersion, err := manager.InitializeCollection(ctx, CollectionInitialization{
 		CollectionID: 1,
 		VChannels:    []string{"ch-1"},
 	})

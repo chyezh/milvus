@@ -178,7 +178,7 @@ func TestPublicationCompactRewriteAdvancesCompactVersion(t *testing.T) {
 func TestPublicationStreamingMutationAdvancesAndRetriesAfterRestart(t *testing.T) {
 	ctx := context.Background()
 	manager, catalog, store := newTestDataViewManager()
-	_, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{CollectionID: 1, VChannels: []string{"ch-0"}})
+	_, err := manager.InitializeCollection(ctx, CollectionInitialization{CollectionID: 1, VChannels: []string{"ch-0"}})
 	require.NoError(t, err)
 	mutation := PublishedMutation{Add: []SegmentMembership{loadableMembership(1, 10, 100, "ch-0")}}
 
@@ -198,7 +198,7 @@ func TestPublicationStreamingMutationAdvancesAndRetriesAfterRestart(t *testing.T
 func TestPublicationStreamingMutationWaitsForPendingAssignedFlush(t *testing.T) {
 	ctx := context.Background()
 	manager, catalog, store := newTestDataViewManager()
-	_, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{CollectionID: 1, VChannels: []string{"ch-0"}})
+	_, err := manager.InitializeCollection(ctx, CollectionInitialization{CollectionID: 1, VChannels: []string{"ch-0"}})
 	require.NoError(t, err)
 	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-0", 1000)
 	assigned, err := manager.AssignFlushVersion(ctx, 1, 100)
@@ -217,7 +217,7 @@ func TestPublicationStreamingMutationWaitsForPendingAssignedFlush(t *testing.T) 
 func TestPublicationStreamingMutationRetryRequiresExactAddedMembership(t *testing.T) {
 	ctx := context.Background()
 	manager, _, _ := newTestDataViewManager()
-	_, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{CollectionID: 1, VChannels: []string{"ch-0"}})
+	_, err := manager.InitializeCollection(ctx, CollectionInitialization{CollectionID: 1, VChannels: []string{"ch-0"}})
 	require.NoError(t, err)
 	_, err = manager.CommitStreamingView(ctx, 1, PublishedMutation{
 		Add: []SegmentMembership{loadableMembership(1, 10, 100, "ch-0")},
@@ -471,7 +471,7 @@ func TestPublicationCreateCollectionPersistsPublishedHeadAtomically(t *testing.T
 	ctx := context.Background()
 	manager, catalog, _ := newTestDataViewManager()
 
-	version, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+	version, err := manager.InitializeCollection(ctx, CollectionInitialization{
 		CollectionID: 1,
 		VChannels:    []string{"ch-0"},
 	})
@@ -497,7 +497,7 @@ func TestPublicationCreateCollectionRecoversDurableHeadBeforeNewerOrphan(t *test
 		},
 	}
 
-	version, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+	version, err := manager.InitializeCollection(ctx, CollectionInitialization{
 		CollectionID: 1,
 		VChannels:    []string{"ch-0"},
 	})
@@ -523,7 +523,7 @@ func TestPublicationCreateCollectionRejectsOrphanSnapshotWhenDurableHeadIsMissin
 		},
 	}
 
-	_, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+	_, err := manager.InitializeCollection(ctx, CollectionInitialization{
 		CollectionID: 1,
 		VChannels:    []string{"ch-0"},
 	})

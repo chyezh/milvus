@@ -73,7 +73,7 @@ func TestDataViewDropWaitsForRefsAndFinalizeBarrier(t *testing.T) {
 	ref, err := manager.Get(ctx, 1, qviews.DataVersion{StreamingVersion: 1})
 	require.NoError(t, err)
 
-	require.NoError(t, noErrorVersion(manager.OnDropCollection(ctx, 1)))
+	require.NoError(t, manager.MarkCollectionTerminal(ctx, 1))
 	views, err := catalog.ListDataViews(ctx, 1)
 	require.NoError(t, err)
 	require.Len(t, views, 1, "terminal drop must retain snapshots while refs are live")
@@ -92,7 +92,7 @@ func TestDataViewDropWithoutRefsStillWaitsForFinalizeBarrier(t *testing.T) {
 	manager, catalog, store := newTestDataViewManager()
 	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 100)
 	require.NoError(t, noErrorVersion(manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})))
-	require.NoError(t, noErrorVersion(manager.OnDropCollection(ctx, 1)))
+	require.NoError(t, manager.MarkCollectionTerminal(ctx, 1))
 
 	views, err := catalog.ListDataViews(ctx, 1)
 	require.NoError(t, err)
@@ -110,7 +110,7 @@ func TestDataViewFinalizeDropRejectsLiveRefs(t *testing.T) {
 	require.NoError(t, noErrorVersion(manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})))
 	ref, err := manager.Get(ctx, 1, qviews.DataVersion{StreamingVersion: 1})
 	require.NoError(t, err)
-	require.NoError(t, noErrorVersion(manager.OnDropCollection(ctx, 1)))
+	require.NoError(t, manager.MarkCollectionTerminal(ctx, 1))
 
 	require.Error(t, manager.FinalizeDropCollection(ctx, 1))
 	ref.Deref()
