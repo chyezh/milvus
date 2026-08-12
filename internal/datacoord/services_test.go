@@ -524,8 +524,6 @@ func (s *ServerSuite) TestSaveBinlogPath_L0Segment() {
 	segment = s.testServer.meta.GetHealthySegment(context.TODO(), 1)
 	s.NotNil(segment)
 	s.EqualValues(datapb.SegmentLevel_L0, segment.GetLevel())
-	s.Empty(manager.l0CompactEvents)
-	s.Empty(manager.flushEvents)
 }
 
 func (s *ServerSuite) TestSaveBinlogPathsReturnsExactAssignedDataVersion() {
@@ -548,7 +546,6 @@ func (s *ServerSuite) TestSaveBinlogPathsReturnsExactAssignedDataVersion() {
 	s.Require().Equal("7", resp.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
 	s.Require().Equal("0", resp.GetExtraInfo()[statusExtraInfoDataViewCompactVersion])
 	s.Require().Equal([]int64{100}, manager.assignedSegments)
-	s.Require().Empty(manager.flushEvents)
 	s.Require().Len(manager.publishedMutations, 1)
 	s.Require().Equal([]int64{100}, lo.Map(manager.publishedMutations[0].Add, func(membership dataview.SegmentMembership, _ int) int64 {
 		return membership.SegmentID
@@ -601,7 +598,7 @@ func (s *ServerSuite) TestSaveBinlogPathsLostResponseRetryReturnsOriginalAssigne
 	s.Require().NoError(merr.Error(retried))
 	s.Require().Equal("1", retried.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
 
-	latest, err := manager.LatestVisibleDataView(context.Background(), 1)
+	latest, err := manager.LatestPublishedDataView(context.Background(), 1)
 	s.Require().NoError(err)
 	s.Require().Equal(int64(2), latest.GetDataVersion().GetStreamingVersion())
 }
@@ -1019,7 +1016,6 @@ func (s *ServerSuite) TestSaveBinlogPathsDelayedFlushSkipsPublication() {
 	s.Require().NoError(err)
 	s.Require().NoError(merr.Error(resp))
 	s.Require().Equal("7", resp.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
-	s.Require().Empty(manager.flushEvents)
 	s.Require().True(s.testServer.meta.GetSegment(context.Background(), 103).GetIsInvisible())
 }
 
@@ -3057,8 +3053,8 @@ func TestServer_NotifyDropPartitionCompletesTargetedAssignedEpochAfterRemovalFen
 
 	require.NoError(t, err)
 	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
-	requirePublishedDataViewVersion(t, meta, 1, 2, 0)
-	visible, err := manager.LatestVisibleDataView(ctx, 1)
+	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 0)
+	visible, err := manager.LatestPublishedDataView(ctx, 1)
 	require.NoError(t, err)
 	require.Empty(t, visible.GetShards())
 
@@ -3090,7 +3086,7 @@ func TestServer_DropSegmentsByTimeCompletesTargetedAssignedEpochAfterRemovalFenc
 
 	require.NoError(t, err)
 	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
-	requirePublishedDataViewVersion(t, meta, 1, 2, 0)
+	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 0)
 
 	addDDLTrimSegment(t, meta, 200, 20, "ch-0", 1100)
 	later, err := meta.commitDataViewStreaming(ctx, 1, []int64{200})
@@ -3116,7 +3112,7 @@ func TestServer_DropSegmentsByTimeRemovalFenceSurvivesPublicationFailureAndResta
 
 	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
 	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
-	requirePublishedDataViewVersion(t, meta, 1, 1, 0)
+	requireLatestPublishedDataViewVersion(t, meta, 1, 1, 0)
 
 	recoveryCatalog, ok := meta.catalog.(dataview.RecoveryCatalog)
 	require.True(t, ok)
@@ -3126,14 +3122,14 @@ func TestServer_DropSegmentsByTimeRemovalFenceSurvivesPublicationFailureAndResta
 	state, err := meta.catalog.GetDataViewVersionState(ctx, 1)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, state.GetPublishedDataVersion().GetStreamingVersion())
-	visible, err := restarted.LatestVisibleDataView(ctx, 1)
+	visible, err := restarted.LatestPublishedDataView(ctx, 1)
 	require.NoError(t, err)
 	require.Empty(t, dataViewShardSegmentIDs(dataViewShard(visible, "ch-0"), nil))
 
 	server.dataViewManager = restarted
 	require.NoError(t, server.DropSegmentsByTime(ctx, 1, map[string]uint64{"ch-0": 1000}))
-	requirePublishedDataViewVersion(t, meta, 1, 2, 0)
-	visible, err = restarted.LatestVisibleDataView(ctx, 1)
+	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 0)
+	visible, err = restarted.LatestPublishedDataView(ctx, 1)
 	require.NoError(t, err)
 	require.Empty(t, dataViewShardSegmentIDs(dataViewShard(visible, "ch-0"), nil))
 }
@@ -3157,14 +3153,14 @@ func TestServer_NotifyDropPartitionRemovalFenceKeepsPublishedViewUntilRetry(t *t
 
 	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
 	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
-	requirePublishedDataViewVersion(t, meta, 1, 2, 0)
-	visible, err := manager.LatestVisibleDataView(ctx, 1)
+	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 0)
+	visible, err := manager.LatestPublishedDataView(ctx, 1)
 	require.NoError(t, err)
 	require.Equal(t, []int64{100}, visible.GetShards()[0].GetPartitions()[0].GetSegmentIds())
 
 	require.NoError(t, server.NotifyDropPartition(ctx, "ch-0", []int64{10}))
-	requirePublishedDataViewVersion(t, meta, 1, 2, 1)
-	visible, err = manager.LatestVisibleDataView(ctx, 1)
+	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 1)
+	visible, err = manager.LatestPublishedDataView(ctx, 1)
 	require.NoError(t, err)
 	require.Empty(t, visible.GetShards())
 }
@@ -3187,7 +3183,7 @@ func TestServer_NotifyDropPartitionDoesNotOvertakeEarlierNonTargetedAssignedEpoc
 	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
 	require.True(t, merr.IsRetryableErr(err))
 	require.Equal(t, commonpb.SegmentState_Flushed, meta.GetSegment(ctx, 200).GetState())
-	requirePublishedDataViewVersion(t, meta, 1, 1, 0)
+	requireLatestPublishedDataViewVersion(t, meta, 1, 1, 0)
 }
 
 func TestServer_NotifyDropPartitionCompletesTargetBeforeUnrelatedLaterAssignedEpoch(t *testing.T) {
@@ -3208,7 +3204,7 @@ func TestServer_NotifyDropPartitionCompletesTargetBeforeUnrelatedLaterAssignedEp
 	require.NoError(t, err)
 	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
 	require.Equal(t, commonpb.SegmentState_Flushed, meta.GetSegment(ctx, 200).GetState())
-	requirePublishedDataViewVersion(t, meta, 1, 2, 0)
+	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 0)
 	published, err := manager.CommitPublishedView(ctx, 1, laterAssigned, PublishedMutation{
 		Add: []SegmentMembership{publishedSegmentMembership(meta.GetSegment(ctx, 200))},
 	})
@@ -3234,8 +3230,8 @@ func TestServer_NotifyDropPartitionCompactRemovesAlreadyPublishedTarget(t *testi
 	err = server.NotifyDropPartition(ctx, "ch-0", []int64{10})
 
 	require.NoError(t, err)
-	requirePublishedDataViewVersion(t, meta, 1, 2, 1)
-	visible, err := manager.LatestVisibleDataView(ctx, 1)
+	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 1)
+	visible, err := manager.LatestPublishedDataView(ctx, 1)
 	require.NoError(t, err)
 	require.Empty(t, visible.GetShards())
 }
@@ -3250,7 +3246,7 @@ func TestServer_NotifyDropPartitionRefreshesDurableAssignedPublicationBeforeTrim
 		Add: []SegmentMembership{publishedSegmentMembership(meta.GetSegment(ctx, 100))},
 	})
 	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
-	requirePublishedDataViewVersion(t, meta, 1, 2, 0)
+	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 0)
 
 	segmentManager := NewMockManager(t)
 	segmentManager.EXPECT().DropSegmentsOfPartition(mock.Anything, "ch-0", []int64{10}).Once()
@@ -3260,8 +3256,8 @@ func TestServer_NotifyDropPartitionRefreshesDurableAssignedPublicationBeforeTrim
 	err = server.NotifyDropPartition(ctx, "ch-0", []int64{10})
 
 	require.NoError(t, err)
-	requirePublishedDataViewVersion(t, meta, 1, 2, 1)
-	visible, err := manager.LatestVisibleDataView(ctx, 1)
+	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 1)
+	visible, err := manager.LatestPublishedDataView(ctx, 1)
 	require.NoError(t, err)
 	require.Empty(t, visible.GetShards())
 }
@@ -3316,8 +3312,8 @@ func TestServer_NotifyDropPartitionRereadsAssignmentAfterAdapterSnapshot(t *test
 
 	require.NoError(t, <-trimDone)
 	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
-	requirePublishedDataViewVersion(t, meta, 1, 2, 0)
-	visible, err := realManager.LatestVisibleDataView(ctx, 1)
+	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 0)
+	visible, err := realManager.LatestPublishedDataView(ctx, 1)
 	require.NoError(t, err)
 	require.Empty(t, visible.GetShards())
 	require.EqualValues(t, 2, assigned.GetStreamingVersion())
@@ -3375,7 +3371,7 @@ func TestServer_NotifyDropPartitionKeepsLockThroughMetadataFinalize(t *testing.T
 	require.Nil(t, result.version)
 	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
 	require.Nil(t, meta.GetSegment(ctx, 100).GetSealedAtDataVersion())
-	requirePublishedDataViewVersion(t, meta, 1, 1, 0)
+	requireLatestPublishedDataViewVersion(t, meta, 1, 1, 0)
 
 	addDDLTrimSegment(t, meta, 200, 20, "ch-0", 200)
 	later, err := meta.commitDataViewStreaming(ctx, 1, []int64{200})
@@ -3425,8 +3421,8 @@ func TestServer_NotifyDropPartitionRefreshesTargetsAfterPreLockEnumeration(t *te
 	require.NoError(t, <-trimDone)
 	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
 	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 200).GetState())
-	requirePublishedDataViewVersion(t, meta, 1, 2, 2)
-	visible, err := realManager.LatestVisibleDataView(ctx, 1)
+	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 2)
+	visible, err := realManager.LatestPublishedDataView(ctx, 1)
 	require.NoError(t, err)
 	require.Empty(t, visible.GetShards())
 }
@@ -3476,8 +3472,8 @@ func TestServer_DropSegmentsByTimeRefreshesTargetsAfterPreLockEnumeration(t *tes
 	require.NoError(t, <-trimDone)
 	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
 	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 200).GetState())
-	requirePublishedDataViewVersion(t, meta, 1, 2, 2)
-	visible, err := realManager.LatestVisibleDataView(ctx, 1)
+	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 2)
+	visible, err := realManager.LatestPublishedDataView(ctx, 1)
 	require.NoError(t, err)
 	require.Empty(t, visible.GetShards())
 }
@@ -3536,10 +3532,10 @@ func TestServer_NotifyDropPartitionDoesNotFinalizeLaterCollectionBeforeItsDataVi
 	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
 	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
 	require.Equal(t, commonpb.SegmentState_Flushed, meta.GetSegment(ctx, 200).GetState())
-	visible1, err := manager.LatestVisibleDataView(ctx, 1)
+	visible1, err := manager.LatestPublishedDataView(ctx, 1)
 	require.NoError(t, err)
 	require.Empty(t, visible1.GetShards())
-	visible2, err := manager.LatestVisibleDataView(ctx, 2)
+	visible2, err := manager.LatestPublishedDataView(ctx, 2)
 	require.NoError(t, err)
 	require.Equal(t, []int64{200}, visible2.GetShards()[0].GetPartitions()[0].GetSegmentIds())
 }
@@ -3595,10 +3591,10 @@ func TestServer_DropSegmentsByTimeDoesNotFinalizeOtherCollection(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
 	require.Equal(t, commonpb.SegmentState_Flushed, meta.GetSegment(ctx, 200).GetState())
-	visible1, err := manager.LatestVisibleDataView(ctx, 1)
+	visible1, err := manager.LatestPublishedDataView(ctx, 1)
 	require.NoError(t, err)
 	require.Empty(t, visible1.GetShards())
-	visible2, err := manager.LatestVisibleDataView(ctx, 2)
+	visible2, err := manager.LatestPublishedDataView(ctx, 2)
 	require.NoError(t, err)
 	require.Equal(t, []int64{200}, visible2.GetShards()[0].GetPartitions()[0].GetSegmentIds())
 }
@@ -3705,7 +3701,7 @@ func assignDDLTrimSegment(t *testing.T, manager DataViewManager, segmentID, expe
 	return assigned
 }
 
-func requirePublishedDataViewVersion(
+func requireLatestPublishedDataViewVersion(
 	t *testing.T,
 	meta *meta,
 	collectionID, expectedStreaming, expectedCompact int64,
@@ -7149,7 +7145,7 @@ func TestHandleCommitVchannelRPC_PublishesOnlyFinalSortedImportMembership(t *tes
 
 	require.NoError(t, err)
 	require.NoError(t, merr.Error(resp))
-	view, err := manager.LatestVisibleDataView(ctx, 100)
+	view, err := manager.LatestPublishedDataView(ctx, 100)
 	require.NoError(t, err)
 	require.Equal(t, int64(2), view.GetDataVersion().GetStreamingVersion())
 	require.Zero(t, view.GetDataVersion().GetCompactVersion())

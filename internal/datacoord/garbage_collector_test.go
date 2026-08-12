@@ -94,12 +94,10 @@ type fakeGCDataViewManager struct {
 	publishedVersion   *viewpb.DataVersion
 	publishVersionErr  error
 	assignedSegments   []int64
-	flushEvents        []FlushDataViewEvent
 	publishedMutations []dataview.PublishedMutation
 	publishedAssigned  []*viewpb.DataVersion
 	streamingMutations []dataview.PublishedMutation
 	rewriteMutations   []dataview.PublishedMutation
-	l0CompactEvents    []L0CompactDataViewEvent
 	snapshotRequested  []int64
 	snapshotViews      []*viewpb.DataViewOfCollection
 	segmentReferenced  bool
@@ -186,40 +184,6 @@ func (m *fakeGCDataViewManager) OnCreateCollection(ctx context.Context, event Cr
 	return nil, nil
 }
 
-func (m *fakeGCDataViewManager) OnFlush(ctx context.Context, event FlushDataViewEvent) (*viewpb.DataVersion, error) {
-	m.flushEvents = append(m.flushEvents, event)
-	return m.publishedVersion, m.publishVersionErr
-}
-
-func (m *fakeGCDataViewManager) OnImport(ctx context.Context, event ImportDataViewEvent) (*viewpb.DataVersion, error) {
-	return nil, nil
-}
-
-func (m *fakeGCDataViewManager) OnCopySegmentComplete(ctx context.Context, event CopySegmentCompleteDataViewEvent) (*viewpb.DataVersion, error) {
-	return nil, nil
-}
-
-func (m *fakeGCDataViewManager) OnCompact(ctx context.Context, event CompactDataViewEvent) (*viewpb.DataVersion, error) {
-	return nil, nil
-}
-
-func (m *fakeGCDataViewManager) OnL0Compact(ctx context.Context, event L0CompactDataViewEvent) (*viewpb.DataVersion, error) {
-	m.l0CompactEvents = append(m.l0CompactEvents, event)
-	return nil, nil
-}
-
-func (m *fakeGCDataViewManager) OnExternalRefresh(ctx context.Context, event ExternalRefreshDataViewEvent) (*viewpb.DataVersion, error) {
-	return nil, nil
-}
-
-func (m *fakeGCDataViewManager) OnDropPartition(ctx context.Context, event DropPartitionDataViewEvent) (*viewpb.DataVersion, error) {
-	return nil, nil
-}
-
-func (m *fakeGCDataViewManager) OnTruncate(ctx context.Context, event TruncateDataViewEvent) (*viewpb.DataVersion, error) {
-	return nil, nil
-}
-
 func (m *fakeGCDataViewManager) OnDropCollection(ctx context.Context, collectionID int64) (*viewpb.DataVersion, error) {
 	m.droppedCollections = append(m.droppedCollections, collectionID)
 	return nil, nil
@@ -237,7 +201,7 @@ func (m *fakeGCDataViewManager) LatestPublished(ctx context.Context, collectionI
 	return nil, merr.WrapErrServiceNotReadyMsg("fake data view references are not available")
 }
 
-func (m *fakeGCDataViewManager) LatestVisibleDataView(ctx context.Context, collectionID int64) (*viewpb.DataViewOfCollection, error) {
+func (m *fakeGCDataViewManager) LatestPublishedDataView(ctx context.Context, collectionID int64) (*viewpb.DataViewOfCollection, error) {
 	return nil, nil
 }
 

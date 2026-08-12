@@ -134,7 +134,6 @@ func (s *L0CompactionTaskSuite) TestSaveSegmentMetaDoesNotPublishMembershipAfter
 	}}
 
 	s.NoError(task.saveSegmentMeta(output))
-	s.Empty(manager.l0CompactEvents)
 	s.Empty(manager.publishedMutations)
 	s.Empty(manager.rewriteMutations)
 }
