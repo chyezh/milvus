@@ -103,10 +103,6 @@ func (m *dataViewLifecycle) DataViewSnapshotRefForCollections(ctx context.Contex
 	provider, ok := m.dataViews.(interface {
 		DataViewSnapshotRefForCollections(context.Context, map[int64]struct{}) (balancer.DataViewSnapshotRef, error)
 	})
-	base := m.dataViewProvider()
-	if base == nil {
-		return nil, merr.WrapErrServiceNotReadyMsg("data view provider is not initialized")
-	}
 	collectionIDs := make([]int64, 0)
 	if ids == nil {
 		m.mu.Lock()
@@ -140,6 +136,10 @@ func (m *dataViewLifecycle) DataViewSnapshotRefForCollections(ctx context.Contex
 	}()
 	if ok {
 		return provider.DataViewSnapshotRefForCollections(ctx, ids)
+	}
+	base := m.dataViewProvider()
+	if base == nil {
+		return nil, merr.WrapErrServiceNotReadyMsg("data view provider is not initialized")
 	}
 	return &legacyDataViewSnapshotRef{snapshot: base.DataViewSnapshotForCollections(ctx, ids)}, nil
 }
