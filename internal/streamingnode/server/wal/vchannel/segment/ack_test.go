@@ -36,15 +36,15 @@ func TestEnsureGrowingRetainsRefUntilLifecycleSucceeds(t *testing.T) {
 	assert.True(t, view.ObserveCreateSegmentMessageV2(context.Background(), msg))
 	controller.Seal()
 	require.Len(t, scheduler.tasks, 1)
-	assert.False(t, controller.Completed())
+	assert.NotPanics(t, func() { _ = controller.TimeTick() })
 
 	err := scheduler.tasks[0].Execute(context.Background())
 	assert.True(t, errors.Is(err, nodescheduler.ErrDelay))
-	assert.False(t, controller.Completed())
+	assert.NotPanics(t, func() { _ = controller.TimeTick() })
 
 	lifecycle.err = nil
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
-	assert.True(t, controller.Completed())
+	assert.Panics(t, func() { _ = controller.TimeTick() })
 	assert.Equal(t, timetick, view.AssignmentMeta().GetDataCheckpointTimeTick())
 	assert.True(t, view.HasDirty())
 }
@@ -83,13 +83,13 @@ func TestInsertChunkReleasesEveryCoveredMessageRefAfterDurableMetadataUpdate(t *
 	assert.True(t, view.ObserveInsertMessageV1(context.Background(), secondMsg, secondAssignment))
 	second.Seal()
 	require.Len(t, scheduler.tasks, 1)
-	assert.False(t, first.Completed())
-	assert.False(t, second.Completed())
+	assert.NotPanics(t, func() { _ = first.TimeTick() })
+	assert.NotPanics(t, func() { _ = second.TimeTick() })
 
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
 	assert.Equal(t, 1, writer.calls)
-	assert.True(t, first.Completed())
-	assert.True(t, second.Completed())
+	assert.Panics(t, func() { _ = first.TimeTick() })
+	assert.Panics(t, func() { _ = second.TimeTick() })
 	assert.Equal(t, uint64(20), view.AssignmentMeta().GetDataCheckpointTimeTick())
 	assert.True(t, view.HasDirty())
 }
@@ -103,16 +103,16 @@ func TestFinalCommitRetainsRefUntilLifecycleSucceeds(t *testing.T) {
 	assert.True(t, view.Flush(context.Background(), msg))
 	controller.Seal()
 	require.Len(t, scheduler.tasks, 1)
-	assert.False(t, controller.Completed())
+	assert.NotPanics(t, func() { _ = controller.TimeTick() })
 
 	err := scheduler.tasks[0].Execute(context.Background())
 	assert.True(t, errors.Is(err, nodescheduler.ErrDelay))
-	assert.False(t, controller.Completed())
+	assert.NotPanics(t, func() { _ = controller.TimeTick() })
 	assert.Equal(t, uint64(1), view.AssignmentMeta().GetDataCheckpointTimeTick())
 
 	lifecycle.err = nil
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
-	assert.True(t, controller.Completed())
+	assert.Panics(t, func() { _ = controller.TimeTick() })
 	assert.Equal(t, 2, lifecycle.commitCalls)
 	assert.Equal(t, uint64(20), view.AssignmentMeta().GetDataCheckpointTimeTick())
 	assert.NotNil(t, view.AssignmentMeta().GetSealedAtDataVersion())
@@ -131,12 +131,12 @@ func TestRepeatedFlushRefsSharePendingFinalCommit(t *testing.T) {
 	assert.False(t, view.Flush(context.Background(), secondMsg))
 	second.Seal()
 	require.Len(t, scheduler.tasks, 1)
-	assert.False(t, first.Completed())
-	assert.False(t, second.Completed())
+	assert.NotPanics(t, func() { _ = first.TimeTick() })
+	assert.NotPanics(t, func() { _ = second.TimeTick() })
 
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
-	assert.True(t, first.Completed())
-	assert.True(t, second.Completed())
+	assert.Panics(t, func() { _ = first.TimeTick() })
+	assert.Panics(t, func() { _ = second.TimeTick() })
 	assert.Equal(t, 1, lifecycle.commitCalls)
 }
 

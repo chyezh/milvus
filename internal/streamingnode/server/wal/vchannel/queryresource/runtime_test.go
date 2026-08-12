@@ -96,7 +96,7 @@ func TestQueryRuntimeOwnsQueuedRefCountedMessage(t *testing.T) {
 
 	require.True(t, runtime.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: controller}))
 	controller.Seal()
-	require.True(t, controller.Completed())
+	require.Panics(t, func() { _ = controller.TimeTick() })
 	require.NoError(t, runtime.Initialize(context.Background(), testWALView(1, "ch", qviews.DataVersion{})))
 	require.Equal(t, uint64(20), module.timeTick)
 	runtime.Close()

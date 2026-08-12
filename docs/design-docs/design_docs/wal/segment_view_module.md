@@ -24,13 +24,13 @@ Each `SegmentView` owns:
 - object-storage chunks already written for the growing segment;
 - ensure-growing, flush-buffer, and commit-L1 tasks;
 - segment tombstone and physical cleanup state;
-- message Ack Refs associated with pending data.
+- retained immutable message handles associated with pending data.
 
 `VChannelRecoveryModule` owns:
 
 - lookup and creation of SegmentViews;
 - routing CreateSegment, Insert, Txn(Insert), Flush, and flush-style messages;
-- passing the message AckRecord to every actual SegmentView consumer;
+- passing the ref-counted message itself to every actual SegmentView consumer;
 - composing Segment dirty snapshots into the PChannel recovery snapshot;
 - advancing VChannel-level Segment DataVersion summaries.
 
@@ -39,27 +39,28 @@ checkpoints, or QueryView references.
 
 ## 2. Message Ack
 
-Every affected SegmentView directly calls `Retain()` before submitting or
-exposing asynchronous work. The returned Ref is owned by that concrete
-consumer or by a module-local parent operation that waits for its dynamic child
-tasks.
+Every affected SegmentView directly calls `Retain()` on the message before
+submitting or exposing asynchronous work. The returned retained immutable
+message is owned by that concrete consumer or by a module-local parent operation
+that waits for its dynamic child tasks.
 
 ```text
-message AckRecord
-  -> SegmentView A Ref
-  -> SegmentView B Ref
-  -> pending Insert chunk Ref
+ref-counted immutable message
+  -> SegmentView A retained handle
+  -> SegmentView B retained handle
+  -> pending Insert chunk retained handle
 ```
 
 There is no message-level Segment bit or global Segment fanout. Segment tasks
 remain independently scheduled, and Insert flushes may batch data from multiple
-WAL messages. A batched chunk keeps one Ref per contributing message and calls
-`Done()` on all of them only after the shared write succeeds.
+WAL messages. A batched chunk keeps one retained message per contributing WAL
+message and calls `Release()` on all of them only after the shared write
+succeeds.
 
-If a SegmentView discovers child tasks asynchronously, it must retain one
-parent Ref before returning from observation and manage the child count inside
-the SegmentView. It cannot call `Retain()` after RecoveryStorage seals the
-AckRecord.
+If a SegmentView discovers child tasks asynchronously, it must retain one parent
+message handle before returning from observation and manage the child count
+inside the SegmentView. It cannot call `Retain()` after RecoveryStorage seals
+the message.
 
 ## 3. Observe Rules
 
@@ -68,39 +69,40 @@ AckRecord.
 If the target segment is absent, `VChannelRecoveryModule` creates a SegmentView
 using the schema valid at the message timetick and updates segment metadata.
 
-In MetaAndData mode, ensure-growing work retains a Ref before the task is
-submitted. The Ref releases after the lifecycle side effect succeeds. Failure
-keeps the Ref pending and retries.
+In MetaAndData mode, ensure-growing work retains a message handle before the task
+is submitted. The handle releases after the lifecycle side effect succeeds.
+Failure keeps the handle live and retries.
 
 The metadata mutation marks the SegmentView dirty so the next persist batch
 captures a stable Segment snapshot.
 
 ### 3.2 Insert
 
-Insert metadata updates row and size statistics. In MetaAndData mode, the
-payload and one direct Ref are appended to the SegmentView's pending L1 buffer.
+Insert metadata updates row and size statistics. In MetaAndData mode, one
+retained specialized Insert message is appended to the SegmentView's pending L1
+buffer. The payload and ownership remain one object.
 
-The Ref remains attached to the buffered message until the chunk that
+The retained handle remains attached to the buffered message until the chunk that
 contains it is successfully written to object storage and installed into the
 SegmentView state. A flush may contain messages from several WAL records; all
-of their Refs release after the shared write succeeds.
+of their handles release after the shared write succeeds.
 
-If the chunk write fails, no Ref releases.
+If the chunk write fails, no handle releases.
 
 ### 3.3 Txn Insert
 
 A transaction is observed as one WAL message. All Insert bodies affecting this
-VChannel are applied atomically to the relevant SegmentViews. The message's
-AckRecord receives one direct Ref from every affected SegmentView. Each Ref
-releases after that view's resulting data work succeeds.
+VChannel are applied atomically to the relevant SegmentViews. Every affected
+SegmentView retains its own outer Txn message handle. Each handle releases after
+that view's resulting data work succeeds.
 
-Delete bodies are handled by TransformLog and do not create Segment Refs.
+Delete bodies are handled by TransformLog and do not create Segment handles.
 
 ### 3.4 Flush
 
 Flush closes the target SegmentView at the message timetick and records the
 sealed metadata transition. In MetaAndData mode, pending Insert data and the
-commit-L1 side effect retain Refs until all required work is durable and
+commit-L1 side effect retain message handles until all required work is durable and
 accepted by the segment lifecycle writer.
 
 The final commit returns the exact first DataView version whose membership
@@ -115,9 +117,9 @@ DropCollection, DropPartition, TruncateCollection, ManualFlush, FlushAll,
 schema-changing AlterCollection, and AlterWAL may flush one or more retained
 SegmentViews according to their message scope.
 
-Every affected view retains a direct Ref on the same message AckRecord. This is
-required so `broadcastAckModule` cannot acknowledge the message before all
-segment work caused by it has completed.
+Every affected view retains its own handle from the same ref-counted message.
+This is required so `broadcastAckModule` cannot acknowledge the message before
+all segment work caused by it has completed.
 
 ## 4. Object Storage And Metadata Publication
 
@@ -125,16 +127,16 @@ Segment completion has two layers:
 
 ```text
 data layer: object chunk or lifecycle side effect succeeds
-  -> Segment Ref.Done()
+  -> Segment retainedMessage.Release()
 
 metadata layer: Segment dirty snapshot persists to etcd
   -> MarkPersisted
 ```
 
-Before releasing a Ref, an asynchronous Segment consumer installs its metadata
-changes and marks the SegmentView dirty. RecoveryStorage freezes the batch
-checkpoint before consuming snapshots, persists those snapshots first, and
-writes the checkpoint last.
+Before releasing a retained handle, an asynchronous Segment consumer installs
+its metadata changes and marks the SegmentView dirty. RecoveryStorage freezes
+the batch checkpoint before consuming snapshots, persists those snapshots
+first, and writes the checkpoint last.
 
 Segment-local data timeticks may remain useful for internal state and cleanup.
 They are not inputs to RecoveryStorage Data checkpoint advancement.
@@ -181,13 +183,13 @@ On recovery:
 4. replayed messages at or before the durable Segment data checkpoint are
    skipped, while messages not covered by that data checkpoint are applied
    against recovered Growing or Flushed state;
-5. new replay work creates fresh Message Ack refs;
+5. new replay work creates fresh ref-counted messages and retained handles;
 6. every recovered `FLUSHED` segment without `SealedAtDataVersion` immediately
    schedules or reuses one final-commit task. That task first completes any
    remaining data work, then performs the idempotent lifecycle commit and
    installs the returned version.
 
-Ack refs themselves are not recovered from Segment metadata.
+Retained handles themselves are not recovered from Segment metadata.
 
 Segment replay is required to be data-safe, not physically exactly once.
 Ensure-growing uses the fixed SegmentID and accepts retry. A repeated Insert
@@ -200,22 +202,22 @@ unfinished Insert work.
 ## 8. Invariants
 
 1. SegmentView is VChannel-owned, not a top-level recovery module.
-2. Every actual SegmentView consumer retains one direct Ref before asynchronous
+2. Every actual SegmentView consumer retains one message handle before asynchronous
    work is exposed.
-3. Dynamic child work is joined behind a module-local parent Ref retained
+3. Dynamic child work is joined behind a module-local parent handle retained
    before Seal.
-4. A buffered Insert Ref releases only after its containing object chunk is
+4. A buffered Insert handle releases only after its containing object chunk is
    durable.
-5. Ensure-growing and commit Refs release only after their side effects
+5. Ensure-growing and commit handles release only after their side effects
    succeed.
-6. Work that has not reached its success condition keeps its Ref pending;
+6. Work that has not reached its success condition keeps its handle live;
    cancellation and close do not release it.
 7. Segment metadata publication is captured by the frozen persist batch.
-8. Segment Refs are the only Segment completion input to the RecoveryStorage
-   Data checkpoint.
-9. Every broadcast-triggered Segment consumer retains a direct Ref before
+8. Segment retained handles are the only Segment completion input to the
+   RecoveryStorage Data checkpoint.
+9. Every broadcast-triggered Segment consumer retains a message handle before
    BroadcastAck can observe completion.
-10. Async Segment consumers mark metadata dirty before releasing their Ref.
+10. Async Segment consumers mark metadata dirty before releasing their handle.
 11. `SealedAtDataVersion` is the segment's first DataView membership version,
     not the latest collection version observed by a retry.
 12. Every retained `FLUSHED` segment without `SealedAtDataVersion` has one

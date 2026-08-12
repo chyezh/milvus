@@ -153,12 +153,12 @@ For every observed WAL message:
    `checkpoint_time_tick` or the open buffer tail.
 6. Append Delete entries to the open buffer.
 7. Notify local scanners and the PChannel stream manager.
-8. Call `Retain()` and attach the returned Ref to the entry or barrier before
-   exposing required asynchronous flush work.
+8. Call `Retain()` and attach the returned retained immutable message to the
+   entry or barrier before exposing required asynchronous flush work.
 9. Submit flush or materialization tasks when the message requires them.
 10. Return after synchronous observation. Metadata is exposed later through
     `ConsumeDirtySnapshots`; data-side completion is represented only by the
-    retained message Refs.
+    retained message handles.
 
 The Delete append step is immediately readable by live subscriptions. It is not
 object-storage durable until a TransformLog chunk is written. It is not
@@ -189,13 +189,13 @@ open buffer entries up to target T
   -> advance next_chunk_id
   -> advance checkpoint_time_tick to the last flushed Delete entry TimeTick
   -> mark TransformLog dirty
-  -> release Ack refs for messages contained in the committed chunk
+  -> release retained message handles contained in the committed chunk
   -> RecoveryStorage persists VChannelTransformLogMeta
   -> MarkSnapshotPersisted advances persistedDataTimeTick
 ```
 
-Ack release does not wait for `MarkSnapshotPersisted`: object data completion
-does not wait for catalog IO. Before releasing covered Refs, the flush task
+Handle release does not wait for `MarkSnapshotPersisted`: object data completion
+does not wait for catalog IO. Before releasing covered handles, the flush task
 commits the updated TransformLog state and marks it dirty. A persist batch then
 captures that metadata and writes it before the batch checkpoint.
 
@@ -257,7 +257,7 @@ The scheduler serializes materialization after preceding TransformLog flush
 tasks. Materialization scans Delete entries in the retained window and ignores
 sync-up frontier updates because they are not payload entries.
 
-Materialization does not retain the message AckRecord. BroadcastAck and
+Materialization does not retain a message handle. BroadcastAck and
 RecoveryStorage Data checkpoint advancement do not wait for
 `materialized_time_tick`.
 
@@ -305,8 +305,8 @@ During RecoveryStorage startup:
    `checkpoint_time_tick` are skipped.
 9. Replayed sync-up barrier messages advance volatile `sync_up_time_tick` again.
 10. Delete messages after `checkpoint_time_tick` append to the open buffer,
-    retain fresh TransformLog Ack refs, and are flushed again before the Ack
-    completed frontier can pass them.
+    retain fresh message handles, and are flushed again before the Ack completed
+    frontier can pass them.
 
 Cold chunks are loaded on demand by subscription, materialization, or truncation.
 Loading validates:

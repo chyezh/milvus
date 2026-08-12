@@ -35,7 +35,7 @@ func TestBroadcastAckWaitsUntilOnlyItsRefRemains(t *testing.T) {
 	require.ErrorIs(t, scheduler.tasks[0].Execute(context.Background()), nodescheduler.ErrDelay)
 	other.Release()
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
-	assert.True(t, controller.Completed())
+	assert.Panics(t, func() { _ = controller.TimeTick() })
 }
 
 func TestBroadcastAckRetriesSameQueueHeadAfterFailure(t *testing.T) {
@@ -59,12 +59,12 @@ func TestBroadcastAckRetriesSameQueueHeadAfterFailure(t *testing.T) {
 	controller.Seal()
 
 	assert.True(t, errors.Is(scheduler.tasks[0].Execute(context.Background()), nodescheduler.ErrDelay))
-	assert.False(t, controller.Completed())
+	assert.NotPanics(t, func() { _ = controller.TimeTick() })
 	assert.Len(t, scheduler.tasks, 1)
 
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
 	assert.Equal(t, 2, attempts)
-	assert.True(t, controller.Completed())
+	assert.Panics(t, func() { _ = controller.TimeTick() })
 }
 
 func TestBroadcastAckKeepsFIFOUntilQueueHeadSucceeds(t *testing.T) {
@@ -102,15 +102,15 @@ func TestBroadcastAckKeepsFIFOUntilQueueHeadSucceeds(t *testing.T) {
 
 	assert.True(t, errors.Is(scheduler.tasks[0].Execute(context.Background()), nodescheduler.ErrDelay))
 	assert.Empty(t, acked)
-	assert.False(t, first.Completed())
-	assert.False(t, second.Completed())
+	assert.NotPanics(t, func() { _ = first.TimeTick() })
+	assert.NotPanics(t, func() { _ = second.TimeTick() })
 	assert.Len(t, scheduler.tasks, 1)
 
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
-	assert.True(t, first.Completed())
-	assert.False(t, second.Completed())
+	assert.Panics(t, func() { _ = first.TimeTick() })
+	assert.NotPanics(t, func() { _ = second.TimeTick() })
 	require.Len(t, scheduler.tasks, 2)
 	require.NoError(t, scheduler.tasks[1].Execute(context.Background()))
-	assert.True(t, second.Completed())
+	assert.Panics(t, func() { _ = second.TimeTick() })
 	assert.Equal(t, []uint64{firstTimeTick, secondTimeTick}, acked)
 }

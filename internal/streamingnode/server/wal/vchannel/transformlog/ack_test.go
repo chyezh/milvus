@@ -36,11 +36,11 @@ func TestTransformLogFailedChunkWriteRetainsMessageRef(t *testing.T) {
 
 	err := scheduler.tasks[0].Execute(context.Background())
 	assert.True(t, errors.Is(err, nodescheduler.ErrDelay))
-	assert.False(t, controller.Completed())
+	assert.NotPanics(t, func() { _ = controller.TimeTick() })
 
 	store.err = nil
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
-	assert.True(t, controller.Completed())
+	assert.Panics(t, func() { _ = controller.TimeTick() })
 	assert.Equal(t, uint64(10), transformLog.SnapshotMeta().GetCheckpointTimeTick())
 	assert.True(t, transformLog.HasDirty())
 }
@@ -68,8 +68,8 @@ func TestTransformLogBarrierRefCompletesWithoutMaterialization(t *testing.T) {
 	assert.IsType(t, &transformMaterializeTask{}, scheduler.tasks[1])
 
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
-	assert.True(t, deleteMessage.Completed())
-	assert.True(t, barrierMessage.Completed())
+	assert.Panics(t, func() { _ = deleteMessage.TimeTick() })
+	assert.Panics(t, func() { _ = barrierMessage.TimeTick() })
 	assert.Empty(t, materializer.requests)
 }
 
@@ -95,14 +95,14 @@ func TestTransformLogMultiChunkFlushReleasesRefsByDurablePrefix(t *testing.T) {
 	require.GreaterOrEqual(t, len(scheduler.tasks), 3)
 
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
-	assert.True(t, first.Completed())
-	assert.False(t, second.Completed())
-	assert.False(t, barrier.Completed())
+	assert.Panics(t, func() { _ = first.TimeTick() })
+	assert.NotPanics(t, func() { _ = second.TimeTick() })
+	assert.NotPanics(t, func() { _ = barrier.TimeTick() })
 	assert.Equal(t, uint64(10), transformLog.SnapshotMeta().GetCheckpointTimeTick())
 
 	require.NoError(t, scheduler.tasks[1].Execute(context.Background()))
-	assert.True(t, second.Completed())
-	assert.True(t, barrier.Completed())
+	assert.Panics(t, func() { _ = second.TimeTick() })
+	assert.Panics(t, func() { _ = barrier.TimeTick() })
 	assert.Equal(t, uint64(11), transformLog.SnapshotMeta().GetCheckpointTimeTick())
 }
 
@@ -166,8 +166,8 @@ func TestTransformLogRegistersBarrierRefBeforeConcurrentFlushCommit(t *testing.T
 	<-observeDone
 	barrierController.Seal()
 
-	assert.True(t, deleteMessage.Completed())
-	assert.True(t, barrierController.Completed())
+	assert.Panics(t, func() { _ = deleteMessage.TimeTick() })
+	assert.Panics(t, func() { _ = barrierController.TimeTick() })
 }
 
 type failingTransformLogStore struct {

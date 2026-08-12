@@ -261,7 +261,7 @@ that segment and is treated as corrupted runtime input.
 
 ### 5.1 Preparation
 
-Before `VChannelWALView` is captured, bounded RecoveryStorage replay must be
+Before `VChannelWALView` is captured, bounded Meta-only recovery must be
 complete and the owning module must have resolved every retained
 `FLUSHED && SealedAtDataVersion == nil` segment. Resolution schedules or reuses
 the segment's idempotent final-commit task and delays QueryView readiness; the
@@ -323,8 +323,11 @@ QueryRuntime.applyLiveEvent(event)
 `QueryRuntime` owns event ordering. `GrowingRuntime` assumes calls come from the
 single `QueryRuntime` consumer and are already serialized in WAL order.
 
-Recovery baseline events are defined by
-[RecoveryBarrier](../../../../agent_guides/streaming-system/message/message-semantic-recovery-barrier.md).
+Recovery baselines are the WALView's independent `BaseGrowingTimeTick` and
+`BaseTransformTimeTick`. `BaseGrowingTimeTick` covers only data-path messages
+already represented by the captured WALView state; it is not automatically
+advanced to the startup `RecoveryBarrier`. Later DataScanner replay is applied
+through live events and filtered against the corresponding runtime frontier.
 
 ### 5.3 Segment Seal DataVersion
 

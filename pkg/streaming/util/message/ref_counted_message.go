@@ -12,26 +12,26 @@ import (
 type refCountedImmutableMessageCore struct {
 	mu sync.Mutex
 
-	message     ImmutableMessage
-	sealed      bool
-	refCount    int64
-	completed   bool
-	onCompleted func()
+	message   ImmutableMessage
+	sealed    bool
+	refCount  int64
+	finalized bool
+	finalizer func()
 }
 
 // NewRefCountedImmutableMessage takes ownership of msg and returns its
 // dispatch-lifetime controller.
 func NewRefCountedImmutableMessage(
 	msg ImmutableMessage,
-	onCompleted func(),
+	finalizer func(),
 ) RefCountedImmutableMessageController {
 	if msg == nil {
 		panic("ref-counted immutable message is nil")
 	}
 	core := &refCountedImmutableMessageCore{
-		message:     msg,
-		refCount:    1,
-		onCompleted: onCompleted,
+		message:   msg,
+		refCount:  1,
+		finalizer: finalizer,
 	}
 	return &refCountedImmutableMessage{
 		immutableMessageView: newImmutableMessageView(core),
@@ -42,8 +42,8 @@ func NewRefCountedImmutableMessage(
 func (c *refCountedImmutableMessageCore) immutableMessage() ImmutableMessage {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.completed || c.message == nil {
-		panic("ref-counted immutable message accessed after completion")
+	if c.finalized || c.message == nil {
+		panic("ref-counted immutable message accessed after finalization")
 	}
 	return c.message
 }
@@ -69,9 +69,9 @@ func (c *refCountedImmutableMessageCore) seal() {
 	}
 	c.sealed = true
 	c.refCount--
-	onCompleted, completed := c.takeCompletionCallbackLocked()
+	finalizer, finalized := c.takeFinalizerLocked()
 	c.mu.Unlock()
-	c.finishCompletion(onCompleted, completed)
+	c.finishFinalization(finalizer, finalized)
 }
 
 func (c *refCountedImmutableMessageCore) release() {
@@ -81,39 +81,33 @@ func (c *refCountedImmutableMessageCore) release() {
 		panic("ref-counted immutable message reference count underflow")
 	}
 	c.refCount--
-	onCompleted, completed := c.takeCompletionCallbackLocked()
+	finalizer, finalized := c.takeFinalizerLocked()
 	c.mu.Unlock()
-	c.finishCompletion(onCompleted, completed)
+	c.finishFinalization(finalizer, finalized)
 }
 
-func (c *refCountedImmutableMessageCore) takeCompletionCallbackLocked() (func(), bool) {
-	if !c.sealed || c.refCount != 0 || c.completed {
+func (c *refCountedImmutableMessageCore) takeFinalizerLocked() (func(), bool) {
+	if !c.sealed || c.refCount != 0 || c.finalized {
 		return nil, false
 	}
-	c.completed = true
-	return c.onCompleted, true
+	c.finalized = true
+	return c.finalizer, true
 }
 
-func (c *refCountedImmutableMessageCore) finishCompletion(onCompleted func(), completed bool) {
-	if !completed {
+func (c *refCountedImmutableMessageCore) finishFinalization(finalizer func(), finalized bool) {
+	if !finalized {
 		return
 	}
 	defer func() {
 		c.mu.Lock()
 		c.message = nil
-		c.onCompleted = nil
+		c.finalizer = nil
 		c.mu.Unlock()
 	}()
-	if onCompleted == nil {
+	if finalizer == nil {
 		return
 	}
-	onCompleted()
-}
-
-func (c *refCountedImmutableMessageCore) isCompleted() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.completed
+	finalizer()
 }
 
 func (c *refCountedImmutableMessageCore) isSealed() bool {
@@ -251,10 +245,6 @@ func (m *refCountedImmutableMessage) Retain() RetainedImmutableMessage {
 
 func (m *refCountedImmutableMessage) Seal() {
 	m.core.seal()
-}
-
-func (m *refCountedImmutableMessage) Completed() bool {
-	return m.core.isCompleted()
 }
 
 type retainedImmutableMessage struct {

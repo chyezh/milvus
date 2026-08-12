@@ -77,21 +77,32 @@ MetaAndData mode. A data scanner starts from the persisted Data checkpoint and
 replays any data-side work that may not have completed before the previous
 process stopped.
 
-Meta-only observation uses a no-op Ack envelope. Data-scanner observation
-creates a real Ack record for every message.
+Meta-only observation passes the ordinary `ImmutableMessage`. Data-scanner
+observation wraps the message as a `RefCountedImmutableMessage`; both implement
+the same immutable message API, while only the data wrapper can be retained for
+asynchronous completion.
+
+Each VChannel also tracks a query data-observed frontier. It starts at the
+persisted Data checkpoint and advances only after the module processes a real
+data envelope. A QueryRuntime WALView may be captured while DataScanner is still
+replaying: state before the captured frontier is included in the WALView, and
+later messages enter the runtime's pending event queue. The startup
+`RecoveryBarrier` does not gate QueryRuntime construction.
 
 ## 5. Message Observation
 
 For one data-scanner message at WAL point `P`:
 
 ```text
-create AckRecord(P) with one implicit dispatch Ref
-  -> append record to ordered Ack tracker
-  -> dispatch envelope to PChannelRecoveryManager
-  -> dispatch envelope to broadcastAckModule
-  -> Seal the record
+derive P from the raw ImmutableMessage
+  -> create trackedEntry{point: P}
+  -> construct RefCountedImmutableMessage with one implicit dispatch reference
+  -> append entry to ordered Ack tracker
+  -> dispatch the same message wrapper to PChannelRecoveryManager
+  -> dispatch the same message wrapper to broadcastAckModule
+  -> Seal the wrapper
        -> forbid future Retain
-       -> release implicit dispatch Ref
+       -> release implicit dispatch reference
   -> advance latest observed WAL point
   -> mark RecoveryStorage dirty
   -> reevaluate continuous Ack completed frontier
@@ -109,10 +120,11 @@ physical resume anchor used with `DeliverPolicyStartFrom`; recovery may replay
 completed messages but must not skip a later TimeTick.
 
 Module observation performs synchronous in-memory state transitions and may
-submit asynchronous tasks. Every actual data consumer must retain a direct Ref
-before the asynchronous task can observe completion. A module that discovers
-dynamic children later retains one parent Ref before returning and joins those
-children internally.
+submit asynchronous tasks. Every actual data consumer must retain a message
+handle before the asynchronous task can observe completion. The retained handle
+itself remains an immutable message and can be specialized, so child APIs do not
+receive a separate Ack parameter. A module that discovers dynamic children later
+retains one parent handle before returning and joins those children internally.
 
 The Module API exposes no generic data barrier or data frontier. Message Ack is
 the only contract for data-side work that must block the RecoveryStorage Data
@@ -120,8 +132,8 @@ checkpoint.
 
 Message Ack does not provide task ordering. SegmentView, TransformLog, and
 BroadcastAck own their scheduler dependencies and component-local progress.
-They call `Ref.Done()` only after their own ordered success condition is
-satisfied.
+They call `Release()` on the retained message only after their own ordered
+success condition is satisfied.
 
 ## 6. Persistence Model
 
@@ -131,7 +143,7 @@ Segment and TransformLog data are written asynchronously:
 
 - Segment insert data is sealed into chunks or committed L1 output;
 - TransformLog entries are sealed into deterministic chunk objects;
-- failed writes remain retryable and keep their Message Ack refs.
+- failed writes remain retryable and keep their retained message handles.
 
 Object writes may finish before the recovery metadata that references them is
 persisted. Such objects are not enough by themselves to publish a restart
@@ -191,7 +203,7 @@ The batch never refreshes its checkpoint to a point observed after the freeze.
 If new work arrives, it is captured by the next batch.
 
 An asynchronous consumer that changes recovery metadata must mutate the state
-and mark it dirty before calling `Ref.Done()`. Consequently, every message in
+and mark it dirty before calling `Release()`. Consequently, every message in
 the frozen Ack completed frontier has exposed all metadata that the subsequent
 DirtySnapshot capture must persist.
 
@@ -214,7 +226,7 @@ components retain the recovery information needed to reconcile them:
   TransformLog, and DataView records, allowing independently persisted keys.
 
 These are replay preconditions owned by the components, not guarantees supplied
-by AckRecord itself.
+by the reference-counted message itself.
 
 ## 8. Async Scheduler
 
@@ -229,20 +241,22 @@ RecoveryStorage wraps the node scheduler with a PChannel-scoped scheduler. It:
 
 Message Ack is independent from physical task shape. One message may fan out to
 multiple tasks, and one storage task may batch work from multiple messages.
-Every actual consumer retains a direct Ref. When children are discovered after
-observation, module-local fan-in maps those child completions to a parent Ref
-that was retained before Seal.
+Every actual consumer retains a message handle. When children are discovered
+after observation, module-local fan-in maps those child completions to a parent
+handle that was retained before Seal.
 
-Cancellation and close do not release Message Ack Refs. AckRecord has no failed
-state: only successful component work calls `Done()`. Process shutdown may
-discard the in-memory tracker because the persisted Data checkpoint remains
-behind every outstanding Ref and restart reconstructs the records from WAL.
+Cancellation and close do not release retained message handles. The wrapper has
+no failed state: only successful component work calls `Release()`. Process
+shutdown may discard the in-memory tracker because the persisted Data checkpoint
+remains behind every outstanding handle and restart reconstructs the entries and
+wrappers from WAL.
 
 ## 9. Broadcast Acknowledgement
 
-`broadcastAckModule` retains one Ref for messages carrying a `BroadcastHeader`.
-Its FIFO queue head waits until the record is sealed and its own Ref is the only
-remaining reference, then calls the coordinator Ack API and releases that Ref.
+`broadcastAckModule` retains one message handle for messages carrying a
+`BroadcastHeader`. Its FIFO queue head waits until the message is sealed and its
+own handle is exclusive, then calls the coordinator Ack API and releases that
+handle.
 
 It does not infer readiness from message type, module progress, checkpoint
 publication, or TransformLog materialization. See
@@ -267,21 +281,24 @@ VChannel, Segment, and TransformLog cleanup remain independently owned. One
 component must not inspect another component's private state to decide whether
 its own tombstone is safe to remove.
 
-Message-tracking cleanup is separate from metadata tombstones. RecoveryStorage
-removes the continuous completed AckRecord prefix from its live tracker after
-the records are sealed and all consumer Refs have completed.
+Message-tracking cleanup is separate from metadata tombstones. A finalized
+wrapper invokes its Tracker finalizer and clears the underlying
+`ImmutableMessage` immediately. RecoveryStorage removes the continuous
+completed entry prefix from its live tracker when earlier ordering gaps are
+closed. A later finalized entry therefore retains only its checkpoint point and
+completion bit, not the WAL payload.
 
 ## 11. Retry And Recovery
 
 | Interruption point | Recovery behavior |
 |---|---|
-| Before object data is durable | Consumer Ref remains pending; persisted Data checkpoint stays behind and WAL replay retries the work. |
+| Before object data is durable | Consumer handle remains live; persisted Data checkpoint stays behind and WAL replay retries the work. |
 | Object data durable but dirty metadata not persisted | Ack may complete, but the persist batch cannot write its checkpoint; WAL replay reconciles or republishes the metadata. |
-| Dirty metadata persisted but a consumer Ref remains | MetaPoint may advance, but DataPoint stays behind the Ack completed frontier. |
+| Dirty metadata persisted but a consumer handle remains | MetaPoint may advance, but DataPoint stays behind the Ack completed frontier. |
 | Dirty metadata persists but checkpoint persistence fails | Metadata is ahead of the old checkpoint; replay from the old checkpoint remains safe. |
 | Broadcast Ack succeeds before checkpoint persistence | WAL replay may repeat the idempotent coordinator Ack. |
-| Process exits with in-flight Ack records | Data scanner rebuilds records by replaying from the persisted Data checkpoint. |
-| Task context is canceled or RecoveryStorage closes | Outstanding Refs remain retained; close never reports incomplete work as completed. |
+| Process exits with in-flight wrappers | Data scanner rebuilds entries and wrappers by replaying from the persisted Data checkpoint. |
+| Task context is canceled or RecoveryStorage closes | Outstanding handles remain retained; close never reports incomplete work as completed. |
 | Catalog contains a tombstone after restart | Component reconstructs the tombstone and resumes cleanup under the same retention rule. |
 
 ## 12. ModuleAPI Boundary
@@ -291,17 +308,19 @@ The core recovery module contract is:
 ```go
 type Module interface {
     Name() ModuleName
-    ObserveMessage(ctx context.Context, msg messageack.Message)
+    ObserveMessage(ctx context.Context, msg message.ImmutableMessage)
     SwitchIntoMetaAndData() ModuleSnapshot
     ConsumeDirtySnapshots() []DirtySnapshot
 }
 ```
 
-A module must retain a message Ref for every operation that must block that
-message's completion. `ObserveMessage` returns nothing because metadata
-durability is guaranteed by the frozen persist batch and data completion is
-represented by Message Ack. Domain-specific progress values remain private to
-their owning components or are exposed through purpose-specific APIs.
+A module must retain the ref-counted message for every operation that must block
+that message's completion. Meta-only replay supplies an ordinary immutable
+message and cannot create data handles. `ObserveMessage` returns nothing because
+metadata durability is guaranteed by the frozen persist batch and data
+completion is represented by Message Ack. Domain-specific progress values
+remain private to their owning components or are exposed through purpose-specific
+APIs.
 
 `CleanupModule` and `PendingCleanupModule` expose catalog cleanup work.
 `ModuleNotifier` wakes RecoveryStorage after new dirty metadata or Ack completion
@@ -324,16 +343,17 @@ so a new persist batch can be scheduled promptly.
 2. Data checkpoint advancement is driven by the continuous Message Ack
    completed frontier.
 3. A batch DataPoint never passes its MetaPoint.
-4. Segment and TransformLog data refs release only after their data-side success
-   conditions.
+4. Segment and TransformLog retained handles release only after their data-side
+   success conditions.
 5. Async consumers update metadata and mark it dirty before releasing their
-   Ref.
+   retained handles.
 6. Every DirtySnapshot in a batch persists before that batch's checkpoint.
-7. BroadcastAck waits for other refs on the same message and remains FIFO.
+7. BroadcastAck waits for other handles on the same message and remains FIFO.
 8. QueryView references do not affect RecoveryStorage checkpoints.
-9. Physical task layout is module local and is not encoded in AckRecord owner
-   categories.
-10. WAL replay is sufficient to rebuild non-persisted Ack state.
+9. Physical task layout is module local and is not encoded in retained-handle
+   owner categories.
+10. WAL replay is sufficient to rebuild non-persisted Tracker entries and
+    ref-counted wrappers.
 11. Ack does not define component-local execution order or failure states.
 12. Checkpoint recovery uses `LastConfirmedMessageID` with
     `DeliverPolicyStartFrom`.

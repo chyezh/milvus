@@ -39,7 +39,7 @@ They are defined by [WAL Message Ack Design](../../wal/message_ack.md).
 | `RecoveryStorage` | Restores and persists PChannel WAL state and exposes `VChannelManager()`. | It does not build query runtimes, publish load callbacks, or own live query observers. |
 | `PChannelRecoveryManager` | Owns all `VChannelRecoveryModule` instances on one PChannel, the vchannel index, the shared build scheduler, and the live-event dispatcher. Implements `snview.StreamingNodeResourceManager`. | It does not own QueryView state transitions. |
 | `VChannelRecoveryModule` | Owns one VChannel's metadata, growing segments, TransformLog, DataView recovery, QueryRuntime lifecycle, and DML event dispatch. | It does not coordinate across VChannels except through manager-provided scheduler/dispatcher. |
-| `QueryRuntime` | Owns one live-event buffer, initializes resource modules from a WAL input view, drains buffered events in WAL order, and advances DataVersion watermarks. | It does not own WAL checkpoints, Message Ack records, or QueryView references. |
+| `QueryRuntime` | Owns one live-event buffer, initializes resource modules from a WAL input view, drains buffered events in WAL order, and advances DataVersion watermarks. | It does not own WAL checkpoints, Message Ack handles, or QueryView references. |
 | `QueryRuntimeModule` | Common lifecycle interface implemented by growing segment runtime, IDF oracle runtime, and future query resource modules. | It does not manage QueryView references or RecoveryStorage persistence. |
 | `QueryViewStateMachine` | Owns QueryView transitions. Calls `Acquire` when a local QueryView starts using StreamingNode resources and `Release` when the QueryView leaves. | It does not build csegments, BM25 resources, TransformLog scanners, DataView snapshots, or WAL Ack records. |
 
@@ -52,9 +52,9 @@ QueryViewStateMachine.Acquire(qv)
   -> PChannelRecoveryManager.Acquire
   -> VChannelRecoveryModule registers the QueryView reference
   -> if no runtime exists:
-       wait until bounded RecoveryStorage replay is complete
        resolve every FLUSHED segment without SealedAtDataVersion
-       build WAL input view from QueryView meta + DataView + TransformLog
+       build WAL input view from the current data-observed frontier,
+         QueryView meta, DataView, and TransformLog
        create QueryRuntime
        submit build task to the shared scheduler
   -> wait for runtime build
@@ -72,6 +72,16 @@ The readiness gate is segment-local:
 no retained segment has
   state == FLUSHED && SealedAtDataVersion == nil
 ```
+
+The startup `RecoveryBarrier` is not a resource-build gate. DataScanner may be
+replaying concurrently. WALView capture and QueryRuntime registration are
+serialized by the VChannel lock, so replay before capture is in the snapshot and
+replay after capture is buffered by the runtime.
+
+Resource readiness and MVCC visibility are separate. A recovered QueryView may
+return to `Up` after its runtime resources are prepared, while a query whose
+plan requests a newer Growing or Transform TimeTick blocks in
+`QueryRuntime.WaitMVCCVisible` until DataScanner replay reaches both frontiers.
 
 An unresolved segment triggers or reuses its idempotent final-commit task. Once
 all retained flushed segments have a version, the module classifies them
@@ -95,7 +105,8 @@ the same `QueryRuntime` event buffer. After the runtime becomes ready, the share
 dispatcher drains future events through the same per-runtime serialized path.
 
 Live query observation is not a WAL persistence completion signal. QueryRuntime
-and its modules neither retain nor release data-message Ack Refs.
+clones a ref-counted message before queueing the event; it and its modules neither
+retain nor release data-message Ack handles.
 
 ## 5. References
 
@@ -126,7 +137,8 @@ checkpoint decisions.
 Recovery rebuilds state from WAL metadata and QueryView metadata:
 
 1. `RecoveryStorage` recovers `PChannelRecoveryManager` from VChannel metadata,
-   Segment metadata, TransformLog metadata, and completes bounded WAL replay.
+   Segment metadata, and TransformLog metadata, completes bounded Meta-only
+   replay, then starts DataScanner from the persisted Data checkpoint.
 2. `SNQueryViewHandler` recovers persisted QueryView state.
 3. Recovered QueryView state machines call `Acquire` for local resources.
 4. `VChannelRecoveryModule` resolves any recovered `FLUSHED` segment without a
@@ -135,8 +147,8 @@ Recovery rebuilds state from WAL metadata and QueryView metadata:
 5. The segment snapshot includes queryable resources when
    `SealedAtDataVersion > QueryView.DataVersion` and non-queryable replay markers
    when `SealedAtDataVersion <= QueryView.DataVersion`.
-6. After runtime initialization, the module continues consuming DML and
-   dispatching live resource events to the runtime.
+6. DataScanner replay that occurs after WALView capture is buffered while the
+   runtime initializes, then applied in WAL order before and after readiness.
 
 WAL Message Ack state is rebuilt independently by RecoveryStorage replay and is
 not recovered from QueryView state.

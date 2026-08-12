@@ -31,11 +31,11 @@ func TestVChannelRecoveryModuleObservesOnlyItsVChannel(t *testing.T) {
 	module.SwitchIntoMetaAndData()
 
 	record := observeTestMessage(ctx, t, module, newTestDeleteMessage(t, "v2", 10))
-	assert.True(t, record.Completed())
+	assert.Panics(t, func() { _ = record.TimeTick() })
 	assert.Empty(t, module.ConsumeDirtySnapshots())
 
 	record = observeTestMessage(ctx, t, module, newTestDeleteMessage(t, "v1", 20))
-	assert.False(t, record.Completed())
+	assert.NotPanics(t, func() { _ = record.TimeTick() })
 }
 
 func TestVChannelRecoveryModuleLazilyAllocatesDirtySegments(t *testing.T) {
@@ -218,8 +218,8 @@ func TestVChannelRecoveryModuleRecoveryBarrierFlushesOwnedTransformLog(t *testin
 
 	barrierRecord := observeTestMessage(ctx, t, module, newTestRecoveryBarrierMessage(t, 30))
 
-	assert.False(t, deleteRecord.Completed())
-	assert.False(t, barrierRecord.Completed())
+	assert.NotPanics(t, func() { _ = deleteRecord.TimeTick() })
+	assert.NotPanics(t, func() { _ = barrierRecord.TimeTick() })
 	assert.Equal(t, uint64(30), module.transformLog.LatestTimeTick())
 }
 
@@ -229,7 +229,7 @@ func TestVChannelRecoveryModuleEmptyRecoveryBarrierDoesNotDirtyTransformLog(t *t
 
 	record := observeTestMessage(context.Background(), t, module, newTestRecoveryBarrierMessage(t, 30))
 
-	assert.True(t, record.Completed())
+	assert.Panics(t, func() { _ = record.TimeTick() })
 	for _, snapshot := range module.ConsumeDirtySnapshots() {
 		assert.NotEqual(t, moduleapi.ModuleNameTransformLog, snapshot.ModuleName())
 	}
@@ -260,13 +260,13 @@ func TestVChannelRecoveryModuleRuntimeCreatedSegmentInheritsMetaAndData(t *testi
 
 	createRecord := observeTestMessage(ctx, t, module, newTestCreateSegmentMessage(t, "v1", 10, 20))
 
-	assert.False(t, createRecord.Completed())
+	assert.NotPanics(t, func() { _ = createRecord.TimeTick() })
 	require.Len(t, scheduler.tasks, 1)
 	require.NotNil(t, module.segments[10])
 
 	flushRecord := observeTestMessage(ctx, t, module, newTestManualFlushMessage(t, "v1", 30))
 
-	assert.False(t, flushRecord.Completed())
+	assert.NotPanics(t, func() { _ = flushRecord.TimeTick() })
 	assert.Len(t, scheduler.tasks, 2)
 }
 
@@ -384,15 +384,15 @@ func TestManualFlushDeduplicatesPendingSegmentFinalCommit(t *testing.T) {
 	first := observeTestMessage(ctx, t, module, newTestManualFlushMessage(t, "v1", 30))
 	second := observeTestMessage(ctx, t, module, newTestManualFlushMessage(t, "v1", 40))
 
-	assert.False(t, first.Completed())
-	assert.False(t, second.Completed())
+	assert.NotPanics(t, func() { _ = first.TimeTick() })
+	assert.NotPanics(t, func() { _ = second.TimeTick() })
 	require.Len(t, taskScheduler.tasks, 2)
 	for _, task := range taskScheduler.tasks {
 		require.NoError(t, task.Execute(ctx))
 	}
 
-	assert.True(t, first.Completed())
-	assert.True(t, second.Completed())
+	assert.Panics(t, func() { _ = first.TimeTick() })
+	assert.Panics(t, func() { _ = second.TimeTick() })
 	assert.Equal(t, []int64{10, 20}, lifecycle.committedSegmentIDs)
 	assert.Equal(t, int64(1), module.segments[10].AssignmentMeta().GetSealedAtDataVersion().GetStreamingVersion())
 	assert.Equal(t, int64(2), module.segments[20].AssignmentMeta().GetSealedAtDataVersion().GetStreamingVersion())

@@ -26,7 +26,8 @@ PChannelRecoveryManager
 - the VChannel TransformLog and its stream registration;
 - DataView recovery state and Segment DataVersion summaries;
 - QueryRuntime creation and live event forwarding;
-- passing the shared AckRecord to actual Segment and TransformLog consumers.
+- passing the same ref-counted immutable message to actual Segment and
+  TransformLog consumers.
 
 It does not own:
 
@@ -39,22 +40,24 @@ It does not own:
 
 `PChannelRecoveryManager` selects a VChannel module by message scope. A
 PChannel-wide message is routed to all relevant VChannels using the same
-Message Ack envelope.
+ref-counted immutable message.
 
 Within one VChannel:
 
 ```text
-ObserveMessage(AckMessage)
-  -> unwrap immutable WAL message
+ObserveMessage(ImmutableMessage)
   -> update VChannelView metadata
-  -> route the same AckRecord to affected SegmentViews
-  -> route the same envelope to TransformLog
+  -> route the same ref-counted message to affected SegmentViews
+  -> route the same message to TransformLog
   -> forward a live resource event to QueryRuntime when present
   -> mark mutated recovery components dirty
 ```
 
 QueryRuntime observation is not a WAL persistence completion condition and does
-not retain Message Ack Refs.
+not retain message handles. A live event that carries a ref-counted RecoveryStorage
+message is synchronously cloned before it enters the QueryRuntime queue, so the
+queued event owns an ordinary immutable message and may outlive Message Ack
+completion.
 
 ## 3. VChannel Metadata Rules
 
@@ -66,8 +69,7 @@ The mutation marks the VChannelView dirty for the next persist batch.
 ### DropPartition And DropCollection
 
 Record logical tombstones before physical cleanup. Segment and TransformLog
-consumers handle their own data flush and Ref rules under the same message
-AckRecord.
+consumers retain their own message handles for required data work.
 
 ### TruncateCollection
 
@@ -108,16 +110,16 @@ DataPoint = min(MetaPoint, Ack completed frontier)
 ```
 
 An asynchronous VChannel-owned consumer updates recovery metadata and marks its
-component dirty before releasing the message Ref.
+component dirty before releasing its retained message handle.
 
 ## 5. Segment And TransformLog Interaction
 
-SegmentView and TransformLog data completion is joined by the shared Message
-AckRecord:
+SegmentView and TransformLog data completion is joined by the shared
+ref-counted immutable message:
 
-- Segment Refs release after segment data/lifecycle work succeeds;
-- TransformLog Refs release after containing chunks are durable;
-- BroadcastAck waits until every such direct Ref is released.
+- Segment handles release after segment data/lifecycle work succeeds;
+- TransformLog handles release after containing chunks are durable;
+- BroadcastAck waits until every other retained handle is released.
 
 Historical schema lookup is an internal VChannel ownership operation when a new
 SegmentView is created. TransformLog does not inspect Segment private state for
@@ -139,7 +141,7 @@ DataVersion fence.
 
 QueryView references protect temporary serving resources only. They do not:
 
-- retain Message Ack Refs;
+- retain WAL message handles;
 - affect RecoveryStorage persist-batch boundaries;
 - affect broadcast acknowledgement;
 - own TransformLog object durability.
@@ -172,7 +174,8 @@ After construction:
 1. metadata replay rebuilds in-memory state;
 2. modules switch into MetaAndData mode;
 3. data replay starts from the persisted Data checkpoint;
-4. replay creates new Message Ack records for unfinished messages;
+4. replay creates new Tracker entries and ref-counted wrappers for unfinished
+   messages;
 5. bounded replay reaches the recovery boundary;
 6. QueryView state recovery independently reacquires query resources, waiting
    for any recovered final commits before WAL view capture.
@@ -186,7 +189,8 @@ After construction:
 4. Data checkpoint advancement is Message Ack based and bounded by the batch
    MetaPoint.
 5. QueryRuntime observation does not participate in Message Ack.
-6. Every broadcast-related Segment/TransformLog consumer retains a direct Ref.
-7. Async VChannel-owned consumers mark metadata dirty before releasing a Ref.
+6. Every broadcast-related Segment/TransformLog consumer retains its own message
+   handle.
+7. Async VChannel-owned consumers mark metadata dirty before releasing a handle.
 8. QueryView readiness requires no retained `FLUSHED` SegmentView with a nil
    `SealedAtDataVersion`; it does not require an aggregate DataVersion fence.

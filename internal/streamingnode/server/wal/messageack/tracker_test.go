@@ -49,7 +49,6 @@ func TestTrackerAdvancesOnlyContinuousCompletedPrefix(t *testing.T) {
 	assert.Equal(t, initial.TimeTick, point.TimeTick)
 	assert.Empty(t, advanced)
 	assert.Equal(t, 2, tracker.Pending())
-	assert.True(t, second.Completed())
 	assert.Panics(t, func() { _ = second.TimeTick() })
 	tracker.mu.Lock()
 	assert.Nil(t, tracker.pending[1].controller)

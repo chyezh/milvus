@@ -214,7 +214,6 @@ type RefCountedImmutableMessageController interface {
 	RefCountedImmutableMessage
 
 	Seal()
-	Completed() bool
 }
 
 // ImmutableTxnMessage is the read-only transaction message interface.

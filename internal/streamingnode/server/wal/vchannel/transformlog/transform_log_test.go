@@ -69,8 +69,8 @@ func TestObserveMessageOwnsAppendFlushAndMaterializeScheduling(t *testing.T) {
 	deleteMessage.Seal()
 	flushMessage.Seal()
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
-	assert.True(t, deleteMessage.Completed())
-	assert.True(t, flushMessage.Completed())
+	assert.Panics(t, func() { _ = deleteMessage.TimeTick() })
+	assert.Panics(t, func() { _ = flushMessage.TimeTick() })
 }
 
 func TestEmptyBarrierDoesNotCreateDirtySnapshot(t *testing.T) {
@@ -80,7 +80,7 @@ func TestEmptyBarrierDoesNotCreateDirtySnapshot(t *testing.T) {
 	msg := newRefCountedTransformMessage(newTransformLogTestManualFlushMessage(t, 20))
 	transformLog.ObserveMessage(context.Background(), msg)
 	msg.Seal()
-	assert.True(t, msg.Completed())
+	assert.Panics(t, func() { _ = msg.TimeTick() })
 	assert.Zero(t, transformLog.SnapshotMeta().GetCheckpointTimeTick())
 	assert.Nil(t, transformLog.ConsumeDirtyAndGetSnapshot())
 }

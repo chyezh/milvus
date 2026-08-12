@@ -12,12 +12,12 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 )
 
-func TestRefCountedImmutableMessageDelegatesAndCompletes(t *testing.T) {
+func TestRefCountedImmutableMessageDelegatesAndFinalizes(t *testing.T) {
 	raw := CreateTestTimeTickSyncMessage(t, 1, 20, testMessageID("10")).
 		IntoImmutableMessage(testMessageID("11"))
-	var completed atomic.Int32
+	var finalizerCalls atomic.Int32
 	controller := NewRefCountedImmutableMessage(raw, func() {
-		completed.Add(1)
+		finalizerCalls.Add(1)
 	})
 
 	assert.Equal(t, raw.MessageType(), controller.MessageType())
@@ -26,7 +26,6 @@ func TestRefCountedImmutableMessageDelegatesAndCompletes(t *testing.T) {
 	assert.True(t, raw.LastConfirmedMessageID().EQ(controller.LastConfirmedMessageID()))
 	assert.Equal(t, raw.Payload(), controller.Payload())
 	assert.Equal(t, raw.Properties().ToRawMap(), controller.Properties().ToRawMap())
-	assert.False(t, controller.Completed())
 
 	first := controller.Retain()
 	second := controller.Retain()
@@ -37,46 +36,42 @@ func TestRefCountedImmutableMessageDelegatesAndCompletes(t *testing.T) {
 	controller.Seal()
 	assert.True(t, first.Sealed())
 	assert.False(t, first.IsExclusive())
-	assert.False(t, controller.Completed())
-	assert.Zero(t, completed.Load())
+	assert.Zero(t, finalizerCalls.Load())
 
 	first.Release()
 	first.Release()
 	assert.True(t, second.IsExclusive())
-	assert.False(t, controller.Completed())
 
 	second.Release()
 	second.Release()
-	assert.True(t, controller.Completed())
-	assert.Equal(t, int32(1), completed.Load())
+	assert.Equal(t, int32(1), finalizerCalls.Load())
 	assert.Panics(t, func() { _ = controller.TimeTick() })
 	assert.Panics(t, func() { _ = first.TimeTick() })
 	assert.Panics(t, func() { _ = second.Sealed() })
 }
 
-func TestRefCountedImmutableMessageCompletesAtSealWithoutConsumers(t *testing.T) {
+func TestRefCountedImmutableMessageFinalizesAtSealWithoutConsumers(t *testing.T) {
 	raw := CreateTestTimeTickSyncMessage(t, 1, 20, testMessageID("10")).
 		IntoImmutableMessage(testMessageID("11"))
-	var completed atomic.Int32
+	var finalizerCalls atomic.Int32
 	controller := NewRefCountedImmutableMessage(raw, func() {
-		completed.Add(1)
+		finalizerCalls.Add(1)
 	})
 
 	controller.Seal()
 	controller.Seal()
 
-	assert.True(t, controller.Completed())
-	assert.Equal(t, int32(1), completed.Load())
+	assert.Equal(t, int32(1), finalizerCalls.Load())
 	assert.Panics(t, func() { controller.Retain() })
 }
 
-func TestRefCountedImmutableMessageClearsPayloadAfterCompletionCallback(t *testing.T) {
+func TestRefCountedImmutableMessageClearsPayloadAfterFinalizer(t *testing.T) {
 	raw := CreateTestTimeTickSyncMessage(t, 1, 20, testMessageID("10")).
 		IntoImmutableMessage(testMessageID("11"))
 	var controller RefCountedImmutableMessageController
 	controller = NewRefCountedImmutableMessage(raw, func() {
 		core := controller.(*refCountedImmutableMessage).core
-		core.finishCompletion(nil, false)
+		core.finishFinalization(nil, false)
 		core.mu.Lock()
 		assert.NotNil(t, core.message)
 		core.mu.Unlock()
@@ -84,7 +79,6 @@ func TestRefCountedImmutableMessageClearsPayloadAfterCompletionCallback(t *testi
 
 	controller.Seal()
 
-	assert.True(t, controller.Completed())
 	core := controller.(*refCountedImmutableMessage).core
 	core.mu.Lock()
 	assert.Nil(t, core.message)
@@ -96,9 +90,9 @@ func TestRefCountedImmutableMessageRetainAndSealAreSerialized(t *testing.T) {
 	for range 100 {
 		raw := CreateTestTimeTickSyncMessage(t, 1, 20, testMessageID("10")).
 			IntoImmutableMessage(testMessageID("11"))
-		var completed atomic.Int32
+		var finalizerCalls atomic.Int32
 		controller := NewRefCountedImmutableMessage(raw, func() {
-			completed.Add(1)
+			finalizerCalls.Add(1)
 		})
 		start := make(chan struct{})
 		retained := make(chan RetainedImmutableMessage, 1)
@@ -125,8 +119,7 @@ func TestRefCountedImmutableMessageRetainAndSealAreSerialized(t *testing.T) {
 			handle.Release()
 		}
 
-		assert.True(t, controller.Completed())
-		assert.Equal(t, int32(1), completed.Load())
+		assert.Equal(t, int32(1), finalizerCalls.Load())
 	}
 }
 
@@ -148,7 +141,6 @@ func TestRefCountedSpecializedImmutableMessagePreservesLifecycle(t *testing.T) {
 	controller.Seal()
 	assert.True(t, retainedInsert.IsExclusive())
 	retainedInsert.Release()
-	assert.True(t, controller.Completed())
 	assert.Panics(t, func() { retainedInsert.MustBody() })
 }
 
@@ -171,7 +163,6 @@ func TestRetainedImmutableTxnMessageOwnsBorrowedChildren(t *testing.T) {
 
 	controller.Seal()
 	retained.Release()
-	assert.True(t, controller.Completed())
 	assert.Panics(t, func() { _ = retainedTxn.Size() })
 	assert.Panics(t, func() { _ = child.TimeTick() })
 }
@@ -185,7 +176,6 @@ func TestCloneImmutableMessageOutlivesRefCountedSource(t *testing.T) {
 	cloned := CloneImmutableMessage(controller)
 	controller.Seal()
 
-	assert.True(t, controller.Completed())
 	assert.Equal(t, uint64(20), cloned.TimeTick())
 	assert.Equal(t, int64(100), MustAsImmutableInsertMessageV1(cloned).Header().Partitions[0].SegmentAssignment.SegmentId)
 	require.NotEmpty(t, sourcePayload)

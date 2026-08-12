@@ -30,11 +30,12 @@ does not imply runtime module ownership.
 The authoritative completion rules are:
 
 1. TransformLog calls `Retain()` when a message requires chunk flush work and
-   stores the returned Ref with the buffered entry or barrier.
-2. The Ref releases after the chunk covering the message is durable and
+   stores the returned retained immutable message with the buffered entry or
+   barrier.
+2. The handle releases after the chunk covering the message is durable and
    committed into in-memory TransformLog state.
-3. The Ref does not wait for L0 materialization.
+3. The handle does not wait for L0 materialization.
 4. TransformLog installs metadata changes and marks itself dirty before
-   releasing the Ref.
+   releasing the handle.
 5. RecoveryStorage persists the TransformLog DirtySnapshot before the frozen
    batch checkpoint that includes the completed message.
