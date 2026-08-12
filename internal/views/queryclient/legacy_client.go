@@ -28,8 +28,7 @@ type LegacyClient interface {
 }
 
 type LegacySearchRequest struct {
-	Req            *internalpb.SearchRequest
-	RetainedMemory *searchutil.RetainedMemoryAccounting
+	Req *internalpb.SearchRequest
 }
 
 type LegacySearchResult struct {
@@ -63,10 +62,8 @@ type legacyClient struct {
 }
 
 type prefetchedReduceStream struct {
-	stream         searchutil.ReduceStream
-	firstChunk     *internalpb.SearchResults
-	retainedChunk  *internalpb.SearchResults
-	retainedMemory *searchutil.RetainedMemoryAccounting
+	stream     searchutil.ReduceStream
+	firstChunk *internalpb.SearchResults
 }
 
 func (s *prefetchedReduceStream) Recv() (*internalpb.SearchResults, error) {
@@ -75,37 +72,17 @@ func (s *prefetchedReduceStream) Recv() (*internalpb.SearchResults, error) {
 		s.firstChunk = nil
 		return chunk, nil
 	}
-	s.releaseRetainedChunk()
-	chunk, err := s.stream.Recv()
-	if err == nil && chunk != nil {
-		s.retainChunk(chunk)
-	}
-	return chunk, err
+	return s.stream.Recv()
 }
 
 func (s *prefetchedReduceStream) Close() error {
-	s.releaseRetainedChunk()
 	s.firstChunk = nil
 	return s.stream.Close()
 }
 
 func (s *prefetchedReduceStream) Interrupt() (*internalpb.SearchResults, error) {
-	s.releaseRetainedChunk()
 	s.firstChunk = nil
 	return s.stream.Interrupt()
-}
-
-func (s *prefetchedReduceStream) retainChunk(chunk *internalpb.SearchResults) {
-	s.retainedChunk = chunk
-	s.retainedMemory.Retain(s, searchutil.RetainedMemoryFinalChunkHandoff, chunk)
-}
-
-func (s *prefetchedReduceStream) releaseRetainedChunk() {
-	if s.retainedChunk == nil {
-		return
-	}
-	s.retainedMemory.Release(s, s.retainedChunk)
-	s.retainedChunk = nil
 }
 
 func NewLegacyViewQueryClient(
@@ -151,17 +128,15 @@ func supportsSearchStream(req *internalpb.SearchRequest) bool {
 
 func (c *legacyClient) Search(ctx context.Context, req *LegacySearchRequest) (*LegacySearchResult, error) {
 	if c.enableSearchStreaming && supportsSearchStream(req.Req) {
-		req.RetainedMemory.SetMode(searchutil.RetainedMemoryModeStreaming)
 		return c.searchStream(ctx, req)
 	}
-	req.RetainedMemory.SetMode(searchutil.RetainedMemoryModeBatch)
 
 	vchannels, err := c.shardResolver.ResolveVChannels(ctx, req.Req.CollectionID)
 	if err != nil {
 		return nil, err
 	}
 
-	collector := newLegacySearchCollector(req.RetainedMemory)
+	collector := newLegacySearchCollector()
 	shardPlans := make([]ShardPlan, len(vchannels))
 	g, gCtx := errgroup.WithContext(ctx)
 	for i := range vchannels {
@@ -180,7 +155,6 @@ func (c *legacyClient) Search(ctx context.Context, req *LegacySearchRequest) (*L
 		})
 	}
 	if err := g.Wait(); err != nil {
-		collector.ReleaseAll()
 		return nil, err
 	}
 	return &LegacySearchResult{
@@ -203,7 +177,7 @@ func (c *legacyClient) searchStream(ctx context.Context, req *LegacySearchReques
 		for i := range vchannels {
 			i := i
 			g.Go(func() error {
-				stream, plan, err := c.shardClient.SearchStream(ctx, vchannels[i], req.Req, c.searchStreamChunkSize, req.RetainedMemory)
+				stream, plan, err := c.shardClient.SearchStream(ctx, vchannels[i], req.Req, c.searchStreamChunkSize)
 				if err != nil {
 					return err
 				}
@@ -226,13 +200,7 @@ func (c *legacyClient) searchStream(ctx context.Context, req *LegacySearchReques
 			continue
 		}
 
-		finalStream, err := searchutil.NewReduceStreamWithRetainedMemory(
-			req.Req,
-			vchannelStreams,
-			c.searchStreamChunkSize,
-			req.RetainedMemory,
-			searchutil.RetainedMemoryFinalReduceStreamRole,
-		)
+		finalStream, err := searchutil.NewReduceStream(req.Req, vchannelStreams, c.searchStreamChunkSize)
 		if err != nil {
 			for _, stream := range vchannelStreams {
 				err = errors.Join(err, stream.Close())
@@ -252,13 +220,10 @@ func (c *legacyClient) searchStream(ctx context.Context, req *LegacySearchReques
 
 		stream := finalStream
 		if firstChunk != nil {
-			prefetched := &prefetchedReduceStream{
-				stream:         finalStream,
-				firstChunk:     firstChunk,
-				retainedMemory: req.RetainedMemory,
+			stream = &prefetchedReduceStream{
+				stream:     finalStream,
+				firstChunk: firstChunk,
 			}
-			prefetched.retainChunk(firstChunk)
-			stream = prefetched
 		}
 
 		return &LegacySearchResult{
@@ -303,15 +268,13 @@ func (c *legacyClient) Query(ctx context.Context, req *LegacyQueryRequest) (*Leg
 }
 
 type legacySearchCollector struct {
-	mu             sync.Mutex
-	results        map[string][]*internalpb.SearchResults
-	retainedMemory *searchutil.RetainedMemoryAccounting
+	mu      sync.Mutex
+	results map[string][]*internalpb.SearchResults
 }
 
-func newLegacySearchCollector(retainedMemory *searchutil.RetainedMemoryAccounting) *legacySearchCollector {
+func newLegacySearchCollector() *legacySearchCollector {
 	return &legacySearchCollector{
-		results:        make(map[string][]*internalpb.SearchResults),
-		retainedMemory: retainedMemory,
+		results: make(map[string][]*internalpb.SearchResults),
 	}
 }
 
@@ -326,7 +289,6 @@ func (c *legacySearchCollector) Add(shardID qviews.ShardID, resp *viewpb.SearchO
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.retainedMemory.Retain(result, searchutil.RetainedMemoryBatchResults, result)
 	c.results[shardID.String()] = append(c.results[shardID.String()], result)
 	return nil
 }
@@ -334,21 +296,7 @@ func (c *legacySearchCollector) Add(shardID qviews.ShardID, resp *viewpb.SearchO
 func (c *legacySearchCollector) ResetShard(shardID qviews.ShardID) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for _, result := range c.results[shardID.String()] {
-		c.retainedMemory.Release(result, result)
-	}
 	delete(c.results, shardID.String())
-}
-
-func (c *legacySearchCollector) ReleaseAll() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for shardID, results := range c.results {
-		for _, result := range results {
-			c.retainedMemory.Release(result, result)
-		}
-		delete(c.results, shardID)
-	}
 }
 
 func (c *legacySearchCollector) Finish() (*internalpb.SearchResults, error) {

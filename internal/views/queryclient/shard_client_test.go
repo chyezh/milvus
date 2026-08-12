@@ -189,7 +189,7 @@ func TestShardSearchStreamReturnsPerVChannelReduceStream(t *testing.T) {
 	}
 	client := newTestShardClient(1, shardID, plan, queryService)
 
-	stream, shardPlan, err := client.SearchStream(context.Background(), shardID.VChannel, request, 2, nil)
+	stream, shardPlan, err := client.SearchStream(context.Background(), shardID.VChannel, request, 2)
 
 	require.NoError(t, err)
 	require.Equal(t, shardID, shardPlan.ShardID)
@@ -237,7 +237,7 @@ func TestShardSearchStreamCloseCompletesReplicaPicker(t *testing.T) {
 		},
 	)
 
-	stream, _, err := client.SearchStream(context.Background(), shardID.VChannel, request, defaultSearchStreamChunkSize, nil)
+	stream, _, err := client.SearchStream(context.Background(), shardID.VChannel, request, defaultSearchStreamChunkSize)
 	require.NoError(t, err)
 	require.NoError(t, stream.Close())
 
@@ -269,7 +269,7 @@ func TestShardSearchClosesOpenedStreamsOnSetupFailure(t *testing.T) {
 	}
 	client := newTestShardClient(1, shardID, plan, queryService)
 
-	_, _, err := client.SearchStream(context.Background(), shardID.VChannel, request, defaultSearchStreamChunkSize, nil)
+	_, _, err := client.SearchStream(context.Background(), shardID.VChannel, request, defaultSearchStreamChunkSize)
 
 	require.ErrorContains(t, err, "open failed")
 	require.Equal(t, 1, openedStream.closeCount())

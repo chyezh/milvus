@@ -2410,11 +2410,10 @@ type proxyConfig struct {
 
 	GracefulStopTimeout ParamItem `refreshable:"true"`
 
-	SlowQuerySpanInSeconds   ParamItem `refreshable:"true"`
-	QueryNodePoolingSize     ParamItem `refreshable:"false"`
-	EnableSearchStreaming    ParamItem `refreshable:"false"`
-	SearchStreamChunkSize    ParamItem `refreshable:"false"`
-	RetainedMemoryOutputPath ParamItem `refreshable:"false"`
+	SlowQuerySpanInSeconds ParamItem `refreshable:"true"`
+	QueryNodePoolingSize   ParamItem `refreshable:"false"`
+	EnableSearchStreaming  ParamItem `refreshable:"false"`
+	SearchStreamChunkSize  ParamItem `refreshable:"false"`
 
 	HybridSearchRequeryPolicy ParamItem `refreshable:"true"`
 }
@@ -3072,15 +3071,6 @@ Disabled if the value is less or equal to 0.`,
 		Export:       true,
 	}
 	p.SearchStreamChunkSize.Init(base.mgr)
-
-	p.RetainedMemoryOutputPath = ParamItem{
-		Key:          "proxy.queryView.retainedMemoryOutputPath",
-		Version:      "3.0.0",
-		DefaultValue: "",
-		Doc:          "append QueryView iterator retained-memory accounting records to this JSONL file; empty disables accounting",
-		Export:       true,
-	}
-	p.RetainedMemoryOutputPath.Init(base.mgr)
 }
 
 // /////////////////////////////////////////////////////////////////////////////
