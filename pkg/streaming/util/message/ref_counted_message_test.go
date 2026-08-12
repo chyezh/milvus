@@ -12,190 +12,131 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 )
 
-func TestRefCountedImmutableMessageDelegatesAndFinalizes(t *testing.T) {
+func TestRefCountedImmutableMessageOwnerCloneAndFinalize(t *testing.T) {
 	raw := CreateTestTimeTickSyncMessage(t, 1, 20, testMessageID("10")).
 		IntoImmutableMessage(testMessageID("11"))
 	var finalizerCalls atomic.Int32
-	controller := NewRefCountedImmutableMessage(raw, func() {
+	owner := NewRefCountedImmutableMessageOwner(raw, func() {
 		finalizerCalls.Add(1)
 	})
 
-	assert.Equal(t, raw.MessageType(), controller.MessageType())
-	assert.Equal(t, raw.TimeTick(), controller.TimeTick())
-	assert.True(t, raw.MessageID().EQ(controller.MessageID()))
-	assert.True(t, raw.LastConfirmedMessageID().EQ(controller.LastConfirmedMessageID()))
-	assert.Equal(t, raw.Payload(), controller.Payload())
-	assert.Equal(t, raw.Properties().ToRawMap(), controller.Properties().ToRawMap())
-
-	first := controller.Retain()
-	second := controller.Retain()
+	assert.Same(t, raw, owner.Message())
+	first := owner.Clone()
+	second := first.Clone()
 	require.NotSame(t, first, second)
-	assert.False(t, first.Sealed())
-	assert.False(t, first.IsExclusive())
+	assert.Same(t, raw, first.Message())
+	assert.Same(t, raw, second.Message())
 
-	controller.Seal()
-	assert.True(t, first.Sealed())
-	assert.False(t, first.IsExclusive())
+	owner.Release()
 	assert.Zero(t, finalizerCalls.Load())
-
 	first.Release()
-	first.Release()
-	assert.True(t, second.IsExclusive())
-
-	second.Release()
+	assert.Zero(t, finalizerCalls.Load())
 	second.Release()
 	assert.Equal(t, int32(1), finalizerCalls.Load())
-	assert.Panics(t, func() { _ = controller.TimeTick() })
-	assert.Panics(t, func() { _ = first.TimeTick() })
-	assert.Panics(t, func() { _ = second.Sealed() })
+
+	assert.Panics(t, func() { _ = owner.Message() })
+	assert.Panics(t, func() { _ = first.Message() })
+	assert.Panics(t, func() { _ = second.Message() })
+	first.Release()
 }
 
-func TestRefCountedImmutableMessageFinalizesAtSealWithoutConsumers(t *testing.T) {
+func TestRefCountedImmutableMessageOwnerReleaseDoesNotInvalidateClones(t *testing.T) {
+	raw := CreateTestTimeTickSyncMessage(t, 1, 20, testMessageID("10")).
+		IntoImmutableMessage(testMessageID("11"))
+	owner := NewRefCountedImmutableMessageOwner(raw, nil)
+	clone := owner.Clone()
+
+	owner.Release()
+	assert.Panics(t, func() { _ = owner.Message() })
+	assert.Equal(t, uint64(20), clone.Message().TimeTick())
+	clone.Release()
+}
+
+func TestRefCountedImmutableMessageOwnerWithoutConsumers(t *testing.T) {
+	raw := CreateTestTimeTickSyncMessage(t, 1, 20, testMessageID("10")).
+		IntoImmutableMessage(testMessageID("11"))
+	var finalized atomic.Bool
+	owner := NewRefCountedImmutableMessageOwner(raw, func() {
+		finalized.Store(true)
+	})
+
+	owner.Release()
+	assert.True(t, finalized.Load())
+}
+
+func TestRetainedImmutableMessageConcurrentReleaseFinalizesOnce(t *testing.T) {
 	raw := CreateTestTimeTickSyncMessage(t, 1, 20, testMessageID("10")).
 		IntoImmutableMessage(testMessageID("11"))
 	var finalizerCalls atomic.Int32
-	controller := NewRefCountedImmutableMessage(raw, func() {
+	owner := NewRefCountedImmutableMessageOwner(raw, func() {
 		finalizerCalls.Add(1)
 	})
+	handles := make([]RetainedImmutableMessage, 64)
+	for i := range handles {
+		handles[i] = owner.Clone()
+	}
+	owner.Release()
 
-	controller.Seal()
-	controller.Seal()
+	var wg sync.WaitGroup
+	for _, handle := range handles {
+		wg.Go(handle.Release)
+	}
+	wg.Wait()
 
 	assert.Equal(t, int32(1), finalizerCalls.Load())
-	assert.Panics(t, func() { controller.Retain() })
 }
 
-func TestRefCountedImmutableMessageClearsPayloadAfterFinalizer(t *testing.T) {
-	raw := CreateTestTimeTickSyncMessage(t, 1, 20, testMessageID("10")).
-		IntoImmutableMessage(testMessageID("11"))
-	var controller RefCountedImmutableMessageController
-	controller = NewRefCountedImmutableMessage(raw, func() {
-		core := controller.(*refCountedImmutableMessage).core
-		core.finishFinalization(nil, false)
-		core.mu.Lock()
-		assert.NotNil(t, core.message)
-		core.mu.Unlock()
-	})
-
-	controller.Seal()
-
-	core := controller.(*refCountedImmutableMessage).core
-	core.mu.Lock()
-	assert.Nil(t, core.message)
-	core.mu.Unlock()
-	assert.Panics(t, func() { _ = controller.TimeTick() })
-}
-
-func TestRefCountedImmutableMessageRetainAndSealAreSerialized(t *testing.T) {
-	for range 100 {
-		raw := CreateTestTimeTickSyncMessage(t, 1, 20, testMessageID("10")).
-			IntoImmutableMessage(testMessageID("11"))
-		var finalizerCalls atomic.Int32
-		controller := NewRefCountedImmutableMessage(raw, func() {
-			finalizerCalls.Add(1)
-		})
-		start := make(chan struct{})
-		retained := make(chan RetainedImmutableMessage, 1)
-		var workers sync.WaitGroup
-		workers.Add(2)
-		go func() {
-			defer workers.Done()
-			defer func() {
-				if recover() != nil {
-					retained <- nil
-				}
-			}()
-			<-start
-			retained <- controller.Retain()
-		}()
-		go func() {
-			defer workers.Done()
-			<-start
-			controller.Seal()
-		}()
-		close(start)
-		workers.Wait()
-		if handle := <-retained; handle != nil {
-			handle.Release()
-		}
-
-		assert.Equal(t, int32(1), finalizerCalls.Load())
-	}
-}
-
-func TestRefCountedSpecializedImmutableMessagePreservesLifecycle(t *testing.T) {
+func TestRetainedImmutableMessageCloneIsIndependent(t *testing.T) {
 	raw := CreateTestInsertMessage(t, 100, 2, 20, testMessageID("10")).
 		IntoImmutableMessage(testMessageID("11"))
-	controller := NewRefCountedImmutableMessage(raw, nil)
+	owner := NewRefCountedImmutableMessageOwner(raw, nil)
+	first := owner.Clone()
+	second := first.Clone()
 
-	specialized := MustAsImmutableInsertMessageV1(controller)
-	refCounted, ok := specialized.(RefCountedSpecializedImmutableMessage[*InsertMessageHeader, *msgpb.InsertRequest])
-	require.True(t, ok)
-	assert.Equal(t, int64(100), refCounted.Header().Partitions[0].SegmentAssignment.SegmentId)
-	assert.Equal(t, int64(1), refCounted.MustBody().CollectionID)
-
-	retained := refCounted.Retain()
-	retainedInsert := MustAsRetainedImmutableInsertMessageV1(retained)
-	assert.Equal(t, int64(100), retainedInsert.Header().Partitions[0].SegmentAssignment.SegmentId)
-
-	controller.Seal()
-	assert.True(t, retainedInsert.IsExclusive())
-	retainedInsert.Release()
-	assert.Panics(t, func() { retainedInsert.MustBody() })
+	first.Release()
+	assert.Equal(t, uint64(20), second.Message().TimeTick())
+	second.Release()
+	owner.Release()
 }
 
-func TestRetainedImmutableTxnMessageOwnsBorrowedChildren(t *testing.T) {
+func TestRetainedMessageDoesNotExposeMessageAfterRelease(t *testing.T) {
+	raw := CreateTestInsertMessage(t, 100, 2, 20, testMessageID("10")).
+		IntoImmutableMessage(testMessageID("11"))
+	owner := NewRefCountedImmutableMessageOwner(raw, nil)
+	retained := owner.Clone()
+	typed := RetainedMessage[ImmutableMessage]{message: raw, retained: retained}
+
+	typed.Release()
+	assert.Panics(t, func() { _ = typed.Message() })
+	owner.Release()
+}
+
+func TestRetainedTxnKeepsWholeTransactionAlive(t *testing.T) {
 	txn := buildRefCountedTestTxn(t)
-	controller := NewRefCountedImmutableMessage(txn, nil)
-	retained := controller.Retain()
-	retainedTxn := AsImmutableTxnMessage(retained)
+	owner := NewRefCountedImmutableMessageOwner(txn, nil)
+	retained := owner.Clone()
+
+	retainedTxn := AsImmutableTxnMessage(retained.Message())
 	require.NotNil(t, retainedTxn)
 	require.Equal(t, 1, retainedTxn.Size())
-
-	var child ImmutableMessage
-	require.NoError(t, retainedTxn.RangeOver(func(msg ImmutableMessage) error {
-		child = msg
-		assert.Equal(t, txn.TimeTick(), msg.TimeTick())
-		return nil
-	}))
-	assert.NotNil(t, retainedTxn.Begin())
-	assert.NotNil(t, retainedTxn.Commit())
-
-	controller.Seal()
-	retained.Release()
-	assert.Panics(t, func() { _ = retainedTxn.Size() })
-	assert.Panics(t, func() { _ = child.TimeTick() })
-}
-
-func TestCloneImmutableMessageOutlivesRefCountedSource(t *testing.T) {
-	raw := CreateTestInsertMessage(t, 100, 2, 20, testMessageID("10")).
-		IntoImmutableMessage(testMessageID("11"))
-	sourcePayload := raw.Payload()
-	controller := NewRefCountedImmutableMessage(raw, nil)
-
-	cloned := CloneImmutableMessage(controller)
-	controller.Seal()
-
-	assert.Equal(t, uint64(20), cloned.TimeTick())
-	assert.Equal(t, int64(100), MustAsImmutableInsertMessageV1(cloned).Header().Partitions[0].SegmentAssignment.SegmentId)
-	require.NotEmpty(t, sourcePayload)
-	require.NotEmpty(t, cloned.Payload())
-	assert.NotSame(t, &sourcePayload[0], &cloned.Payload()[0])
-}
-
-func TestCloneImmutableTxnMessageCopiesBorrowedChildren(t *testing.T) {
-	controller := NewRefCountedImmutableMessage(buildRefCountedTestTxn(t), nil)
-	cloned := CloneImmutableMessage(controller)
-	clonedTxn := AsImmutableTxnMessage(cloned)
-	require.NotNil(t, clonedTxn)
-
-	controller.Seal()
-
-	require.Equal(t, 1, clonedTxn.Size())
-	require.NoError(t, clonedTxn.RangeOver(func(inner ImmutableMessage) error {
+	require.NoError(t, retainedTxn.RangeOver(func(inner ImmutableMessage) error {
 		assert.Equal(t, MessageTypeInsert, inner.MessageType())
 		return nil
 	}))
+
+	retained.Release()
+	owner.Release()
+}
+
+func TestCloneImmutableMessageCanOutliveOwner(t *testing.T) {
+	raw := CreateTestInsertMessage(t, 100, 2, 20, testMessageID("10")).
+		IntoImmutableMessage(testMessageID("11"))
+	owner := NewRefCountedImmutableMessageOwner(raw, nil)
+	cloned := CloneImmutableMessage(owner.Message())
+	owner.Release()
+
+	assert.Equal(t, uint64(20), cloned.TimeTick())
+	assert.NotSame(t, &raw.Payload()[0], &cloned.Payload()[0])
 }
 
 func buildRefCountedTestTxn(t *testing.T) ImmutableTxnMessage {

@@ -65,8 +65,11 @@ snapshots:
 - Every actual Segment and TransformLog data consumer retains a direct message
   handle until its object-storage work succeeds and its metadata changes are
   marked dirty.
-- Broadcast acknowledgement retains its own handle and waits until the sealed
-  message has no other handles, independently from checkpoint progress.
+- Broadcast acknowledgement adds no reference. Its sink unconditionally
+  releases the Owner; it uses the Tracker entry's fixed broadcast requirement
+  to decide whether to enqueue a FIFO ACK task. That task waits for the local
+  consumer completion event and completes the broadcast Tracker condition only
+  after Coordinator Ack succeeds.
 - `AckSyncUp` disables Coordinator FastAck and waits for the RecoveryStorage
   consumer Ack; it does not require checkpoint persistence before that Ack.
 - Retry, cancellation, and close keep incomplete handles retained. Restart

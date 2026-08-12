@@ -10,7 +10,6 @@ import (
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
-	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
@@ -77,7 +76,7 @@ func TestSharedDefaultFlushPolicyObservesDynamicConfig(t *testing.T) {
 	defer params.Reset(params.DataNodeCfg.FlushInsertBufferSize.Key)
 
 	assert.True(t, policy.ShouldFlush(writeOnlyInsertBuffer{
-		entries:    []message.RetainedImmutableMessage{nil},
+		entries:    []retainedInsertMessage{{}},
 		binarySize: 2,
 	}, 0))
 }
@@ -178,9 +177,9 @@ func TestPrunePendingFlushChunksClearsDiscardedBackingSlots(t *testing.T) {
 	view := &SegmentView{
 		meta: &streamingpb.SegmentAssignmentMeta{DataCheckpointTimeTick: 20},
 		pendingFlushChunks: []writeOnlyInsertBuffer{
-			{entries: make([]message.RetainedImmutableMessage, 1), toTimeTick: 10},
-			{entries: make([]message.RetainedImmutableMessage, 1), toTimeTick: 15},
-			{entries: make([]message.RetainedImmutableMessage, 1), toTimeTick: 30},
+			{entries: make([]retainedInsertMessage, 1), toTimeTick: 10},
+			{entries: make([]retainedInsertMessage, 1), toTimeTick: 15},
+			{entries: make([]retainedInsertMessage, 1), toTimeTick: 30},
 		},
 	}
 

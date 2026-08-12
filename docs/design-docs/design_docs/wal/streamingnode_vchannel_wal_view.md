@@ -81,8 +81,9 @@ release VChannel lock
 Messages consumed before capture are represented by persisted storage, pending
 Segment buffers, pending flush chunks, or TransformLog state. Messages consumed
 after capture see the installed QueryRuntime and enter its pending event queue.
-Ref-counted RecoveryStorage messages are cloned before queueing; QueryRuntime
-therefore owns an ordinary immutable copy and never retains a Message Ack handle.
+`VChannelRecoveryModule` deep-copies a data-scanner message before queueing it;
+QueryRuntime therefore owns an ordinary immutable copy and never receives a
+Message Ack handle.
 DataScanner therefore does not need to stop or catch up to the startup barrier
 before QueryRuntime preparation begins.
 

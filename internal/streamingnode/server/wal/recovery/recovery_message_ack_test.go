@@ -22,7 +22,7 @@ import (
 )
 
 type retainingRecoveryModule struct {
-	message message.RefCountedImmutableMessage
+	message message.ImmutableMessage
 	handle  message.RetainedImmutableMessage
 }
 
@@ -30,13 +30,14 @@ func (m *retainingRecoveryModule) Name() moduleapi.ModuleName {
 	return moduleapi.ModuleName("retaining-test")
 }
 
-func (m *retainingRecoveryModule) ObserveMessage(_ context.Context, msg message.ImmutableMessage) {
-	refCounted, ok := msg.(message.RefCountedImmutableMessage)
-	if !ok {
-		return
-	}
-	m.message = refCounted
-	m.handle = refCounted.Retain()
+func (m *retainingRecoveryModule) ObserveMessage(_ context.Context, _ message.ImmutableMessage) {}
+
+func (m *retainingRecoveryModule) ObserveDataMessage(
+	_ context.Context,
+	owner message.RefCountedImmutableMessageOwner,
+) {
+	m.message = owner.Message()
+	m.handle = owner.Clone()
 }
 
 func (m *retainingRecoveryModule) SwitchIntoMetaAndData() moduleapi.ModuleSnapshot {
@@ -47,7 +48,7 @@ func (m *retainingRecoveryModule) ConsumeDirtySnapshots() []moduleapi.DirtySnaps
 	return nil
 }
 
-func TestDataScannerSealsMessageAfterAllModulesObserve(t *testing.T) {
+func TestDataScannerReleasesOwnerAfterAllModulesObserve(t *testing.T) {
 	checkpoint := &utility.WALCheckpoint{
 		MessageID: walimplstest.NewTestMessageID(1),
 		TimeTick:  10,
@@ -72,8 +73,7 @@ func TestDataScannerSealsMessageAfterAllModulesObserve(t *testing.T) {
 
 	require.NotNil(t, module.message)
 	require.NotNil(t, module.handle)
-	assert.True(t, module.handle.Sealed())
-	assert.True(t, module.handle.IsExclusive())
+	assert.Equal(t, msg.TimeTick(), module.handle.Message().TimeTick())
 	point := storage.ackTracker.CompletedPoint()
 	assert.Equal(t, uint64(10), point.TimeTick)
 
@@ -81,6 +81,55 @@ func TestDataScannerSealsMessageAfterAllModulesObserve(t *testing.T) {
 	point = storage.ackTracker.CompletedPoint()
 	require.True(t, msg.LastConfirmedMessageID().EQ(point.MessageID))
 	assert.Equal(t, msg.TimeTick(), point.TimeTick)
+}
+
+func TestBroadcastDataMessageCompletesAfterConsumersAndCoordinatorAck(t *testing.T) {
+	checkpoint := &utility.WALCheckpoint{
+		MessageID: walimplstest.NewTestMessageID(1),
+		TimeTick:  10,
+		DataCheckpoint: &utility.WALConsumeCheckpoint{
+			MessageID: walimplstest.NewTestMessageID(1),
+			TimeTick:  10,
+		},
+	}
+	storage := newTestRecoveryStorage(t, checkpoint)
+	t.Cleanup(storage.metrics.Close)
+	module := &retainingRecoveryModule{}
+	storage.modules = []moduleapi.Module{module}
+	scheduler := &recordingAckTaskScheduler{}
+	storage.broadcastAck = newBroadcastAckModule(moduleapi.Runtime{Scheduler: scheduler})
+	attempts := 0
+	storage.broadcastAck.ack = func(context.Context, message.ImmutableMessage) error {
+		attempts++
+		if attempts == 1 {
+			return errors.New("coordinator unavailable")
+		}
+		return nil
+	}
+	msg := newBroadcastAckMessage(t, message.NewCreateCollectionMessageBuilderV1().
+		WithBroadcast([]string{"test-vchannel"}).
+		WithHeader(&message.CreateCollectionMessageHeader{CollectionId: 1}).
+		WithBody(&msgpb.CreateCollectionRequest{}))
+
+	storage.observeDataScannerMessage(context.Background(), msg)
+
+	require.NotNil(t, module.handle)
+	require.Len(t, scheduler.tasks, 1)
+	assert.Equal(t, uint64(10), storage.ackTracker.CompletedPoint().TimeTick)
+	require.ErrorIs(t, scheduler.tasks[0].Execute(context.Background()), nodescheduler.ErrDelay)
+	assert.Zero(t, attempts)
+
+	module.handle.Release()
+	assert.Equal(t, uint64(10), storage.ackTracker.CompletedPoint().TimeTick)
+	assert.Error(t, scheduler.tasks[0].Execute(context.Background()))
+	assert.Equal(t, 1, attempts)
+	assert.Equal(t, uint64(10), storage.ackTracker.CompletedPoint().TimeTick)
+
+	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
+	assert.Equal(t, 2, attempts)
+	completed := storage.ackTracker.CompletedPoint()
+	assert.True(t, msg.LastConfirmedMessageID().EQ(completed.MessageID))
+	assert.Equal(t, msg.TimeTick(), completed.TimeTick)
 }
 
 func TestMetaScannerUsesOrdinaryImmutableMessage(t *testing.T) {

@@ -21,6 +21,13 @@ type Module interface {
 	ConsumeDirtySnapshots() []DirtySnapshot
 }
 
+// DataMessageObserver receives the single data-scanner owner. Implementations
+// must clone it synchronously for every asynchronous consumer they create.
+// The owner is released by the final RecoveryStorage sink.
+type DataMessageObserver interface {
+	ObserveDataMessage(ctx context.Context, owner message.RefCountedImmutableMessageOwner)
+}
+
 type CleanupContext struct {
 	MetaPhysicalTimeTick uint64
 	DataPhysicalTimeTick uint64
@@ -43,7 +50,6 @@ const (
 	ModuleNameVChannel     ModuleName = "vchannel"
 	ModuleNameSegment      ModuleName = "segment"
 	ModuleNameTransformLog ModuleName = "transformlog"
-	ModuleNameAck          ModuleName = "ack"
 )
 
 type ModuleSnapshot interface {

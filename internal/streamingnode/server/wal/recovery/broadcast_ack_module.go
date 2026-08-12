@@ -7,21 +7,14 @@ import (
 	"github.com/cockroachdb/errors"
 
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/messageack"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
-type moduleMode int
-
-const (
-	moduleModeMetaOnly moduleMode = iota
-	moduleModeMetaAndData
-)
-
 type broadcastAckModule struct {
 	runtime     moduleapi.Runtime
-	mode        moduleMode
 	ackTaskMu   sync.Mutex
 	ackTaskHead *broadcastAckTask
 	ackTaskTail *broadcastAckTask
@@ -31,39 +24,25 @@ type broadcastAckModule struct {
 func newBroadcastAckModule(runtime moduleapi.Runtime) *broadcastAckModule {
 	return &broadcastAckModule{
 		runtime: runtime,
-		mode:    moduleModeMetaOnly,
 		ack: func(ctx context.Context, msg message.ImmutableMessage) error {
 			return streaming.WAL().Broadcast().Ack(ctx, msg)
 		},
 	}
 }
 
-func (m *broadcastAckModule) Name() moduleapi.ModuleName {
-	return moduleapi.ModuleNameAck
-}
-
-func (m *broadcastAckModule) ObserveMessage(_ context.Context, msg message.ImmutableMessage) {
-	if msg == nil || msg.BroadcastHeader() == nil || m.mode != moduleModeMetaAndData {
+func (m *broadcastAckModule) Accept(
+	owner message.RefCountedImmutableMessageOwner,
+	tracked *messageack.TrackedMessage,
+) {
+	owner.Release()
+	if !tracked.RequiresBroadcastAck() {
 		return
 	}
-	refCounted, ok := msg.(message.RefCountedImmutableMessage)
-	if !ok {
-		panic("broadcast ack observed data message without reference-count capability")
-	}
 	task := &broadcastAckTask{
-		module: m,
-		msg:    refCounted.Retain(),
+		module:  m,
+		tracked: tracked,
 	}
 	m.enqueueTask(task)
-}
-
-func (m *broadcastAckModule) SwitchIntoMetaAndData() moduleapi.ModuleSnapshot {
-	m.mode = moduleModeMetaAndData
-	return nil
-}
-
-func (m *broadcastAckModule) ConsumeDirtySnapshots() []moduleapi.DirtySnapshot {
-	return nil
 }
 
 func (m *broadcastAckModule) enqueueTask(task *broadcastAckTask) {
@@ -102,24 +81,23 @@ func (m *broadcastAckModule) finishTask(task *broadcastAckTask) {
 }
 
 type broadcastAckTask struct {
-	module *broadcastAckModule
-	msg    message.RetainedImmutableMessage
-	next   *broadcastAckTask
+	module  *broadcastAckModule
+	tracked *messageack.TrackedMessage
+	next    *broadcastAckTask
 }
 
 func (t *broadcastAckTask) Execute(ctx context.Context) error {
-	if !t.msg.Sealed() || !t.msg.IsExclusive() {
+	select {
+	case <-t.tracked.ConsumersDone():
+	default:
 		return nodescheduler.ErrDelay
 	}
-	if err := t.module.ack(ctx, t.msg); err != nil {
+	if err := t.module.ack(ctx, t.tracked.Message()); err != nil {
 		return errors.Mark(err, nodescheduler.ErrDelay)
 	}
-	t.msg.Release()
+	t.tracked.CompleteBroadcastAck()
 	t.module.finishTask(t)
 	return nil
 }
 
-var (
-	_ moduleapi.Module   = (*broadcastAckModule)(nil)
-	_ nodescheduler.Task = (*broadcastAckTask)(nil)
-)
+var _ nodescheduler.Task = (*broadcastAckTask)(nil)

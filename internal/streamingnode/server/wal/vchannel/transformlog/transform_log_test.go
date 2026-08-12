@@ -14,6 +14,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
@@ -56,31 +57,40 @@ func TestObserveMessageOwnsAppendFlushAndMaterializeScheduling(t *testing.T) {
 	})
 	transformLog.SwitchIntoMetaAndData()
 
-	deleteMessage := newRefCountedTransformMessage(newTransformLogTestDeleteMessage(t, 10))
-	transformLog.ObserveMessage(context.Background(), deleteMessage)
+	deleteOwner := newRefCountedTransformMessage(newTransformLogTestDeleteMessage(t, 10))
+	deleteProbe := deleteOwner.Clone()
+	transformLog.ObserveDataMessage(context.Background(), message.NewOwnedMessage(deleteOwner, deleteOwner.Message()))
 	assert.Empty(t, scheduler.tasks)
 
-	flushMessage := newRefCountedTransformMessage(newTransformLogTestManualFlushMessage(t, 20))
-	transformLog.ObserveMessage(context.Background(), flushMessage)
+	flushOwner := newRefCountedTransformMessage(newTransformLogTestManualFlushMessage(t, 20))
+	flushProbe := flushOwner.Clone()
+	transformLog.ObserveDataMessage(context.Background(), message.NewOwnedMessage(flushOwner, flushOwner.Message()))
 	require.Len(t, scheduler.tasks, 2)
 	assert.IsType(t, &transformFlushTask{}, scheduler.tasks[0])
 	assert.IsType(t, &transformMaterializeTask{}, scheduler.tasks[1])
 
-	deleteMessage.Seal()
-	flushMessage.Seal()
+	deleteOwner.Release()
+	flushOwner.Release()
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
-	assert.Panics(t, func() { _ = deleteMessage.TimeTick() })
-	assert.Panics(t, func() { _ = flushMessage.TimeTick() })
+	assert.NotPanics(t, func() { _ = deleteProbe.Message() })
+	assert.NotPanics(t, func() { _ = flushProbe.Message() })
+	deleteProbe.Release()
+	flushProbe.Release()
+	assert.Panics(t, func() { _ = deleteOwner.Message() })
+	assert.Panics(t, func() { _ = flushOwner.Message() })
 }
 
 func TestEmptyBarrierDoesNotCreateDirtySnapshot(t *testing.T) {
 	transformLog := New(Config{VChannel: "v1"})
 	transformLog.SwitchIntoMetaAndData()
 
-	msg := newRefCountedTransformMessage(newTransformLogTestManualFlushMessage(t, 20))
-	transformLog.ObserveMessage(context.Background(), msg)
-	msg.Seal()
-	assert.Panics(t, func() { _ = msg.TimeTick() })
+	owner := newRefCountedTransformMessage(newTransformLogTestManualFlushMessage(t, 20))
+	probe := owner.Clone()
+	transformLog.ObserveDataMessage(context.Background(), message.NewOwnedMessage(owner, owner.Message()))
+	owner.Release()
+	assert.NotPanics(t, func() { _ = probe.Message() })
+	probe.Release()
+	assert.Panics(t, func() { _ = owner.Message() })
 	assert.Zero(t, transformLog.SnapshotMeta().GetCheckpointTimeTick())
 	assert.Nil(t, transformLog.ConsumeDirtyAndGetSnapshot())
 }

@@ -87,16 +87,13 @@ func TestQueryRuntimeInitialBatchAndReadyEventsUseSameConsumer(t *testing.T) {
 	runtime.Close()
 }
 
-func TestQueryRuntimeOwnsQueuedRefCountedMessage(t *testing.T) {
+func TestQueryRuntimeOwnsQueuedImmutableMessage(t *testing.T) {
 	module := &messageRecordingModule{}
 	runtime := NewQueryRuntime(module)
 	raw := message.CreateTestTimeTickSyncMessage(t, 1, 20, walimplstest.NewTestMessageID(10)).
 		IntoImmutableMessage(walimplstest.NewTestMessageID(11))
-	controller := message.NewRefCountedImmutableMessage(raw, nil)
-
-	require.True(t, runtime.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: controller}))
-	controller.Seal()
-	require.Panics(t, func() { _ = controller.TimeTick() })
+	cloned := message.CloneImmutableMessage(raw)
+	require.True(t, runtime.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: cloned}))
 	require.NoError(t, runtime.Initialize(context.Background(), testWALView(1, "ch", qviews.DataVersion{})))
 	require.Equal(t, uint64(20), module.timeTick)
 	runtime.Close()

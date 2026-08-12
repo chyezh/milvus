@@ -129,6 +129,21 @@ func (t *TransformLog) SwitchIntoMetaAndData() {
 }
 
 func (t *TransformLog) ObserveMessage(ctx context.Context, msg message.ImmutableMessage) {
+	t.observeMessage(ctx, msg, nil)
+}
+
+func (t *TransformLog) ObserveDataMessage(
+	ctx context.Context,
+	owned message.OwnedMessage[message.ImmutableMessage],
+) {
+	t.observeMessage(ctx, owned.Message(), owned.CloneHandle)
+}
+
+func (t *TransformLog) observeMessage(
+	ctx context.Context,
+	msg message.ImmutableMessage,
+	clone func() message.RetainedImmutableMessage,
+) {
 	if t == nil || msg == nil || !t.isMetaAndData() {
 		return
 	}
@@ -139,15 +154,12 @@ func (t *TransformLog) ObserveMessage(ctx context.Context, msg message.Immutable
 	var result appendResult
 	switch kind {
 	case messageutil.TransformLogKindDelete:
-		if msg.TimeTick() <= t.dataCheckpointTimeTick() {
-			return
-		}
-		result = t.appendWithMessage(msg, appendOption{}, msg)
+		result = t.appendWithMessage(msg, appendOption{}, clone)
 	case messageutil.TransformLogKindBarrier:
 		if msg.TimeTick() <= t.latestTimeTick() && !t.HasPendingWork() {
 			return
 		}
-		result = t.syncUpWithMessage(msg.TimeTick(), msg)
+		result = t.syncUpWithMessage(msg.TimeTick(), clone)
 	}
 	if !result.Appended && !result.HasFlushWork {
 		return
@@ -169,7 +181,7 @@ func (t *TransformLog) append(msg message.ImmutableMessage, opt appendOption) ap
 func (t *TransformLog) appendWithMessage(
 	msg message.ImmutableMessage,
 	opt appendOption,
-	owner message.ImmutableMessage,
+	clone func() message.RetainedImmutableMessage,
 ) appendResult {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -179,7 +191,7 @@ func (t *TransformLog) appendWithMessage(
 	if !t.buffer.append(msg, opt) {
 		return appendResult{DataTimeTick: t.buffer.DataTimeTick()}
 	}
-	t.retainMessageLocked(msg.TimeTick(), owner)
+	t.retainMessageLocked(msg.TimeTick(), cloneMessage(clone))
 	t.notifyStreamLocked()
 	return appendResult{
 		Appended:     true,
@@ -193,24 +205,30 @@ func (t *TransformLog) syncUp(timeTick uint64) appendResult {
 	return t.syncUpWithMessage(timeTick, nil)
 }
 
-func (t *TransformLog) syncUpWithMessage(timeTick uint64, owner message.ImmutableMessage) appendResult {
+func (t *TransformLog) syncUpWithMessage(
+	timeTick uint64,
+	clone func() message.RetainedImmutableMessage,
+) appendResult {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	appended := false
 	if timeTick <= t.syncUpTimeTick {
-		return t.syncUpResultLocked(false, owner)
+		return t.syncUpResultLocked(false, clone)
 	}
 	t.syncUpTimeTick = timeTick
 	appended = true
 	t.notifyStreamLocked()
-	return t.syncUpResultLocked(appended, owner)
+	return t.syncUpResultLocked(appended, clone)
 }
 
-func (t *TransformLog) syncUpResultLocked(appended bool, owner message.ImmutableMessage) appendResult {
+func (t *TransformLog) syncUpResultLocked(
+	appended bool,
+	clone func() message.RetainedImmutableMessage,
+) appendResult {
 	hasFlushWork := !t.buffer.IsEmpty() || t.buffer.IsFlushing()
 	dataTimeTick := t.buffer.DataTimeTick()
 	if hasFlushWork {
-		t.retainMessageLocked(dataTimeTick, owner)
+		t.retainMessageLocked(dataTimeTick, cloneMessage(clone))
 	}
 	return appendResult{
 		Appended:     appended,
@@ -481,17 +499,13 @@ func (t *TransformLog) commitFlushLocked(work flushWork) flushResult {
 	return result
 }
 
-func (t *TransformLog) retainMessageLocked(timetick uint64, msg message.ImmutableMessage) {
-	if msg == nil {
+func (t *TransformLog) retainMessageLocked(timetick uint64, retained message.RetainedImmutableMessage) {
+	if retained == nil {
 		return
-	}
-	refCounted, ok := msg.(message.RefCountedImmutableMessage)
-	if !ok {
-		panic("transform log data work observed without reference-count capability")
 	}
 	t.pendingMessages = append(t.pendingMessages, pendingMessage{
 		timetick: timetick,
-		message:  refCounted.Retain(),
+		message:  retained,
 	})
 }
 
@@ -514,6 +528,19 @@ func releaseMessages(messages []message.RetainedImmutableMessage) {
 	for _, msg := range messages {
 		msg.Release()
 	}
+}
+
+func releaseMessage(msg message.RetainedImmutableMessage) {
+	if msg != nil {
+		msg.Release()
+	}
+}
+
+func cloneMessage(clone func() message.RetainedImmutableMessage) message.RetainedImmutableMessage {
+	if clone == nil {
+		return nil
+	}
+	return clone()
 }
 
 type pendingMessage struct {

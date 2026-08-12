@@ -12,6 +12,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/walimplstest"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
@@ -28,21 +29,38 @@ func TestTransformLogFailedChunkWriteRetainsMessageRef(t *testing.T) {
 		Runtime:  moduleapi.Runtime{Scheduler: scheduler},
 	})
 	transformLog.SwitchIntoMetaAndData()
-	controller := newRefCountedTransformMessage(newTransformLogTestDeleteMessage(t, 10))
+	owner := newRefCountedTransformMessage(newTransformLogTestDeleteMessage(t, 10))
+	probe := owner.Clone()
 
-	transformLog.ObserveMessage(context.Background(), controller)
-	controller.Seal()
+	transformLog.ObserveDataMessage(context.Background(), message.NewOwnedMessage(owner, owner.Message()))
+	owner.Release()
 	require.Len(t, scheduler.tasks, 1)
 
 	err := scheduler.tasks[0].Execute(context.Background())
 	assert.True(t, errors.Is(err, nodescheduler.ErrDelay))
-	assert.NotPanics(t, func() { _ = controller.TimeTick() })
+	assert.NotPanics(t, func() { _ = probe.Message().TimeTick() })
 
 	store.err = nil
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
-	assert.Panics(t, func() { _ = controller.TimeTick() })
+	probe.Release()
+	assert.Panics(t, func() { _ = owner.Message() })
 	assert.Equal(t, uint64(10), transformLog.SnapshotMeta().GetCheckpointTimeTick())
 	assert.True(t, transformLog.HasDirty())
+}
+
+func TestTransformLogDoesNotCloneUnrelatedMessage(t *testing.T) {
+	transformLog := New(Config{VChannel: "v1"})
+	transformLog.SwitchIntoMetaAndData()
+	raw := message.CreateTestTimeTickSyncMessage(t, 1, 10, walimplstest.NewTestMessageID(10)).
+		IntoImmutableMessage(walimplstest.NewTestMessageID(11))
+	base := newRefCountedTransformMessage(raw)
+	owner := &countingTransformOwner{owner: base}
+
+	transformLog.ObserveDataMessage(context.Background(), message.NewOwnedMessage(owner, raw))
+	owner.Release()
+
+	assert.Zero(t, owner.cloneCount)
+	assert.Panics(t, func() { _ = owner.Message() })
 }
 
 func TestTransformLogBarrierRefCompletesWithoutMaterialization(t *testing.T) {
@@ -59,17 +77,17 @@ func TestTransformLogBarrierRefCompletesWithoutMaterialization(t *testing.T) {
 	deleteMessage := newRefCountedTransformMessage(newTransformLogTestDeleteMessage(t, 10))
 	barrierMessage := newRefCountedTransformMessage(newTransformLogTestManualFlushMessage(t, 20))
 
-	transformLog.ObserveMessage(context.Background(), deleteMessage)
-	deleteMessage.Seal()
-	transformLog.ObserveMessage(context.Background(), barrierMessage)
-	barrierMessage.Seal()
+	transformLog.ObserveDataMessage(context.Background(), message.NewOwnedMessage(deleteMessage, deleteMessage.Message()))
+	deleteMessage.Release()
+	transformLog.ObserveDataMessage(context.Background(), message.NewOwnedMessage(barrierMessage, barrierMessage.Message()))
+	barrierMessage.Release()
 	require.Len(t, scheduler.tasks, 2)
 	assert.IsType(t, &transformFlushTask{}, scheduler.tasks[0])
 	assert.IsType(t, &transformMaterializeTask{}, scheduler.tasks[1])
 
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
-	assert.Panics(t, func() { _ = deleteMessage.TimeTick() })
-	assert.Panics(t, func() { _ = barrierMessage.TimeTick() })
+	assert.Panics(t, func() { _ = deleteMessage.Message() })
+	assert.Panics(t, func() { _ = barrierMessage.Message() })
 	assert.Empty(t, materializer.requests)
 }
 
@@ -85,24 +103,32 @@ func TestTransformLogMultiChunkFlushReleasesRefsByDurablePrefix(t *testing.T) {
 	first := newRefCountedTransformMessage(newTransformLogTestDeleteMessage(t, 10))
 	second := newRefCountedTransformMessage(newTransformLogTestDeleteMessage(t, 11))
 	barrier := newRefCountedTransformMessage(newTransformLogTestManualFlushMessage(t, 20))
+	firstProbe := first.Clone()
+	secondProbe := second.Clone()
+	barrierProbe := barrier.Clone()
 
-	transformLog.ObserveMessage(context.Background(), first)
-	first.Seal()
-	transformLog.ObserveMessage(context.Background(), second)
-	second.Seal()
-	transformLog.ObserveMessage(context.Background(), barrier)
-	barrier.Seal()
+	transformLog.ObserveDataMessage(context.Background(), message.NewOwnedMessage(first, first.Message()))
+	first.Release()
+	transformLog.ObserveDataMessage(context.Background(), message.NewOwnedMessage(second, second.Message()))
+	second.Release()
+	transformLog.ObserveDataMessage(context.Background(), message.NewOwnedMessage(barrier, barrier.Message()))
+	barrier.Release()
 	require.GreaterOrEqual(t, len(scheduler.tasks), 3)
 
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
-	assert.Panics(t, func() { _ = first.TimeTick() })
-	assert.NotPanics(t, func() { _ = second.TimeTick() })
-	assert.NotPanics(t, func() { _ = barrier.TimeTick() })
+	assert.NotPanics(t, func() { _ = firstProbe.Message() })
+	assert.NotPanics(t, func() { _ = secondProbe.Message().TimeTick() })
+	assert.NotPanics(t, func() { _ = barrierProbe.Message().TimeTick() })
 	assert.Equal(t, uint64(10), transformLog.SnapshotMeta().GetCheckpointTimeTick())
 
 	require.NoError(t, scheduler.tasks[1].Execute(context.Background()))
-	assert.Panics(t, func() { _ = second.TimeTick() })
-	assert.Panics(t, func() { _ = barrier.TimeTick() })
+	assert.NotPanics(t, func() { _ = secondProbe.Message() })
+	assert.NotPanics(t, func() { _ = barrierProbe.Message() })
+	firstProbe.Release()
+	secondProbe.Release()
+	barrierProbe.Release()
+	assert.Panics(t, func() { _ = second.Message() })
+	assert.Panics(t, func() { _ = barrier.Message() })
 	assert.Equal(t, uint64(11), transformLog.SnapshotMeta().GetCheckpointTimeTick())
 }
 
@@ -119,8 +145,8 @@ func TestTransformLogRegistersBarrierRefBeforeConcurrentFlushCommit(t *testing.T
 	})
 	transformLog.SwitchIntoMetaAndData()
 	deleteMessage := newRefCountedTransformMessage(newTransformLogTestDeleteMessage(t, 10))
-	transformLog.ObserveMessage(context.Background(), deleteMessage)
-	deleteMessage.Seal()
+	transformLog.ObserveDataMessage(context.Background(), message.NewOwnedMessage(deleteMessage, deleteMessage.Message()))
+	deleteMessage.Release()
 
 	type flushOutcome struct {
 		result flushResult
@@ -134,15 +160,14 @@ func TestTransformLogRegistersBarrierRefBeforeConcurrentFlushCommit(t *testing.T
 	<-store.writeStarted
 
 	barrierController := newRefCountedTransformMessage(newTransformLogTestManualFlushMessage(t, 20))
-	barrierMessage := &blockingRefCountedMessage{
-		ImmutableMessage: barrierController,
-		controller:       barrierController,
-		retainStarted:    make(chan struct{}),
-		releaseRetain:    make(chan struct{}),
+	barrierMessage := &blockingMessageOwner{
+		owner:         barrierController,
+		retainStarted: make(chan struct{}),
+		releaseRetain: make(chan struct{}),
 	}
 	observeDone := make(chan struct{})
 	go func() {
-		transformLog.ObserveMessage(context.Background(), barrierMessage)
+		transformLog.ObserveDataMessage(context.Background(), message.NewOwnedMessage[message.ImmutableMessage](barrierMessage, barrierMessage.Message()))
 		close(observeDone)
 	}()
 	<-barrierMessage.retainStarted
@@ -164,10 +189,10 @@ func TestTransformLogRegistersBarrierRefBeforeConcurrentFlushCommit(t *testing.T
 		releaseMessages(flush.CompletedMessages)
 	}
 	<-observeDone
-	barrierController.Seal()
+	barrierController.Release()
 
-	assert.Panics(t, func() { _ = deleteMessage.TimeTick() })
-	assert.Panics(t, func() { _ = barrierController.TimeTick() })
+	assert.Panics(t, func() { _ = deleteMessage.Message() })
+	assert.Panics(t, func() { _ = barrierController.Message() })
 }
 
 type failingTransformLogStore struct {
@@ -175,21 +200,46 @@ type failingTransformLogStore struct {
 	err error
 }
 
-type blockingRefCountedMessage struct {
-	message.ImmutableMessage
-	controller    message.RefCountedImmutableMessageController
+type blockingMessageOwner struct {
+	owner         message.RefCountedImmutableMessageOwner
 	retainStarted chan struct{}
 	releaseRetain chan struct{}
 }
 
-func (m *blockingRefCountedMessage) Retain() message.RetainedImmutableMessage {
-	close(m.retainStarted)
-	<-m.releaseRetain
-	return m.controller.Retain()
+func (m *blockingMessageOwner) Message() message.ImmutableMessage {
+	return m.owner.Message()
 }
 
-func newRefCountedTransformMessage(raw message.ImmutableMessage) message.RefCountedImmutableMessageController {
-	return message.NewRefCountedImmutableMessage(raw, nil)
+func (m *blockingMessageOwner) Clone() message.RetainedImmutableMessage {
+	close(m.retainStarted)
+	<-m.releaseRetain
+	return m.owner.Clone()
+}
+
+func (m *blockingMessageOwner) Release() {
+	m.owner.Release()
+}
+
+func newRefCountedTransformMessage(raw message.ImmutableMessage) message.RefCountedImmutableMessageOwner {
+	return message.NewRefCountedImmutableMessageOwner(raw, nil)
+}
+
+type countingTransformOwner struct {
+	owner      message.RefCountedImmutableMessageOwner
+	cloneCount int
+}
+
+func (o *countingTransformOwner) Message() message.ImmutableMessage {
+	return o.owner.Message()
+}
+
+func (o *countingTransformOwner) Clone() message.RetainedImmutableMessage {
+	o.cloneCount++
+	return o.owner.Clone()
+}
+
+func (o *countingTransformOwner) Release() {
+	o.owner.Release()
 }
 
 type blockingTransformLogWriteStore struct {

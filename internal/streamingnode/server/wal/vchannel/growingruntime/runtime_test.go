@@ -214,9 +214,9 @@ func TestDrainDeleteReplayUsesSharedTransformLogStream(t *testing.T) {
 		log := transformlog.New(transformlog.Config{VChannel: vchannel})
 		log.SwitchIntoMetaAndData()
 		raw := newTestTransformDeleteMessage(t, vchannel, 10)
-		controller := message.NewRefCountedImmutableMessage(raw, nil)
-		log.ObserveMessage(ctx, controller)
-		controller.Seal()
+		owner := message.NewRefCountedImmutableMessageOwner(raw, nil)
+		log.ObserveDataMessage(ctx, message.NewOwnedMessage(owner, raw))
+		owner.Release()
 		manager.Register(vchannel, log)
 	}
 	stream, err := manager.AcquireStream(ctx, "p1")

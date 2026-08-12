@@ -10,7 +10,7 @@ import (
 )
 
 type writeOnlyInsertBuffer struct {
-	entries      []message.RetainedImmutableMessage
+	entries      []retainedInsertMessage
 	fromTimeTick uint64
 	toTimeTick   uint64
 	rows         uint64
@@ -22,14 +22,14 @@ func (b *writeOnlyInsertBuffer) append(msg message.RetainedImmutableMessage, ass
 }
 
 func (b *writeOnlyInsertBuffer) appendMessage(msg message.RetainedImmutableMessage, rows uint64, binarySize uint64) {
-	timetick := msg.TimeTick()
+	timetick := msg.Message().TimeTick()
 	if len(b.entries) == 0 {
 		b.fromTimeTick = timetick
 	}
 	b.toTimeTick = timetick
 	b.rows += rows
 	b.binarySize += binarySize
-	b.entries = append(b.entries, msg)
+	b.entries = append(b.entries, retainedInsertMessage{message: msg.Message(), retained: msg})
 }
 
 func (b writeOnlyInsertBuffer) DataTimeTick() uint64 {
@@ -42,7 +42,7 @@ func (b writeOnlyInsertBuffer) Messages() []message.ImmutableMessage {
 	}
 	messages := make([]message.ImmutableMessage, len(b.entries))
 	for idx, entry := range b.entries {
-		messages[idx] = message.CloneImmutableMessage(entry)
+		messages[idx] = message.CloneImmutableMessage(entry.message)
 	}
 	return messages
 }
@@ -53,9 +53,25 @@ func (b writeOnlyInsertBuffer) borrowedMessages() []message.ImmutableMessage {
 	}
 	messages := make([]message.ImmutableMessage, len(b.entries))
 	for idx, entry := range b.entries {
-		messages[idx] = entry
+		messages[idx] = entry.message
 	}
 	return messages
+}
+
+func (b writeOnlyInsertBuffer) retainedHandles() []message.RetainedImmutableMessage {
+	if len(b.entries) == 0 {
+		return nil
+	}
+	handles := make([]message.RetainedImmutableMessage, len(b.entries))
+	for idx, entry := range b.entries {
+		handles[idx] = entry.retained
+	}
+	return handles
+}
+
+type retainedInsertMessage struct {
+	message  message.ImmutableMessage
+	retained message.RetainedImmutableMessage
 }
 
 func (b *writeOnlyInsertBuffer) flushPack(meta *streamingpb.SegmentAssignmentMeta, schema *schemapb.CollectionSchema) *flushPack {

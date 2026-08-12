@@ -153,7 +153,7 @@ For every observed WAL message:
    `checkpoint_time_tick` or the open buffer tail.
 6. Append Delete entries to the open buffer.
 7. Notify local scanners and the PChannel stream manager.
-8. Call `Retain()` and attach the returned retained immutable message to the
+8. Call `Clone()` on the Owner and attach the returned retained immutable message to the
    entry or barrier before exposing required asynchronous flush work.
 9. Submit flush or materialization tasks when the message requires them.
 10. Return after synchronous observation. Metadata is exposed later through

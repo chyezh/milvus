@@ -83,32 +83,6 @@ func MustAsSpecializedImmutableMessage[H proto.Message, B proto.Message](msg Imm
 	return smsg
 }
 
-// MustAsRefCountedSpecializedImmutableMessage specializes a ref-counted
-// immutable message and panics if the message does not expose ref counting.
-func MustAsRefCountedSpecializedImmutableMessage[H proto.Message, B proto.Message](
-	msg ImmutableMessage,
-) RefCountedSpecializedImmutableMessage[H, B] {
-	specialized := MustAsSpecializedImmutableMessage[H, B](msg)
-	refCounted, ok := specialized.(RefCountedSpecializedImmutableMessage[H, B])
-	if !ok {
-		panic("specialized immutable message is not ref-counted")
-	}
-	return refCounted
-}
-
-// MustAsRetainedSpecializedImmutableMessage specializes a retained immutable
-// message and panics if the message does not own a retained reference.
-func MustAsRetainedSpecializedImmutableMessage[H proto.Message, B proto.Message](
-	msg ImmutableMessage,
-) RetainedSpecializedImmutableMessage[H, B] {
-	specialized := MustAsSpecializedImmutableMessage[H, B](msg)
-	retained, ok := specialized.(RetainedSpecializedImmutableMessage[H, B])
-	if !ok {
-		panic("specialized immutable message is not retained")
-	}
-	return retained
-}
-
 // asSpecializedImmutableMessage converts a ImmutableMessage to a specialized ImmutableMessage.
 // Return nil, error if the message is the target specialized message but failed to decode the specialized header.
 // Return asSpecializedImmutableMessage, nil if the message is the target specialized message and successfully decoded the specialized header.
@@ -116,7 +90,7 @@ func asSpecializedImmutableMessage[H proto.Message, B proto.Message](msg Immutab
 	if already, ok := msg.(SpecializedImmutableMessage[H, B]); ok {
 		return already, nil
 	}
-	underlying, ok := unwrapImmutableMessage(msg).(*immutableMessageImpl)
+	underlying, ok := msg.(*immutableMessageImpl)
 	if !ok {
 		// maybe a txn message.
 		return nil, merr.WrapErrParameterInvalidMsg("not a specialized immutable message, txn message maybe")
@@ -143,9 +117,6 @@ func asSpecializedImmutableMessage[H proto.Message, B proto.Message](msg Immutab
 	// must be a pointer to a proto message
 	if err := DecodeProto(val, header); err != nil {
 		return nil, errors.Wrap(err, "failed to decode specialized header")
-	}
-	if _, ok := msg.(wrappedImmutableMessage); ok {
-		return newSpecializedImmutableMessageView[H, B](msg, header), nil
 	}
 	return &specializedImmutableMessageImpl[H, B]{
 		header:               header,
@@ -254,10 +225,6 @@ type specializedImmutableMessageImpl[H proto.Message, B proto.Message] struct {
 	*immutableMessageImpl
 }
 
-func (m *specializedImmutableMessageImpl[H, B]) unwrapImmutableMessage() ImmutableMessage {
-	return m.immutableMessageImpl
-}
-
 // Header returns the message header.
 func (m *specializedImmutableMessageImpl[H, B]) Header() H {
 	return m.header
@@ -275,86 +242,6 @@ func (m *specializedImmutableMessageImpl[H, B]) MustBody() B {
 		panic(fmt.Sprintf("failed to unmarshal specialized body, %s, %s", m.MessageID().String(), err.Error()))
 	}
 	return b
-}
-
-type specializedImmutableMessageView[H proto.Message, B proto.Message] struct {
-	ImmutableMessage
-	header H
-}
-
-func newSpecializedImmutableMessageView[H proto.Message, B proto.Message](
-	msg ImmutableMessage,
-	header H,
-) SpecializedImmutableMessage[H, B] {
-	view := &specializedImmutableMessageView[H, B]{
-		ImmutableMessage: msg,
-		header:           header,
-	}
-	if retained, ok := msg.(RetainedImmutableMessage); ok {
-		return &retainedSpecializedImmutableMessage[H, B]{
-			specializedImmutableMessageView: view,
-			retained:                        retained,
-		}
-	}
-	if refCounted, ok := msg.(RefCountedImmutableMessage); ok {
-		return &refCountedSpecializedImmutableMessage[H, B]{
-			specializedImmutableMessageView: view,
-			refCounted:                      refCounted,
-		}
-	}
-	return view
-}
-
-func (m *specializedImmutableMessageView[H, B]) unwrapImmutableMessage() ImmutableMessage {
-	return m.ImmutableMessage
-}
-
-func (m *specializedImmutableMessageView[H, B]) Header() H {
-	_ = m.MessageType()
-	return m.header
-}
-
-func (m *specializedImmutableMessageView[H, B]) Body() (B, error) {
-	return unmarshalProtoB[B](m.Payload())
-}
-
-func (m *specializedImmutableMessageView[H, B]) MustBody() B {
-	body, err := m.Body()
-	if err != nil {
-		panic(fmt.Sprintf("failed to unmarshal specialized body, %s, %s", m.MessageID().String(), err.Error()))
-	}
-	return body
-}
-
-type refCountedSpecializedImmutableMessage[H proto.Message, B proto.Message] struct {
-	*specializedImmutableMessageView[H, B]
-	refCounted RefCountedImmutableMessage
-}
-
-func (m *refCountedSpecializedImmutableMessage[H, B]) Retain() RetainedImmutableMessage {
-	retained := m.refCounted.Retain()
-	specialized, err := asSpecializedImmutableMessage[H, B](retained)
-	if err != nil {
-		panic(err)
-	}
-	return specialized.(RetainedImmutableMessage)
-}
-
-type retainedSpecializedImmutableMessage[H proto.Message, B proto.Message] struct {
-	*specializedImmutableMessageView[H, B]
-	retained RetainedImmutableMessage
-}
-
-func (m *retainedSpecializedImmutableMessage[H, B]) Sealed() bool {
-	return m.retained.Sealed()
-}
-
-func (m *retainedSpecializedImmutableMessage[H, B]) IsExclusive() bool {
-	return m.retained.IsExclusive()
-}
-
-func (m *retainedSpecializedImmutableMessage[H, B]) Release() {
-	m.retained.Release()
 }
 
 func unmarshalProtoB[B proto.Message](data []byte) (B, error) {

@@ -186,8 +186,9 @@ func (s *SegmentView) HasDirty() bool {
 
 func (s *SegmentView) ObserveCreateSegmentMessageV2(
 	_ context.Context,
-	msg message.ImmutableCreateSegmentMessageV2,
+	owned message.OwnedMessage[message.ImmutableCreateSegmentMessageV2],
 ) bool {
+	msg := owned.Message()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -201,7 +202,7 @@ func (s *SegmentView) ObserveCreateSegmentMessageV2(
 	if timetick <= s.meta.GetDataCheckpointTimeTick() {
 		return false
 	}
-	s.retainDataHandleLocked(timetick, msg)
+	s.retainDataHandleLocked(timetick, owned.CloneHandle())
 	task := s.newEnsureGrowingSegmentTaskLocked(timetick)
 	s.runtime.Scheduler.Submit(task)
 	return true
@@ -209,9 +210,10 @@ func (s *SegmentView) ObserveCreateSegmentMessageV2(
 
 func (s *SegmentView) ObserveInsertMessageV1(
 	_ context.Context,
-	msg message.ImmutableInsertMessageV1,
+	owned message.OwnedMessage[message.ImmutableInsertMessageV1],
 	assignment *messagespb.PartitionSegmentAssignment,
 ) bool {
+	msg := owned.Message()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -232,7 +234,7 @@ func (s *SegmentView) ObserveInsertMessageV1(
 	if msg.TimeTick() <= s.pending.DataTimeTick() {
 		return changed
 	}
-	s.pending.append(retainImmutableMessage(msg), assignment)
+	s.pending.append(owned.CloneHandle(), assignment)
 	changed = true
 	if s.flushPolicy != nil && s.flushPolicy.ShouldFlush(s.pending, msg.TimeTick()) {
 		task := s.newFlushL1BufferTaskLocked()
@@ -241,7 +243,11 @@ func (s *SegmentView) ObserveInsertMessageV1(
 	return changed
 }
 
-func (s *SegmentView) ObserveTxnMessage(_ context.Context, msg message.ImmutableTxnMessage) bool {
+func (s *SegmentView) ObserveTxnMessage(
+	_ context.Context,
+	owned message.OwnedMessage[message.ImmutableTxnMessage],
+) bool {
+	msg := owned.Message()
 	var task segmentTask
 	matched := false
 	appliedData := false
@@ -279,7 +285,7 @@ func (s *SegmentView) ObserveTxnMessage(_ context.Context, msg message.Immutable
 		return false
 	}
 	if appliedData {
-		s.pending.appendMessage(retainImmutableMessage(msg), rows, binarySize)
+		s.pending.appendMessage(owned.CloneHandle(), rows, binarySize)
 		if s.flushPolicy != nil && s.flushPolicy.ShouldFlush(s.pending, timetick) {
 			task = s.newFlushL1BufferTaskLocked()
 		}
@@ -299,7 +305,11 @@ func (s *SegmentView) observeInsertMetaLocked(timetick uint64, assignment *messa
 	s.dirty = true
 }
 
-func (s *SegmentView) Flush(_ context.Context, msg message.ImmutableMessage) bool {
+func (s *SegmentView) Flush(
+	_ context.Context,
+	owned message.OwnedMessage[message.ImmutableMessage],
+) bool {
+	msg := owned.Message()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -314,7 +324,7 @@ func (s *SegmentView) Flush(_ context.Context, msg message.ImmutableMessage) boo
 	if s.finalCommitDone {
 		return metaChanged
 	}
-	s.retainDataHandleLocked(flushTimeTick, msg)
+	s.retainDataHandleLocked(flushTimeTick, owned.CloneHandle())
 	task := s.newCommitL1SegmentTaskLocked(flushTimeTick)
 	if task != nil {
 		s.runtime.Scheduler.Submit(task)
@@ -722,16 +732,19 @@ func (s *SegmentView) markPendingDataDurableLocked(timetick uint64) []message.Re
 		if chunk.toTimeTick > timetick {
 			break
 		}
-		completed = append(completed, chunk.entries...)
+		completed = append(completed, chunk.retainedHandles()...)
 	}
 	s.markDataCheckpointLocked(timetick)
 	return completed
 }
 
-func (s *SegmentView) retainDataHandleLocked(timetick uint64, msg message.ImmutableMessage) {
+func (s *SegmentView) retainDataHandleLocked(
+	timetick uint64,
+	retained message.RetainedImmutableMessage,
+) {
 	s.pendingDataHandles = append(s.pendingDataHandles, pendingDataHandle{
 		timetick: timetick,
-		message:  retainImmutableMessage(msg),
+		message:  retained,
 	})
 }
 
@@ -754,14 +767,6 @@ func releaseMessages(messages []message.RetainedImmutableMessage) {
 	for _, msg := range messages {
 		msg.Release()
 	}
-}
-
-func retainImmutableMessage(msg message.ImmutableMessage) message.RetainedImmutableMessage {
-	refCounted, ok := msg.(message.RefCountedImmutableMessage)
-	if !ok {
-		panic("segment data work observed without reference-count capability")
-	}
-	return refCounted.Retain()
 }
 
 type pendingDataHandle struct {

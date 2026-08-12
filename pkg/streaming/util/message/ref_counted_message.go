@@ -3,28 +3,24 @@ package message
 import (
 	"sync"
 	"sync/atomic"
-
-	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
-	"github.com/milvus-io/milvus/pkg/v3/mlog"
-	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
 )
 
 type refCountedImmutableMessageCore struct {
 	mu sync.Mutex
 
-	message   ImmutableMessage
-	sealed    bool
-	refCount  int64
-	finalized bool
-	finalizer func()
+	message       ImmutableMessage
+	refCount      int64
+	ownerReleased bool
+	finalized     bool
+	finalizer     func()
 }
 
-// NewRefCountedImmutableMessage takes ownership of msg and returns its
-// dispatch-lifetime controller.
-func NewRefCountedImmutableMessage(
+// NewRefCountedImmutableMessageOwner takes ownership of msg and creates its
+// unique root reference.
+func NewRefCountedImmutableMessageOwner(
 	msg ImmutableMessage,
 	finalizer func(),
-) RefCountedImmutableMessageController {
+) RefCountedImmutableMessageOwner {
 	if msg == nil {
 		panic("ref-counted immutable message is nil")
 	}
@@ -33,13 +29,10 @@ func NewRefCountedImmutableMessage(
 		refCount:  1,
 		finalizer: finalizer,
 	}
-	return &refCountedImmutableMessage{
-		immutableMessageView: newImmutableMessageView(core),
-		core:                 core,
-	}
+	return &refCountedImmutableMessageOwner{core: core}
 }
 
-func (c *refCountedImmutableMessageCore) immutableMessage() ImmutableMessage {
+func (c *refCountedImmutableMessageCore) loadMessage() ImmutableMessage {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.finalized || c.message == nil {
@@ -48,46 +41,55 @@ func (c *refCountedImmutableMessageCore) immutableMessage() ImmutableMessage {
 	return c.message
 }
 
-func (c *refCountedImmutableMessageCore) retain() RetainedImmutableMessage {
+func (c *refCountedImmutableMessageCore) clone() RetainedImmutableMessage {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.sealed {
-		panic("ref-counted immutable message retained after seal")
+	if c.finalized || c.message == nil {
+		panic("ref-counted immutable message cloned after finalization")
 	}
 	c.refCount++
 	handle := &retainedImmutableMessage{}
 	handle.core.Store(c)
-	handle.immutableMessageView = newImmutableMessageView(handle)
 	return handle
 }
 
-func (c *refCountedImmutableMessageCore) seal() {
+func (c *refCountedImmutableMessageCore) ownerClone() RetainedImmutableMessage {
 	c.mu.Lock()
-	if c.sealed {
+	defer c.mu.Unlock()
+	if c.ownerReleased {
+		panic("ref-counted immutable message owner cloned after release")
+	}
+	c.refCount++
+	handle := &retainedImmutableMessage{}
+	handle.core.Store(c)
+	return handle
+}
+
+func (c *refCountedImmutableMessageCore) releaseOwner() {
+	c.mu.Lock()
+	if c.ownerReleased {
 		c.mu.Unlock()
 		return
 	}
-	c.sealed = true
-	c.refCount--
-	finalizer, finalized := c.takeFinalizerLocked()
+	c.ownerReleased = true
+	finalizer, finalized := c.releaseLocked()
 	c.mu.Unlock()
 	c.finishFinalization(finalizer, finalized)
 }
 
 func (c *refCountedImmutableMessageCore) release() {
 	c.mu.Lock()
-	if c.refCount <= 0 {
-		c.mu.Unlock()
-		panic("ref-counted immutable message reference count underflow")
-	}
-	c.refCount--
-	finalizer, finalized := c.takeFinalizerLocked()
+	finalizer, finalized := c.releaseLocked()
 	c.mu.Unlock()
 	c.finishFinalization(finalizer, finalized)
 }
 
-func (c *refCountedImmutableMessageCore) takeFinalizerLocked() (func(), bool) {
-	if !c.sealed || c.refCount != 0 || c.finalized {
+func (c *refCountedImmutableMessageCore) releaseLocked() (func(), bool) {
+	if c.refCount <= 0 {
+		panic("ref-counted immutable message reference count underflow")
+	}
+	c.refCount--
+	if c.refCount != 0 || c.finalized {
 		return nil, false
 	}
 	c.finalized = true
@@ -104,164 +106,46 @@ func (c *refCountedImmutableMessageCore) finishFinalization(finalizer func(), fi
 		c.finalizer = nil
 		c.mu.Unlock()
 	}()
-	if finalizer == nil {
-		return
+	if finalizer != nil {
+		finalizer()
 	}
-	finalizer()
 }
 
-func (c *refCountedImmutableMessageCore) isSealed() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.sealed
-}
-
-func (c *refCountedImmutableMessageCore) isExclusive() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.sealed && c.refCount == 1
-}
-
-type immutableMessageProvider interface {
-	immutableMessage() ImmutableMessage
-}
-
-type wrappedImmutableMessage interface {
-	unwrapImmutableMessage() ImmutableMessage
-}
-
-type immutableMessageView struct {
-	provider immutableMessageProvider
-}
-
-func newImmutableMessageView(provider immutableMessageProvider) *immutableMessageView {
-	return &immutableMessageView{provider: provider}
-}
-
-func (m *immutableMessageView) unwrapImmutableMessage() ImmutableMessage {
-	return m.provider.immutableMessage()
-}
-
-func (m *immutableMessageView) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	return m.provider.immutableMessage().MarshalLogObject(enc)
-}
-
-func (m *immutableMessageView) MessageType() MessageType {
-	return m.provider.immutableMessage().MessageType()
-}
-
-func (m *immutableMessageView) Version() Version {
-	return m.provider.immutableMessage().Version()
-}
-
-func (m *immutableMessageView) MessageTypeWithVersion() MessageTypeWithVersion {
-	return m.provider.immutableMessage().MessageTypeWithVersion()
-}
-
-func (m *immutableMessageView) Payload() []byte {
-	return m.provider.immutableMessage().Payload()
-}
-
-func (m *immutableMessageView) EstimateSize() int {
-	return m.provider.immutableMessage().EstimateSize()
-}
-
-func (m *immutableMessageView) Properties() RProperties {
-	return m.provider.immutableMessage().Properties()
-}
-
-func (m *immutableMessageView) IsUnreplicable() bool {
-	return m.provider.immutableMessage().IsUnreplicable()
-}
-
-func (m *immutableMessageView) TimeTick() uint64 {
-	return m.provider.immutableMessage().TimeTick()
-}
-
-func (m *immutableMessageView) BarrierTimeTick() uint64 {
-	return m.provider.immutableMessage().BarrierTimeTick()
-}
-
-func (m *immutableMessageView) TxnContext() *TxnContext {
-	return m.provider.immutableMessage().TxnContext()
-}
-
-func (m *immutableMessageView) BroadcastHeader() *BroadcastHeader {
-	return m.provider.immutableMessage().BroadcastHeader()
-}
-
-func (m *immutableMessageView) ReplicateHeader() *ReplicateHeader {
-	return m.provider.immutableMessage().ReplicateHeader()
-}
-
-func (m *immutableMessageView) IsPersisted() bool {
-	return m.provider.immutableMessage().IsPersisted()
-}
-
-func (m *immutableMessageView) IsPChannelLevel() bool {
-	return m.provider.immutableMessage().IsPChannelLevel()
-}
-
-func (m *immutableMessageView) IntoMessageProto() *messagespb.Message {
-	return m.provider.immutableMessage().IntoMessageProto()
-}
-
-func (m *immutableMessageView) WALName() WALName {
-	return m.provider.immutableMessage().WALName()
-}
-
-func (m *immutableMessageView) VChannel() string {
-	return m.provider.immutableMessage().VChannel()
-}
-
-func (m *immutableMessageView) PChannel() string {
-	return m.provider.immutableMessage().PChannel()
-}
-
-func (m *immutableMessageView) MessageID() MessageID {
-	return m.provider.immutableMessage().MessageID()
-}
-
-func (m *immutableMessageView) LastConfirmedMessageID() MessageID {
-	return m.provider.immutableMessage().LastConfirmedMessageID()
-}
-
-func (m *immutableMessageView) IntoImmutableMessageProto() *commonpb.ImmutableMessage {
-	return m.provider.immutableMessage().IntoImmutableMessageProto()
-}
-
-func (m *immutableMessageView) IntoBroadcastMutableMessage() BroadcastMutableMessage {
-	return m.provider.immutableMessage().IntoBroadcastMutableMessage()
-}
-
-type refCountedImmutableMessage struct {
-	*immutableMessageView
+type refCountedImmutableMessageOwner struct {
 	core *refCountedImmutableMessageCore
 }
 
-func (m *refCountedImmutableMessage) Retain() RetainedImmutableMessage {
-	return m.core.retain()
+func (m *refCountedImmutableMessageOwner) Message() ImmutableMessage {
+	if m.core == nil {
+		panic("ref-counted immutable message owner accessed after release")
+	}
+	return m.core.loadMessage()
 }
 
-func (m *refCountedImmutableMessage) Seal() {
-	m.core.seal()
+func (m *refCountedImmutableMessageOwner) Clone() RetainedImmutableMessage {
+	if m.core == nil {
+		panic("ref-counted immutable message owner cloned after release")
+	}
+	return m.core.ownerClone()
+}
+
+func (m *refCountedImmutableMessageOwner) Release() {
+	if m.core != nil {
+		m.core.releaseOwner()
+		m.core = nil
+	}
 }
 
 type retainedImmutableMessage struct {
-	*immutableMessageView
 	core atomic.Pointer[refCountedImmutableMessageCore]
 }
 
-func (m *retainedImmutableMessage) immutableMessage() ImmutableMessage {
-	return m.loadCore().immutableMessage()
+func (m *retainedImmutableMessage) Message() ImmutableMessage {
+	return m.loadCore().loadMessage()
 }
 
-func (m *retainedImmutableMessage) Sealed() bool {
-	return m.loadCore().isSealed()
-}
-
-func (m *retainedImmutableMessage) IsExclusive() bool {
-	return m.loadCore().isExclusive()
+func (m *retainedImmutableMessage) Clone() RetainedImmutableMessage {
+	return m.loadCore().clone()
 }
 
 func (m *retainedImmutableMessage) Release() {
@@ -278,17 +162,70 @@ func (m *retainedImmutableMessage) loadCore() *refCountedImmutableMessageCore {
 	return core
 }
 
-func unwrapImmutableMessage(msg ImmutableMessage) ImmutableMessage {
-	for {
-		wrapped, ok := msg.(wrappedImmutableMessage)
-		if !ok {
-			return msg
-		}
-		msg = wrapped.unwrapImmutableMessage()
+// OwnedMessage combines a specialized immutable message with the root owner
+// that protects it during synchronous dispatch.
+type OwnedMessage[T ImmutableMessage] struct {
+	message T
+	owner   RefCountedImmutableMessageOwner
+}
+
+func NewOwnedMessage[T ImmutableMessage](owner RefCountedImmutableMessageOwner, msg T) OwnedMessage[T] {
+	return OwnedMessage[T]{message: msg, owner: owner}
+}
+
+func (m OwnedMessage[T]) Message() T {
+	if m.owner != nil {
+		_ = m.owner.Message()
+	}
+	return m.message
+}
+
+func (m OwnedMessage[T]) Clone() RetainedMessage[T] {
+	return RetainedMessage[T]{message: m.message, retained: m.owner.Clone()}
+}
+
+func (m OwnedMessage[T]) CloneHandle() RetainedImmutableMessage {
+	return m.owner.Clone()
+}
+
+func (m OwnedMessage[T]) Untyped() OwnedMessage[ImmutableMessage] {
+	return OwnedMessage[ImmutableMessage]{message: m.message, owner: m.owner}
+}
+
+// RetainedMessage combines typed access with one independently releasable
+// reference. The typed message remains valid until Release.
+type RetainedMessage[T ImmutableMessage] struct {
+	message  T
+	retained RetainedImmutableMessage
+}
+
+func (m RetainedMessage[T]) Message() T {
+	_ = m.retained.Message()
+	return m.message
+}
+
+func (m RetainedMessage[T]) Clone() RetainedMessage[T] {
+	return RetainedMessage[T]{message: m.message, retained: m.retained.Clone()}
+}
+
+func (m RetainedMessage[T]) Untyped() RetainedMessage[ImmutableMessage] {
+	return RetainedMessage[ImmutableMessage]{message: m.message, retained: m.retained}
+}
+
+func (m RetainedMessage[T]) Handle() RetainedImmutableMessage {
+	return m.retained
+}
+
+func (m *RetainedMessage[T]) Release() {
+	if m.retained != nil {
+		m.retained.Release()
+		m.retained = nil
+		var zero T
+		m.message = zero
 	}
 }
 
 var (
-	_ RefCountedImmutableMessageController = (*refCountedImmutableMessage)(nil)
-	_ RetainedImmutableMessage             = (*retainedImmutableMessage)(nil)
+	_ RefCountedImmutableMessageOwner = (*refCountedImmutableMessageOwner)(nil)
+	_ RetainedImmutableMessage        = (*retainedImmutableMessage)(nil)
 )

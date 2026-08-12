@@ -39,7 +39,7 @@ checkpoints, or QueryView references.
 
 ## 2. Message Ack
 
-Every affected SegmentView directly calls `Retain()` on the message before
+Every affected SegmentView directly calls `Clone()` on the Owner before
 submitting or exposing asynchronous work. The returned retained immutable
 message is owned by that concrete consumer or by a module-local parent operation
 that waits for its dynamic child tasks.
@@ -57,10 +57,10 @@ WAL messages. A batched chunk keeps one retained message per contributing WAL
 message and calls `Release()` on all of them only after the shared write
 succeeds.
 
-If a SegmentView discovers child tasks asynchronously, it must retain one parent
+If a SegmentView discovers child tasks asynchronously, it must clone one parent
 message handle before returning from observation and manage the child count
-inside the SegmentView. It cannot call `Retain()` after RecoveryStorage seals
-the message.
+inside the SegmentView. It cannot use the released Owner after synchronous
+dispatch returns.
 
 ## 3. Observe Rules
 
@@ -69,7 +69,7 @@ the message.
 If the target segment is absent, `VChannelRecoveryModule` creates a SegmentView
 using the schema valid at the message timetick and updates segment metadata.
 
-In MetaAndData mode, ensure-growing work retains a message handle before the task
+In MetaAndData mode, ensure-growing work clones a message handle before the task
 is submitted. The handle releases after the lifecycle side effect succeeds.
 Failure keeps the handle live and retries.
 
@@ -117,9 +117,9 @@ DropCollection, DropPartition, TruncateCollection, ManualFlush, FlushAll,
 schema-changing AlterCollection, and AlterWAL may flush one or more retained
 SegmentViews according to their message scope.
 
-Every affected view retains its own handle from the same ref-counted message.
-This is required so `broadcastAckModule` cannot acknowledge the message before
-all segment work caused by it has completed.
+Every affected view clones its own handle from the same ref-counted message.
+This is required so the dedicated BroadcastAck sink cannot acknowledge the
+message before all segment work caused by it has completed.
 
 ## 4. Object Storage And Metadata Publication
 
@@ -202,10 +202,10 @@ unfinished Insert work.
 ## 8. Invariants
 
 1. SegmentView is VChannel-owned, not a top-level recovery module.
-2. Every actual SegmentView consumer retains one message handle before asynchronous
+2. Every actual SegmentView consumer clones one message handle before asynchronous
    work is exposed.
-3. Dynamic child work is joined behind a module-local parent handle retained
-   before Seal.
+3. Dynamic child work is joined behind a module-local parent handle cloned
+   during synchronous dispatch.
 4. A buffered Insert handle releases only after its containing object chunk is
    durable.
 5. Ensure-growing and commit handles release only after their side effects
@@ -215,8 +215,8 @@ unfinished Insert work.
 7. Segment metadata publication is captured by the frozen persist batch.
 8. Segment retained handles are the only Segment completion input to the
    RecoveryStorage Data checkpoint.
-9. Every broadcast-triggered Segment consumer retains a message handle before
-   BroadcastAck can observe completion.
+9. Every broadcast-triggered Segment consumer clones a message handle before
+   the dedicated BroadcastAck sink releases the Owner.
 10. Async Segment consumers mark metadata dirty before releasing their handle.
 11. `SealedAtDataVersion` is the segment's first DataView membership version,
     not the latest collection version observed by a retry.

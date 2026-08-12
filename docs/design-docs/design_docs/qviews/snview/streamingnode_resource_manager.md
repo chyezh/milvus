@@ -104,9 +104,10 @@ Events observed while the runtime build task is still running are buffered in
 the same `QueryRuntime` event buffer. After the runtime becomes ready, the shared
 dispatcher drains future events through the same per-runtime serialized path.
 
-Live query observation is not a WAL persistence completion signal. QueryRuntime
-clones a ref-counted message before queueing the event; it and its modules neither
-retain nor release data-message Ack handles.
+Live query observation is not a WAL persistence completion signal.
+`VChannelRecoveryModule` deep-copies the immutable message before queueing the
+event; QueryRuntime and its modules never receive, retain, or release
+data-message Ack handles.
 
 ## 5. References
 

@@ -1,140 +1,96 @@
 # Broadcast Ack Module
 
-`broadcastAckModule` owns StreamingNode-local acknowledgement for persisted
-broadcast WAL messages. It is a RecoveryStorage module because the coordinator
-Ack is a replayable data-side effect.
+`broadcastAckModule` sends consuming-side acknowledgements for broadcast WAL
+messages to StreamingCoord. It is a dedicated RecoveryStorage sink, not an
+additional message consumer and not a `moduleapi.Module`.
 
-Message completion and checkpoint semantics are defined by
+The common ownership and checkpoint rules are defined in
 [WAL Message Ack Design](message_ack.md).
 
 ## 1. Ownership
 
-`broadcastAckModule` owns:
-
-- detecting persisted messages carrying a `BroadcastHeader`;
-- retaining one message handle for each such message;
-- preserving acknowledgement order within one PChannel;
-- submitting `streaming.WAL().Broadcast().Ack(ctx, msg)`;
-- retrying failed coordinator Ack calls;
-- releasing its handle only after the Ack call succeeds.
-
-It does not own:
-
-- VChannel, Segment, TransformLog, or DataView metadata;
-- object-storage flush decisions;
-- TransformLog materialization;
-- module dirty snapshots;
-- Meta or Data checkpoint advancement.
-
-## 2. Ack As Message Work
-
-For every persisted message carrying a `BroadcastHeader`, the module calls
-`Retain()` during `ObserveMessage` and stores the returned retained immutable
-message directly in the queued broadcast task.
-
-The handle shares the same reference-count control block used by SegmentView and
-TransformLog consumers. It blocks completion of that WAL message until the
-external broadcast Ack has succeeded.
-
-The module expresses its data-side completion only through its retained handle.
-RecoveryStorage derives its data checkpoint from the continuous completed Ack
-frontier frozen for a persist batch.
-
-Broadcast Ack is replayable and idempotent. If StreamingNode crashes after the
-coordinator call succeeds but before the recovery checkpoint is persisted, WAL
-replay may send the same Ack again.
-
-For a message with `BroadcastHeader.AckSyncUp`, Coordinator Broadcaster skips
-its FastAck path and waits for this consuming-side Ack. `AckSyncUp` does not add
-another RecoveryStorage readiness condition and does not mean the
-RecoveryStorage checkpoint has already been persisted.
-
-## 3. Preconditions
-
-The queue head may acknowledge its message when:
+BroadcastAck receives the Owner and the Tracker's `TrackedMessage` for the
+same data-scanner message. It does not clone the Owner and does not retain a
+separate handle. `Accept` is called only from the data-scanner path. Its only
+operation on the Owner is an unconditional `Release`; it uses the Tracker
+handle, rather than the Owner, to decide whether a Coordinator ACK is needed:
 
 ```text
-handle.Sealed() && handle.IsExclusive()
+owner.Release()
+if tracked.RequiresBroadcastAck():
+    queue TrackedMessage
 ```
 
-The exclusive ownership is the queue head's own BroadcastAck handle. `Sealed()`
-proves that all observers have returned and no new consumer may retain the
-message. `IsExclusive()` proves that every other asynchronous consumer has
-released its handle.
+The queued task retains the original immutable message indirectly through the
+Tracker entry. The Tracker keeps that entry until both local consumers and
+Coordinator ACK have completed.
 
-No message-type-specific readiness table is required.
+## 2. Task Preconditions
 
-The task does not wait for:
-
-- a Segment or TransformLog timetick frontier;
-- RecoveryStorage Data checkpoint progress;
-- RecoveryStorage checkpoint publication;
-- TransformLog materialization.
-
-If a broadcast message causes Segment or TransformLog data work, those
-consumers must retain their own handles before dispatch is sealed. The
-BroadcastAck precondition then observes their real completion directly.
-
-## 4. Ordering
-
-Broadcast acknowledgements remain FIFO within one PChannel:
+The FIFO queue head is eligible when:
 
 ```text
-message A queue head
-  -> wait until A is sealed and BroadcastAck's handle is exclusive
-  -> Ack(A) succeeds
-  -> A's BroadcastAck handle.Release()
-  -> submit message B queue head
+TrackedMessage.ConsumersDone is closed
 ```
 
-A later broadcast is not acknowledged before an earlier one, even if the later
-message's other handles have already released. StreamingCoord relies on this
-per-PChannel WAL order.
+This event means that the Owner and every Segment/TransformLog retained handle
+have been released. BroadcastAck does not inspect the Owner, a raw refcount, or
+an exclusive-handle predicate, and does not wait for a checkpoint frontier.
+The sink itself has no retained handle; the Tracker event is the only local
+consumer completion signal it observes.
 
-## 5. Retry And Close
+When eligible, the task calls:
 
-If another message consumer is still pending, the task returns the scheduler's
-delay signal and keeps its handle.
+```text
+streaming.WAL().Broadcast().Ack(ctx, tracked.Message())
+```
 
-If `Broadcast().Ack` fails, the task is delayed and retried. It does not call
-`Release()` and does not advance the FIFO queue.
+After the call succeeds it invokes `tracked.CompleteBroadcastAck()` and removes
+itself from the FIFO queue. The Tracker can then advance the continuous
+completed prefix if this message is next in WAL order.
 
-BroadcastAck has no failed completion state. Context cancellation and
-RecoveryStorage close also keep the handle retained. Shutdown may discard the
-in-memory queue only because the persisted Data checkpoint remains behind the
-message and WAL replay will rebuild the BroadcastAck handle.
+## 3. Ordering And Retry
 
-After `Broadcast().Ack` succeeds:
+Broadcast ACK remains FIFO within one PChannel:
 
-1. call `Release()` on the task's retained message handle;
-2. remove the task from the queue head;
-3. submit the next queued broadcast task;
-4. let the shared message zero transition notify its Tracker entry when this was
-   the final handle.
+```text
+release A Owner -> enqueue A
+  -> wait A ConsumersDone
+  -> Coordinator Ack(A)
+  -> CompleteBroadcastAck(A)
+  -> enqueue/submit B
+```
 
-## 6. ModuleAPI
+If local consumers are unfinished, the task returns the scheduler delay signal.
+If Coordinator ACK fails, the task remains the queue head and retries. It does
+not complete the Tracker entry or advance the queue.
 
-`broadcastAckModule` implements `moduleapi.Module`:
+Coordinator ACK is idempotent. If the process crashes after Coordinator has
+accepted the ACK but before the Tracker entry or checkpoint is persisted, WAL
+replay may issue the same ACK again.
 
-- `Name()` returns `ModuleNameAck`;
-- `ObserveMessage()` retains one message handle and enqueues a task only for a broadcast
-  message in MetaAndData mode;
-- `SwitchIntoMetaAndData()` enables broadcast acknowledgement and returns no
-  recovery snapshot;
-- `ConsumeDirtySnapshots()` returns nil because Ack state is replayed from WAL,
-  not persisted as module metadata.
+## 4. AckSyncUp
 
-## 7. Invariants
+`BroadcastHeader.AckSyncUp` only changes Coordinator behavior: it disables
+FastAck and makes Coordinator wait for the consuming-side ACK. It does not make
+BroadcastAck wait for Meta checkpoint persistence, Data checkpoint persistence,
+TransformLog materialization, or QueryRuntime readiness.
 
-1. Every observed broadcast message in MetaAndData mode owns exactly one
-   BroadcastAck retained handle.
-2. BroadcastAck waits for a sealed message with an exclusive handle, not inferred
-   module frontiers.
-3. The coordinator call remains FIFO per PChannel.
-4. A failed coordinator call keeps the handle live and remains retryable.
-5. The handle is released only after the coordinator call succeeds.
-6. BroadcastAck does not wait for checkpoint publication or
-   TransformLog materialization.
-7. `AckSyncUp` disables Coordinator FastAck but does not change the
-   RecoveryStorage Ack precondition.
-8. Cancellation and close never release an incomplete BroadcastAck handle.
+## 5. Close And Recovery
+
+An unfinished BroadcastAck task retains no Owner handle, but its Tracker entry
+remains live through the Tracker's original message reference. Close does not
+mark the task complete. On restart, WAL replay reconstructs the task and
+Coordinator ACK may be repeated safely.
+
+## 6. Invariants
+
+1. BroadcastAck is not a `moduleapi.Module` and is absent from the module
+   dirty-snapshot and Meta-only replay paths.
+2. BroadcastAck never calls `Message()` or `Clone()` on the Owner.
+3. BroadcastAck releases the Owner exactly once for every data-scanner message.
+4. Only actual Segment and TransformLog work creates retained handles.
+5. Coordinator ACK happens after `ConsumersDone` and before
+   `CompleteBroadcastAck`.
+6. Broadcast ACK order is FIFO per PChannel.
+7. BroadcastAck does not wait for checkpoint publication or materialization.

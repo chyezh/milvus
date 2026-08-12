@@ -10,8 +10,8 @@ Current design is split across:
   durability, subscription, materialization, truncation, and recovery;
 - [WAL Message Ack Design](message_ack.md): per-message reference-count
   completion and checkpoint gating;
-- [Broadcast Ack Module](broadcast_ack_module.md): broadcast last-reference and
-  FIFO acknowledgement semantics;
+- [Broadcast Ack Module](broadcast_ack_module.md): immediate Owner release, Tracker
+  completion, and FIFO acknowledgement semantics;
 - [StreamingNode VChannel WAL Input View](streamingnode_vchannel_wal_view.md):
   QueryRuntime preparation from the VChannel-owned TransformLog stream.
 
@@ -29,7 +29,7 @@ does not imply runtime module ownership.
 
 The authoritative completion rules are:
 
-1. TransformLog calls `Retain()` when a message requires chunk flush work and
+1. TransformLog calls `Clone()` when a message requires chunk flush work and
    stores the returned retained immutable message with the buffered entry or
    barrier.
 2. The handle releases after the chunk covering the message is durable and

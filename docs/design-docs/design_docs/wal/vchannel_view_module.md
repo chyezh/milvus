@@ -45,7 +45,7 @@ ref-counted immutable message.
 Within one VChannel:
 
 ```text
-ObserveMessage(ImmutableMessage)
+ObserveDataMessage(Owner)
   -> update VChannelView metadata
   -> route the same ref-counted message to affected SegmentViews
   -> route the same message to TransformLog
@@ -119,7 +119,9 @@ ref-counted immutable message:
 
 - Segment handles release after segment data/lifecycle work succeeds;
 - TransformLog handles release after containing chunks are durable;
-- BroadcastAck waits until every other retained handle is released.
+- the dedicated BroadcastAck sink unconditionally releases the Owner; it uses
+  the Tracker entry's fixed broadcast requirement to decide whether its FIFO
+  ACK task waits for the local-consumer completion notification.
 
 Historical schema lookup is an internal VChannel ownership operation when a new
 SegmentView is created. TransformLog does not inspect Segment private state for

@@ -146,6 +146,21 @@ func (m *PChannelRecoveryManager) Name() moduleapi.ModuleName {
 }
 
 func (m *PChannelRecoveryManager) ObserveMessage(ctx context.Context, msg message.ImmutableMessage) {
+	m.observeMessage(ctx, msg, nil)
+}
+
+func (m *PChannelRecoveryManager) ObserveDataMessage(
+	ctx context.Context,
+	owner message.RefCountedImmutableMessageOwner,
+) {
+	m.observeMessage(ctx, owner.Message(), owner)
+}
+
+func (m *PChannelRecoveryManager) observeMessage(
+	ctx context.Context,
+	msg message.ImmutableMessage,
+	owner message.RefCountedImmutableMessageOwner,
+) {
 	if m == nil || msg == nil {
 		return
 	}
@@ -153,14 +168,14 @@ func (m *PChannelRecoveryManager) ObserveMessage(ctx context.Context, msg messag
 		return
 	}
 	if m.shouldBroadcast(msg) {
-		m.observeBroadcastMessage(ctx, msg)
+		m.observeBroadcastMessage(ctx, msg, owner)
 		return
 	}
 	module := m.moduleForMessage(msg)
 	if module == nil {
 		return
 	}
-	module.ObserveMessage(ctx, msg)
+	module.observeMessage(ctx, msg, owner)
 	m.markModuleUpdated(module)
 	m.syncTransformLogStream(module)
 }
@@ -364,9 +379,13 @@ func (m *PChannelRecoveryManager) shouldBroadcast(msg message.ImmutableMessage) 
 	return msg.VChannel() == "" || msg.IsPChannelLevel()
 }
 
-func (m *PChannelRecoveryManager) observeBroadcastMessage(ctx context.Context, msg message.ImmutableMessage) {
+func (m *PChannelRecoveryManager) observeBroadcastMessage(
+	ctx context.Context,
+	msg message.ImmutableMessage,
+	owner message.RefCountedImmutableMessageOwner,
+) {
 	m.modules.Range(func(_ string, module *VChannelRecoveryModule) bool {
-		module.ObserveMessage(ctx, msg)
+		module.observeMessage(ctx, msg, owner)
 		m.markModuleUpdated(module)
 		m.syncTransformLogStream(module)
 		return true
@@ -497,6 +516,7 @@ func (n *dirtyTrackingNotifier) NotifyModuleUpdated(name moduleapi.ModuleName) {
 
 var (
 	_ moduleapi.Module                    = (*PChannelRecoveryManager)(nil)
+	_ moduleapi.DataMessageObserver       = (*PChannelRecoveryManager)(nil)
 	_ moduleapi.PendingCleanupModule      = (*PChannelRecoveryManager)(nil)
 	_ wal.TransformLogStreamManager       = (*PChannelRecoveryManager)(nil)
 	_ snview.StreamingNodeResourceManager = (*PChannelRecoveryManager)(nil)

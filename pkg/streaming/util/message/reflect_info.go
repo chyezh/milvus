@@ -205,13 +205,11 @@ type (
 
 // Type aliases for TimeTickMessageV1
 type (
-	MutableTimeTickMessageV1             = specializedMutableMessage[*TimeTickMessageHeader, *TimeTickMsg]
-	ImmutableTimeTickMessageV1           = SpecializedImmutableMessage[*TimeTickMessageHeader, *TimeTickMsg]
-	RefCountedImmutableTimeTickMessageV1 = RefCountedSpecializedImmutableMessage[*TimeTickMessageHeader, *TimeTickMsg]
-	RetainedImmutableTimeTickMessageV1   = RetainedSpecializedImmutableMessage[*TimeTickMessageHeader, *TimeTickMsg]
-	BroadcastTimeTickMessageV1           = SpecializedBroadcastMessage[*TimeTickMessageHeader, *TimeTickMsg]
-	BroadcastResultTimeTickMessageV1     = BroadcastResult[*TimeTickMessageHeader, *TimeTickMsg]
-	AckResultTimeTickMessageV1           = AckResult[*TimeTickMessageHeader, *TimeTickMsg]
+	MutableTimeTickMessageV1         = specializedMutableMessage[*TimeTickMessageHeader, *TimeTickMsg]
+	ImmutableTimeTickMessageV1       = SpecializedImmutableMessage[*TimeTickMessageHeader, *TimeTickMsg]
+	BroadcastTimeTickMessageV1       = SpecializedBroadcastMessage[*TimeTickMessageHeader, *TimeTickMsg]
+	BroadcastResultTimeTickMessageV1 = BroadcastResult[*TimeTickMessageHeader, *TimeTickMsg]
+	AckResultTimeTickMessageV1       = AckResult[*TimeTickMessageHeader, *TimeTickMsg]
 )
 
 // MessageTypeWithVersion for TimeTickMessageV1
@@ -238,12 +236,6 @@ var AsImmutableTimeTickMessageV1 = asSpecializedImmutableMessage[*TimeTickMessag
 // MustAsImmutableTimeTickMessageV1 converts an ImmutableMessage to ImmutableTimeTickMessageV1, panics on error
 var MustAsImmutableTimeTickMessageV1 = MustAsSpecializedImmutableMessage[*TimeTickMessageHeader, *TimeTickMsg]
 
-// MustAsRefCountedImmutableTimeTickMessageV1 converts an ImmutableMessage to RefCountedImmutableTimeTickMessageV1, panics on error
-var MustAsRefCountedImmutableTimeTickMessageV1 = MustAsRefCountedSpecializedImmutableMessage[*TimeTickMessageHeader, *TimeTickMsg]
-
-// MustAsRetainedImmutableTimeTickMessageV1 converts an ImmutableMessage to RetainedImmutableTimeTickMessageV1, panics on error
-var MustAsRetainedImmutableTimeTickMessageV1 = MustAsRetainedSpecializedImmutableMessage[*TimeTickMessageHeader, *TimeTickMsg]
-
 // AsBroadcastTimeTickMessageV1 converts a BasicMessage to BroadcastTimeTickMessageV1
 var AsBroadcastTimeTickMessageV1 = asSpecializedBroadcastMessage[*TimeTickMessageHeader, *TimeTickMsg]
 
@@ -255,13 +247,11 @@ var NewTimeTickMessageBuilderV1 = newMutableMessageBuilder[*TimeTickMessageHeade
 
 // Type aliases for InsertMessageV1
 type (
-	MutableInsertMessageV1             = specializedMutableMessage[*InsertMessageHeader, *InsertRequest]
-	ImmutableInsertMessageV1           = SpecializedImmutableMessage[*InsertMessageHeader, *InsertRequest]
-	RefCountedImmutableInsertMessageV1 = RefCountedSpecializedImmutableMessage[*InsertMessageHeader, *InsertRequest]
-	RetainedImmutableInsertMessageV1   = RetainedSpecializedImmutableMessage[*InsertMessageHeader, *InsertRequest]
-	BroadcastInsertMessageV1           = SpecializedBroadcastMessage[*InsertMessageHeader, *InsertRequest]
-	BroadcastResultInsertMessageV1     = BroadcastResult[*InsertMessageHeader, *InsertRequest]
-	AckResultInsertMessageV1           = AckResult[*InsertMessageHeader, *InsertRequest]
+	MutableInsertMessageV1         = specializedMutableMessage[*InsertMessageHeader, *InsertRequest]
+	ImmutableInsertMessageV1       = SpecializedImmutableMessage[*InsertMessageHeader, *InsertRequest]
+	BroadcastInsertMessageV1       = SpecializedBroadcastMessage[*InsertMessageHeader, *InsertRequest]
+	BroadcastResultInsertMessageV1 = BroadcastResult[*InsertMessageHeader, *InsertRequest]
+	AckResultInsertMessageV1       = AckResult[*InsertMessageHeader, *InsertRequest]
 )
 
 // MessageTypeWithVersion for InsertMessageV1
@@ -288,12 +278,6 @@ var AsImmutableInsertMessageV1 = asSpecializedImmutableMessage[*InsertMessageHea
 // MustAsImmutableInsertMessageV1 converts an ImmutableMessage to ImmutableInsertMessageV1, panics on error
 var MustAsImmutableInsertMessageV1 = MustAsSpecializedImmutableMessage[*InsertMessageHeader, *InsertRequest]
 
-// MustAsRefCountedImmutableInsertMessageV1 converts an ImmutableMessage to RefCountedImmutableInsertMessageV1, panics on error
-var MustAsRefCountedImmutableInsertMessageV1 = MustAsRefCountedSpecializedImmutableMessage[*InsertMessageHeader, *InsertRequest]
-
-// MustAsRetainedImmutableInsertMessageV1 converts an ImmutableMessage to RetainedImmutableInsertMessageV1, panics on error
-var MustAsRetainedImmutableInsertMessageV1 = MustAsRetainedSpecializedImmutableMessage[*InsertMessageHeader, *InsertRequest]
-
 // AsBroadcastInsertMessageV1 converts a BasicMessage to BroadcastInsertMessageV1
 var AsBroadcastInsertMessageV1 = asSpecializedBroadcastMessage[*InsertMessageHeader, *InsertRequest]
 
@@ -305,13 +289,11 @@ var NewInsertMessageBuilderV1 = newMutableMessageBuilder[*InsertMessageHeader, *
 
 // Type aliases for DeleteMessageV1
 type (
-	MutableDeleteMessageV1             = specializedMutableMessage[*DeleteMessageHeader, *DeleteRequest]
-	ImmutableDeleteMessageV1           = SpecializedImmutableMessage[*DeleteMessageHeader, *DeleteRequest]
-	RefCountedImmutableDeleteMessageV1 = RefCountedSpecializedImmutableMessage[*DeleteMessageHeader, *DeleteRequest]
-	RetainedImmutableDeleteMessageV1   = RetainedSpecializedImmutableMessage[*DeleteMessageHeader, *DeleteRequest]
-	BroadcastDeleteMessageV1           = SpecializedBroadcastMessage[*DeleteMessageHeader, *DeleteRequest]
-	BroadcastResultDeleteMessageV1     = BroadcastResult[*DeleteMessageHeader, *DeleteRequest]
-	AckResultDeleteMessageV1           = AckResult[*DeleteMessageHeader, *DeleteRequest]
+	MutableDeleteMessageV1         = specializedMutableMessage[*DeleteMessageHeader, *DeleteRequest]
+	ImmutableDeleteMessageV1       = SpecializedImmutableMessage[*DeleteMessageHeader, *DeleteRequest]
+	BroadcastDeleteMessageV1       = SpecializedBroadcastMessage[*DeleteMessageHeader, *DeleteRequest]
+	BroadcastResultDeleteMessageV1 = BroadcastResult[*DeleteMessageHeader, *DeleteRequest]
+	AckResultDeleteMessageV1       = AckResult[*DeleteMessageHeader, *DeleteRequest]
 )
 
 // MessageTypeWithVersion for DeleteMessageV1
@@ -338,12 +320,6 @@ var AsImmutableDeleteMessageV1 = asSpecializedImmutableMessage[*DeleteMessageHea
 // MustAsImmutableDeleteMessageV1 converts an ImmutableMessage to ImmutableDeleteMessageV1, panics on error
 var MustAsImmutableDeleteMessageV1 = MustAsSpecializedImmutableMessage[*DeleteMessageHeader, *DeleteRequest]
 
-// MustAsRefCountedImmutableDeleteMessageV1 converts an ImmutableMessage to RefCountedImmutableDeleteMessageV1, panics on error
-var MustAsRefCountedImmutableDeleteMessageV1 = MustAsRefCountedSpecializedImmutableMessage[*DeleteMessageHeader, *DeleteRequest]
-
-// MustAsRetainedImmutableDeleteMessageV1 converts an ImmutableMessage to RetainedImmutableDeleteMessageV1, panics on error
-var MustAsRetainedImmutableDeleteMessageV1 = MustAsRetainedSpecializedImmutableMessage[*DeleteMessageHeader, *DeleteRequest]
-
 // AsBroadcastDeleteMessageV1 converts a BasicMessage to BroadcastDeleteMessageV1
 var AsBroadcastDeleteMessageV1 = asSpecializedBroadcastMessage[*DeleteMessageHeader, *DeleteRequest]
 
@@ -355,13 +331,11 @@ var NewDeleteMessageBuilderV1 = newMutableMessageBuilder[*DeleteMessageHeader, *
 
 // Type aliases for CreateCollectionMessageV1
 type (
-	MutableCreateCollectionMessageV1             = specializedMutableMessage[*CreateCollectionMessageHeader, *CreateCollectionRequest]
-	ImmutableCreateCollectionMessageV1           = SpecializedImmutableMessage[*CreateCollectionMessageHeader, *CreateCollectionRequest]
-	RefCountedImmutableCreateCollectionMessageV1 = RefCountedSpecializedImmutableMessage[*CreateCollectionMessageHeader, *CreateCollectionRequest]
-	RetainedImmutableCreateCollectionMessageV1   = RetainedSpecializedImmutableMessage[*CreateCollectionMessageHeader, *CreateCollectionRequest]
-	BroadcastCreateCollectionMessageV1           = SpecializedBroadcastMessage[*CreateCollectionMessageHeader, *CreateCollectionRequest]
-	BroadcastResultCreateCollectionMessageV1     = BroadcastResult[*CreateCollectionMessageHeader, *CreateCollectionRequest]
-	AckResultCreateCollectionMessageV1           = AckResult[*CreateCollectionMessageHeader, *CreateCollectionRequest]
+	MutableCreateCollectionMessageV1         = specializedMutableMessage[*CreateCollectionMessageHeader, *CreateCollectionRequest]
+	ImmutableCreateCollectionMessageV1       = SpecializedImmutableMessage[*CreateCollectionMessageHeader, *CreateCollectionRequest]
+	BroadcastCreateCollectionMessageV1       = SpecializedBroadcastMessage[*CreateCollectionMessageHeader, *CreateCollectionRequest]
+	BroadcastResultCreateCollectionMessageV1 = BroadcastResult[*CreateCollectionMessageHeader, *CreateCollectionRequest]
+	AckResultCreateCollectionMessageV1       = AckResult[*CreateCollectionMessageHeader, *CreateCollectionRequest]
 )
 
 // MessageTypeWithVersion for CreateCollectionMessageV1
@@ -388,12 +362,6 @@ var AsImmutableCreateCollectionMessageV1 = asSpecializedImmutableMessage[*Create
 // MustAsImmutableCreateCollectionMessageV1 converts an ImmutableMessage to ImmutableCreateCollectionMessageV1, panics on error
 var MustAsImmutableCreateCollectionMessageV1 = MustAsSpecializedImmutableMessage[*CreateCollectionMessageHeader, *CreateCollectionRequest]
 
-// MustAsRefCountedImmutableCreateCollectionMessageV1 converts an ImmutableMessage to RefCountedImmutableCreateCollectionMessageV1, panics on error
-var MustAsRefCountedImmutableCreateCollectionMessageV1 = MustAsRefCountedSpecializedImmutableMessage[*CreateCollectionMessageHeader, *CreateCollectionRequest]
-
-// MustAsRetainedImmutableCreateCollectionMessageV1 converts an ImmutableMessage to RetainedImmutableCreateCollectionMessageV1, panics on error
-var MustAsRetainedImmutableCreateCollectionMessageV1 = MustAsRetainedSpecializedImmutableMessage[*CreateCollectionMessageHeader, *CreateCollectionRequest]
-
 // AsBroadcastCreateCollectionMessageV1 converts a BasicMessage to BroadcastCreateCollectionMessageV1
 var AsBroadcastCreateCollectionMessageV1 = asSpecializedBroadcastMessage[*CreateCollectionMessageHeader, *CreateCollectionRequest]
 
@@ -405,13 +373,11 @@ var NewCreateCollectionMessageBuilderV1 = newMutableMessageBuilder[*CreateCollec
 
 // Type aliases for DropCollectionMessageV1
 type (
-	MutableDropCollectionMessageV1             = specializedMutableMessage[*DropCollectionMessageHeader, *DropCollectionRequest]
-	ImmutableDropCollectionMessageV1           = SpecializedImmutableMessage[*DropCollectionMessageHeader, *DropCollectionRequest]
-	RefCountedImmutableDropCollectionMessageV1 = RefCountedSpecializedImmutableMessage[*DropCollectionMessageHeader, *DropCollectionRequest]
-	RetainedImmutableDropCollectionMessageV1   = RetainedSpecializedImmutableMessage[*DropCollectionMessageHeader, *DropCollectionRequest]
-	BroadcastDropCollectionMessageV1           = SpecializedBroadcastMessage[*DropCollectionMessageHeader, *DropCollectionRequest]
-	BroadcastResultDropCollectionMessageV1     = BroadcastResult[*DropCollectionMessageHeader, *DropCollectionRequest]
-	AckResultDropCollectionMessageV1           = AckResult[*DropCollectionMessageHeader, *DropCollectionRequest]
+	MutableDropCollectionMessageV1         = specializedMutableMessage[*DropCollectionMessageHeader, *DropCollectionRequest]
+	ImmutableDropCollectionMessageV1       = SpecializedImmutableMessage[*DropCollectionMessageHeader, *DropCollectionRequest]
+	BroadcastDropCollectionMessageV1       = SpecializedBroadcastMessage[*DropCollectionMessageHeader, *DropCollectionRequest]
+	BroadcastResultDropCollectionMessageV1 = BroadcastResult[*DropCollectionMessageHeader, *DropCollectionRequest]
+	AckResultDropCollectionMessageV1       = AckResult[*DropCollectionMessageHeader, *DropCollectionRequest]
 )
 
 // MessageTypeWithVersion for DropCollectionMessageV1
@@ -438,12 +404,6 @@ var AsImmutableDropCollectionMessageV1 = asSpecializedImmutableMessage[*DropColl
 // MustAsImmutableDropCollectionMessageV1 converts an ImmutableMessage to ImmutableDropCollectionMessageV1, panics on error
 var MustAsImmutableDropCollectionMessageV1 = MustAsSpecializedImmutableMessage[*DropCollectionMessageHeader, *DropCollectionRequest]
 
-// MustAsRefCountedImmutableDropCollectionMessageV1 converts an ImmutableMessage to RefCountedImmutableDropCollectionMessageV1, panics on error
-var MustAsRefCountedImmutableDropCollectionMessageV1 = MustAsRefCountedSpecializedImmutableMessage[*DropCollectionMessageHeader, *DropCollectionRequest]
-
-// MustAsRetainedImmutableDropCollectionMessageV1 converts an ImmutableMessage to RetainedImmutableDropCollectionMessageV1, panics on error
-var MustAsRetainedImmutableDropCollectionMessageV1 = MustAsRetainedSpecializedImmutableMessage[*DropCollectionMessageHeader, *DropCollectionRequest]
-
 // AsBroadcastDropCollectionMessageV1 converts a BasicMessage to BroadcastDropCollectionMessageV1
 var AsBroadcastDropCollectionMessageV1 = asSpecializedBroadcastMessage[*DropCollectionMessageHeader, *DropCollectionRequest]
 
@@ -455,13 +415,11 @@ var NewDropCollectionMessageBuilderV1 = newMutableMessageBuilder[*DropCollection
 
 // Type aliases for TruncateCollectionMessageV2
 type (
-	MutableTruncateCollectionMessageV2             = specializedMutableMessage[*TruncateCollectionMessageHeader, *TruncateCollectionMessageBody]
-	ImmutableTruncateCollectionMessageV2           = SpecializedImmutableMessage[*TruncateCollectionMessageHeader, *TruncateCollectionMessageBody]
-	RefCountedImmutableTruncateCollectionMessageV2 = RefCountedSpecializedImmutableMessage[*TruncateCollectionMessageHeader, *TruncateCollectionMessageBody]
-	RetainedImmutableTruncateCollectionMessageV2   = RetainedSpecializedImmutableMessage[*TruncateCollectionMessageHeader, *TruncateCollectionMessageBody]
-	BroadcastTruncateCollectionMessageV2           = SpecializedBroadcastMessage[*TruncateCollectionMessageHeader, *TruncateCollectionMessageBody]
-	BroadcastResultTruncateCollectionMessageV2     = BroadcastResult[*TruncateCollectionMessageHeader, *TruncateCollectionMessageBody]
-	AckResultTruncateCollectionMessageV2           = AckResult[*TruncateCollectionMessageHeader, *TruncateCollectionMessageBody]
+	MutableTruncateCollectionMessageV2         = specializedMutableMessage[*TruncateCollectionMessageHeader, *TruncateCollectionMessageBody]
+	ImmutableTruncateCollectionMessageV2       = SpecializedImmutableMessage[*TruncateCollectionMessageHeader, *TruncateCollectionMessageBody]
+	BroadcastTruncateCollectionMessageV2       = SpecializedBroadcastMessage[*TruncateCollectionMessageHeader, *TruncateCollectionMessageBody]
+	BroadcastResultTruncateCollectionMessageV2 = BroadcastResult[*TruncateCollectionMessageHeader, *TruncateCollectionMessageBody]
+	AckResultTruncateCollectionMessageV2       = AckResult[*TruncateCollectionMessageHeader, *TruncateCollectionMessageBody]
 )
 
 // MessageTypeWithVersion for TruncateCollectionMessageV2
@@ -488,12 +446,6 @@ var AsImmutableTruncateCollectionMessageV2 = asSpecializedImmutableMessage[*Trun
 // MustAsImmutableTruncateCollectionMessageV2 converts an ImmutableMessage to ImmutableTruncateCollectionMessageV2, panics on error
 var MustAsImmutableTruncateCollectionMessageV2 = MustAsSpecializedImmutableMessage[*TruncateCollectionMessageHeader, *TruncateCollectionMessageBody]
 
-// MustAsRefCountedImmutableTruncateCollectionMessageV2 converts an ImmutableMessage to RefCountedImmutableTruncateCollectionMessageV2, panics on error
-var MustAsRefCountedImmutableTruncateCollectionMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*TruncateCollectionMessageHeader, *TruncateCollectionMessageBody]
-
-// MustAsRetainedImmutableTruncateCollectionMessageV2 converts an ImmutableMessage to RetainedImmutableTruncateCollectionMessageV2, panics on error
-var MustAsRetainedImmutableTruncateCollectionMessageV2 = MustAsRetainedSpecializedImmutableMessage[*TruncateCollectionMessageHeader, *TruncateCollectionMessageBody]
-
 // AsBroadcastTruncateCollectionMessageV2 converts a BasicMessage to BroadcastTruncateCollectionMessageV2
 var AsBroadcastTruncateCollectionMessageV2 = asSpecializedBroadcastMessage[*TruncateCollectionMessageHeader, *TruncateCollectionMessageBody]
 
@@ -505,13 +457,11 @@ var NewTruncateCollectionMessageBuilderV2 = newMutableMessageBuilder[*TruncateCo
 
 // Type aliases for CreatePartitionMessageV1
 type (
-	MutableCreatePartitionMessageV1             = specializedMutableMessage[*CreatePartitionMessageHeader, *CreatePartitionRequest]
-	ImmutableCreatePartitionMessageV1           = SpecializedImmutableMessage[*CreatePartitionMessageHeader, *CreatePartitionRequest]
-	RefCountedImmutableCreatePartitionMessageV1 = RefCountedSpecializedImmutableMessage[*CreatePartitionMessageHeader, *CreatePartitionRequest]
-	RetainedImmutableCreatePartitionMessageV1   = RetainedSpecializedImmutableMessage[*CreatePartitionMessageHeader, *CreatePartitionRequest]
-	BroadcastCreatePartitionMessageV1           = SpecializedBroadcastMessage[*CreatePartitionMessageHeader, *CreatePartitionRequest]
-	BroadcastResultCreatePartitionMessageV1     = BroadcastResult[*CreatePartitionMessageHeader, *CreatePartitionRequest]
-	AckResultCreatePartitionMessageV1           = AckResult[*CreatePartitionMessageHeader, *CreatePartitionRequest]
+	MutableCreatePartitionMessageV1         = specializedMutableMessage[*CreatePartitionMessageHeader, *CreatePartitionRequest]
+	ImmutableCreatePartitionMessageV1       = SpecializedImmutableMessage[*CreatePartitionMessageHeader, *CreatePartitionRequest]
+	BroadcastCreatePartitionMessageV1       = SpecializedBroadcastMessage[*CreatePartitionMessageHeader, *CreatePartitionRequest]
+	BroadcastResultCreatePartitionMessageV1 = BroadcastResult[*CreatePartitionMessageHeader, *CreatePartitionRequest]
+	AckResultCreatePartitionMessageV1       = AckResult[*CreatePartitionMessageHeader, *CreatePartitionRequest]
 )
 
 // MessageTypeWithVersion for CreatePartitionMessageV1
@@ -538,12 +488,6 @@ var AsImmutableCreatePartitionMessageV1 = asSpecializedImmutableMessage[*CreateP
 // MustAsImmutableCreatePartitionMessageV1 converts an ImmutableMessage to ImmutableCreatePartitionMessageV1, panics on error
 var MustAsImmutableCreatePartitionMessageV1 = MustAsSpecializedImmutableMessage[*CreatePartitionMessageHeader, *CreatePartitionRequest]
 
-// MustAsRefCountedImmutableCreatePartitionMessageV1 converts an ImmutableMessage to RefCountedImmutableCreatePartitionMessageV1, panics on error
-var MustAsRefCountedImmutableCreatePartitionMessageV1 = MustAsRefCountedSpecializedImmutableMessage[*CreatePartitionMessageHeader, *CreatePartitionRequest]
-
-// MustAsRetainedImmutableCreatePartitionMessageV1 converts an ImmutableMessage to RetainedImmutableCreatePartitionMessageV1, panics on error
-var MustAsRetainedImmutableCreatePartitionMessageV1 = MustAsRetainedSpecializedImmutableMessage[*CreatePartitionMessageHeader, *CreatePartitionRequest]
-
 // AsBroadcastCreatePartitionMessageV1 converts a BasicMessage to BroadcastCreatePartitionMessageV1
 var AsBroadcastCreatePartitionMessageV1 = asSpecializedBroadcastMessage[*CreatePartitionMessageHeader, *CreatePartitionRequest]
 
@@ -555,13 +499,11 @@ var NewCreatePartitionMessageBuilderV1 = newMutableMessageBuilder[*CreatePartiti
 
 // Type aliases for DropPartitionMessageV1
 type (
-	MutableDropPartitionMessageV1             = specializedMutableMessage[*DropPartitionMessageHeader, *DropPartitionRequest]
-	ImmutableDropPartitionMessageV1           = SpecializedImmutableMessage[*DropPartitionMessageHeader, *DropPartitionRequest]
-	RefCountedImmutableDropPartitionMessageV1 = RefCountedSpecializedImmutableMessage[*DropPartitionMessageHeader, *DropPartitionRequest]
-	RetainedImmutableDropPartitionMessageV1   = RetainedSpecializedImmutableMessage[*DropPartitionMessageHeader, *DropPartitionRequest]
-	BroadcastDropPartitionMessageV1           = SpecializedBroadcastMessage[*DropPartitionMessageHeader, *DropPartitionRequest]
-	BroadcastResultDropPartitionMessageV1     = BroadcastResult[*DropPartitionMessageHeader, *DropPartitionRequest]
-	AckResultDropPartitionMessageV1           = AckResult[*DropPartitionMessageHeader, *DropPartitionRequest]
+	MutableDropPartitionMessageV1         = specializedMutableMessage[*DropPartitionMessageHeader, *DropPartitionRequest]
+	ImmutableDropPartitionMessageV1       = SpecializedImmutableMessage[*DropPartitionMessageHeader, *DropPartitionRequest]
+	BroadcastDropPartitionMessageV1       = SpecializedBroadcastMessage[*DropPartitionMessageHeader, *DropPartitionRequest]
+	BroadcastResultDropPartitionMessageV1 = BroadcastResult[*DropPartitionMessageHeader, *DropPartitionRequest]
+	AckResultDropPartitionMessageV1       = AckResult[*DropPartitionMessageHeader, *DropPartitionRequest]
 )
 
 // MessageTypeWithVersion for DropPartitionMessageV1
@@ -588,12 +530,6 @@ var AsImmutableDropPartitionMessageV1 = asSpecializedImmutableMessage[*DropParti
 // MustAsImmutableDropPartitionMessageV1 converts an ImmutableMessage to ImmutableDropPartitionMessageV1, panics on error
 var MustAsImmutableDropPartitionMessageV1 = MustAsSpecializedImmutableMessage[*DropPartitionMessageHeader, *DropPartitionRequest]
 
-// MustAsRefCountedImmutableDropPartitionMessageV1 converts an ImmutableMessage to RefCountedImmutableDropPartitionMessageV1, panics on error
-var MustAsRefCountedImmutableDropPartitionMessageV1 = MustAsRefCountedSpecializedImmutableMessage[*DropPartitionMessageHeader, *DropPartitionRequest]
-
-// MustAsRetainedImmutableDropPartitionMessageV1 converts an ImmutableMessage to RetainedImmutableDropPartitionMessageV1, panics on error
-var MustAsRetainedImmutableDropPartitionMessageV1 = MustAsRetainedSpecializedImmutableMessage[*DropPartitionMessageHeader, *DropPartitionRequest]
-
 // AsBroadcastDropPartitionMessageV1 converts a BasicMessage to BroadcastDropPartitionMessageV1
 var AsBroadcastDropPartitionMessageV1 = asSpecializedBroadcastMessage[*DropPartitionMessageHeader, *DropPartitionRequest]
 
@@ -605,13 +541,11 @@ var NewDropPartitionMessageBuilderV1 = newMutableMessageBuilder[*DropPartitionMe
 
 // Type aliases for ImportMessageV1
 type (
-	MutableImportMessageV1             = specializedMutableMessage[*ImportMessageHeader, *ImportMsg]
-	ImmutableImportMessageV1           = SpecializedImmutableMessage[*ImportMessageHeader, *ImportMsg]
-	RefCountedImmutableImportMessageV1 = RefCountedSpecializedImmutableMessage[*ImportMessageHeader, *ImportMsg]
-	RetainedImmutableImportMessageV1   = RetainedSpecializedImmutableMessage[*ImportMessageHeader, *ImportMsg]
-	BroadcastImportMessageV1           = SpecializedBroadcastMessage[*ImportMessageHeader, *ImportMsg]
-	BroadcastResultImportMessageV1     = BroadcastResult[*ImportMessageHeader, *ImportMsg]
-	AckResultImportMessageV1           = AckResult[*ImportMessageHeader, *ImportMsg]
+	MutableImportMessageV1         = specializedMutableMessage[*ImportMessageHeader, *ImportMsg]
+	ImmutableImportMessageV1       = SpecializedImmutableMessage[*ImportMessageHeader, *ImportMsg]
+	BroadcastImportMessageV1       = SpecializedBroadcastMessage[*ImportMessageHeader, *ImportMsg]
+	BroadcastResultImportMessageV1 = BroadcastResult[*ImportMessageHeader, *ImportMsg]
+	AckResultImportMessageV1       = AckResult[*ImportMessageHeader, *ImportMsg]
 )
 
 // MessageTypeWithVersion for ImportMessageV1
@@ -638,12 +572,6 @@ var AsImmutableImportMessageV1 = asSpecializedImmutableMessage[*ImportMessageHea
 // MustAsImmutableImportMessageV1 converts an ImmutableMessage to ImmutableImportMessageV1, panics on error
 var MustAsImmutableImportMessageV1 = MustAsSpecializedImmutableMessage[*ImportMessageHeader, *ImportMsg]
 
-// MustAsRefCountedImmutableImportMessageV1 converts an ImmutableMessage to RefCountedImmutableImportMessageV1, panics on error
-var MustAsRefCountedImmutableImportMessageV1 = MustAsRefCountedSpecializedImmutableMessage[*ImportMessageHeader, *ImportMsg]
-
-// MustAsRetainedImmutableImportMessageV1 converts an ImmutableMessage to RetainedImmutableImportMessageV1, panics on error
-var MustAsRetainedImmutableImportMessageV1 = MustAsRetainedSpecializedImmutableMessage[*ImportMessageHeader, *ImportMsg]
-
 // AsBroadcastImportMessageV1 converts a BasicMessage to BroadcastImportMessageV1
 var AsBroadcastImportMessageV1 = asSpecializedBroadcastMessage[*ImportMessageHeader, *ImportMsg]
 
@@ -655,13 +583,11 @@ var NewImportMessageBuilderV1 = newMutableMessageBuilder[*ImportMessageHeader, *
 
 // Type aliases for CommitImportMessageV2
 type (
-	MutableCommitImportMessageV2             = specializedMutableMessage[*CommitImportMessageHeader, *CommitImportMessageBody]
-	ImmutableCommitImportMessageV2           = SpecializedImmutableMessage[*CommitImportMessageHeader, *CommitImportMessageBody]
-	RefCountedImmutableCommitImportMessageV2 = RefCountedSpecializedImmutableMessage[*CommitImportMessageHeader, *CommitImportMessageBody]
-	RetainedImmutableCommitImportMessageV2   = RetainedSpecializedImmutableMessage[*CommitImportMessageHeader, *CommitImportMessageBody]
-	BroadcastCommitImportMessageV2           = SpecializedBroadcastMessage[*CommitImportMessageHeader, *CommitImportMessageBody]
-	BroadcastResultCommitImportMessageV2     = BroadcastResult[*CommitImportMessageHeader, *CommitImportMessageBody]
-	AckResultCommitImportMessageV2           = AckResult[*CommitImportMessageHeader, *CommitImportMessageBody]
+	MutableCommitImportMessageV2         = specializedMutableMessage[*CommitImportMessageHeader, *CommitImportMessageBody]
+	ImmutableCommitImportMessageV2       = SpecializedImmutableMessage[*CommitImportMessageHeader, *CommitImportMessageBody]
+	BroadcastCommitImportMessageV2       = SpecializedBroadcastMessage[*CommitImportMessageHeader, *CommitImportMessageBody]
+	BroadcastResultCommitImportMessageV2 = BroadcastResult[*CommitImportMessageHeader, *CommitImportMessageBody]
+	AckResultCommitImportMessageV2       = AckResult[*CommitImportMessageHeader, *CommitImportMessageBody]
 )
 
 // MessageTypeWithVersion for CommitImportMessageV2
@@ -688,12 +614,6 @@ var AsImmutableCommitImportMessageV2 = asSpecializedImmutableMessage[*CommitImpo
 // MustAsImmutableCommitImportMessageV2 converts an ImmutableMessage to ImmutableCommitImportMessageV2, panics on error
 var MustAsImmutableCommitImportMessageV2 = MustAsSpecializedImmutableMessage[*CommitImportMessageHeader, *CommitImportMessageBody]
 
-// MustAsRefCountedImmutableCommitImportMessageV2 converts an ImmutableMessage to RefCountedImmutableCommitImportMessageV2, panics on error
-var MustAsRefCountedImmutableCommitImportMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*CommitImportMessageHeader, *CommitImportMessageBody]
-
-// MustAsRetainedImmutableCommitImportMessageV2 converts an ImmutableMessage to RetainedImmutableCommitImportMessageV2, panics on error
-var MustAsRetainedImmutableCommitImportMessageV2 = MustAsRetainedSpecializedImmutableMessage[*CommitImportMessageHeader, *CommitImportMessageBody]
-
 // AsBroadcastCommitImportMessageV2 converts a BasicMessage to BroadcastCommitImportMessageV2
 var AsBroadcastCommitImportMessageV2 = asSpecializedBroadcastMessage[*CommitImportMessageHeader, *CommitImportMessageBody]
 
@@ -705,13 +625,11 @@ var NewCommitImportMessageBuilderV2 = newMutableMessageBuilder[*CommitImportMess
 
 // Type aliases for RollbackImportMessageV2
 type (
-	MutableRollbackImportMessageV2             = specializedMutableMessage[*RollbackImportMessageHeader, *RollbackImportMessageBody]
-	ImmutableRollbackImportMessageV2           = SpecializedImmutableMessage[*RollbackImportMessageHeader, *RollbackImportMessageBody]
-	RefCountedImmutableRollbackImportMessageV2 = RefCountedSpecializedImmutableMessage[*RollbackImportMessageHeader, *RollbackImportMessageBody]
-	RetainedImmutableRollbackImportMessageV2   = RetainedSpecializedImmutableMessage[*RollbackImportMessageHeader, *RollbackImportMessageBody]
-	BroadcastRollbackImportMessageV2           = SpecializedBroadcastMessage[*RollbackImportMessageHeader, *RollbackImportMessageBody]
-	BroadcastResultRollbackImportMessageV2     = BroadcastResult[*RollbackImportMessageHeader, *RollbackImportMessageBody]
-	AckResultRollbackImportMessageV2           = AckResult[*RollbackImportMessageHeader, *RollbackImportMessageBody]
+	MutableRollbackImportMessageV2         = specializedMutableMessage[*RollbackImportMessageHeader, *RollbackImportMessageBody]
+	ImmutableRollbackImportMessageV2       = SpecializedImmutableMessage[*RollbackImportMessageHeader, *RollbackImportMessageBody]
+	BroadcastRollbackImportMessageV2       = SpecializedBroadcastMessage[*RollbackImportMessageHeader, *RollbackImportMessageBody]
+	BroadcastResultRollbackImportMessageV2 = BroadcastResult[*RollbackImportMessageHeader, *RollbackImportMessageBody]
+	AckResultRollbackImportMessageV2       = AckResult[*RollbackImportMessageHeader, *RollbackImportMessageBody]
 )
 
 // MessageTypeWithVersion for RollbackImportMessageV2
@@ -738,12 +656,6 @@ var AsImmutableRollbackImportMessageV2 = asSpecializedImmutableMessage[*Rollback
 // MustAsImmutableRollbackImportMessageV2 converts an ImmutableMessage to ImmutableRollbackImportMessageV2, panics on error
 var MustAsImmutableRollbackImportMessageV2 = MustAsSpecializedImmutableMessage[*RollbackImportMessageHeader, *RollbackImportMessageBody]
 
-// MustAsRefCountedImmutableRollbackImportMessageV2 converts an ImmutableMessage to RefCountedImmutableRollbackImportMessageV2, panics on error
-var MustAsRefCountedImmutableRollbackImportMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*RollbackImportMessageHeader, *RollbackImportMessageBody]
-
-// MustAsRetainedImmutableRollbackImportMessageV2 converts an ImmutableMessage to RetainedImmutableRollbackImportMessageV2, panics on error
-var MustAsRetainedImmutableRollbackImportMessageV2 = MustAsRetainedSpecializedImmutableMessage[*RollbackImportMessageHeader, *RollbackImportMessageBody]
-
 // AsBroadcastRollbackImportMessageV2 converts a BasicMessage to BroadcastRollbackImportMessageV2
 var AsBroadcastRollbackImportMessageV2 = asSpecializedBroadcastMessage[*RollbackImportMessageHeader, *RollbackImportMessageBody]
 
@@ -755,13 +667,11 @@ var NewRollbackImportMessageBuilderV2 = newMutableMessageBuilder[*RollbackImport
 
 // Type aliases for CreateSegmentMessageV2
 type (
-	MutableCreateSegmentMessageV2             = specializedMutableMessage[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
-	ImmutableCreateSegmentMessageV2           = SpecializedImmutableMessage[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
-	RefCountedImmutableCreateSegmentMessageV2 = RefCountedSpecializedImmutableMessage[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
-	RetainedImmutableCreateSegmentMessageV2   = RetainedSpecializedImmutableMessage[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
-	BroadcastCreateSegmentMessageV2           = SpecializedBroadcastMessage[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
-	BroadcastResultCreateSegmentMessageV2     = BroadcastResult[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
-	AckResultCreateSegmentMessageV2           = AckResult[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
+	MutableCreateSegmentMessageV2         = specializedMutableMessage[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
+	ImmutableCreateSegmentMessageV2       = SpecializedImmutableMessage[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
+	BroadcastCreateSegmentMessageV2       = SpecializedBroadcastMessage[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
+	BroadcastResultCreateSegmentMessageV2 = BroadcastResult[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
+	AckResultCreateSegmentMessageV2       = AckResult[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
 )
 
 // MessageTypeWithVersion for CreateSegmentMessageV2
@@ -788,12 +698,6 @@ var AsImmutableCreateSegmentMessageV2 = asSpecializedImmutableMessage[*CreateSeg
 // MustAsImmutableCreateSegmentMessageV2 converts an ImmutableMessage to ImmutableCreateSegmentMessageV2, panics on error
 var MustAsImmutableCreateSegmentMessageV2 = MustAsSpecializedImmutableMessage[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
 
-// MustAsRefCountedImmutableCreateSegmentMessageV2 converts an ImmutableMessage to RefCountedImmutableCreateSegmentMessageV2, panics on error
-var MustAsRefCountedImmutableCreateSegmentMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
-
-// MustAsRetainedImmutableCreateSegmentMessageV2 converts an ImmutableMessage to RetainedImmutableCreateSegmentMessageV2, panics on error
-var MustAsRetainedImmutableCreateSegmentMessageV2 = MustAsRetainedSpecializedImmutableMessage[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
-
 // AsBroadcastCreateSegmentMessageV2 converts a BasicMessage to BroadcastCreateSegmentMessageV2
 var AsBroadcastCreateSegmentMessageV2 = asSpecializedBroadcastMessage[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
 
@@ -805,13 +709,11 @@ var NewCreateSegmentMessageBuilderV2 = newMutableMessageBuilder[*CreateSegmentMe
 
 // Type aliases for FlushMessageV2
 type (
-	MutableFlushMessageV2             = specializedMutableMessage[*FlushMessageHeader, *FlushMessageBody]
-	ImmutableFlushMessageV2           = SpecializedImmutableMessage[*FlushMessageHeader, *FlushMessageBody]
-	RefCountedImmutableFlushMessageV2 = RefCountedSpecializedImmutableMessage[*FlushMessageHeader, *FlushMessageBody]
-	RetainedImmutableFlushMessageV2   = RetainedSpecializedImmutableMessage[*FlushMessageHeader, *FlushMessageBody]
-	BroadcastFlushMessageV2           = SpecializedBroadcastMessage[*FlushMessageHeader, *FlushMessageBody]
-	BroadcastResultFlushMessageV2     = BroadcastResult[*FlushMessageHeader, *FlushMessageBody]
-	AckResultFlushMessageV2           = AckResult[*FlushMessageHeader, *FlushMessageBody]
+	MutableFlushMessageV2         = specializedMutableMessage[*FlushMessageHeader, *FlushMessageBody]
+	ImmutableFlushMessageV2       = SpecializedImmutableMessage[*FlushMessageHeader, *FlushMessageBody]
+	BroadcastFlushMessageV2       = SpecializedBroadcastMessage[*FlushMessageHeader, *FlushMessageBody]
+	BroadcastResultFlushMessageV2 = BroadcastResult[*FlushMessageHeader, *FlushMessageBody]
+	AckResultFlushMessageV2       = AckResult[*FlushMessageHeader, *FlushMessageBody]
 )
 
 // MessageTypeWithVersion for FlushMessageV2
@@ -838,12 +740,6 @@ var AsImmutableFlushMessageV2 = asSpecializedImmutableMessage[*FlushMessageHeade
 // MustAsImmutableFlushMessageV2 converts an ImmutableMessage to ImmutableFlushMessageV2, panics on error
 var MustAsImmutableFlushMessageV2 = MustAsSpecializedImmutableMessage[*FlushMessageHeader, *FlushMessageBody]
 
-// MustAsRefCountedImmutableFlushMessageV2 converts an ImmutableMessage to RefCountedImmutableFlushMessageV2, panics on error
-var MustAsRefCountedImmutableFlushMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*FlushMessageHeader, *FlushMessageBody]
-
-// MustAsRetainedImmutableFlushMessageV2 converts an ImmutableMessage to RetainedImmutableFlushMessageV2, panics on error
-var MustAsRetainedImmutableFlushMessageV2 = MustAsRetainedSpecializedImmutableMessage[*FlushMessageHeader, *FlushMessageBody]
-
 // AsBroadcastFlushMessageV2 converts a BasicMessage to BroadcastFlushMessageV2
 var AsBroadcastFlushMessageV2 = asSpecializedBroadcastMessage[*FlushMessageHeader, *FlushMessageBody]
 
@@ -855,13 +751,11 @@ var NewFlushMessageBuilderV2 = newMutableMessageBuilder[*FlushMessageHeader, *Fl
 
 // Type aliases for ManualFlushMessageV2
 type (
-	MutableManualFlushMessageV2             = specializedMutableMessage[*ManualFlushMessageHeader, *ManualFlushMessageBody]
-	ImmutableManualFlushMessageV2           = SpecializedImmutableMessage[*ManualFlushMessageHeader, *ManualFlushMessageBody]
-	RefCountedImmutableManualFlushMessageV2 = RefCountedSpecializedImmutableMessage[*ManualFlushMessageHeader, *ManualFlushMessageBody]
-	RetainedImmutableManualFlushMessageV2   = RetainedSpecializedImmutableMessage[*ManualFlushMessageHeader, *ManualFlushMessageBody]
-	BroadcastManualFlushMessageV2           = SpecializedBroadcastMessage[*ManualFlushMessageHeader, *ManualFlushMessageBody]
-	BroadcastResultManualFlushMessageV2     = BroadcastResult[*ManualFlushMessageHeader, *ManualFlushMessageBody]
-	AckResultManualFlushMessageV2           = AckResult[*ManualFlushMessageHeader, *ManualFlushMessageBody]
+	MutableManualFlushMessageV2         = specializedMutableMessage[*ManualFlushMessageHeader, *ManualFlushMessageBody]
+	ImmutableManualFlushMessageV2       = SpecializedImmutableMessage[*ManualFlushMessageHeader, *ManualFlushMessageBody]
+	BroadcastManualFlushMessageV2       = SpecializedBroadcastMessage[*ManualFlushMessageHeader, *ManualFlushMessageBody]
+	BroadcastResultManualFlushMessageV2 = BroadcastResult[*ManualFlushMessageHeader, *ManualFlushMessageBody]
+	AckResultManualFlushMessageV2       = AckResult[*ManualFlushMessageHeader, *ManualFlushMessageBody]
 )
 
 // MessageTypeWithVersion for ManualFlushMessageV2
@@ -888,12 +782,6 @@ var AsImmutableManualFlushMessageV2 = asSpecializedImmutableMessage[*ManualFlush
 // MustAsImmutableManualFlushMessageV2 converts an ImmutableMessage to ImmutableManualFlushMessageV2, panics on error
 var MustAsImmutableManualFlushMessageV2 = MustAsSpecializedImmutableMessage[*ManualFlushMessageHeader, *ManualFlushMessageBody]
 
-// MustAsRefCountedImmutableManualFlushMessageV2 converts an ImmutableMessage to RefCountedImmutableManualFlushMessageV2, panics on error
-var MustAsRefCountedImmutableManualFlushMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*ManualFlushMessageHeader, *ManualFlushMessageBody]
-
-// MustAsRetainedImmutableManualFlushMessageV2 converts an ImmutableMessage to RetainedImmutableManualFlushMessageV2, panics on error
-var MustAsRetainedImmutableManualFlushMessageV2 = MustAsRetainedSpecializedImmutableMessage[*ManualFlushMessageHeader, *ManualFlushMessageBody]
-
 // AsBroadcastManualFlushMessageV2 converts a BasicMessage to BroadcastManualFlushMessageV2
 var AsBroadcastManualFlushMessageV2 = asSpecializedBroadcastMessage[*ManualFlushMessageHeader, *ManualFlushMessageBody]
 
@@ -905,13 +793,11 @@ var NewManualFlushMessageBuilderV2 = newMutableMessageBuilder[*ManualFlushMessag
 
 // Type aliases for AlterReplicateConfigMessageV2
 type (
-	MutableAlterReplicateConfigMessageV2             = specializedMutableMessage[*AlterReplicateConfigMessageHeader, *AlterReplicateConfigMessageBody]
-	ImmutableAlterReplicateConfigMessageV2           = SpecializedImmutableMessage[*AlterReplicateConfigMessageHeader, *AlterReplicateConfigMessageBody]
-	RefCountedImmutableAlterReplicateConfigMessageV2 = RefCountedSpecializedImmutableMessage[*AlterReplicateConfigMessageHeader, *AlterReplicateConfigMessageBody]
-	RetainedImmutableAlterReplicateConfigMessageV2   = RetainedSpecializedImmutableMessage[*AlterReplicateConfigMessageHeader, *AlterReplicateConfigMessageBody]
-	BroadcastAlterReplicateConfigMessageV2           = SpecializedBroadcastMessage[*AlterReplicateConfigMessageHeader, *AlterReplicateConfigMessageBody]
-	BroadcastResultAlterReplicateConfigMessageV2     = BroadcastResult[*AlterReplicateConfigMessageHeader, *AlterReplicateConfigMessageBody]
-	AckResultAlterReplicateConfigMessageV2           = AckResult[*AlterReplicateConfigMessageHeader, *AlterReplicateConfigMessageBody]
+	MutableAlterReplicateConfigMessageV2         = specializedMutableMessage[*AlterReplicateConfigMessageHeader, *AlterReplicateConfigMessageBody]
+	ImmutableAlterReplicateConfigMessageV2       = SpecializedImmutableMessage[*AlterReplicateConfigMessageHeader, *AlterReplicateConfigMessageBody]
+	BroadcastAlterReplicateConfigMessageV2       = SpecializedBroadcastMessage[*AlterReplicateConfigMessageHeader, *AlterReplicateConfigMessageBody]
+	BroadcastResultAlterReplicateConfigMessageV2 = BroadcastResult[*AlterReplicateConfigMessageHeader, *AlterReplicateConfigMessageBody]
+	AckResultAlterReplicateConfigMessageV2       = AckResult[*AlterReplicateConfigMessageHeader, *AlterReplicateConfigMessageBody]
 )
 
 // MessageTypeWithVersion for AlterReplicateConfigMessageV2
@@ -938,12 +824,6 @@ var AsImmutableAlterReplicateConfigMessageV2 = asSpecializedImmutableMessage[*Al
 // MustAsImmutableAlterReplicateConfigMessageV2 converts an ImmutableMessage to ImmutableAlterReplicateConfigMessageV2, panics on error
 var MustAsImmutableAlterReplicateConfigMessageV2 = MustAsSpecializedImmutableMessage[*AlterReplicateConfigMessageHeader, *AlterReplicateConfigMessageBody]
 
-// MustAsRefCountedImmutableAlterReplicateConfigMessageV2 converts an ImmutableMessage to RefCountedImmutableAlterReplicateConfigMessageV2, panics on error
-var MustAsRefCountedImmutableAlterReplicateConfigMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*AlterReplicateConfigMessageHeader, *AlterReplicateConfigMessageBody]
-
-// MustAsRetainedImmutableAlterReplicateConfigMessageV2 converts an ImmutableMessage to RetainedImmutableAlterReplicateConfigMessageV2, panics on error
-var MustAsRetainedImmutableAlterReplicateConfigMessageV2 = MustAsRetainedSpecializedImmutableMessage[*AlterReplicateConfigMessageHeader, *AlterReplicateConfigMessageBody]
-
 // AsBroadcastAlterReplicateConfigMessageV2 converts a BasicMessage to BroadcastAlterReplicateConfigMessageV2
 var AsBroadcastAlterReplicateConfigMessageV2 = asSpecializedBroadcastMessage[*AlterReplicateConfigMessageHeader, *AlterReplicateConfigMessageBody]
 
@@ -955,13 +835,11 @@ var NewAlterReplicateConfigMessageBuilderV2 = newMutableMessageBuilder[*AlterRep
 
 // Type aliases for BeginTxnMessageV2
 type (
-	MutableBeginTxnMessageV2             = specializedMutableMessage[*BeginTxnMessageHeader, *BeginTxnMessageBody]
-	ImmutableBeginTxnMessageV2           = SpecializedImmutableMessage[*BeginTxnMessageHeader, *BeginTxnMessageBody]
-	RefCountedImmutableBeginTxnMessageV2 = RefCountedSpecializedImmutableMessage[*BeginTxnMessageHeader, *BeginTxnMessageBody]
-	RetainedImmutableBeginTxnMessageV2   = RetainedSpecializedImmutableMessage[*BeginTxnMessageHeader, *BeginTxnMessageBody]
-	BroadcastBeginTxnMessageV2           = SpecializedBroadcastMessage[*BeginTxnMessageHeader, *BeginTxnMessageBody]
-	BroadcastResultBeginTxnMessageV2     = BroadcastResult[*BeginTxnMessageHeader, *BeginTxnMessageBody]
-	AckResultBeginTxnMessageV2           = AckResult[*BeginTxnMessageHeader, *BeginTxnMessageBody]
+	MutableBeginTxnMessageV2         = specializedMutableMessage[*BeginTxnMessageHeader, *BeginTxnMessageBody]
+	ImmutableBeginTxnMessageV2       = SpecializedImmutableMessage[*BeginTxnMessageHeader, *BeginTxnMessageBody]
+	BroadcastBeginTxnMessageV2       = SpecializedBroadcastMessage[*BeginTxnMessageHeader, *BeginTxnMessageBody]
+	BroadcastResultBeginTxnMessageV2 = BroadcastResult[*BeginTxnMessageHeader, *BeginTxnMessageBody]
+	AckResultBeginTxnMessageV2       = AckResult[*BeginTxnMessageHeader, *BeginTxnMessageBody]
 )
 
 // MessageTypeWithVersion for BeginTxnMessageV2
@@ -988,12 +866,6 @@ var AsImmutableBeginTxnMessageV2 = asSpecializedImmutableMessage[*BeginTxnMessag
 // MustAsImmutableBeginTxnMessageV2 converts an ImmutableMessage to ImmutableBeginTxnMessageV2, panics on error
 var MustAsImmutableBeginTxnMessageV2 = MustAsSpecializedImmutableMessage[*BeginTxnMessageHeader, *BeginTxnMessageBody]
 
-// MustAsRefCountedImmutableBeginTxnMessageV2 converts an ImmutableMessage to RefCountedImmutableBeginTxnMessageV2, panics on error
-var MustAsRefCountedImmutableBeginTxnMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*BeginTxnMessageHeader, *BeginTxnMessageBody]
-
-// MustAsRetainedImmutableBeginTxnMessageV2 converts an ImmutableMessage to RetainedImmutableBeginTxnMessageV2, panics on error
-var MustAsRetainedImmutableBeginTxnMessageV2 = MustAsRetainedSpecializedImmutableMessage[*BeginTxnMessageHeader, *BeginTxnMessageBody]
-
 // AsBroadcastBeginTxnMessageV2 converts a BasicMessage to BroadcastBeginTxnMessageV2
 var AsBroadcastBeginTxnMessageV2 = asSpecializedBroadcastMessage[*BeginTxnMessageHeader, *BeginTxnMessageBody]
 
@@ -1005,13 +877,11 @@ var NewBeginTxnMessageBuilderV2 = newMutableMessageBuilder[*BeginTxnMessageHeade
 
 // Type aliases for CommitTxnMessageV2
 type (
-	MutableCommitTxnMessageV2             = specializedMutableMessage[*CommitTxnMessageHeader, *CommitTxnMessageBody]
-	ImmutableCommitTxnMessageV2           = SpecializedImmutableMessage[*CommitTxnMessageHeader, *CommitTxnMessageBody]
-	RefCountedImmutableCommitTxnMessageV2 = RefCountedSpecializedImmutableMessage[*CommitTxnMessageHeader, *CommitTxnMessageBody]
-	RetainedImmutableCommitTxnMessageV2   = RetainedSpecializedImmutableMessage[*CommitTxnMessageHeader, *CommitTxnMessageBody]
-	BroadcastCommitTxnMessageV2           = SpecializedBroadcastMessage[*CommitTxnMessageHeader, *CommitTxnMessageBody]
-	BroadcastResultCommitTxnMessageV2     = BroadcastResult[*CommitTxnMessageHeader, *CommitTxnMessageBody]
-	AckResultCommitTxnMessageV2           = AckResult[*CommitTxnMessageHeader, *CommitTxnMessageBody]
+	MutableCommitTxnMessageV2         = specializedMutableMessage[*CommitTxnMessageHeader, *CommitTxnMessageBody]
+	ImmutableCommitTxnMessageV2       = SpecializedImmutableMessage[*CommitTxnMessageHeader, *CommitTxnMessageBody]
+	BroadcastCommitTxnMessageV2       = SpecializedBroadcastMessage[*CommitTxnMessageHeader, *CommitTxnMessageBody]
+	BroadcastResultCommitTxnMessageV2 = BroadcastResult[*CommitTxnMessageHeader, *CommitTxnMessageBody]
+	AckResultCommitTxnMessageV2       = AckResult[*CommitTxnMessageHeader, *CommitTxnMessageBody]
 )
 
 // MessageTypeWithVersion for CommitTxnMessageV2
@@ -1038,12 +908,6 @@ var AsImmutableCommitTxnMessageV2 = asSpecializedImmutableMessage[*CommitTxnMess
 // MustAsImmutableCommitTxnMessageV2 converts an ImmutableMessage to ImmutableCommitTxnMessageV2, panics on error
 var MustAsImmutableCommitTxnMessageV2 = MustAsSpecializedImmutableMessage[*CommitTxnMessageHeader, *CommitTxnMessageBody]
 
-// MustAsRefCountedImmutableCommitTxnMessageV2 converts an ImmutableMessage to RefCountedImmutableCommitTxnMessageV2, panics on error
-var MustAsRefCountedImmutableCommitTxnMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*CommitTxnMessageHeader, *CommitTxnMessageBody]
-
-// MustAsRetainedImmutableCommitTxnMessageV2 converts an ImmutableMessage to RetainedImmutableCommitTxnMessageV2, panics on error
-var MustAsRetainedImmutableCommitTxnMessageV2 = MustAsRetainedSpecializedImmutableMessage[*CommitTxnMessageHeader, *CommitTxnMessageBody]
-
 // AsBroadcastCommitTxnMessageV2 converts a BasicMessage to BroadcastCommitTxnMessageV2
 var AsBroadcastCommitTxnMessageV2 = asSpecializedBroadcastMessage[*CommitTxnMessageHeader, *CommitTxnMessageBody]
 
@@ -1055,13 +919,11 @@ var NewCommitTxnMessageBuilderV2 = newMutableMessageBuilder[*CommitTxnMessageHea
 
 // Type aliases for RollbackTxnMessageV2
 type (
-	MutableRollbackTxnMessageV2             = specializedMutableMessage[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
-	ImmutableRollbackTxnMessageV2           = SpecializedImmutableMessage[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
-	RefCountedImmutableRollbackTxnMessageV2 = RefCountedSpecializedImmutableMessage[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
-	RetainedImmutableRollbackTxnMessageV2   = RetainedSpecializedImmutableMessage[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
-	BroadcastRollbackTxnMessageV2           = SpecializedBroadcastMessage[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
-	BroadcastResultRollbackTxnMessageV2     = BroadcastResult[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
-	AckResultRollbackTxnMessageV2           = AckResult[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
+	MutableRollbackTxnMessageV2         = specializedMutableMessage[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
+	ImmutableRollbackTxnMessageV2       = SpecializedImmutableMessage[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
+	BroadcastRollbackTxnMessageV2       = SpecializedBroadcastMessage[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
+	BroadcastResultRollbackTxnMessageV2 = BroadcastResult[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
+	AckResultRollbackTxnMessageV2       = AckResult[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
 )
 
 // MessageTypeWithVersion for RollbackTxnMessageV2
@@ -1088,12 +950,6 @@ var AsImmutableRollbackTxnMessageV2 = asSpecializedImmutableMessage[*RollbackTxn
 // MustAsImmutableRollbackTxnMessageV2 converts an ImmutableMessage to ImmutableRollbackTxnMessageV2, panics on error
 var MustAsImmutableRollbackTxnMessageV2 = MustAsSpecializedImmutableMessage[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
 
-// MustAsRefCountedImmutableRollbackTxnMessageV2 converts an ImmutableMessage to RefCountedImmutableRollbackTxnMessageV2, panics on error
-var MustAsRefCountedImmutableRollbackTxnMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
-
-// MustAsRetainedImmutableRollbackTxnMessageV2 converts an ImmutableMessage to RetainedImmutableRollbackTxnMessageV2, panics on error
-var MustAsRetainedImmutableRollbackTxnMessageV2 = MustAsRetainedSpecializedImmutableMessage[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
-
 // AsBroadcastRollbackTxnMessageV2 converts a BasicMessage to BroadcastRollbackTxnMessageV2
 var AsBroadcastRollbackTxnMessageV2 = asSpecializedBroadcastMessage[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
 
@@ -1105,13 +961,11 @@ var NewRollbackTxnMessageBuilderV2 = newMutableMessageBuilder[*RollbackTxnMessag
 
 // Type aliases for TxnMessageV2
 type (
-	MutableTxnMessageV2             = specializedMutableMessage[*TxnMessageHeader, *TxnMessageBody]
-	ImmutableTxnMessageV2           = SpecializedImmutableMessage[*TxnMessageHeader, *TxnMessageBody]
-	RefCountedImmutableTxnMessageV2 = RefCountedSpecializedImmutableMessage[*TxnMessageHeader, *TxnMessageBody]
-	RetainedImmutableTxnMessageV2   = RetainedSpecializedImmutableMessage[*TxnMessageHeader, *TxnMessageBody]
-	BroadcastTxnMessageV2           = SpecializedBroadcastMessage[*TxnMessageHeader, *TxnMessageBody]
-	BroadcastResultTxnMessageV2     = BroadcastResult[*TxnMessageHeader, *TxnMessageBody]
-	AckResultTxnMessageV2           = AckResult[*TxnMessageHeader, *TxnMessageBody]
+	MutableTxnMessageV2         = specializedMutableMessage[*TxnMessageHeader, *TxnMessageBody]
+	ImmutableTxnMessageV2       = SpecializedImmutableMessage[*TxnMessageHeader, *TxnMessageBody]
+	BroadcastTxnMessageV2       = SpecializedBroadcastMessage[*TxnMessageHeader, *TxnMessageBody]
+	BroadcastResultTxnMessageV2 = BroadcastResult[*TxnMessageHeader, *TxnMessageBody]
+	AckResultTxnMessageV2       = AckResult[*TxnMessageHeader, *TxnMessageBody]
 )
 
 // MessageTypeWithVersion for TxnMessageV2
@@ -1128,13 +982,11 @@ var SpecializedTypeTxnV2 = MessageSpecializedType{
 
 // Type aliases for SchemaChangeMessageV2
 type (
-	MutableSchemaChangeMessageV2             = specializedMutableMessage[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
-	ImmutableSchemaChangeMessageV2           = SpecializedImmutableMessage[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
-	RefCountedImmutableSchemaChangeMessageV2 = RefCountedSpecializedImmutableMessage[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
-	RetainedImmutableSchemaChangeMessageV2   = RetainedSpecializedImmutableMessage[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
-	BroadcastSchemaChangeMessageV2           = SpecializedBroadcastMessage[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
-	BroadcastResultSchemaChangeMessageV2     = BroadcastResult[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
-	AckResultSchemaChangeMessageV2           = AckResult[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
+	MutableSchemaChangeMessageV2         = specializedMutableMessage[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
+	ImmutableSchemaChangeMessageV2       = SpecializedImmutableMessage[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
+	BroadcastSchemaChangeMessageV2       = SpecializedBroadcastMessage[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
+	BroadcastResultSchemaChangeMessageV2 = BroadcastResult[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
+	AckResultSchemaChangeMessageV2       = AckResult[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
 )
 
 // MessageTypeWithVersion for SchemaChangeMessageV2
@@ -1161,12 +1013,6 @@ var AsImmutableSchemaChangeMessageV2 = asSpecializedImmutableMessage[*SchemaChan
 // MustAsImmutableSchemaChangeMessageV2 converts an ImmutableMessage to ImmutableSchemaChangeMessageV2, panics on error
 var MustAsImmutableSchemaChangeMessageV2 = MustAsSpecializedImmutableMessage[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
 
-// MustAsRefCountedImmutableSchemaChangeMessageV2 converts an ImmutableMessage to RefCountedImmutableSchemaChangeMessageV2, panics on error
-var MustAsRefCountedImmutableSchemaChangeMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
-
-// MustAsRetainedImmutableSchemaChangeMessageV2 converts an ImmutableMessage to RetainedImmutableSchemaChangeMessageV2, panics on error
-var MustAsRetainedImmutableSchemaChangeMessageV2 = MustAsRetainedSpecializedImmutableMessage[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
-
 // AsBroadcastSchemaChangeMessageV2 converts a BasicMessage to BroadcastSchemaChangeMessageV2
 var AsBroadcastSchemaChangeMessageV2 = asSpecializedBroadcastMessage[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
 
@@ -1178,13 +1024,11 @@ var NewSchemaChangeMessageBuilderV2 = newMutableMessageBuilder[*SchemaChangeMess
 
 // Type aliases for AlterCollectionMessageV2
 type (
-	MutableAlterCollectionMessageV2             = specializedMutableMessage[*AlterCollectionMessageHeader, *AlterCollectionMessageBody]
-	ImmutableAlterCollectionMessageV2           = SpecializedImmutableMessage[*AlterCollectionMessageHeader, *AlterCollectionMessageBody]
-	RefCountedImmutableAlterCollectionMessageV2 = RefCountedSpecializedImmutableMessage[*AlterCollectionMessageHeader, *AlterCollectionMessageBody]
-	RetainedImmutableAlterCollectionMessageV2   = RetainedSpecializedImmutableMessage[*AlterCollectionMessageHeader, *AlterCollectionMessageBody]
-	BroadcastAlterCollectionMessageV2           = SpecializedBroadcastMessage[*AlterCollectionMessageHeader, *AlterCollectionMessageBody]
-	BroadcastResultAlterCollectionMessageV2     = BroadcastResult[*AlterCollectionMessageHeader, *AlterCollectionMessageBody]
-	AckResultAlterCollectionMessageV2           = AckResult[*AlterCollectionMessageHeader, *AlterCollectionMessageBody]
+	MutableAlterCollectionMessageV2         = specializedMutableMessage[*AlterCollectionMessageHeader, *AlterCollectionMessageBody]
+	ImmutableAlterCollectionMessageV2       = SpecializedImmutableMessage[*AlterCollectionMessageHeader, *AlterCollectionMessageBody]
+	BroadcastAlterCollectionMessageV2       = SpecializedBroadcastMessage[*AlterCollectionMessageHeader, *AlterCollectionMessageBody]
+	BroadcastResultAlterCollectionMessageV2 = BroadcastResult[*AlterCollectionMessageHeader, *AlterCollectionMessageBody]
+	AckResultAlterCollectionMessageV2       = AckResult[*AlterCollectionMessageHeader, *AlterCollectionMessageBody]
 )
 
 // MessageTypeWithVersion for AlterCollectionMessageV2
@@ -1211,12 +1055,6 @@ var AsImmutableAlterCollectionMessageV2 = asSpecializedImmutableMessage[*AlterCo
 // MustAsImmutableAlterCollectionMessageV2 converts an ImmutableMessage to ImmutableAlterCollectionMessageV2, panics on error
 var MustAsImmutableAlterCollectionMessageV2 = MustAsSpecializedImmutableMessage[*AlterCollectionMessageHeader, *AlterCollectionMessageBody]
 
-// MustAsRefCountedImmutableAlterCollectionMessageV2 converts an ImmutableMessage to RefCountedImmutableAlterCollectionMessageV2, panics on error
-var MustAsRefCountedImmutableAlterCollectionMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*AlterCollectionMessageHeader, *AlterCollectionMessageBody]
-
-// MustAsRetainedImmutableAlterCollectionMessageV2 converts an ImmutableMessage to RetainedImmutableAlterCollectionMessageV2, panics on error
-var MustAsRetainedImmutableAlterCollectionMessageV2 = MustAsRetainedSpecializedImmutableMessage[*AlterCollectionMessageHeader, *AlterCollectionMessageBody]
-
 // AsBroadcastAlterCollectionMessageV2 converts a BasicMessage to BroadcastAlterCollectionMessageV2
 var AsBroadcastAlterCollectionMessageV2 = asSpecializedBroadcastMessage[*AlterCollectionMessageHeader, *AlterCollectionMessageBody]
 
@@ -1228,13 +1066,11 @@ var NewAlterCollectionMessageBuilderV2 = newMutableMessageBuilder[*AlterCollecti
 
 // Type aliases for AlterLoadConfigMessageV2
 type (
-	MutableAlterLoadConfigMessageV2             = specializedMutableMessage[*AlterLoadConfigMessageHeader, *AlterLoadConfigMessageBody]
-	ImmutableAlterLoadConfigMessageV2           = SpecializedImmutableMessage[*AlterLoadConfigMessageHeader, *AlterLoadConfigMessageBody]
-	RefCountedImmutableAlterLoadConfigMessageV2 = RefCountedSpecializedImmutableMessage[*AlterLoadConfigMessageHeader, *AlterLoadConfigMessageBody]
-	RetainedImmutableAlterLoadConfigMessageV2   = RetainedSpecializedImmutableMessage[*AlterLoadConfigMessageHeader, *AlterLoadConfigMessageBody]
-	BroadcastAlterLoadConfigMessageV2           = SpecializedBroadcastMessage[*AlterLoadConfigMessageHeader, *AlterLoadConfigMessageBody]
-	BroadcastResultAlterLoadConfigMessageV2     = BroadcastResult[*AlterLoadConfigMessageHeader, *AlterLoadConfigMessageBody]
-	AckResultAlterLoadConfigMessageV2           = AckResult[*AlterLoadConfigMessageHeader, *AlterLoadConfigMessageBody]
+	MutableAlterLoadConfigMessageV2         = specializedMutableMessage[*AlterLoadConfigMessageHeader, *AlterLoadConfigMessageBody]
+	ImmutableAlterLoadConfigMessageV2       = SpecializedImmutableMessage[*AlterLoadConfigMessageHeader, *AlterLoadConfigMessageBody]
+	BroadcastAlterLoadConfigMessageV2       = SpecializedBroadcastMessage[*AlterLoadConfigMessageHeader, *AlterLoadConfigMessageBody]
+	BroadcastResultAlterLoadConfigMessageV2 = BroadcastResult[*AlterLoadConfigMessageHeader, *AlterLoadConfigMessageBody]
+	AckResultAlterLoadConfigMessageV2       = AckResult[*AlterLoadConfigMessageHeader, *AlterLoadConfigMessageBody]
 )
 
 // MessageTypeWithVersion for AlterLoadConfigMessageV2
@@ -1261,12 +1097,6 @@ var AsImmutableAlterLoadConfigMessageV2 = asSpecializedImmutableMessage[*AlterLo
 // MustAsImmutableAlterLoadConfigMessageV2 converts an ImmutableMessage to ImmutableAlterLoadConfigMessageV2, panics on error
 var MustAsImmutableAlterLoadConfigMessageV2 = MustAsSpecializedImmutableMessage[*AlterLoadConfigMessageHeader, *AlterLoadConfigMessageBody]
 
-// MustAsRefCountedImmutableAlterLoadConfigMessageV2 converts an ImmutableMessage to RefCountedImmutableAlterLoadConfigMessageV2, panics on error
-var MustAsRefCountedImmutableAlterLoadConfigMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*AlterLoadConfigMessageHeader, *AlterLoadConfigMessageBody]
-
-// MustAsRetainedImmutableAlterLoadConfigMessageV2 converts an ImmutableMessage to RetainedImmutableAlterLoadConfigMessageV2, panics on error
-var MustAsRetainedImmutableAlterLoadConfigMessageV2 = MustAsRetainedSpecializedImmutableMessage[*AlterLoadConfigMessageHeader, *AlterLoadConfigMessageBody]
-
 // AsBroadcastAlterLoadConfigMessageV2 converts a BasicMessage to BroadcastAlterLoadConfigMessageV2
 var AsBroadcastAlterLoadConfigMessageV2 = asSpecializedBroadcastMessage[*AlterLoadConfigMessageHeader, *AlterLoadConfigMessageBody]
 
@@ -1278,13 +1108,11 @@ var NewAlterLoadConfigMessageBuilderV2 = newMutableMessageBuilder[*AlterLoadConf
 
 // Type aliases for DropLoadConfigMessageV2
 type (
-	MutableDropLoadConfigMessageV2             = specializedMutableMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
-	ImmutableDropLoadConfigMessageV2           = SpecializedImmutableMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
-	RefCountedImmutableDropLoadConfigMessageV2 = RefCountedSpecializedImmutableMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
-	RetainedImmutableDropLoadConfigMessageV2   = RetainedSpecializedImmutableMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
-	BroadcastDropLoadConfigMessageV2           = SpecializedBroadcastMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
-	BroadcastResultDropLoadConfigMessageV2     = BroadcastResult[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
-	AckResultDropLoadConfigMessageV2           = AckResult[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
+	MutableDropLoadConfigMessageV2         = specializedMutableMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
+	ImmutableDropLoadConfigMessageV2       = SpecializedImmutableMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
+	BroadcastDropLoadConfigMessageV2       = SpecializedBroadcastMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
+	BroadcastResultDropLoadConfigMessageV2 = BroadcastResult[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
+	AckResultDropLoadConfigMessageV2       = AckResult[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
 )
 
 // MessageTypeWithVersion for DropLoadConfigMessageV2
@@ -1311,12 +1139,6 @@ var AsImmutableDropLoadConfigMessageV2 = asSpecializedImmutableMessage[*DropLoad
 // MustAsImmutableDropLoadConfigMessageV2 converts an ImmutableMessage to ImmutableDropLoadConfigMessageV2, panics on error
 var MustAsImmutableDropLoadConfigMessageV2 = MustAsSpecializedImmutableMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
 
-// MustAsRefCountedImmutableDropLoadConfigMessageV2 converts an ImmutableMessage to RefCountedImmutableDropLoadConfigMessageV2, panics on error
-var MustAsRefCountedImmutableDropLoadConfigMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
-
-// MustAsRetainedImmutableDropLoadConfigMessageV2 converts an ImmutableMessage to RetainedImmutableDropLoadConfigMessageV2, panics on error
-var MustAsRetainedImmutableDropLoadConfigMessageV2 = MustAsRetainedSpecializedImmutableMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
-
 // AsBroadcastDropLoadConfigMessageV2 converts a BasicMessage to BroadcastDropLoadConfigMessageV2
 var AsBroadcastDropLoadConfigMessageV2 = asSpecializedBroadcastMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
 
@@ -1328,13 +1150,11 @@ var NewDropLoadConfigMessageBuilderV2 = newMutableMessageBuilder[*DropLoadConfig
 
 // Type aliases for CreateDatabaseMessageV2
 type (
-	MutableCreateDatabaseMessageV2             = specializedMutableMessage[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
-	ImmutableCreateDatabaseMessageV2           = SpecializedImmutableMessage[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
-	RefCountedImmutableCreateDatabaseMessageV2 = RefCountedSpecializedImmutableMessage[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
-	RetainedImmutableCreateDatabaseMessageV2   = RetainedSpecializedImmutableMessage[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
-	BroadcastCreateDatabaseMessageV2           = SpecializedBroadcastMessage[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
-	BroadcastResultCreateDatabaseMessageV2     = BroadcastResult[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
-	AckResultCreateDatabaseMessageV2           = AckResult[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
+	MutableCreateDatabaseMessageV2         = specializedMutableMessage[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
+	ImmutableCreateDatabaseMessageV2       = SpecializedImmutableMessage[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
+	BroadcastCreateDatabaseMessageV2       = SpecializedBroadcastMessage[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
+	BroadcastResultCreateDatabaseMessageV2 = BroadcastResult[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
+	AckResultCreateDatabaseMessageV2       = AckResult[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
 )
 
 // MessageTypeWithVersion for CreateDatabaseMessageV2
@@ -1361,12 +1181,6 @@ var AsImmutableCreateDatabaseMessageV2 = asSpecializedImmutableMessage[*CreateDa
 // MustAsImmutableCreateDatabaseMessageV2 converts an ImmutableMessage to ImmutableCreateDatabaseMessageV2, panics on error
 var MustAsImmutableCreateDatabaseMessageV2 = MustAsSpecializedImmutableMessage[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
 
-// MustAsRefCountedImmutableCreateDatabaseMessageV2 converts an ImmutableMessage to RefCountedImmutableCreateDatabaseMessageV2, panics on error
-var MustAsRefCountedImmutableCreateDatabaseMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
-
-// MustAsRetainedImmutableCreateDatabaseMessageV2 converts an ImmutableMessage to RetainedImmutableCreateDatabaseMessageV2, panics on error
-var MustAsRetainedImmutableCreateDatabaseMessageV2 = MustAsRetainedSpecializedImmutableMessage[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
-
 // AsBroadcastCreateDatabaseMessageV2 converts a BasicMessage to BroadcastCreateDatabaseMessageV2
 var AsBroadcastCreateDatabaseMessageV2 = asSpecializedBroadcastMessage[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
 
@@ -1378,13 +1192,11 @@ var NewCreateDatabaseMessageBuilderV2 = newMutableMessageBuilder[*CreateDatabase
 
 // Type aliases for AlterDatabaseMessageV2
 type (
-	MutableAlterDatabaseMessageV2             = specializedMutableMessage[*AlterDatabaseMessageHeader, *AlterDatabaseMessageBody]
-	ImmutableAlterDatabaseMessageV2           = SpecializedImmutableMessage[*AlterDatabaseMessageHeader, *AlterDatabaseMessageBody]
-	RefCountedImmutableAlterDatabaseMessageV2 = RefCountedSpecializedImmutableMessage[*AlterDatabaseMessageHeader, *AlterDatabaseMessageBody]
-	RetainedImmutableAlterDatabaseMessageV2   = RetainedSpecializedImmutableMessage[*AlterDatabaseMessageHeader, *AlterDatabaseMessageBody]
-	BroadcastAlterDatabaseMessageV2           = SpecializedBroadcastMessage[*AlterDatabaseMessageHeader, *AlterDatabaseMessageBody]
-	BroadcastResultAlterDatabaseMessageV2     = BroadcastResult[*AlterDatabaseMessageHeader, *AlterDatabaseMessageBody]
-	AckResultAlterDatabaseMessageV2           = AckResult[*AlterDatabaseMessageHeader, *AlterDatabaseMessageBody]
+	MutableAlterDatabaseMessageV2         = specializedMutableMessage[*AlterDatabaseMessageHeader, *AlterDatabaseMessageBody]
+	ImmutableAlterDatabaseMessageV2       = SpecializedImmutableMessage[*AlterDatabaseMessageHeader, *AlterDatabaseMessageBody]
+	BroadcastAlterDatabaseMessageV2       = SpecializedBroadcastMessage[*AlterDatabaseMessageHeader, *AlterDatabaseMessageBody]
+	BroadcastResultAlterDatabaseMessageV2 = BroadcastResult[*AlterDatabaseMessageHeader, *AlterDatabaseMessageBody]
+	AckResultAlterDatabaseMessageV2       = AckResult[*AlterDatabaseMessageHeader, *AlterDatabaseMessageBody]
 )
 
 // MessageTypeWithVersion for AlterDatabaseMessageV2
@@ -1411,12 +1223,6 @@ var AsImmutableAlterDatabaseMessageV2 = asSpecializedImmutableMessage[*AlterData
 // MustAsImmutableAlterDatabaseMessageV2 converts an ImmutableMessage to ImmutableAlterDatabaseMessageV2, panics on error
 var MustAsImmutableAlterDatabaseMessageV2 = MustAsSpecializedImmutableMessage[*AlterDatabaseMessageHeader, *AlterDatabaseMessageBody]
 
-// MustAsRefCountedImmutableAlterDatabaseMessageV2 converts an ImmutableMessage to RefCountedImmutableAlterDatabaseMessageV2, panics on error
-var MustAsRefCountedImmutableAlterDatabaseMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*AlterDatabaseMessageHeader, *AlterDatabaseMessageBody]
-
-// MustAsRetainedImmutableAlterDatabaseMessageV2 converts an ImmutableMessage to RetainedImmutableAlterDatabaseMessageV2, panics on error
-var MustAsRetainedImmutableAlterDatabaseMessageV2 = MustAsRetainedSpecializedImmutableMessage[*AlterDatabaseMessageHeader, *AlterDatabaseMessageBody]
-
 // AsBroadcastAlterDatabaseMessageV2 converts a BasicMessage to BroadcastAlterDatabaseMessageV2
 var AsBroadcastAlterDatabaseMessageV2 = asSpecializedBroadcastMessage[*AlterDatabaseMessageHeader, *AlterDatabaseMessageBody]
 
@@ -1428,13 +1234,11 @@ var NewAlterDatabaseMessageBuilderV2 = newMutableMessageBuilder[*AlterDatabaseMe
 
 // Type aliases for DropDatabaseMessageV2
 type (
-	MutableDropDatabaseMessageV2             = specializedMutableMessage[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
-	ImmutableDropDatabaseMessageV2           = SpecializedImmutableMessage[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
-	RefCountedImmutableDropDatabaseMessageV2 = RefCountedSpecializedImmutableMessage[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
-	RetainedImmutableDropDatabaseMessageV2   = RetainedSpecializedImmutableMessage[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
-	BroadcastDropDatabaseMessageV2           = SpecializedBroadcastMessage[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
-	BroadcastResultDropDatabaseMessageV2     = BroadcastResult[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
-	AckResultDropDatabaseMessageV2           = AckResult[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
+	MutableDropDatabaseMessageV2         = specializedMutableMessage[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
+	ImmutableDropDatabaseMessageV2       = SpecializedImmutableMessage[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
+	BroadcastDropDatabaseMessageV2       = SpecializedBroadcastMessage[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
+	BroadcastResultDropDatabaseMessageV2 = BroadcastResult[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
+	AckResultDropDatabaseMessageV2       = AckResult[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
 )
 
 // MessageTypeWithVersion for DropDatabaseMessageV2
@@ -1461,12 +1265,6 @@ var AsImmutableDropDatabaseMessageV2 = asSpecializedImmutableMessage[*DropDataba
 // MustAsImmutableDropDatabaseMessageV2 converts an ImmutableMessage to ImmutableDropDatabaseMessageV2, panics on error
 var MustAsImmutableDropDatabaseMessageV2 = MustAsSpecializedImmutableMessage[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
 
-// MustAsRefCountedImmutableDropDatabaseMessageV2 converts an ImmutableMessage to RefCountedImmutableDropDatabaseMessageV2, panics on error
-var MustAsRefCountedImmutableDropDatabaseMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
-
-// MustAsRetainedImmutableDropDatabaseMessageV2 converts an ImmutableMessage to RetainedImmutableDropDatabaseMessageV2, panics on error
-var MustAsRetainedImmutableDropDatabaseMessageV2 = MustAsRetainedSpecializedImmutableMessage[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
-
 // AsBroadcastDropDatabaseMessageV2 converts a BasicMessage to BroadcastDropDatabaseMessageV2
 var AsBroadcastDropDatabaseMessageV2 = asSpecializedBroadcastMessage[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
 
@@ -1478,13 +1276,11 @@ var NewDropDatabaseMessageBuilderV2 = newMutableMessageBuilder[*DropDatabaseMess
 
 // Type aliases for AlterAliasMessageV2
 type (
-	MutableAlterAliasMessageV2             = specializedMutableMessage[*AlterAliasMessageHeader, *AlterAliasMessageBody]
-	ImmutableAlterAliasMessageV2           = SpecializedImmutableMessage[*AlterAliasMessageHeader, *AlterAliasMessageBody]
-	RefCountedImmutableAlterAliasMessageV2 = RefCountedSpecializedImmutableMessage[*AlterAliasMessageHeader, *AlterAliasMessageBody]
-	RetainedImmutableAlterAliasMessageV2   = RetainedSpecializedImmutableMessage[*AlterAliasMessageHeader, *AlterAliasMessageBody]
-	BroadcastAlterAliasMessageV2           = SpecializedBroadcastMessage[*AlterAliasMessageHeader, *AlterAliasMessageBody]
-	BroadcastResultAlterAliasMessageV2     = BroadcastResult[*AlterAliasMessageHeader, *AlterAliasMessageBody]
-	AckResultAlterAliasMessageV2           = AckResult[*AlterAliasMessageHeader, *AlterAliasMessageBody]
+	MutableAlterAliasMessageV2         = specializedMutableMessage[*AlterAliasMessageHeader, *AlterAliasMessageBody]
+	ImmutableAlterAliasMessageV2       = SpecializedImmutableMessage[*AlterAliasMessageHeader, *AlterAliasMessageBody]
+	BroadcastAlterAliasMessageV2       = SpecializedBroadcastMessage[*AlterAliasMessageHeader, *AlterAliasMessageBody]
+	BroadcastResultAlterAliasMessageV2 = BroadcastResult[*AlterAliasMessageHeader, *AlterAliasMessageBody]
+	AckResultAlterAliasMessageV2       = AckResult[*AlterAliasMessageHeader, *AlterAliasMessageBody]
 )
 
 // MessageTypeWithVersion for AlterAliasMessageV2
@@ -1511,12 +1307,6 @@ var AsImmutableAlterAliasMessageV2 = asSpecializedImmutableMessage[*AlterAliasMe
 // MustAsImmutableAlterAliasMessageV2 converts an ImmutableMessage to ImmutableAlterAliasMessageV2, panics on error
 var MustAsImmutableAlterAliasMessageV2 = MustAsSpecializedImmutableMessage[*AlterAliasMessageHeader, *AlterAliasMessageBody]
 
-// MustAsRefCountedImmutableAlterAliasMessageV2 converts an ImmutableMessage to RefCountedImmutableAlterAliasMessageV2, panics on error
-var MustAsRefCountedImmutableAlterAliasMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*AlterAliasMessageHeader, *AlterAliasMessageBody]
-
-// MustAsRetainedImmutableAlterAliasMessageV2 converts an ImmutableMessage to RetainedImmutableAlterAliasMessageV2, panics on error
-var MustAsRetainedImmutableAlterAliasMessageV2 = MustAsRetainedSpecializedImmutableMessage[*AlterAliasMessageHeader, *AlterAliasMessageBody]
-
 // AsBroadcastAlterAliasMessageV2 converts a BasicMessage to BroadcastAlterAliasMessageV2
 var AsBroadcastAlterAliasMessageV2 = asSpecializedBroadcastMessage[*AlterAliasMessageHeader, *AlterAliasMessageBody]
 
@@ -1528,13 +1318,11 @@ var NewAlterAliasMessageBuilderV2 = newMutableMessageBuilder[*AlterAliasMessageH
 
 // Type aliases for DropAliasMessageV2
 type (
-	MutableDropAliasMessageV2             = specializedMutableMessage[*DropAliasMessageHeader, *DropAliasMessageBody]
-	ImmutableDropAliasMessageV2           = SpecializedImmutableMessage[*DropAliasMessageHeader, *DropAliasMessageBody]
-	RefCountedImmutableDropAliasMessageV2 = RefCountedSpecializedImmutableMessage[*DropAliasMessageHeader, *DropAliasMessageBody]
-	RetainedImmutableDropAliasMessageV2   = RetainedSpecializedImmutableMessage[*DropAliasMessageHeader, *DropAliasMessageBody]
-	BroadcastDropAliasMessageV2           = SpecializedBroadcastMessage[*DropAliasMessageHeader, *DropAliasMessageBody]
-	BroadcastResultDropAliasMessageV2     = BroadcastResult[*DropAliasMessageHeader, *DropAliasMessageBody]
-	AckResultDropAliasMessageV2           = AckResult[*DropAliasMessageHeader, *DropAliasMessageBody]
+	MutableDropAliasMessageV2         = specializedMutableMessage[*DropAliasMessageHeader, *DropAliasMessageBody]
+	ImmutableDropAliasMessageV2       = SpecializedImmutableMessage[*DropAliasMessageHeader, *DropAliasMessageBody]
+	BroadcastDropAliasMessageV2       = SpecializedBroadcastMessage[*DropAliasMessageHeader, *DropAliasMessageBody]
+	BroadcastResultDropAliasMessageV2 = BroadcastResult[*DropAliasMessageHeader, *DropAliasMessageBody]
+	AckResultDropAliasMessageV2       = AckResult[*DropAliasMessageHeader, *DropAliasMessageBody]
 )
 
 // MessageTypeWithVersion for DropAliasMessageV2
@@ -1561,12 +1349,6 @@ var AsImmutableDropAliasMessageV2 = asSpecializedImmutableMessage[*DropAliasMess
 // MustAsImmutableDropAliasMessageV2 converts an ImmutableMessage to ImmutableDropAliasMessageV2, panics on error
 var MustAsImmutableDropAliasMessageV2 = MustAsSpecializedImmutableMessage[*DropAliasMessageHeader, *DropAliasMessageBody]
 
-// MustAsRefCountedImmutableDropAliasMessageV2 converts an ImmutableMessage to RefCountedImmutableDropAliasMessageV2, panics on error
-var MustAsRefCountedImmutableDropAliasMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*DropAliasMessageHeader, *DropAliasMessageBody]
-
-// MustAsRetainedImmutableDropAliasMessageV2 converts an ImmutableMessage to RetainedImmutableDropAliasMessageV2, panics on error
-var MustAsRetainedImmutableDropAliasMessageV2 = MustAsRetainedSpecializedImmutableMessage[*DropAliasMessageHeader, *DropAliasMessageBody]
-
 // AsBroadcastDropAliasMessageV2 converts a BasicMessage to BroadcastDropAliasMessageV2
 var AsBroadcastDropAliasMessageV2 = asSpecializedBroadcastMessage[*DropAliasMessageHeader, *DropAliasMessageBody]
 
@@ -1578,13 +1360,11 @@ var NewDropAliasMessageBuilderV2 = newMutableMessageBuilder[*DropAliasMessageHea
 
 // Type aliases for AlterUserMessageV2
 type (
-	MutableAlterUserMessageV2             = specializedMutableMessage[*AlterUserMessageHeader, *AlterUserMessageBody]
-	ImmutableAlterUserMessageV2           = SpecializedImmutableMessage[*AlterUserMessageHeader, *AlterUserMessageBody]
-	RefCountedImmutableAlterUserMessageV2 = RefCountedSpecializedImmutableMessage[*AlterUserMessageHeader, *AlterUserMessageBody]
-	RetainedImmutableAlterUserMessageV2   = RetainedSpecializedImmutableMessage[*AlterUserMessageHeader, *AlterUserMessageBody]
-	BroadcastAlterUserMessageV2           = SpecializedBroadcastMessage[*AlterUserMessageHeader, *AlterUserMessageBody]
-	BroadcastResultAlterUserMessageV2     = BroadcastResult[*AlterUserMessageHeader, *AlterUserMessageBody]
-	AckResultAlterUserMessageV2           = AckResult[*AlterUserMessageHeader, *AlterUserMessageBody]
+	MutableAlterUserMessageV2         = specializedMutableMessage[*AlterUserMessageHeader, *AlterUserMessageBody]
+	ImmutableAlterUserMessageV2       = SpecializedImmutableMessage[*AlterUserMessageHeader, *AlterUserMessageBody]
+	BroadcastAlterUserMessageV2       = SpecializedBroadcastMessage[*AlterUserMessageHeader, *AlterUserMessageBody]
+	BroadcastResultAlterUserMessageV2 = BroadcastResult[*AlterUserMessageHeader, *AlterUserMessageBody]
+	AckResultAlterUserMessageV2       = AckResult[*AlterUserMessageHeader, *AlterUserMessageBody]
 )
 
 // MessageTypeWithVersion for AlterUserMessageV2
@@ -1611,12 +1391,6 @@ var AsImmutableAlterUserMessageV2 = asSpecializedImmutableMessage[*AlterUserMess
 // MustAsImmutableAlterUserMessageV2 converts an ImmutableMessage to ImmutableAlterUserMessageV2, panics on error
 var MustAsImmutableAlterUserMessageV2 = MustAsSpecializedImmutableMessage[*AlterUserMessageHeader, *AlterUserMessageBody]
 
-// MustAsRefCountedImmutableAlterUserMessageV2 converts an ImmutableMessage to RefCountedImmutableAlterUserMessageV2, panics on error
-var MustAsRefCountedImmutableAlterUserMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*AlterUserMessageHeader, *AlterUserMessageBody]
-
-// MustAsRetainedImmutableAlterUserMessageV2 converts an ImmutableMessage to RetainedImmutableAlterUserMessageV2, panics on error
-var MustAsRetainedImmutableAlterUserMessageV2 = MustAsRetainedSpecializedImmutableMessage[*AlterUserMessageHeader, *AlterUserMessageBody]
-
 // AsBroadcastAlterUserMessageV2 converts a BasicMessage to BroadcastAlterUserMessageV2
 var AsBroadcastAlterUserMessageV2 = asSpecializedBroadcastMessage[*AlterUserMessageHeader, *AlterUserMessageBody]
 
@@ -1628,13 +1402,11 @@ var NewAlterUserMessageBuilderV2 = newMutableMessageBuilder[*AlterUserMessageHea
 
 // Type aliases for DropUserMessageV2
 type (
-	MutableDropUserMessageV2             = specializedMutableMessage[*DropUserMessageHeader, *DropUserMessageBody]
-	ImmutableDropUserMessageV2           = SpecializedImmutableMessage[*DropUserMessageHeader, *DropUserMessageBody]
-	RefCountedImmutableDropUserMessageV2 = RefCountedSpecializedImmutableMessage[*DropUserMessageHeader, *DropUserMessageBody]
-	RetainedImmutableDropUserMessageV2   = RetainedSpecializedImmutableMessage[*DropUserMessageHeader, *DropUserMessageBody]
-	BroadcastDropUserMessageV2           = SpecializedBroadcastMessage[*DropUserMessageHeader, *DropUserMessageBody]
-	BroadcastResultDropUserMessageV2     = BroadcastResult[*DropUserMessageHeader, *DropUserMessageBody]
-	AckResultDropUserMessageV2           = AckResult[*DropUserMessageHeader, *DropUserMessageBody]
+	MutableDropUserMessageV2         = specializedMutableMessage[*DropUserMessageHeader, *DropUserMessageBody]
+	ImmutableDropUserMessageV2       = SpecializedImmutableMessage[*DropUserMessageHeader, *DropUserMessageBody]
+	BroadcastDropUserMessageV2       = SpecializedBroadcastMessage[*DropUserMessageHeader, *DropUserMessageBody]
+	BroadcastResultDropUserMessageV2 = BroadcastResult[*DropUserMessageHeader, *DropUserMessageBody]
+	AckResultDropUserMessageV2       = AckResult[*DropUserMessageHeader, *DropUserMessageBody]
 )
 
 // MessageTypeWithVersion for DropUserMessageV2
@@ -1661,12 +1433,6 @@ var AsImmutableDropUserMessageV2 = asSpecializedImmutableMessage[*DropUserMessag
 // MustAsImmutableDropUserMessageV2 converts an ImmutableMessage to ImmutableDropUserMessageV2, panics on error
 var MustAsImmutableDropUserMessageV2 = MustAsSpecializedImmutableMessage[*DropUserMessageHeader, *DropUserMessageBody]
 
-// MustAsRefCountedImmutableDropUserMessageV2 converts an ImmutableMessage to RefCountedImmutableDropUserMessageV2, panics on error
-var MustAsRefCountedImmutableDropUserMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*DropUserMessageHeader, *DropUserMessageBody]
-
-// MustAsRetainedImmutableDropUserMessageV2 converts an ImmutableMessage to RetainedImmutableDropUserMessageV2, panics on error
-var MustAsRetainedImmutableDropUserMessageV2 = MustAsRetainedSpecializedImmutableMessage[*DropUserMessageHeader, *DropUserMessageBody]
-
 // AsBroadcastDropUserMessageV2 converts a BasicMessage to BroadcastDropUserMessageV2
 var AsBroadcastDropUserMessageV2 = asSpecializedBroadcastMessage[*DropUserMessageHeader, *DropUserMessageBody]
 
@@ -1678,13 +1444,11 @@ var NewDropUserMessageBuilderV2 = newMutableMessageBuilder[*DropUserMessageHeade
 
 // Type aliases for AlterRoleMessageV2
 type (
-	MutableAlterRoleMessageV2             = specializedMutableMessage[*AlterRoleMessageHeader, *AlterRoleMessageBody]
-	ImmutableAlterRoleMessageV2           = SpecializedImmutableMessage[*AlterRoleMessageHeader, *AlterRoleMessageBody]
-	RefCountedImmutableAlterRoleMessageV2 = RefCountedSpecializedImmutableMessage[*AlterRoleMessageHeader, *AlterRoleMessageBody]
-	RetainedImmutableAlterRoleMessageV2   = RetainedSpecializedImmutableMessage[*AlterRoleMessageHeader, *AlterRoleMessageBody]
-	BroadcastAlterRoleMessageV2           = SpecializedBroadcastMessage[*AlterRoleMessageHeader, *AlterRoleMessageBody]
-	BroadcastResultAlterRoleMessageV2     = BroadcastResult[*AlterRoleMessageHeader, *AlterRoleMessageBody]
-	AckResultAlterRoleMessageV2           = AckResult[*AlterRoleMessageHeader, *AlterRoleMessageBody]
+	MutableAlterRoleMessageV2         = specializedMutableMessage[*AlterRoleMessageHeader, *AlterRoleMessageBody]
+	ImmutableAlterRoleMessageV2       = SpecializedImmutableMessage[*AlterRoleMessageHeader, *AlterRoleMessageBody]
+	BroadcastAlterRoleMessageV2       = SpecializedBroadcastMessage[*AlterRoleMessageHeader, *AlterRoleMessageBody]
+	BroadcastResultAlterRoleMessageV2 = BroadcastResult[*AlterRoleMessageHeader, *AlterRoleMessageBody]
+	AckResultAlterRoleMessageV2       = AckResult[*AlterRoleMessageHeader, *AlterRoleMessageBody]
 )
 
 // MessageTypeWithVersion for AlterRoleMessageV2
@@ -1711,12 +1475,6 @@ var AsImmutableAlterRoleMessageV2 = asSpecializedImmutableMessage[*AlterRoleMess
 // MustAsImmutableAlterRoleMessageV2 converts an ImmutableMessage to ImmutableAlterRoleMessageV2, panics on error
 var MustAsImmutableAlterRoleMessageV2 = MustAsSpecializedImmutableMessage[*AlterRoleMessageHeader, *AlterRoleMessageBody]
 
-// MustAsRefCountedImmutableAlterRoleMessageV2 converts an ImmutableMessage to RefCountedImmutableAlterRoleMessageV2, panics on error
-var MustAsRefCountedImmutableAlterRoleMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*AlterRoleMessageHeader, *AlterRoleMessageBody]
-
-// MustAsRetainedImmutableAlterRoleMessageV2 converts an ImmutableMessage to RetainedImmutableAlterRoleMessageV2, panics on error
-var MustAsRetainedImmutableAlterRoleMessageV2 = MustAsRetainedSpecializedImmutableMessage[*AlterRoleMessageHeader, *AlterRoleMessageBody]
-
 // AsBroadcastAlterRoleMessageV2 converts a BasicMessage to BroadcastAlterRoleMessageV2
 var AsBroadcastAlterRoleMessageV2 = asSpecializedBroadcastMessage[*AlterRoleMessageHeader, *AlterRoleMessageBody]
 
@@ -1728,13 +1486,11 @@ var NewAlterRoleMessageBuilderV2 = newMutableMessageBuilder[*AlterRoleMessageHea
 
 // Type aliases for DropRoleMessageV2
 type (
-	MutableDropRoleMessageV2             = specializedMutableMessage[*DropRoleMessageHeader, *DropRoleMessageBody]
-	ImmutableDropRoleMessageV2           = SpecializedImmutableMessage[*DropRoleMessageHeader, *DropRoleMessageBody]
-	RefCountedImmutableDropRoleMessageV2 = RefCountedSpecializedImmutableMessage[*DropRoleMessageHeader, *DropRoleMessageBody]
-	RetainedImmutableDropRoleMessageV2   = RetainedSpecializedImmutableMessage[*DropRoleMessageHeader, *DropRoleMessageBody]
-	BroadcastDropRoleMessageV2           = SpecializedBroadcastMessage[*DropRoleMessageHeader, *DropRoleMessageBody]
-	BroadcastResultDropRoleMessageV2     = BroadcastResult[*DropRoleMessageHeader, *DropRoleMessageBody]
-	AckResultDropRoleMessageV2           = AckResult[*DropRoleMessageHeader, *DropRoleMessageBody]
+	MutableDropRoleMessageV2         = specializedMutableMessage[*DropRoleMessageHeader, *DropRoleMessageBody]
+	ImmutableDropRoleMessageV2       = SpecializedImmutableMessage[*DropRoleMessageHeader, *DropRoleMessageBody]
+	BroadcastDropRoleMessageV2       = SpecializedBroadcastMessage[*DropRoleMessageHeader, *DropRoleMessageBody]
+	BroadcastResultDropRoleMessageV2 = BroadcastResult[*DropRoleMessageHeader, *DropRoleMessageBody]
+	AckResultDropRoleMessageV2       = AckResult[*DropRoleMessageHeader, *DropRoleMessageBody]
 )
 
 // MessageTypeWithVersion for DropRoleMessageV2
@@ -1761,12 +1517,6 @@ var AsImmutableDropRoleMessageV2 = asSpecializedImmutableMessage[*DropRoleMessag
 // MustAsImmutableDropRoleMessageV2 converts an ImmutableMessage to ImmutableDropRoleMessageV2, panics on error
 var MustAsImmutableDropRoleMessageV2 = MustAsSpecializedImmutableMessage[*DropRoleMessageHeader, *DropRoleMessageBody]
 
-// MustAsRefCountedImmutableDropRoleMessageV2 converts an ImmutableMessage to RefCountedImmutableDropRoleMessageV2, panics on error
-var MustAsRefCountedImmutableDropRoleMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*DropRoleMessageHeader, *DropRoleMessageBody]
-
-// MustAsRetainedImmutableDropRoleMessageV2 converts an ImmutableMessage to RetainedImmutableDropRoleMessageV2, panics on error
-var MustAsRetainedImmutableDropRoleMessageV2 = MustAsRetainedSpecializedImmutableMessage[*DropRoleMessageHeader, *DropRoleMessageBody]
-
 // AsBroadcastDropRoleMessageV2 converts a BasicMessage to BroadcastDropRoleMessageV2
 var AsBroadcastDropRoleMessageV2 = asSpecializedBroadcastMessage[*DropRoleMessageHeader, *DropRoleMessageBody]
 
@@ -1778,13 +1528,11 @@ var NewDropRoleMessageBuilderV2 = newMutableMessageBuilder[*DropRoleMessageHeade
 
 // Type aliases for AlterUserRoleMessageV2
 type (
-	MutableAlterUserRoleMessageV2             = specializedMutableMessage[*AlterUserRoleMessageHeader, *AlterUserRoleMessageBody]
-	ImmutableAlterUserRoleMessageV2           = SpecializedImmutableMessage[*AlterUserRoleMessageHeader, *AlterUserRoleMessageBody]
-	RefCountedImmutableAlterUserRoleMessageV2 = RefCountedSpecializedImmutableMessage[*AlterUserRoleMessageHeader, *AlterUserRoleMessageBody]
-	RetainedImmutableAlterUserRoleMessageV2   = RetainedSpecializedImmutableMessage[*AlterUserRoleMessageHeader, *AlterUserRoleMessageBody]
-	BroadcastAlterUserRoleMessageV2           = SpecializedBroadcastMessage[*AlterUserRoleMessageHeader, *AlterUserRoleMessageBody]
-	BroadcastResultAlterUserRoleMessageV2     = BroadcastResult[*AlterUserRoleMessageHeader, *AlterUserRoleMessageBody]
-	AckResultAlterUserRoleMessageV2           = AckResult[*AlterUserRoleMessageHeader, *AlterUserRoleMessageBody]
+	MutableAlterUserRoleMessageV2         = specializedMutableMessage[*AlterUserRoleMessageHeader, *AlterUserRoleMessageBody]
+	ImmutableAlterUserRoleMessageV2       = SpecializedImmutableMessage[*AlterUserRoleMessageHeader, *AlterUserRoleMessageBody]
+	BroadcastAlterUserRoleMessageV2       = SpecializedBroadcastMessage[*AlterUserRoleMessageHeader, *AlterUserRoleMessageBody]
+	BroadcastResultAlterUserRoleMessageV2 = BroadcastResult[*AlterUserRoleMessageHeader, *AlterUserRoleMessageBody]
+	AckResultAlterUserRoleMessageV2       = AckResult[*AlterUserRoleMessageHeader, *AlterUserRoleMessageBody]
 )
 
 // MessageTypeWithVersion for AlterUserRoleMessageV2
@@ -1811,12 +1559,6 @@ var AsImmutableAlterUserRoleMessageV2 = asSpecializedImmutableMessage[*AlterUser
 // MustAsImmutableAlterUserRoleMessageV2 converts an ImmutableMessage to ImmutableAlterUserRoleMessageV2, panics on error
 var MustAsImmutableAlterUserRoleMessageV2 = MustAsSpecializedImmutableMessage[*AlterUserRoleMessageHeader, *AlterUserRoleMessageBody]
 
-// MustAsRefCountedImmutableAlterUserRoleMessageV2 converts an ImmutableMessage to RefCountedImmutableAlterUserRoleMessageV2, panics on error
-var MustAsRefCountedImmutableAlterUserRoleMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*AlterUserRoleMessageHeader, *AlterUserRoleMessageBody]
-
-// MustAsRetainedImmutableAlterUserRoleMessageV2 converts an ImmutableMessage to RetainedImmutableAlterUserRoleMessageV2, panics on error
-var MustAsRetainedImmutableAlterUserRoleMessageV2 = MustAsRetainedSpecializedImmutableMessage[*AlterUserRoleMessageHeader, *AlterUserRoleMessageBody]
-
 // AsBroadcastAlterUserRoleMessageV2 converts a BasicMessage to BroadcastAlterUserRoleMessageV2
 var AsBroadcastAlterUserRoleMessageV2 = asSpecializedBroadcastMessage[*AlterUserRoleMessageHeader, *AlterUserRoleMessageBody]
 
@@ -1828,13 +1570,11 @@ var NewAlterUserRoleMessageBuilderV2 = newMutableMessageBuilder[*AlterUserRoleMe
 
 // Type aliases for DropUserRoleMessageV2
 type (
-	MutableDropUserRoleMessageV2             = specializedMutableMessage[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
-	ImmutableDropUserRoleMessageV2           = SpecializedImmutableMessage[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
-	RefCountedImmutableDropUserRoleMessageV2 = RefCountedSpecializedImmutableMessage[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
-	RetainedImmutableDropUserRoleMessageV2   = RetainedSpecializedImmutableMessage[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
-	BroadcastDropUserRoleMessageV2           = SpecializedBroadcastMessage[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
-	BroadcastResultDropUserRoleMessageV2     = BroadcastResult[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
-	AckResultDropUserRoleMessageV2           = AckResult[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
+	MutableDropUserRoleMessageV2         = specializedMutableMessage[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
+	ImmutableDropUserRoleMessageV2       = SpecializedImmutableMessage[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
+	BroadcastDropUserRoleMessageV2       = SpecializedBroadcastMessage[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
+	BroadcastResultDropUserRoleMessageV2 = BroadcastResult[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
+	AckResultDropUserRoleMessageV2       = AckResult[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
 )
 
 // MessageTypeWithVersion for DropUserRoleMessageV2
@@ -1861,12 +1601,6 @@ var AsImmutableDropUserRoleMessageV2 = asSpecializedImmutableMessage[*DropUserRo
 // MustAsImmutableDropUserRoleMessageV2 converts an ImmutableMessage to ImmutableDropUserRoleMessageV2, panics on error
 var MustAsImmutableDropUserRoleMessageV2 = MustAsSpecializedImmutableMessage[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
 
-// MustAsRefCountedImmutableDropUserRoleMessageV2 converts an ImmutableMessage to RefCountedImmutableDropUserRoleMessageV2, panics on error
-var MustAsRefCountedImmutableDropUserRoleMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
-
-// MustAsRetainedImmutableDropUserRoleMessageV2 converts an ImmutableMessage to RetainedImmutableDropUserRoleMessageV2, panics on error
-var MustAsRetainedImmutableDropUserRoleMessageV2 = MustAsRetainedSpecializedImmutableMessage[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
-
 // AsBroadcastDropUserRoleMessageV2 converts a BasicMessage to BroadcastDropUserRoleMessageV2
 var AsBroadcastDropUserRoleMessageV2 = asSpecializedBroadcastMessage[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
 
@@ -1878,13 +1612,11 @@ var NewDropUserRoleMessageBuilderV2 = newMutableMessageBuilder[*DropUserRoleMess
 
 // Type aliases for AlterPrivilegeMessageV2
 type (
-	MutableAlterPrivilegeMessageV2             = specializedMutableMessage[*AlterPrivilegeMessageHeader, *AlterPrivilegeMessageBody]
-	ImmutableAlterPrivilegeMessageV2           = SpecializedImmutableMessage[*AlterPrivilegeMessageHeader, *AlterPrivilegeMessageBody]
-	RefCountedImmutableAlterPrivilegeMessageV2 = RefCountedSpecializedImmutableMessage[*AlterPrivilegeMessageHeader, *AlterPrivilegeMessageBody]
-	RetainedImmutableAlterPrivilegeMessageV2   = RetainedSpecializedImmutableMessage[*AlterPrivilegeMessageHeader, *AlterPrivilegeMessageBody]
-	BroadcastAlterPrivilegeMessageV2           = SpecializedBroadcastMessage[*AlterPrivilegeMessageHeader, *AlterPrivilegeMessageBody]
-	BroadcastResultAlterPrivilegeMessageV2     = BroadcastResult[*AlterPrivilegeMessageHeader, *AlterPrivilegeMessageBody]
-	AckResultAlterPrivilegeMessageV2           = AckResult[*AlterPrivilegeMessageHeader, *AlterPrivilegeMessageBody]
+	MutableAlterPrivilegeMessageV2         = specializedMutableMessage[*AlterPrivilegeMessageHeader, *AlterPrivilegeMessageBody]
+	ImmutableAlterPrivilegeMessageV2       = SpecializedImmutableMessage[*AlterPrivilegeMessageHeader, *AlterPrivilegeMessageBody]
+	BroadcastAlterPrivilegeMessageV2       = SpecializedBroadcastMessage[*AlterPrivilegeMessageHeader, *AlterPrivilegeMessageBody]
+	BroadcastResultAlterPrivilegeMessageV2 = BroadcastResult[*AlterPrivilegeMessageHeader, *AlterPrivilegeMessageBody]
+	AckResultAlterPrivilegeMessageV2       = AckResult[*AlterPrivilegeMessageHeader, *AlterPrivilegeMessageBody]
 )
 
 // MessageTypeWithVersion for AlterPrivilegeMessageV2
@@ -1911,12 +1643,6 @@ var AsImmutableAlterPrivilegeMessageV2 = asSpecializedImmutableMessage[*AlterPri
 // MustAsImmutableAlterPrivilegeMessageV2 converts an ImmutableMessage to ImmutableAlterPrivilegeMessageV2, panics on error
 var MustAsImmutableAlterPrivilegeMessageV2 = MustAsSpecializedImmutableMessage[*AlterPrivilegeMessageHeader, *AlterPrivilegeMessageBody]
 
-// MustAsRefCountedImmutableAlterPrivilegeMessageV2 converts an ImmutableMessage to RefCountedImmutableAlterPrivilegeMessageV2, panics on error
-var MustAsRefCountedImmutableAlterPrivilegeMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*AlterPrivilegeMessageHeader, *AlterPrivilegeMessageBody]
-
-// MustAsRetainedImmutableAlterPrivilegeMessageV2 converts an ImmutableMessage to RetainedImmutableAlterPrivilegeMessageV2, panics on error
-var MustAsRetainedImmutableAlterPrivilegeMessageV2 = MustAsRetainedSpecializedImmutableMessage[*AlterPrivilegeMessageHeader, *AlterPrivilegeMessageBody]
-
 // AsBroadcastAlterPrivilegeMessageV2 converts a BasicMessage to BroadcastAlterPrivilegeMessageV2
 var AsBroadcastAlterPrivilegeMessageV2 = asSpecializedBroadcastMessage[*AlterPrivilegeMessageHeader, *AlterPrivilegeMessageBody]
 
@@ -1928,13 +1654,11 @@ var NewAlterPrivilegeMessageBuilderV2 = newMutableMessageBuilder[*AlterPrivilege
 
 // Type aliases for DropPrivilegeMessageV2
 type (
-	MutableDropPrivilegeMessageV2             = specializedMutableMessage[*DropPrivilegeMessageHeader, *DropPrivilegeMessageBody]
-	ImmutableDropPrivilegeMessageV2           = SpecializedImmutableMessage[*DropPrivilegeMessageHeader, *DropPrivilegeMessageBody]
-	RefCountedImmutableDropPrivilegeMessageV2 = RefCountedSpecializedImmutableMessage[*DropPrivilegeMessageHeader, *DropPrivilegeMessageBody]
-	RetainedImmutableDropPrivilegeMessageV2   = RetainedSpecializedImmutableMessage[*DropPrivilegeMessageHeader, *DropPrivilegeMessageBody]
-	BroadcastDropPrivilegeMessageV2           = SpecializedBroadcastMessage[*DropPrivilegeMessageHeader, *DropPrivilegeMessageBody]
-	BroadcastResultDropPrivilegeMessageV2     = BroadcastResult[*DropPrivilegeMessageHeader, *DropPrivilegeMessageBody]
-	AckResultDropPrivilegeMessageV2           = AckResult[*DropPrivilegeMessageHeader, *DropPrivilegeMessageBody]
+	MutableDropPrivilegeMessageV2         = specializedMutableMessage[*DropPrivilegeMessageHeader, *DropPrivilegeMessageBody]
+	ImmutableDropPrivilegeMessageV2       = SpecializedImmutableMessage[*DropPrivilegeMessageHeader, *DropPrivilegeMessageBody]
+	BroadcastDropPrivilegeMessageV2       = SpecializedBroadcastMessage[*DropPrivilegeMessageHeader, *DropPrivilegeMessageBody]
+	BroadcastResultDropPrivilegeMessageV2 = BroadcastResult[*DropPrivilegeMessageHeader, *DropPrivilegeMessageBody]
+	AckResultDropPrivilegeMessageV2       = AckResult[*DropPrivilegeMessageHeader, *DropPrivilegeMessageBody]
 )
 
 // MessageTypeWithVersion for DropPrivilegeMessageV2
@@ -1961,12 +1685,6 @@ var AsImmutableDropPrivilegeMessageV2 = asSpecializedImmutableMessage[*DropPrivi
 // MustAsImmutableDropPrivilegeMessageV2 converts an ImmutableMessage to ImmutableDropPrivilegeMessageV2, panics on error
 var MustAsImmutableDropPrivilegeMessageV2 = MustAsSpecializedImmutableMessage[*DropPrivilegeMessageHeader, *DropPrivilegeMessageBody]
 
-// MustAsRefCountedImmutableDropPrivilegeMessageV2 converts an ImmutableMessage to RefCountedImmutableDropPrivilegeMessageV2, panics on error
-var MustAsRefCountedImmutableDropPrivilegeMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*DropPrivilegeMessageHeader, *DropPrivilegeMessageBody]
-
-// MustAsRetainedImmutableDropPrivilegeMessageV2 converts an ImmutableMessage to RetainedImmutableDropPrivilegeMessageV2, panics on error
-var MustAsRetainedImmutableDropPrivilegeMessageV2 = MustAsRetainedSpecializedImmutableMessage[*DropPrivilegeMessageHeader, *DropPrivilegeMessageBody]
-
 // AsBroadcastDropPrivilegeMessageV2 converts a BasicMessage to BroadcastDropPrivilegeMessageV2
 var AsBroadcastDropPrivilegeMessageV2 = asSpecializedBroadcastMessage[*DropPrivilegeMessageHeader, *DropPrivilegeMessageBody]
 
@@ -1978,13 +1696,11 @@ var NewDropPrivilegeMessageBuilderV2 = newMutableMessageBuilder[*DropPrivilegeMe
 
 // Type aliases for AlterPrivilegeGroupMessageV2
 type (
-	MutableAlterPrivilegeGroupMessageV2             = specializedMutableMessage[*AlterPrivilegeGroupMessageHeader, *AlterPrivilegeGroupMessageBody]
-	ImmutableAlterPrivilegeGroupMessageV2           = SpecializedImmutableMessage[*AlterPrivilegeGroupMessageHeader, *AlterPrivilegeGroupMessageBody]
-	RefCountedImmutableAlterPrivilegeGroupMessageV2 = RefCountedSpecializedImmutableMessage[*AlterPrivilegeGroupMessageHeader, *AlterPrivilegeGroupMessageBody]
-	RetainedImmutableAlterPrivilegeGroupMessageV2   = RetainedSpecializedImmutableMessage[*AlterPrivilegeGroupMessageHeader, *AlterPrivilegeGroupMessageBody]
-	BroadcastAlterPrivilegeGroupMessageV2           = SpecializedBroadcastMessage[*AlterPrivilegeGroupMessageHeader, *AlterPrivilegeGroupMessageBody]
-	BroadcastResultAlterPrivilegeGroupMessageV2     = BroadcastResult[*AlterPrivilegeGroupMessageHeader, *AlterPrivilegeGroupMessageBody]
-	AckResultAlterPrivilegeGroupMessageV2           = AckResult[*AlterPrivilegeGroupMessageHeader, *AlterPrivilegeGroupMessageBody]
+	MutableAlterPrivilegeGroupMessageV2         = specializedMutableMessage[*AlterPrivilegeGroupMessageHeader, *AlterPrivilegeGroupMessageBody]
+	ImmutableAlterPrivilegeGroupMessageV2       = SpecializedImmutableMessage[*AlterPrivilegeGroupMessageHeader, *AlterPrivilegeGroupMessageBody]
+	BroadcastAlterPrivilegeGroupMessageV2       = SpecializedBroadcastMessage[*AlterPrivilegeGroupMessageHeader, *AlterPrivilegeGroupMessageBody]
+	BroadcastResultAlterPrivilegeGroupMessageV2 = BroadcastResult[*AlterPrivilegeGroupMessageHeader, *AlterPrivilegeGroupMessageBody]
+	AckResultAlterPrivilegeGroupMessageV2       = AckResult[*AlterPrivilegeGroupMessageHeader, *AlterPrivilegeGroupMessageBody]
 )
 
 // MessageTypeWithVersion for AlterPrivilegeGroupMessageV2
@@ -2011,12 +1727,6 @@ var AsImmutableAlterPrivilegeGroupMessageV2 = asSpecializedImmutableMessage[*Alt
 // MustAsImmutableAlterPrivilegeGroupMessageV2 converts an ImmutableMessage to ImmutableAlterPrivilegeGroupMessageV2, panics on error
 var MustAsImmutableAlterPrivilegeGroupMessageV2 = MustAsSpecializedImmutableMessage[*AlterPrivilegeGroupMessageHeader, *AlterPrivilegeGroupMessageBody]
 
-// MustAsRefCountedImmutableAlterPrivilegeGroupMessageV2 converts an ImmutableMessage to RefCountedImmutableAlterPrivilegeGroupMessageV2, panics on error
-var MustAsRefCountedImmutableAlterPrivilegeGroupMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*AlterPrivilegeGroupMessageHeader, *AlterPrivilegeGroupMessageBody]
-
-// MustAsRetainedImmutableAlterPrivilegeGroupMessageV2 converts an ImmutableMessage to RetainedImmutableAlterPrivilegeGroupMessageV2, panics on error
-var MustAsRetainedImmutableAlterPrivilegeGroupMessageV2 = MustAsRetainedSpecializedImmutableMessage[*AlterPrivilegeGroupMessageHeader, *AlterPrivilegeGroupMessageBody]
-
 // AsBroadcastAlterPrivilegeGroupMessageV2 converts a BasicMessage to BroadcastAlterPrivilegeGroupMessageV2
 var AsBroadcastAlterPrivilegeGroupMessageV2 = asSpecializedBroadcastMessage[*AlterPrivilegeGroupMessageHeader, *AlterPrivilegeGroupMessageBody]
 
@@ -2028,13 +1738,11 @@ var NewAlterPrivilegeGroupMessageBuilderV2 = newMutableMessageBuilder[*AlterPriv
 
 // Type aliases for DropPrivilegeGroupMessageV2
 type (
-	MutableDropPrivilegeGroupMessageV2             = specializedMutableMessage[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
-	ImmutableDropPrivilegeGroupMessageV2           = SpecializedImmutableMessage[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
-	RefCountedImmutableDropPrivilegeGroupMessageV2 = RefCountedSpecializedImmutableMessage[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
-	RetainedImmutableDropPrivilegeGroupMessageV2   = RetainedSpecializedImmutableMessage[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
-	BroadcastDropPrivilegeGroupMessageV2           = SpecializedBroadcastMessage[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
-	BroadcastResultDropPrivilegeGroupMessageV2     = BroadcastResult[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
-	AckResultDropPrivilegeGroupMessageV2           = AckResult[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
+	MutableDropPrivilegeGroupMessageV2         = specializedMutableMessage[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
+	ImmutableDropPrivilegeGroupMessageV2       = SpecializedImmutableMessage[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
+	BroadcastDropPrivilegeGroupMessageV2       = SpecializedBroadcastMessage[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
+	BroadcastResultDropPrivilegeGroupMessageV2 = BroadcastResult[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
+	AckResultDropPrivilegeGroupMessageV2       = AckResult[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
 )
 
 // MessageTypeWithVersion for DropPrivilegeGroupMessageV2
@@ -2061,12 +1769,6 @@ var AsImmutableDropPrivilegeGroupMessageV2 = asSpecializedImmutableMessage[*Drop
 // MustAsImmutableDropPrivilegeGroupMessageV2 converts an ImmutableMessage to ImmutableDropPrivilegeGroupMessageV2, panics on error
 var MustAsImmutableDropPrivilegeGroupMessageV2 = MustAsSpecializedImmutableMessage[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
 
-// MustAsRefCountedImmutableDropPrivilegeGroupMessageV2 converts an ImmutableMessage to RefCountedImmutableDropPrivilegeGroupMessageV2, panics on error
-var MustAsRefCountedImmutableDropPrivilegeGroupMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
-
-// MustAsRetainedImmutableDropPrivilegeGroupMessageV2 converts an ImmutableMessage to RetainedImmutableDropPrivilegeGroupMessageV2, panics on error
-var MustAsRetainedImmutableDropPrivilegeGroupMessageV2 = MustAsRetainedSpecializedImmutableMessage[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
-
 // AsBroadcastDropPrivilegeGroupMessageV2 converts a BasicMessage to BroadcastDropPrivilegeGroupMessageV2
 var AsBroadcastDropPrivilegeGroupMessageV2 = asSpecializedBroadcastMessage[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
 
@@ -2078,13 +1780,11 @@ var NewDropPrivilegeGroupMessageBuilderV2 = newMutableMessageBuilder[*DropPrivil
 
 // Type aliases for RestoreRBACMessageV2
 type (
-	MutableRestoreRBACMessageV2             = specializedMutableMessage[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
-	ImmutableRestoreRBACMessageV2           = SpecializedImmutableMessage[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
-	RefCountedImmutableRestoreRBACMessageV2 = RefCountedSpecializedImmutableMessage[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
-	RetainedImmutableRestoreRBACMessageV2   = RetainedSpecializedImmutableMessage[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
-	BroadcastRestoreRBACMessageV2           = SpecializedBroadcastMessage[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
-	BroadcastResultRestoreRBACMessageV2     = BroadcastResult[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
-	AckResultRestoreRBACMessageV2           = AckResult[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
+	MutableRestoreRBACMessageV2         = specializedMutableMessage[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
+	ImmutableRestoreRBACMessageV2       = SpecializedImmutableMessage[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
+	BroadcastRestoreRBACMessageV2       = SpecializedBroadcastMessage[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
+	BroadcastResultRestoreRBACMessageV2 = BroadcastResult[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
+	AckResultRestoreRBACMessageV2       = AckResult[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
 )
 
 // MessageTypeWithVersion for RestoreRBACMessageV2
@@ -2111,12 +1811,6 @@ var AsImmutableRestoreRBACMessageV2 = asSpecializedImmutableMessage[*RestoreRBAC
 // MustAsImmutableRestoreRBACMessageV2 converts an ImmutableMessage to ImmutableRestoreRBACMessageV2, panics on error
 var MustAsImmutableRestoreRBACMessageV2 = MustAsSpecializedImmutableMessage[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
 
-// MustAsRefCountedImmutableRestoreRBACMessageV2 converts an ImmutableMessage to RefCountedImmutableRestoreRBACMessageV2, panics on error
-var MustAsRefCountedImmutableRestoreRBACMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
-
-// MustAsRetainedImmutableRestoreRBACMessageV2 converts an ImmutableMessage to RetainedImmutableRestoreRBACMessageV2, panics on error
-var MustAsRetainedImmutableRestoreRBACMessageV2 = MustAsRetainedSpecializedImmutableMessage[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
-
 // AsBroadcastRestoreRBACMessageV2 converts a BasicMessage to BroadcastRestoreRBACMessageV2
 var AsBroadcastRestoreRBACMessageV2 = asSpecializedBroadcastMessage[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
 
@@ -2128,13 +1822,11 @@ var NewRestoreRBACMessageBuilderV2 = newMutableMessageBuilder[*RestoreRBACMessag
 
 // Type aliases for AlterResourceGroupMessageV2
 type (
-	MutableAlterResourceGroupMessageV2             = specializedMutableMessage[*AlterResourceGroupMessageHeader, *AlterResourceGroupMessageBody]
-	ImmutableAlterResourceGroupMessageV2           = SpecializedImmutableMessage[*AlterResourceGroupMessageHeader, *AlterResourceGroupMessageBody]
-	RefCountedImmutableAlterResourceGroupMessageV2 = RefCountedSpecializedImmutableMessage[*AlterResourceGroupMessageHeader, *AlterResourceGroupMessageBody]
-	RetainedImmutableAlterResourceGroupMessageV2   = RetainedSpecializedImmutableMessage[*AlterResourceGroupMessageHeader, *AlterResourceGroupMessageBody]
-	BroadcastAlterResourceGroupMessageV2           = SpecializedBroadcastMessage[*AlterResourceGroupMessageHeader, *AlterResourceGroupMessageBody]
-	BroadcastResultAlterResourceGroupMessageV2     = BroadcastResult[*AlterResourceGroupMessageHeader, *AlterResourceGroupMessageBody]
-	AckResultAlterResourceGroupMessageV2           = AckResult[*AlterResourceGroupMessageHeader, *AlterResourceGroupMessageBody]
+	MutableAlterResourceGroupMessageV2         = specializedMutableMessage[*AlterResourceGroupMessageHeader, *AlterResourceGroupMessageBody]
+	ImmutableAlterResourceGroupMessageV2       = SpecializedImmutableMessage[*AlterResourceGroupMessageHeader, *AlterResourceGroupMessageBody]
+	BroadcastAlterResourceGroupMessageV2       = SpecializedBroadcastMessage[*AlterResourceGroupMessageHeader, *AlterResourceGroupMessageBody]
+	BroadcastResultAlterResourceGroupMessageV2 = BroadcastResult[*AlterResourceGroupMessageHeader, *AlterResourceGroupMessageBody]
+	AckResultAlterResourceGroupMessageV2       = AckResult[*AlterResourceGroupMessageHeader, *AlterResourceGroupMessageBody]
 )
 
 // MessageTypeWithVersion for AlterResourceGroupMessageV2
@@ -2161,12 +1853,6 @@ var AsImmutableAlterResourceGroupMessageV2 = asSpecializedImmutableMessage[*Alte
 // MustAsImmutableAlterResourceGroupMessageV2 converts an ImmutableMessage to ImmutableAlterResourceGroupMessageV2, panics on error
 var MustAsImmutableAlterResourceGroupMessageV2 = MustAsSpecializedImmutableMessage[*AlterResourceGroupMessageHeader, *AlterResourceGroupMessageBody]
 
-// MustAsRefCountedImmutableAlterResourceGroupMessageV2 converts an ImmutableMessage to RefCountedImmutableAlterResourceGroupMessageV2, panics on error
-var MustAsRefCountedImmutableAlterResourceGroupMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*AlterResourceGroupMessageHeader, *AlterResourceGroupMessageBody]
-
-// MustAsRetainedImmutableAlterResourceGroupMessageV2 converts an ImmutableMessage to RetainedImmutableAlterResourceGroupMessageV2, panics on error
-var MustAsRetainedImmutableAlterResourceGroupMessageV2 = MustAsRetainedSpecializedImmutableMessage[*AlterResourceGroupMessageHeader, *AlterResourceGroupMessageBody]
-
 // AsBroadcastAlterResourceGroupMessageV2 converts a BasicMessage to BroadcastAlterResourceGroupMessageV2
 var AsBroadcastAlterResourceGroupMessageV2 = asSpecializedBroadcastMessage[*AlterResourceGroupMessageHeader, *AlterResourceGroupMessageBody]
 
@@ -2178,13 +1864,11 @@ var NewAlterResourceGroupMessageBuilderV2 = newMutableMessageBuilder[*AlterResou
 
 // Type aliases for DropResourceGroupMessageV2
 type (
-	MutableDropResourceGroupMessageV2             = specializedMutableMessage[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
-	ImmutableDropResourceGroupMessageV2           = SpecializedImmutableMessage[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
-	RefCountedImmutableDropResourceGroupMessageV2 = RefCountedSpecializedImmutableMessage[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
-	RetainedImmutableDropResourceGroupMessageV2   = RetainedSpecializedImmutableMessage[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
-	BroadcastDropResourceGroupMessageV2           = SpecializedBroadcastMessage[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
-	BroadcastResultDropResourceGroupMessageV2     = BroadcastResult[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
-	AckResultDropResourceGroupMessageV2           = AckResult[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
+	MutableDropResourceGroupMessageV2         = specializedMutableMessage[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
+	ImmutableDropResourceGroupMessageV2       = SpecializedImmutableMessage[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
+	BroadcastDropResourceGroupMessageV2       = SpecializedBroadcastMessage[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
+	BroadcastResultDropResourceGroupMessageV2 = BroadcastResult[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
+	AckResultDropResourceGroupMessageV2       = AckResult[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
 )
 
 // MessageTypeWithVersion for DropResourceGroupMessageV2
@@ -2211,12 +1895,6 @@ var AsImmutableDropResourceGroupMessageV2 = asSpecializedImmutableMessage[*DropR
 // MustAsImmutableDropResourceGroupMessageV2 converts an ImmutableMessage to ImmutableDropResourceGroupMessageV2, panics on error
 var MustAsImmutableDropResourceGroupMessageV2 = MustAsSpecializedImmutableMessage[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
 
-// MustAsRefCountedImmutableDropResourceGroupMessageV2 converts an ImmutableMessage to RefCountedImmutableDropResourceGroupMessageV2, panics on error
-var MustAsRefCountedImmutableDropResourceGroupMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
-
-// MustAsRetainedImmutableDropResourceGroupMessageV2 converts an ImmutableMessage to RetainedImmutableDropResourceGroupMessageV2, panics on error
-var MustAsRetainedImmutableDropResourceGroupMessageV2 = MustAsRetainedSpecializedImmutableMessage[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
-
 // AsBroadcastDropResourceGroupMessageV2 converts a BasicMessage to BroadcastDropResourceGroupMessageV2
 var AsBroadcastDropResourceGroupMessageV2 = asSpecializedBroadcastMessage[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
 
@@ -2228,13 +1906,11 @@ var NewDropResourceGroupMessageBuilderV2 = newMutableMessageBuilder[*DropResourc
 
 // Type aliases for CreateIndexMessageV2
 type (
-	MutableCreateIndexMessageV2             = specializedMutableMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
-	ImmutableCreateIndexMessageV2           = SpecializedImmutableMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
-	RefCountedImmutableCreateIndexMessageV2 = RefCountedSpecializedImmutableMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
-	RetainedImmutableCreateIndexMessageV2   = RetainedSpecializedImmutableMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
-	BroadcastCreateIndexMessageV2           = SpecializedBroadcastMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
-	BroadcastResultCreateIndexMessageV2     = BroadcastResult[*CreateIndexMessageHeader, *CreateIndexMessageBody]
-	AckResultCreateIndexMessageV2           = AckResult[*CreateIndexMessageHeader, *CreateIndexMessageBody]
+	MutableCreateIndexMessageV2         = specializedMutableMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
+	ImmutableCreateIndexMessageV2       = SpecializedImmutableMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
+	BroadcastCreateIndexMessageV2       = SpecializedBroadcastMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
+	BroadcastResultCreateIndexMessageV2 = BroadcastResult[*CreateIndexMessageHeader, *CreateIndexMessageBody]
+	AckResultCreateIndexMessageV2       = AckResult[*CreateIndexMessageHeader, *CreateIndexMessageBody]
 )
 
 // MessageTypeWithVersion for CreateIndexMessageV2
@@ -2261,12 +1937,6 @@ var AsImmutableCreateIndexMessageV2 = asSpecializedImmutableMessage[*CreateIndex
 // MustAsImmutableCreateIndexMessageV2 converts an ImmutableMessage to ImmutableCreateIndexMessageV2, panics on error
 var MustAsImmutableCreateIndexMessageV2 = MustAsSpecializedImmutableMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
 
-// MustAsRefCountedImmutableCreateIndexMessageV2 converts an ImmutableMessage to RefCountedImmutableCreateIndexMessageV2, panics on error
-var MustAsRefCountedImmutableCreateIndexMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
-
-// MustAsRetainedImmutableCreateIndexMessageV2 converts an ImmutableMessage to RetainedImmutableCreateIndexMessageV2, panics on error
-var MustAsRetainedImmutableCreateIndexMessageV2 = MustAsRetainedSpecializedImmutableMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
-
 // AsBroadcastCreateIndexMessageV2 converts a BasicMessage to BroadcastCreateIndexMessageV2
 var AsBroadcastCreateIndexMessageV2 = asSpecializedBroadcastMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
 
@@ -2278,13 +1948,11 @@ var NewCreateIndexMessageBuilderV2 = newMutableMessageBuilder[*CreateIndexMessag
 
 // Type aliases for AlterIndexMessageV2
 type (
-	MutableAlterIndexMessageV2             = specializedMutableMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
-	ImmutableAlterIndexMessageV2           = SpecializedImmutableMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
-	RefCountedImmutableAlterIndexMessageV2 = RefCountedSpecializedImmutableMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
-	RetainedImmutableAlterIndexMessageV2   = RetainedSpecializedImmutableMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
-	BroadcastAlterIndexMessageV2           = SpecializedBroadcastMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
-	BroadcastResultAlterIndexMessageV2     = BroadcastResult[*AlterIndexMessageHeader, *AlterIndexMessageBody]
-	AckResultAlterIndexMessageV2           = AckResult[*AlterIndexMessageHeader, *AlterIndexMessageBody]
+	MutableAlterIndexMessageV2         = specializedMutableMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
+	ImmutableAlterIndexMessageV2       = SpecializedImmutableMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
+	BroadcastAlterIndexMessageV2       = SpecializedBroadcastMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
+	BroadcastResultAlterIndexMessageV2 = BroadcastResult[*AlterIndexMessageHeader, *AlterIndexMessageBody]
+	AckResultAlterIndexMessageV2       = AckResult[*AlterIndexMessageHeader, *AlterIndexMessageBody]
 )
 
 // MessageTypeWithVersion for AlterIndexMessageV2
@@ -2311,12 +1979,6 @@ var AsImmutableAlterIndexMessageV2 = asSpecializedImmutableMessage[*AlterIndexMe
 // MustAsImmutableAlterIndexMessageV2 converts an ImmutableMessage to ImmutableAlterIndexMessageV2, panics on error
 var MustAsImmutableAlterIndexMessageV2 = MustAsSpecializedImmutableMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
 
-// MustAsRefCountedImmutableAlterIndexMessageV2 converts an ImmutableMessage to RefCountedImmutableAlterIndexMessageV2, panics on error
-var MustAsRefCountedImmutableAlterIndexMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
-
-// MustAsRetainedImmutableAlterIndexMessageV2 converts an ImmutableMessage to RetainedImmutableAlterIndexMessageV2, panics on error
-var MustAsRetainedImmutableAlterIndexMessageV2 = MustAsRetainedSpecializedImmutableMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
-
 // AsBroadcastAlterIndexMessageV2 converts a BasicMessage to BroadcastAlterIndexMessageV2
 var AsBroadcastAlterIndexMessageV2 = asSpecializedBroadcastMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
 
@@ -2328,13 +1990,11 @@ var NewAlterIndexMessageBuilderV2 = newMutableMessageBuilder[*AlterIndexMessageH
 
 // Type aliases for DropIndexMessageV2
 type (
-	MutableDropIndexMessageV2             = specializedMutableMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
-	ImmutableDropIndexMessageV2           = SpecializedImmutableMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
-	RefCountedImmutableDropIndexMessageV2 = RefCountedSpecializedImmutableMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
-	RetainedImmutableDropIndexMessageV2   = RetainedSpecializedImmutableMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
-	BroadcastDropIndexMessageV2           = SpecializedBroadcastMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
-	BroadcastResultDropIndexMessageV2     = BroadcastResult[*DropIndexMessageHeader, *DropIndexMessageBody]
-	AckResultDropIndexMessageV2           = AckResult[*DropIndexMessageHeader, *DropIndexMessageBody]
+	MutableDropIndexMessageV2         = specializedMutableMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
+	ImmutableDropIndexMessageV2       = SpecializedImmutableMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
+	BroadcastDropIndexMessageV2       = SpecializedBroadcastMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
+	BroadcastResultDropIndexMessageV2 = BroadcastResult[*DropIndexMessageHeader, *DropIndexMessageBody]
+	AckResultDropIndexMessageV2       = AckResult[*DropIndexMessageHeader, *DropIndexMessageBody]
 )
 
 // MessageTypeWithVersion for DropIndexMessageV2
@@ -2361,12 +2021,6 @@ var AsImmutableDropIndexMessageV2 = asSpecializedImmutableMessage[*DropIndexMess
 // MustAsImmutableDropIndexMessageV2 converts an ImmutableMessage to ImmutableDropIndexMessageV2, panics on error
 var MustAsImmutableDropIndexMessageV2 = MustAsSpecializedImmutableMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
 
-// MustAsRefCountedImmutableDropIndexMessageV2 converts an ImmutableMessage to RefCountedImmutableDropIndexMessageV2, panics on error
-var MustAsRefCountedImmutableDropIndexMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
-
-// MustAsRetainedImmutableDropIndexMessageV2 converts an ImmutableMessage to RetainedImmutableDropIndexMessageV2, panics on error
-var MustAsRetainedImmutableDropIndexMessageV2 = MustAsRetainedSpecializedImmutableMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
-
 // AsBroadcastDropIndexMessageV2 converts a BasicMessage to BroadcastDropIndexMessageV2
 var AsBroadcastDropIndexMessageV2 = asSpecializedBroadcastMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
 
@@ -2378,13 +2032,11 @@ var NewDropIndexMessageBuilderV2 = newMutableMessageBuilder[*DropIndexMessageHea
 
 // Type aliases for FlushAllMessageV2
 type (
-	MutableFlushAllMessageV2             = specializedMutableMessage[*FlushAllMessageHeader, *FlushAllMessageBody]
-	ImmutableFlushAllMessageV2           = SpecializedImmutableMessage[*FlushAllMessageHeader, *FlushAllMessageBody]
-	RefCountedImmutableFlushAllMessageV2 = RefCountedSpecializedImmutableMessage[*FlushAllMessageHeader, *FlushAllMessageBody]
-	RetainedImmutableFlushAllMessageV2   = RetainedSpecializedImmutableMessage[*FlushAllMessageHeader, *FlushAllMessageBody]
-	BroadcastFlushAllMessageV2           = SpecializedBroadcastMessage[*FlushAllMessageHeader, *FlushAllMessageBody]
-	BroadcastResultFlushAllMessageV2     = BroadcastResult[*FlushAllMessageHeader, *FlushAllMessageBody]
-	AckResultFlushAllMessageV2           = AckResult[*FlushAllMessageHeader, *FlushAllMessageBody]
+	MutableFlushAllMessageV2         = specializedMutableMessage[*FlushAllMessageHeader, *FlushAllMessageBody]
+	ImmutableFlushAllMessageV2       = SpecializedImmutableMessage[*FlushAllMessageHeader, *FlushAllMessageBody]
+	BroadcastFlushAllMessageV2       = SpecializedBroadcastMessage[*FlushAllMessageHeader, *FlushAllMessageBody]
+	BroadcastResultFlushAllMessageV2 = BroadcastResult[*FlushAllMessageHeader, *FlushAllMessageBody]
+	AckResultFlushAllMessageV2       = AckResult[*FlushAllMessageHeader, *FlushAllMessageBody]
 )
 
 // MessageTypeWithVersion for FlushAllMessageV2
@@ -2411,12 +2063,6 @@ var AsImmutableFlushAllMessageV2 = asSpecializedImmutableMessage[*FlushAllMessag
 // MustAsImmutableFlushAllMessageV2 converts an ImmutableMessage to ImmutableFlushAllMessageV2, panics on error
 var MustAsImmutableFlushAllMessageV2 = MustAsSpecializedImmutableMessage[*FlushAllMessageHeader, *FlushAllMessageBody]
 
-// MustAsRefCountedImmutableFlushAllMessageV2 converts an ImmutableMessage to RefCountedImmutableFlushAllMessageV2, panics on error
-var MustAsRefCountedImmutableFlushAllMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*FlushAllMessageHeader, *FlushAllMessageBody]
-
-// MustAsRetainedImmutableFlushAllMessageV2 converts an ImmutableMessage to RetainedImmutableFlushAllMessageV2, panics on error
-var MustAsRetainedImmutableFlushAllMessageV2 = MustAsRetainedSpecializedImmutableMessage[*FlushAllMessageHeader, *FlushAllMessageBody]
-
 // AsBroadcastFlushAllMessageV2 converts a BasicMessage to BroadcastFlushAllMessageV2
 var AsBroadcastFlushAllMessageV2 = asSpecializedBroadcastMessage[*FlushAllMessageHeader, *FlushAllMessageBody]
 
@@ -2428,13 +2074,11 @@ var NewFlushAllMessageBuilderV2 = newMutableMessageBuilder[*FlushAllMessageHeade
 
 // Type aliases for CreateSnapshotMessageV2
 type (
-	MutableCreateSnapshotMessageV2             = specializedMutableMessage[*CreateSnapshotMessageHeader, *CreateSnapshotMessageBody]
-	ImmutableCreateSnapshotMessageV2           = SpecializedImmutableMessage[*CreateSnapshotMessageHeader, *CreateSnapshotMessageBody]
-	RefCountedImmutableCreateSnapshotMessageV2 = RefCountedSpecializedImmutableMessage[*CreateSnapshotMessageHeader, *CreateSnapshotMessageBody]
-	RetainedImmutableCreateSnapshotMessageV2   = RetainedSpecializedImmutableMessage[*CreateSnapshotMessageHeader, *CreateSnapshotMessageBody]
-	BroadcastCreateSnapshotMessageV2           = SpecializedBroadcastMessage[*CreateSnapshotMessageHeader, *CreateSnapshotMessageBody]
-	BroadcastResultCreateSnapshotMessageV2     = BroadcastResult[*CreateSnapshotMessageHeader, *CreateSnapshotMessageBody]
-	AckResultCreateSnapshotMessageV2           = AckResult[*CreateSnapshotMessageHeader, *CreateSnapshotMessageBody]
+	MutableCreateSnapshotMessageV2         = specializedMutableMessage[*CreateSnapshotMessageHeader, *CreateSnapshotMessageBody]
+	ImmutableCreateSnapshotMessageV2       = SpecializedImmutableMessage[*CreateSnapshotMessageHeader, *CreateSnapshotMessageBody]
+	BroadcastCreateSnapshotMessageV2       = SpecializedBroadcastMessage[*CreateSnapshotMessageHeader, *CreateSnapshotMessageBody]
+	BroadcastResultCreateSnapshotMessageV2 = BroadcastResult[*CreateSnapshotMessageHeader, *CreateSnapshotMessageBody]
+	AckResultCreateSnapshotMessageV2       = AckResult[*CreateSnapshotMessageHeader, *CreateSnapshotMessageBody]
 )
 
 // MessageTypeWithVersion for CreateSnapshotMessageV2
@@ -2461,12 +2105,6 @@ var AsImmutableCreateSnapshotMessageV2 = asSpecializedImmutableMessage[*CreateSn
 // MustAsImmutableCreateSnapshotMessageV2 converts an ImmutableMessage to ImmutableCreateSnapshotMessageV2, panics on error
 var MustAsImmutableCreateSnapshotMessageV2 = MustAsSpecializedImmutableMessage[*CreateSnapshotMessageHeader, *CreateSnapshotMessageBody]
 
-// MustAsRefCountedImmutableCreateSnapshotMessageV2 converts an ImmutableMessage to RefCountedImmutableCreateSnapshotMessageV2, panics on error
-var MustAsRefCountedImmutableCreateSnapshotMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*CreateSnapshotMessageHeader, *CreateSnapshotMessageBody]
-
-// MustAsRetainedImmutableCreateSnapshotMessageV2 converts an ImmutableMessage to RetainedImmutableCreateSnapshotMessageV2, panics on error
-var MustAsRetainedImmutableCreateSnapshotMessageV2 = MustAsRetainedSpecializedImmutableMessage[*CreateSnapshotMessageHeader, *CreateSnapshotMessageBody]
-
 // AsBroadcastCreateSnapshotMessageV2 converts a BasicMessage to BroadcastCreateSnapshotMessageV2
 var AsBroadcastCreateSnapshotMessageV2 = asSpecializedBroadcastMessage[*CreateSnapshotMessageHeader, *CreateSnapshotMessageBody]
 
@@ -2478,13 +2116,11 @@ var NewCreateSnapshotMessageBuilderV2 = newMutableMessageBuilder[*CreateSnapshot
 
 // Type aliases for DropSnapshotMessageV2
 type (
-	MutableDropSnapshotMessageV2             = specializedMutableMessage[*DropSnapshotMessageHeader, *DropSnapshotMessageBody]
-	ImmutableDropSnapshotMessageV2           = SpecializedImmutableMessage[*DropSnapshotMessageHeader, *DropSnapshotMessageBody]
-	RefCountedImmutableDropSnapshotMessageV2 = RefCountedSpecializedImmutableMessage[*DropSnapshotMessageHeader, *DropSnapshotMessageBody]
-	RetainedImmutableDropSnapshotMessageV2   = RetainedSpecializedImmutableMessage[*DropSnapshotMessageHeader, *DropSnapshotMessageBody]
-	BroadcastDropSnapshotMessageV2           = SpecializedBroadcastMessage[*DropSnapshotMessageHeader, *DropSnapshotMessageBody]
-	BroadcastResultDropSnapshotMessageV2     = BroadcastResult[*DropSnapshotMessageHeader, *DropSnapshotMessageBody]
-	AckResultDropSnapshotMessageV2           = AckResult[*DropSnapshotMessageHeader, *DropSnapshotMessageBody]
+	MutableDropSnapshotMessageV2         = specializedMutableMessage[*DropSnapshotMessageHeader, *DropSnapshotMessageBody]
+	ImmutableDropSnapshotMessageV2       = SpecializedImmutableMessage[*DropSnapshotMessageHeader, *DropSnapshotMessageBody]
+	BroadcastDropSnapshotMessageV2       = SpecializedBroadcastMessage[*DropSnapshotMessageHeader, *DropSnapshotMessageBody]
+	BroadcastResultDropSnapshotMessageV2 = BroadcastResult[*DropSnapshotMessageHeader, *DropSnapshotMessageBody]
+	AckResultDropSnapshotMessageV2       = AckResult[*DropSnapshotMessageHeader, *DropSnapshotMessageBody]
 )
 
 // MessageTypeWithVersion for DropSnapshotMessageV2
@@ -2511,12 +2147,6 @@ var AsImmutableDropSnapshotMessageV2 = asSpecializedImmutableMessage[*DropSnapsh
 // MustAsImmutableDropSnapshotMessageV2 converts an ImmutableMessage to ImmutableDropSnapshotMessageV2, panics on error
 var MustAsImmutableDropSnapshotMessageV2 = MustAsSpecializedImmutableMessage[*DropSnapshotMessageHeader, *DropSnapshotMessageBody]
 
-// MustAsRefCountedImmutableDropSnapshotMessageV2 converts an ImmutableMessage to RefCountedImmutableDropSnapshotMessageV2, panics on error
-var MustAsRefCountedImmutableDropSnapshotMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*DropSnapshotMessageHeader, *DropSnapshotMessageBody]
-
-// MustAsRetainedImmutableDropSnapshotMessageV2 converts an ImmutableMessage to RetainedImmutableDropSnapshotMessageV2, panics on error
-var MustAsRetainedImmutableDropSnapshotMessageV2 = MustAsRetainedSpecializedImmutableMessage[*DropSnapshotMessageHeader, *DropSnapshotMessageBody]
-
 // AsBroadcastDropSnapshotMessageV2 converts a BasicMessage to BroadcastDropSnapshotMessageV2
 var AsBroadcastDropSnapshotMessageV2 = asSpecializedBroadcastMessage[*DropSnapshotMessageHeader, *DropSnapshotMessageBody]
 
@@ -2528,13 +2158,11 @@ var NewDropSnapshotMessageBuilderV2 = newMutableMessageBuilder[*DropSnapshotMess
 
 // Type aliases for RestoreSnapshotMessageV2
 type (
-	MutableRestoreSnapshotMessageV2             = specializedMutableMessage[*RestoreSnapshotMessageHeader, *RestoreSnapshotMessageBody]
-	ImmutableRestoreSnapshotMessageV2           = SpecializedImmutableMessage[*RestoreSnapshotMessageHeader, *RestoreSnapshotMessageBody]
-	RefCountedImmutableRestoreSnapshotMessageV2 = RefCountedSpecializedImmutableMessage[*RestoreSnapshotMessageHeader, *RestoreSnapshotMessageBody]
-	RetainedImmutableRestoreSnapshotMessageV2   = RetainedSpecializedImmutableMessage[*RestoreSnapshotMessageHeader, *RestoreSnapshotMessageBody]
-	BroadcastRestoreSnapshotMessageV2           = SpecializedBroadcastMessage[*RestoreSnapshotMessageHeader, *RestoreSnapshotMessageBody]
-	BroadcastResultRestoreSnapshotMessageV2     = BroadcastResult[*RestoreSnapshotMessageHeader, *RestoreSnapshotMessageBody]
-	AckResultRestoreSnapshotMessageV2           = AckResult[*RestoreSnapshotMessageHeader, *RestoreSnapshotMessageBody]
+	MutableRestoreSnapshotMessageV2         = specializedMutableMessage[*RestoreSnapshotMessageHeader, *RestoreSnapshotMessageBody]
+	ImmutableRestoreSnapshotMessageV2       = SpecializedImmutableMessage[*RestoreSnapshotMessageHeader, *RestoreSnapshotMessageBody]
+	BroadcastRestoreSnapshotMessageV2       = SpecializedBroadcastMessage[*RestoreSnapshotMessageHeader, *RestoreSnapshotMessageBody]
+	BroadcastResultRestoreSnapshotMessageV2 = BroadcastResult[*RestoreSnapshotMessageHeader, *RestoreSnapshotMessageBody]
+	AckResultRestoreSnapshotMessageV2       = AckResult[*RestoreSnapshotMessageHeader, *RestoreSnapshotMessageBody]
 )
 
 // MessageTypeWithVersion for RestoreSnapshotMessageV2
@@ -2561,12 +2189,6 @@ var AsImmutableRestoreSnapshotMessageV2 = asSpecializedImmutableMessage[*Restore
 // MustAsImmutableRestoreSnapshotMessageV2 converts an ImmutableMessage to ImmutableRestoreSnapshotMessageV2, panics on error
 var MustAsImmutableRestoreSnapshotMessageV2 = MustAsSpecializedImmutableMessage[*RestoreSnapshotMessageHeader, *RestoreSnapshotMessageBody]
 
-// MustAsRefCountedImmutableRestoreSnapshotMessageV2 converts an ImmutableMessage to RefCountedImmutableRestoreSnapshotMessageV2, panics on error
-var MustAsRefCountedImmutableRestoreSnapshotMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*RestoreSnapshotMessageHeader, *RestoreSnapshotMessageBody]
-
-// MustAsRetainedImmutableRestoreSnapshotMessageV2 converts an ImmutableMessage to RetainedImmutableRestoreSnapshotMessageV2, panics on error
-var MustAsRetainedImmutableRestoreSnapshotMessageV2 = MustAsRetainedSpecializedImmutableMessage[*RestoreSnapshotMessageHeader, *RestoreSnapshotMessageBody]
-
 // AsBroadcastRestoreSnapshotMessageV2 converts a BasicMessage to BroadcastRestoreSnapshotMessageV2
 var AsBroadcastRestoreSnapshotMessageV2 = asSpecializedBroadcastMessage[*RestoreSnapshotMessageHeader, *RestoreSnapshotMessageBody]
 
@@ -2578,13 +2200,11 @@ var NewRestoreSnapshotMessageBuilderV2 = newMutableMessageBuilder[*RestoreSnapsh
 
 // Type aliases for DropSnapshotsByCollectionMessageV2
 type (
-	MutableDropSnapshotsByCollectionMessageV2             = specializedMutableMessage[*DropSnapshotsByCollectionMessageHeader, *DropSnapshotsByCollectionMessageBody]
-	ImmutableDropSnapshotsByCollectionMessageV2           = SpecializedImmutableMessage[*DropSnapshotsByCollectionMessageHeader, *DropSnapshotsByCollectionMessageBody]
-	RefCountedImmutableDropSnapshotsByCollectionMessageV2 = RefCountedSpecializedImmutableMessage[*DropSnapshotsByCollectionMessageHeader, *DropSnapshotsByCollectionMessageBody]
-	RetainedImmutableDropSnapshotsByCollectionMessageV2   = RetainedSpecializedImmutableMessage[*DropSnapshotsByCollectionMessageHeader, *DropSnapshotsByCollectionMessageBody]
-	BroadcastDropSnapshotsByCollectionMessageV2           = SpecializedBroadcastMessage[*DropSnapshotsByCollectionMessageHeader, *DropSnapshotsByCollectionMessageBody]
-	BroadcastResultDropSnapshotsByCollectionMessageV2     = BroadcastResult[*DropSnapshotsByCollectionMessageHeader, *DropSnapshotsByCollectionMessageBody]
-	AckResultDropSnapshotsByCollectionMessageV2           = AckResult[*DropSnapshotsByCollectionMessageHeader, *DropSnapshotsByCollectionMessageBody]
+	MutableDropSnapshotsByCollectionMessageV2         = specializedMutableMessage[*DropSnapshotsByCollectionMessageHeader, *DropSnapshotsByCollectionMessageBody]
+	ImmutableDropSnapshotsByCollectionMessageV2       = SpecializedImmutableMessage[*DropSnapshotsByCollectionMessageHeader, *DropSnapshotsByCollectionMessageBody]
+	BroadcastDropSnapshotsByCollectionMessageV2       = SpecializedBroadcastMessage[*DropSnapshotsByCollectionMessageHeader, *DropSnapshotsByCollectionMessageBody]
+	BroadcastResultDropSnapshotsByCollectionMessageV2 = BroadcastResult[*DropSnapshotsByCollectionMessageHeader, *DropSnapshotsByCollectionMessageBody]
+	AckResultDropSnapshotsByCollectionMessageV2       = AckResult[*DropSnapshotsByCollectionMessageHeader, *DropSnapshotsByCollectionMessageBody]
 )
 
 // MessageTypeWithVersion for DropSnapshotsByCollectionMessageV2
@@ -2611,12 +2231,6 @@ var AsImmutableDropSnapshotsByCollectionMessageV2 = asSpecializedImmutableMessag
 // MustAsImmutableDropSnapshotsByCollectionMessageV2 converts an ImmutableMessage to ImmutableDropSnapshotsByCollectionMessageV2, panics on error
 var MustAsImmutableDropSnapshotsByCollectionMessageV2 = MustAsSpecializedImmutableMessage[*DropSnapshotsByCollectionMessageHeader, *DropSnapshotsByCollectionMessageBody]
 
-// MustAsRefCountedImmutableDropSnapshotsByCollectionMessageV2 converts an ImmutableMessage to RefCountedImmutableDropSnapshotsByCollectionMessageV2, panics on error
-var MustAsRefCountedImmutableDropSnapshotsByCollectionMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*DropSnapshotsByCollectionMessageHeader, *DropSnapshotsByCollectionMessageBody]
-
-// MustAsRetainedImmutableDropSnapshotsByCollectionMessageV2 converts an ImmutableMessage to RetainedImmutableDropSnapshotsByCollectionMessageV2, panics on error
-var MustAsRetainedImmutableDropSnapshotsByCollectionMessageV2 = MustAsRetainedSpecializedImmutableMessage[*DropSnapshotsByCollectionMessageHeader, *DropSnapshotsByCollectionMessageBody]
-
 // AsBroadcastDropSnapshotsByCollectionMessageV2 converts a BasicMessage to BroadcastDropSnapshotsByCollectionMessageV2
 var AsBroadcastDropSnapshotsByCollectionMessageV2 = asSpecializedBroadcastMessage[*DropSnapshotsByCollectionMessageHeader, *DropSnapshotsByCollectionMessageBody]
 
@@ -2628,13 +2242,11 @@ var NewDropSnapshotsByCollectionMessageBuilderV2 = newMutableMessageBuilder[*Dro
 
 // Type aliases for AlterWALMessageV2
 type (
-	MutableAlterWALMessageV2             = specializedMutableMessage[*AlterWALMessageHeader, *AlterWALMessageBody]
-	ImmutableAlterWALMessageV2           = SpecializedImmutableMessage[*AlterWALMessageHeader, *AlterWALMessageBody]
-	RefCountedImmutableAlterWALMessageV2 = RefCountedSpecializedImmutableMessage[*AlterWALMessageHeader, *AlterWALMessageBody]
-	RetainedImmutableAlterWALMessageV2   = RetainedSpecializedImmutableMessage[*AlterWALMessageHeader, *AlterWALMessageBody]
-	BroadcastAlterWALMessageV2           = SpecializedBroadcastMessage[*AlterWALMessageHeader, *AlterWALMessageBody]
-	BroadcastResultAlterWALMessageV2     = BroadcastResult[*AlterWALMessageHeader, *AlterWALMessageBody]
-	AckResultAlterWALMessageV2           = AckResult[*AlterWALMessageHeader, *AlterWALMessageBody]
+	MutableAlterWALMessageV2         = specializedMutableMessage[*AlterWALMessageHeader, *AlterWALMessageBody]
+	ImmutableAlterWALMessageV2       = SpecializedImmutableMessage[*AlterWALMessageHeader, *AlterWALMessageBody]
+	BroadcastAlterWALMessageV2       = SpecializedBroadcastMessage[*AlterWALMessageHeader, *AlterWALMessageBody]
+	BroadcastResultAlterWALMessageV2 = BroadcastResult[*AlterWALMessageHeader, *AlterWALMessageBody]
+	AckResultAlterWALMessageV2       = AckResult[*AlterWALMessageHeader, *AlterWALMessageBody]
 )
 
 // MessageTypeWithVersion for AlterWALMessageV2
@@ -2661,12 +2273,6 @@ var AsImmutableAlterWALMessageV2 = asSpecializedImmutableMessage[*AlterWALMessag
 // MustAsImmutableAlterWALMessageV2 converts an ImmutableMessage to ImmutableAlterWALMessageV2, panics on error
 var MustAsImmutableAlterWALMessageV2 = MustAsSpecializedImmutableMessage[*AlterWALMessageHeader, *AlterWALMessageBody]
 
-// MustAsRefCountedImmutableAlterWALMessageV2 converts an ImmutableMessage to RefCountedImmutableAlterWALMessageV2, panics on error
-var MustAsRefCountedImmutableAlterWALMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*AlterWALMessageHeader, *AlterWALMessageBody]
-
-// MustAsRetainedImmutableAlterWALMessageV2 converts an ImmutableMessage to RetainedImmutableAlterWALMessageV2, panics on error
-var MustAsRetainedImmutableAlterWALMessageV2 = MustAsRetainedSpecializedImmutableMessage[*AlterWALMessageHeader, *AlterWALMessageBody]
-
 // AsBroadcastAlterWALMessageV2 converts a BasicMessage to BroadcastAlterWALMessageV2
 var AsBroadcastAlterWALMessageV2 = asSpecializedBroadcastMessage[*AlterWALMessageHeader, *AlterWALMessageBody]
 
@@ -2678,13 +2284,11 @@ var NewAlterWALMessageBuilderV2 = newMutableMessageBuilder[*AlterWALMessageHeade
 
 // Type aliases for RecoveryBarrierMessageV2
 type (
-	MutableRecoveryBarrierMessageV2             = specializedMutableMessage[*RecoveryBarrierMessageHeader, *RecoveryBarrierMessageBody]
-	ImmutableRecoveryBarrierMessageV2           = SpecializedImmutableMessage[*RecoveryBarrierMessageHeader, *RecoveryBarrierMessageBody]
-	RefCountedImmutableRecoveryBarrierMessageV2 = RefCountedSpecializedImmutableMessage[*RecoveryBarrierMessageHeader, *RecoveryBarrierMessageBody]
-	RetainedImmutableRecoveryBarrierMessageV2   = RetainedSpecializedImmutableMessage[*RecoveryBarrierMessageHeader, *RecoveryBarrierMessageBody]
-	BroadcastRecoveryBarrierMessageV2           = SpecializedBroadcastMessage[*RecoveryBarrierMessageHeader, *RecoveryBarrierMessageBody]
-	BroadcastResultRecoveryBarrierMessageV2     = BroadcastResult[*RecoveryBarrierMessageHeader, *RecoveryBarrierMessageBody]
-	AckResultRecoveryBarrierMessageV2           = AckResult[*RecoveryBarrierMessageHeader, *RecoveryBarrierMessageBody]
+	MutableRecoveryBarrierMessageV2         = specializedMutableMessage[*RecoveryBarrierMessageHeader, *RecoveryBarrierMessageBody]
+	ImmutableRecoveryBarrierMessageV2       = SpecializedImmutableMessage[*RecoveryBarrierMessageHeader, *RecoveryBarrierMessageBody]
+	BroadcastRecoveryBarrierMessageV2       = SpecializedBroadcastMessage[*RecoveryBarrierMessageHeader, *RecoveryBarrierMessageBody]
+	BroadcastResultRecoveryBarrierMessageV2 = BroadcastResult[*RecoveryBarrierMessageHeader, *RecoveryBarrierMessageBody]
+	AckResultRecoveryBarrierMessageV2       = AckResult[*RecoveryBarrierMessageHeader, *RecoveryBarrierMessageBody]
 )
 
 // MessageTypeWithVersion for RecoveryBarrierMessageV2
@@ -2711,12 +2315,6 @@ var AsImmutableRecoveryBarrierMessageV2 = asSpecializedImmutableMessage[*Recover
 // MustAsImmutableRecoveryBarrierMessageV2 converts an ImmutableMessage to ImmutableRecoveryBarrierMessageV2, panics on error
 var MustAsImmutableRecoveryBarrierMessageV2 = MustAsSpecializedImmutableMessage[*RecoveryBarrierMessageHeader, *RecoveryBarrierMessageBody]
 
-// MustAsRefCountedImmutableRecoveryBarrierMessageV2 converts an ImmutableMessage to RefCountedImmutableRecoveryBarrierMessageV2, panics on error
-var MustAsRefCountedImmutableRecoveryBarrierMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*RecoveryBarrierMessageHeader, *RecoveryBarrierMessageBody]
-
-// MustAsRetainedImmutableRecoveryBarrierMessageV2 converts an ImmutableMessage to RetainedImmutableRecoveryBarrierMessageV2, panics on error
-var MustAsRetainedImmutableRecoveryBarrierMessageV2 = MustAsRetainedSpecializedImmutableMessage[*RecoveryBarrierMessageHeader, *RecoveryBarrierMessageBody]
-
 // AsBroadcastRecoveryBarrierMessageV2 converts a BasicMessage to BroadcastRecoveryBarrierMessageV2
 var AsBroadcastRecoveryBarrierMessageV2 = asSpecializedBroadcastMessage[*RecoveryBarrierMessageHeader, *RecoveryBarrierMessageBody]
 
@@ -2728,13 +2326,11 @@ var NewRecoveryBarrierMessageBuilderV2 = newMutableMessageBuilder[*RecoveryBarri
 
 // Type aliases for BatchUpdateManifestMessageV2
 type (
-	MutableBatchUpdateManifestMessageV2             = specializedMutableMessage[*BatchUpdateManifestMessageHeader, *BatchUpdateManifestMessageBody]
-	ImmutableBatchUpdateManifestMessageV2           = SpecializedImmutableMessage[*BatchUpdateManifestMessageHeader, *BatchUpdateManifestMessageBody]
-	RefCountedImmutableBatchUpdateManifestMessageV2 = RefCountedSpecializedImmutableMessage[*BatchUpdateManifestMessageHeader, *BatchUpdateManifestMessageBody]
-	RetainedImmutableBatchUpdateManifestMessageV2   = RetainedSpecializedImmutableMessage[*BatchUpdateManifestMessageHeader, *BatchUpdateManifestMessageBody]
-	BroadcastBatchUpdateManifestMessageV2           = SpecializedBroadcastMessage[*BatchUpdateManifestMessageHeader, *BatchUpdateManifestMessageBody]
-	BroadcastResultBatchUpdateManifestMessageV2     = BroadcastResult[*BatchUpdateManifestMessageHeader, *BatchUpdateManifestMessageBody]
-	AckResultBatchUpdateManifestMessageV2           = AckResult[*BatchUpdateManifestMessageHeader, *BatchUpdateManifestMessageBody]
+	MutableBatchUpdateManifestMessageV2         = specializedMutableMessage[*BatchUpdateManifestMessageHeader, *BatchUpdateManifestMessageBody]
+	ImmutableBatchUpdateManifestMessageV2       = SpecializedImmutableMessage[*BatchUpdateManifestMessageHeader, *BatchUpdateManifestMessageBody]
+	BroadcastBatchUpdateManifestMessageV2       = SpecializedBroadcastMessage[*BatchUpdateManifestMessageHeader, *BatchUpdateManifestMessageBody]
+	BroadcastResultBatchUpdateManifestMessageV2 = BroadcastResult[*BatchUpdateManifestMessageHeader, *BatchUpdateManifestMessageBody]
+	AckResultBatchUpdateManifestMessageV2       = AckResult[*BatchUpdateManifestMessageHeader, *BatchUpdateManifestMessageBody]
 )
 
 // MessageTypeWithVersion for BatchUpdateManifestMessageV2
@@ -2761,12 +2357,6 @@ var AsImmutableBatchUpdateManifestMessageV2 = asSpecializedImmutableMessage[*Bat
 // MustAsImmutableBatchUpdateManifestMessageV2 converts an ImmutableMessage to ImmutableBatchUpdateManifestMessageV2, panics on error
 var MustAsImmutableBatchUpdateManifestMessageV2 = MustAsSpecializedImmutableMessage[*BatchUpdateManifestMessageHeader, *BatchUpdateManifestMessageBody]
 
-// MustAsRefCountedImmutableBatchUpdateManifestMessageV2 converts an ImmutableMessage to RefCountedImmutableBatchUpdateManifestMessageV2, panics on error
-var MustAsRefCountedImmutableBatchUpdateManifestMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*BatchUpdateManifestMessageHeader, *BatchUpdateManifestMessageBody]
-
-// MustAsRetainedImmutableBatchUpdateManifestMessageV2 converts an ImmutableMessage to RetainedImmutableBatchUpdateManifestMessageV2, panics on error
-var MustAsRetainedImmutableBatchUpdateManifestMessageV2 = MustAsRetainedSpecializedImmutableMessage[*BatchUpdateManifestMessageHeader, *BatchUpdateManifestMessageBody]
-
 // AsBroadcastBatchUpdateManifestMessageV2 converts a BasicMessage to BroadcastBatchUpdateManifestMessageV2
 var AsBroadcastBatchUpdateManifestMessageV2 = asSpecializedBroadcastMessage[*BatchUpdateManifestMessageHeader, *BatchUpdateManifestMessageBody]
 
@@ -2778,13 +2368,11 @@ var NewBatchUpdateManifestMessageBuilderV2 = newMutableMessageBuilder[*BatchUpda
 
 // Type aliases for RefreshExternalCollectionMessageV2
 type (
-	MutableRefreshExternalCollectionMessageV2             = specializedMutableMessage[*RefreshExternalCollectionMessageHeader, *RefreshExternalCollectionMessageBody]
-	ImmutableRefreshExternalCollectionMessageV2           = SpecializedImmutableMessage[*RefreshExternalCollectionMessageHeader, *RefreshExternalCollectionMessageBody]
-	RefCountedImmutableRefreshExternalCollectionMessageV2 = RefCountedSpecializedImmutableMessage[*RefreshExternalCollectionMessageHeader, *RefreshExternalCollectionMessageBody]
-	RetainedImmutableRefreshExternalCollectionMessageV2   = RetainedSpecializedImmutableMessage[*RefreshExternalCollectionMessageHeader, *RefreshExternalCollectionMessageBody]
-	BroadcastRefreshExternalCollectionMessageV2           = SpecializedBroadcastMessage[*RefreshExternalCollectionMessageHeader, *RefreshExternalCollectionMessageBody]
-	BroadcastResultRefreshExternalCollectionMessageV2     = BroadcastResult[*RefreshExternalCollectionMessageHeader, *RefreshExternalCollectionMessageBody]
-	AckResultRefreshExternalCollectionMessageV2           = AckResult[*RefreshExternalCollectionMessageHeader, *RefreshExternalCollectionMessageBody]
+	MutableRefreshExternalCollectionMessageV2         = specializedMutableMessage[*RefreshExternalCollectionMessageHeader, *RefreshExternalCollectionMessageBody]
+	ImmutableRefreshExternalCollectionMessageV2       = SpecializedImmutableMessage[*RefreshExternalCollectionMessageHeader, *RefreshExternalCollectionMessageBody]
+	BroadcastRefreshExternalCollectionMessageV2       = SpecializedBroadcastMessage[*RefreshExternalCollectionMessageHeader, *RefreshExternalCollectionMessageBody]
+	BroadcastResultRefreshExternalCollectionMessageV2 = BroadcastResult[*RefreshExternalCollectionMessageHeader, *RefreshExternalCollectionMessageBody]
+	AckResultRefreshExternalCollectionMessageV2       = AckResult[*RefreshExternalCollectionMessageHeader, *RefreshExternalCollectionMessageBody]
 )
 
 // MessageTypeWithVersion for RefreshExternalCollectionMessageV2
@@ -2810,12 +2398,6 @@ var AsImmutableRefreshExternalCollectionMessageV2 = asSpecializedImmutableMessag
 
 // MustAsImmutableRefreshExternalCollectionMessageV2 converts an ImmutableMessage to ImmutableRefreshExternalCollectionMessageV2, panics on error
 var MustAsImmutableRefreshExternalCollectionMessageV2 = MustAsSpecializedImmutableMessage[*RefreshExternalCollectionMessageHeader, *RefreshExternalCollectionMessageBody]
-
-// MustAsRefCountedImmutableRefreshExternalCollectionMessageV2 converts an ImmutableMessage to RefCountedImmutableRefreshExternalCollectionMessageV2, panics on error
-var MustAsRefCountedImmutableRefreshExternalCollectionMessageV2 = MustAsRefCountedSpecializedImmutableMessage[*RefreshExternalCollectionMessageHeader, *RefreshExternalCollectionMessageBody]
-
-// MustAsRetainedImmutableRefreshExternalCollectionMessageV2 converts an ImmutableMessage to RetainedImmutableRefreshExternalCollectionMessageV2, panics on error
-var MustAsRetainedImmutableRefreshExternalCollectionMessageV2 = MustAsRetainedSpecializedImmutableMessage[*RefreshExternalCollectionMessageHeader, *RefreshExternalCollectionMessageBody]
 
 // AsBroadcastRefreshExternalCollectionMessageV2 converts a BasicMessage to BroadcastRefreshExternalCollectionMessageV2
 var AsBroadcastRefreshExternalCollectionMessageV2 = asSpecializedBroadcastMessage[*RefreshExternalCollectionMessageHeader, *RefreshExternalCollectionMessageBody]
