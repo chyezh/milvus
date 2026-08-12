@@ -166,7 +166,7 @@ func TestMustAsOwnedImmutableInsertMessageV1RejectsMismatchedOwner(t *testing.T)
 func TestMustAsOwnedImmutableTxnMessage(t *testing.T) {
 	txn := buildRefCountedTestTxn(t)
 	owner := NewOwnedImmutableMessage(txn, nil)
-	var owned OwnedImmutableTxnMessage = MustAsOwnedImmutableTxnMessage(owner)
+	owned := MustAsOwnedImmutableTxnMessage(owner)
 
 	assert.Same(t, txn, owned.Message())
 	retained := owned.Clone()
