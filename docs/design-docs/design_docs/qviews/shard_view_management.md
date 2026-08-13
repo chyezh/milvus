@@ -161,9 +161,13 @@ func newShardViewManager(
     ctx context.Context,
     shardID qviews.ShardID,
     eventSubmitter dirtyViewEventSubmitter,
-    recoveredViews []*viewpb.QueryViewOfShard,
+    dataViews dataview.ReferenceManager,
 ) *ShardViewManager
 ```
+
+`newShardViewManager` creates only an empty manager for a newly discovered
+shard. Recovery must use `RecoverShardViewManager`, which acquires the exact
+`DataViewRef` for every durable QueryView before registering it.
 
 External lifecycle operations remain:
 

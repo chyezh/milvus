@@ -24,3 +24,10 @@ func TestRecoverShardViewRegistryRejectsNilDataViewManager(t *testing.T) {
 	require.ErrorIs(t, err, merr.ErrServiceInternal)
 	require.Nil(t, registry)
 }
+
+func TestNewShardViewManagerCannotBypassReferenceRecovery(t *testing.T) {
+	constructor := reflect.TypeOf(newShardViewManager)
+
+	require.Equal(t, 4, constructor.NumIn(), "fresh manager construction must not accept recovered QueryViews")
+	require.Equal(t, reflect.TypeOf((*DataViewManager)(nil)).Elem(), constructor.In(3))
+}

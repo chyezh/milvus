@@ -79,49 +79,21 @@ type syncEntry struct {
 // newShardViewManager creates a new ShardViewManager for the given shard.
 //
 // ctx is the lifecycle context used by callbacks and event observation.
-// recoveredViews are views loaded from ETCD during crash recovery.
-// Unrecoverable views remain Unrecoverable after construction, waiting for
-// AddPreparing or RequestRelease to advance them to Dropping.
-// Active views in other states are emitted through eventSubmitter for the
-// DirtyViewFlushScheduler to persist and push to their target nodes.
+// New managers always start empty. Durable QueryViews must be restored through
+// RecoverShardViewManager so each view acquires its exact DataViewRef first.
 func newShardViewManager(
 	ctx context.Context,
 	shardID qviews.ShardID,
 	eventSubmitter dirtyViewEventSubmitter,
-	recoveredViews []*viewpb.QueryViewOfShard,
 	dataViews DataViewManager,
 ) *ShardViewManager {
-	m := &ShardViewManager{
+	return &ShardViewManager{
 		ctx:            ctx,
 		shardID:        shardID,
 		eventSubmitter: eventSubmitter,
-		views:          make(map[qviews.QueryViewVersion]*managedQueryView, len(recoveredViews)),
+		views:          make(map[qviews.QueryViewVersion]*managedQueryView),
 		dataViews:      dataViews,
 	}
-
-	// Recover state machines from persisted views.
-	recovered := make([]*managedQueryView, 0, len(recoveredViews))
-	for _, view := range recoveredViews {
-		sm := RecoverCoordQueryViewStateMachine(view)
-		managed := &managedQueryView{stateMachine: sm, dataViewRef: noopDataViewRef{}}
-		recovered = append(recovered, managed)
-		m.views[sm.Version()] = managed
-	}
-
-	// Sort by version ascending (older versions first) so that
-	// processStateMachine sees older views before newer ones,
-	// correctly setting preparingView/upView pointers.
-	sort.Slice(recovered, func(i, j int) bool {
-		return recovered[j].stateMachine.Version().GT(recovered[i].stateMachine.Version())
-	})
-
-	// Process each recovered view: handle Unrecoverable and push initial syncs.
-	// processStateMachine sets preparingView/upView as views are processed.
-	for _, managed := range recovered {
-		m.processStateMachine(managed)
-	}
-	m.submitDirtyEvent(m.consumeDirtyEventLocked())
-	return m
 }
 
 // RecoverShardViewManager restores a shard manager and rebuilds every durable

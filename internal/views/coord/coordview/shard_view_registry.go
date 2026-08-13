@@ -141,7 +141,7 @@ func (r *ShardViewRegistry) Ensure(shardID qviews.ShardID) *ShardViewManager {
 	}
 	r.mu.RUnlock()
 
-	mgr := newShardViewManager(r.ctx, shardID, r.flushScheduler, nil, r.dataViews)
+	mgr := newShardViewManager(r.ctx, shardID, r.flushScheduler, r.dataViews)
 	mgr.SetStatsObserver(r.onShardStatsChanged)
 	mgr.setOnEmpty(r.removeEmptyManager)
 	stats := emptyShardStats()

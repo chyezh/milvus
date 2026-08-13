@@ -322,8 +322,16 @@ func (m *testShardViewManager) waitFlush() {
 func newTestManager(t *testing.T, catalog *mockCatalog, s *mockSyncer, recovered ...*viewpb.QueryViewOfShard) *testShardViewManager {
 	t.Helper()
 	scheduler := newTestDirtyViewFlushScheduler(t, catalog, s, 128)
+	var shardManager *ShardViewManager
+	if len(recovered) > 0 {
+		var err error
+		shardManager, err = RecoverShardViewManager(context.Background(), testShardID, scheduler, noopTestDataViewManager{}, recovered)
+		require.NoError(t, err)
+	} else {
+		shardManager = newShardViewManager(context.Background(), testShardID, scheduler, noopTestDataViewManager{})
+	}
 	manager := &testShardViewManager{
-		ShardViewManager: newShardViewManager(context.Background(), testShardID, scheduler, recovered, noopTestDataViewManager{}),
+		ShardViewManager: shardManager,
 		t:                t,
 		scheduler:        scheduler,
 	}
@@ -338,7 +346,7 @@ func newTestManagerWithDataViewManager(t *testing.T, catalog *mockCatalog, s *mo
 	t.Helper()
 	scheduler := newTestDirtyViewFlushScheduler(t, catalog, s, 128)
 	manager := &testShardViewManager{
-		ShardViewManager: newShardViewManager(context.Background(), testShardID, scheduler, nil, dataViews),
+		ShardViewManager: newShardViewManager(context.Background(), testShardID, scheduler, dataViews),
 		t:                t,
 		scheduler:        scheduler,
 	}
@@ -435,7 +443,7 @@ func TestShardViewManagerDataViewRefGetDoesNotHoldManagerLock(t *testing.T) {
 func TestShardViewManagerCloseCannotFenceBetweenMutationAndSubmit(t *testing.T) {
 	dataViews := &testDataViewManager{refs: make(map[qviews.DataVersion][]*trackedDataViewRef)}
 	submit := &blockingDirtyViewSubmitter{started: make(chan struct{}), release: make(chan struct{})}
-	mgr := newShardViewManager(context.Background(), testShardID, submit, nil, dataViews)
+	mgr := newShardViewManager(context.Background(), testShardID, submit, dataViews)
 
 	addDone := make(chan error, 1)
 	go func() { addDone <- mgr.AddPreparing(context.Background(), testBuilder(1, 1, 1)) }()
@@ -1130,7 +1138,7 @@ func TestRecovery_PreparingView(t *testing.T) {
 	mgr.mu.Unlock()
 }
 
-func TestRecovery_UnrecoverableView(t *testing.T) {
+func TestRecovery_UnrecoverableViewAdvancesToDropping(t *testing.T) {
 	catalog := newMockCatalog()
 	s := newMockSyncer()
 
@@ -1139,15 +1147,15 @@ func TestRecovery_UnrecoverableView(t *testing.T) {
 	v1.Meta.State = viewpb.QueryViewState_QueryViewStateUnrecoverable
 	mgr := newTestManager(t, catalog, s, v1)
 
-	// Stays Unrecoverable, waits for AddPreparing to advance to Dropping.
+	// Recovery advances terminal work so cleanup resumes immediately.
 	ver1 := testVersion(1, 1, 1)
 	mgr.mu.Lock()
 	require.Len(t, mgr.views, 1)
-	assert.Equal(t, qviews.QueryViewStateUnrecoverable, mgr.views[ver1].State())
+	assert.Equal(t, qviews.QueryViewStateDropping, mgr.views[ver1].State())
 	mgr.mu.Unlock()
 
-	// No sync pushed.
-	assert.Equal(t, 0, s.syncViewCount())
+	// Dropping is re-pushed to SN and QN so durable cleanup can complete.
+	assert.Equal(t, 2, s.syncViewCount())
 }
 
 func TestRecovery_FastForward_SNReportsUp(t *testing.T) {
