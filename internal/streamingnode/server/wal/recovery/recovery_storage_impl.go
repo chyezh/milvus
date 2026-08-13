@@ -276,6 +276,9 @@ func (r *recoveryStorageImpl) VChannelManager() *vchannel.PChannelRecoveryManage
 func (r *recoveryStorageImpl) Close() {
 	r.backgroundTaskNotifier.Cancel()
 	r.backgroundTaskNotifier.BlockUntilFinish()
+	if r.broadcastAck != nil {
+		r.broadcastAck.Close()
+	}
 	if r.taskScheduler != nil {
 		r.taskScheduler.Close()
 	}
@@ -312,6 +315,10 @@ func (r *recoveryStorageImpl) consumeDirtySnapshot() *dirtyPersistSnapshot {
 			MessageID: frozenCheckpoint.MessageID,
 			TimeTick:  frozenCheckpoint.TimeTick,
 		}
+	}
+	if persistedCheckpoint != nil && persistedCheckpoint.DataCheckpoint != nil &&
+		!shouldAdvanceConsumePoint(*persistedCheckpoint.DataCheckpoint, completedPoint) {
+		completedPoint = *persistedCheckpoint.DataCheckpoint.Clone()
 	}
 	frozenCheckpoint.DataCheckpoint = completedPoint.Clone()
 	checkpointDirty := r.checkpointDirty || r.dirtyCounter > 0 ||

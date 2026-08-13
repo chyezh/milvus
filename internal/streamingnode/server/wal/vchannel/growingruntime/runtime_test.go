@@ -376,6 +376,48 @@ func TestRuntimeFlushedSegmentSkipsReplayUntilSafeToRelease(t *testing.T) {
 	require.Empty(t, runtime.SegmentIDs())
 }
 
+func TestRuntimeSkipsInsertCoveredBySegmentDataCheckpoint(t *testing.T) {
+	initSegcoreForRuntimeTest(t)
+
+	schema := mock_segcore.GenTestCollectionSchema("snview-segment-replay", schemapb.DataType_Int64, false)
+	runtime := newRuntime()
+	err := runtime.Prepare(context.Background(), walview.VChannelWALView{
+		CollectionID:        1,
+		VChannel:            "ch",
+		Schema:              schema,
+		BaseGrowingTimeTick: 30,
+		SegmentSnapshot: walview.VisibleSegmentSnapshot{
+			CollectionID:        1,
+			VChannel:            "ch",
+			BaseGrowingTimeTick: 30,
+			Segments: []walview.VisibleSegment{
+				{
+					SegmentID:   100,
+					PartitionID: 10,
+					Assignment: &streamingpb.SegmentAssignmentMeta{
+						CollectionId:           1,
+						Vchannel:               "ch",
+						DataCheckpointTimeTick: 100,
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	defer runtime.Close()
+
+	require.NotPanics(t, func() {
+		runtime.applyLiveMessage(context.Background(), newTestSegmentInsertMessage(t, "ch", 100, 2, 80, schema))
+	})
+	_, ok := runtime.Segment(100)
+	require.False(t, ok)
+
+	runtime.applyLiveMessage(context.Background(), newTestSegmentInsertMessage(t, "ch", 100, 2, 120, schema))
+	segment, ok := runtime.Segment(100)
+	require.True(t, ok)
+	require.Equal(t, int64(2), segment.RowNum())
+}
+
 func TestNewCollectionAppliesIndexMetaFromWALView(t *testing.T) {
 	initSegcoreForRuntimeTest(t)
 

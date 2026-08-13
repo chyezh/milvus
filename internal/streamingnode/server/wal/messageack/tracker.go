@@ -144,6 +144,19 @@ func (t *Tracker) completeLocked(entry *trackedEntry) (func(utility.WALConsumeCh
 	}
 	clear(t.pending[:completed])
 	t.pending = t.pending[completed:]
+	if !shouldAdvance(t.completedPoint, point) {
+		return nil, utility.WALConsumeCheckpoint{}, false
+	}
 	t.completedPoint = point
 	return t.onAdvance, point, true
+}
+
+func shouldAdvance(current, next utility.WALConsumeCheckpoint) bool {
+	if next.TimeTick != current.TimeTick {
+		return next.TimeTick > current.TimeTick
+	}
+	if current.MessageID == nil {
+		return next.MessageID != nil
+	}
+	return next.MessageID != nil && current.MessageID.LT(next.MessageID)
 }

@@ -3,6 +3,7 @@ package recovery
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/bytedance/mockey"
 	"github.com/cockroachdb/errors"
@@ -99,6 +100,7 @@ func TestBroadcastDataMessageCompletesAfterConsumersAndCoordinatorAck(t *testing
 	storage.modules = []moduleapi.Module{module}
 	scheduler := &recordingAckTaskScheduler{}
 	storage.broadcastAck = newBroadcastAckModule(moduleapi.Runtime{Scheduler: scheduler})
+	storage.broadcastAck.retryDelay = time.Millisecond
 	attempts := 0
 	storage.broadcastAck.ack = func(context.Context, message.ImmutableMessage) error {
 		attempts++
@@ -115,18 +117,19 @@ func TestBroadcastDataMessageCompletesAfterConsumersAndCoordinatorAck(t *testing
 	storage.observeDataScannerMessage(context.Background(), msg)
 
 	require.NotNil(t, module.handle)
-	require.Len(t, scheduler.tasks, 1)
+	require.Empty(t, scheduler.snapshot())
 	assert.Equal(t, uint64(10), storage.ackTracker.CompletedPoint().TimeTick)
-	require.ErrorIs(t, scheduler.tasks[0].Execute(context.Background()), nodescheduler.ErrDelay)
 	assert.Zero(t, attempts)
 
 	module.handle.Release()
 	assert.Equal(t, uint64(10), storage.ackTracker.CompletedPoint().TimeTick)
-	assert.Error(t, scheduler.tasks[0].Execute(context.Background()))
+	first := scheduler.waitTask(t)
+	require.NoError(t, first.Execute(context.Background()))
 	assert.Equal(t, 1, attempts)
 	assert.Equal(t, uint64(10), storage.ackTracker.CompletedPoint().TimeTick)
 
-	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
+	retry := scheduler.waitTaskAfter(t, 1)
+	require.NoError(t, retry.Execute(context.Background()))
 	assert.Equal(t, 2, attempts)
 	completed := storage.ackTracker.CompletedPoint()
 	assert.True(t, msg.LastConfirmedMessageID().EQ(completed.MessageID))
@@ -202,6 +205,33 @@ func TestDataScannerReplayDoesNotRegressMetaCheckpoint(t *testing.T) {
 	require.NotNil(t, snapshot.Checkpoint.DataCheckpoint)
 	assert.True(t, msg.LastConfirmedMessageID().EQ(snapshot.Checkpoint.DataCheckpoint.MessageID))
 	assert.Equal(t, uint64(20), snapshot.Checkpoint.DataCheckpoint.TimeTick)
+}
+
+func TestDataScannerReplayDoesNotRegressDataCheckpoint(t *testing.T) {
+	dataMessageID := walimplstest.NewTestMessageID(3)
+	checkpoint := &utility.WALCheckpoint{
+		MessageID: walimplstest.NewTestMessageID(4),
+		TimeTick:  40,
+		DataCheckpoint: &utility.WALConsumeCheckpoint{
+			MessageID: dataMessageID,
+			TimeTick:  30,
+		},
+	}
+	storage := newTestRecoveryStorage(t, checkpoint)
+	t.Cleanup(storage.metrics.Close)
+	storage.modules = []moduleapi.Module{&testRecoveryModule{}}
+
+	storage.observeDataScannerMessage(context.Background(), newAckTestTimeTickMessage(t, 20, 1))
+
+	completed := storage.ackTracker.CompletedPoint()
+	require.True(t, dataMessageID.EQ(completed.MessageID))
+	assert.Equal(t, uint64(30), completed.TimeTick)
+
+	snapshot := storage.consumeDirtySnapshot()
+	require.NotNil(t, snapshot)
+	require.NotNil(t, snapshot.Checkpoint.DataCheckpoint)
+	require.True(t, dataMessageID.EQ(snapshot.Checkpoint.DataCheckpoint.MessageID))
+	assert.Equal(t, uint64(30), snapshot.Checkpoint.DataCheckpoint.TimeTick)
 }
 
 func TestDataScannerAdvancesBothCheckpointsAcrossSameTimeTick(t *testing.T) {

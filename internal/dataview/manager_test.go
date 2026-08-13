@@ -24,6 +24,7 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/require"
+
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
@@ -847,6 +848,26 @@ func TestRecoveredManagerDuplicateFlushReturnsOriginalVersion(t *testing.T) {
 	require.NoError(t, err)
 	requireDataVersion(t, retried, 1, 0)
 	require.Len(t, catalog.views, 2)
+}
+
+func TestRecoveredManagerDoesNotInventUnknownSegmentJoinVersion(t *testing.T) {
+	ctx := context.Background()
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{
+			newTestDataView(1, 2, 0, newTestDataViewShard("ch-2", 20, 200)),
+		},
+	}
+	store := &fakeDataViewSegmentStore{segments: map[int64]*Segment{
+		100: newDataViewTestSegment(1, 10, 100, "ch-1", 1000),
+		200: newDataViewTestSegment(1, 20, 200, "ch-2", 2000),
+	}}
+	store.segments[100].State = commonpb.SegmentState_Dropped
+	manager, err := RecoverManager(ctx, catalog, store)
+	require.NoError(t, err)
+
+	version, err := manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})
+	require.NoError(t, err)
+	require.Nil(t, version)
 }
 
 func TestRepairPreservesKnownSegmentJoinVersionAfterOldViewIsCollected(t *testing.T) {

@@ -138,6 +138,26 @@ func TestTrackerCompletedPointReturnsCopy(t *testing.T) {
 	assert.Equal(t, uint64(10), tracker.CompletedPoint().TimeTick)
 }
 
+func TestTrackerCompletedPointDoesNotRegressOnReplay(t *testing.T) {
+	initial := utility.WALConsumeCheckpoint{
+		MessageID: walimplstest.NewTestMessageID(3),
+		TimeTick:  30,
+	}
+	advanceCount := 0
+	tracker := NewTracker(initial, func(utility.WALConsumeCheckpoint) {
+		advanceCount++
+	})
+
+	owner, _ := tracker.Track(testMessage(t, 1, 20))
+	owner.Release()
+
+	completed := tracker.CompletedPoint()
+	require.True(t, initial.MessageID.EQ(completed.MessageID))
+	assert.Equal(t, initial.TimeTick, completed.TimeTick)
+	assert.Zero(t, advanceCount)
+	assert.Zero(t, tracker.Pending())
+}
+
 func testMessage(t *testing.T, messageID int64, timetick uint64) message.ImmutableMessage {
 	t.Helper()
 	id := walimplstest.NewTestMessageID(messageID)

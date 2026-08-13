@@ -24,9 +24,10 @@ func (rs *recoveryStorageImpl) isDirty() bool {
 	rs.mu.Lock()
 	dirty := rs.dirtyCounter > 0 || rs.moduleDirty || rs.pendingSalvageCheckpoint != nil || rs.checkpointDirty
 	persistedCheckpoint := rs.persistedCheckpoint
+	ackTracker := rs.ackTracker
 	rs.mu.Unlock()
-	if !dirty && rs.ackTracker != nil {
-		completed := rs.ackTracker.CompletedPoint()
+	if !dirty && ackTracker != nil {
+		completed := ackTracker.CompletedPoint()
 		dirty = persistedCheckpoint == nil || !consumeCheckpointEqual(persistedCheckpoint.DataCheckpoint, &completed)
 	}
 	if dirty {

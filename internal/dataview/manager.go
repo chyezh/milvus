@@ -899,6 +899,8 @@ func (m *dataViewManager) applyMembershipMutation(ctx context.Context, mutation 
 		if mutation.returnSingleJoinVersion {
 			if joined := state.segmentJoinVersion[mutation.addSegmentIDs[0]]; joined != nil {
 				version = cloneDataVersion(joined)
+			} else {
+				version = nil
 			}
 		}
 		state.mu.Unlock()

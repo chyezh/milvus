@@ -2,6 +2,7 @@ package recovery
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -437,12 +438,53 @@ func TestInitialCheckpointFromLastTimeTickMessage(t *testing.T) {
 }
 
 type recordingAckTaskScheduler struct {
+	mu    sync.Mutex
 	tasks []nodescheduler.Task
+	ready chan struct{}
 }
 
 func (s *recordingAckTaskScheduler) Submit(task nodescheduler.Task) nodescheduler.TaskHandle {
+	s.mu.Lock()
 	s.tasks = append(s.tasks, task)
+	if s.ready != nil {
+		close(s.ready)
+	}
+	s.ready = make(chan struct{})
+	s.mu.Unlock()
 	return recordingAckTaskHandle{}
+}
+
+func (s *recordingAckTaskScheduler) snapshot() []nodescheduler.Task {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]nodescheduler.Task(nil), s.tasks...)
+}
+
+func (s *recordingAckTaskScheduler) waitTask(t *testing.T) nodescheduler.Task {
+	return s.waitTaskAfter(t, 0)
+}
+
+func (s *recordingAckTaskScheduler) waitTaskAfter(t *testing.T, index int) nodescheduler.Task {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		s.mu.Lock()
+		if len(s.tasks) > index {
+			task := s.tasks[index]
+			s.mu.Unlock()
+			return task
+		}
+		if s.ready == nil {
+			s.ready = make(chan struct{})
+		}
+		ready := s.ready
+		s.mu.Unlock()
+		select {
+		case <-ready:
+		case <-deadline:
+			t.Fatalf("timed out waiting for scheduled task %d", index)
+		}
+	}
 }
 
 type recordingAckTaskHandle struct{}

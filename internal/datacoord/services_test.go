@@ -491,6 +491,33 @@ func (s *ServerSuite) TestSaveBinlogPath_DroppedSegmentReturnsOriginalDataVersio
 	s.Equal([]FlushDataViewEvent{{CollectionID: 100, SegmentIDs: []int64{11}}}, manager.flushEvents)
 }
 
+func (s *ServerSuite) TestSaveBinlogPath_DroppedSegmentOmitsUnknownDataVersion() {
+	manager := &fakeGCDataViewManager{}
+	s.testServer.dataViewManager = manager
+	err := s.testServer.meta.AddSegment(context.TODO(), NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            11,
+		CollectionID:  100,
+		PartitionID:   10,
+		InsertChannel: "ch1",
+		State:         commonpb.SegmentState_Dropped,
+		Level:         datapb.SegmentLevel_L1,
+	}))
+	s.Require().NoError(err)
+
+	resp, err := s.testServer.SaveBinlogPaths(context.Background(), &datapb.SaveBinlogPathsRequest{
+		SegmentID:    11,
+		CollectionID: 100,
+		PartitionID:  10,
+		Channel:      "ch1",
+		SegLevel:     datapb.SegmentLevel_L1,
+		Flushed:      true,
+	})
+	s.Require().NoError(err)
+	s.Require().True(merr.Ok(resp))
+	s.Empty(resp.GetExtraInfo())
+	s.Equal([]FlushDataViewEvent{{CollectionID: 100, SegmentIDs: []int64{11}}}, manager.flushEvents)
+}
+
 func (s *ServerSuite) TestSaveBinlogPath_L0Segment() {
 	s.testServer.meta.AddCollection(&collectionInfo{ID: 0})
 	manager := &fakeGCDataViewManager{}
