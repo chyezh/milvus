@@ -204,6 +204,12 @@ func newMixCompactionTask(t *datapb.CompactionTask,
 }
 
 func (t *mixCompactionTask) processMetaSaved() bool {
+	if meta, ok := t.meta.(*meta); ok {
+		if err := meta.publishDataViewAfterCompaction(context.TODO(), t.GetTaskProto(), t.GetTaskProto().GetResultSegments()); err != nil {
+			mlog.Warn(context.TODO(), "mixCompactionTask failed to publish DataView", mlog.Err(err))
+			return false
+		}
+	}
 	if err := t.updateAndSaveTaskMeta(setState(datapb.CompactionTaskState_completed)); err != nil {
 		mlog.Warn(context.TODO(), "mixCompactionTask failed to proccessMetaSaved", mlog.Err(err))
 		return false

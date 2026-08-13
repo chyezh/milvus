@@ -79,7 +79,7 @@ func (s *L0CompactionTaskSuite) TestSaveSegmentMetaUsesAtomicDeltalogOperator() 
 	s.NoError(task.saveSegmentMeta(output))
 }
 
-func (s *L0CompactionTaskSuite) TestSaveSegmentMetaRefreshesDataViewAfterL0Compaction() {
+func (s *L0CompactionTaskSuite) TestSaveSegmentMetaDoesNotPublishMembershipAfterL0Compaction() {
 	ctx := context.Background()
 	meta, err := newMemoryMeta(s.T())
 	s.Require().NoError(err)
@@ -134,8 +134,8 @@ func (s *L0CompactionTaskSuite) TestSaveSegmentMetaRefreshesDataViewAfterL0Compa
 	}}
 
 	s.NoError(task.saveSegmentMeta(output))
-	s.Require().Len(manager.l0CompactEvents, 1)
-	s.EqualValues(1, manager.l0CompactEvents[0].CollectionID)
+	s.Empty(manager.publishedMutations)
+	s.Empty(manager.rewriteMutations)
 }
 
 func (s *L0CompactionTaskSuite) TestProcessRefreshPlan_NormalL0() {

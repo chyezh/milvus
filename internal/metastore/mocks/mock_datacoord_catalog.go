@@ -1239,6 +1239,65 @@ func (_c *DataCoordCatalog_GetCurrentPartitionStatsVersion_Call) RunAndReturn(ru
 	return _c
 }
 
+// GetDataViewVersionState provides a mock function with given fields: ctx, collectionID
+func (_m *DataCoordCatalog) GetDataViewVersionState(ctx context.Context, collectionID int64) (*viewpb.CollectionDataVersionState, error) {
+	ret := _m.Called(ctx, collectionID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetDataViewVersionState")
+	}
+
+	var r0 *viewpb.CollectionDataVersionState
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, int64) (*viewpb.CollectionDataVersionState, error)); ok {
+		return rf(ctx, collectionID)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, int64) *viewpb.CollectionDataVersionState); ok {
+		r0 = rf(ctx, collectionID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*viewpb.CollectionDataVersionState)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, int64) error); ok {
+		r1 = rf(ctx, collectionID)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// DataCoordCatalog_GetDataViewVersionState_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetDataViewVersionState'
+type DataCoordCatalog_GetDataViewVersionState_Call struct {
+	*mock.Call
+}
+
+// GetDataViewVersionState is a helper method to define mock.On call
+//   - ctx context.Context
+//   - collectionID int64
+func (_e *DataCoordCatalog_Expecter) GetDataViewVersionState(ctx interface{}, collectionID interface{}) *DataCoordCatalog_GetDataViewVersionState_Call {
+	return &DataCoordCatalog_GetDataViewVersionState_Call{Call: _e.mock.On("GetDataViewVersionState", ctx, collectionID)}
+}
+
+func (_c *DataCoordCatalog_GetDataViewVersionState_Call) Run(run func(ctx context.Context, collectionID int64)) *DataCoordCatalog_GetDataViewVersionState_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(int64))
+	})
+	return _c
+}
+
+func (_c *DataCoordCatalog_GetDataViewVersionState_Call) Return(_a0 *viewpb.CollectionDataVersionState, _a1 error) *DataCoordCatalog_GetDataViewVersionState_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *DataCoordCatalog_GetDataViewVersionState_Call) RunAndReturn(run func(context.Context, int64) (*viewpb.CollectionDataVersionState, error)) *DataCoordCatalog_GetDataViewVersionState_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ListAnalyzeTasks provides a mock function with given fields: ctx
 func (_m *DataCoordCatalog) ListAnalyzeTasks(ctx context.Context) ([]*indexpb.AnalyzeTask, error) {
 	ret := _m.Called(ctx)
@@ -2765,6 +2824,53 @@ func (_c *DataCoordCatalog_SaveDataView_Call) RunAndReturn(run func(context.Cont
 	return _c
 }
 
+// SaveDataViewVersionState provides a mock function with given fields: ctx, state
+func (_m *DataCoordCatalog) SaveDataViewVersionState(ctx context.Context, state *viewpb.CollectionDataVersionState) error {
+	ret := _m.Called(ctx, state)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SaveDataViewVersionState")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, *viewpb.CollectionDataVersionState) error); ok {
+		r0 = rf(ctx, state)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// DataCoordCatalog_SaveDataViewVersionState_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SaveDataViewVersionState'
+type DataCoordCatalog_SaveDataViewVersionState_Call struct {
+	*mock.Call
+}
+
+// SaveDataViewVersionState is a helper method to define mock.On call
+//   - ctx context.Context
+//   - state *viewpb.CollectionDataVersionState
+func (_e *DataCoordCatalog_Expecter) SaveDataViewVersionState(ctx interface{}, state interface{}) *DataCoordCatalog_SaveDataViewVersionState_Call {
+	return &DataCoordCatalog_SaveDataViewVersionState_Call{Call: _e.mock.On("SaveDataViewVersionState", ctx, state)}
+}
+
+func (_c *DataCoordCatalog_SaveDataViewVersionState_Call) Run(run func(ctx context.Context, state *viewpb.CollectionDataVersionState)) *DataCoordCatalog_SaveDataViewVersionState_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(*viewpb.CollectionDataVersionState))
+	})
+	return _c
+}
+
+func (_c *DataCoordCatalog_SaveDataViewVersionState_Call) Return(_a0 error) *DataCoordCatalog_SaveDataViewVersionState_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *DataCoordCatalog_SaveDataViewVersionState_Call) RunAndReturn(run func(context.Context, *viewpb.CollectionDataVersionState) error) *DataCoordCatalog_SaveDataViewVersionState_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // SaveDroppedSegmentsInBatch provides a mock function with given fields: ctx, segments
 func (_m *DataCoordCatalog) SaveDroppedSegmentsInBatch(ctx context.Context, segments []*datapb.SegmentInfo) error {
 	ret := _m.Called(ctx, segments)
@@ -3091,6 +3197,54 @@ func (_c *DataCoordCatalog_SavePreImportTask_Call) Return(_a0 error) *DataCoordC
 }
 
 func (_c *DataCoordCatalog_SavePreImportTask_Call) RunAndReturn(run func(context.Context, *datapb.PreImportTask) error) *DataCoordCatalog_SavePreImportTask_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// SavePublishedDataView provides a mock function with given fields: ctx, state, view
+func (_m *DataCoordCatalog) SavePublishedDataView(ctx context.Context, state *viewpb.CollectionDataVersionState, view *viewpb.DataViewOfCollection) error {
+	ret := _m.Called(ctx, state, view)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SavePublishedDataView")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, *viewpb.CollectionDataVersionState, *viewpb.DataViewOfCollection) error); ok {
+		r0 = rf(ctx, state, view)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// DataCoordCatalog_SavePublishedDataView_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SavePublishedDataView'
+type DataCoordCatalog_SavePublishedDataView_Call struct {
+	*mock.Call
+}
+
+// SavePublishedDataView is a helper method to define mock.On call
+//   - ctx context.Context
+//   - state *viewpb.CollectionDataVersionState
+//   - view *viewpb.DataViewOfCollection
+func (_e *DataCoordCatalog_Expecter) SavePublishedDataView(ctx interface{}, state interface{}, view interface{}) *DataCoordCatalog_SavePublishedDataView_Call {
+	return &DataCoordCatalog_SavePublishedDataView_Call{Call: _e.mock.On("SavePublishedDataView", ctx, state, view)}
+}
+
+func (_c *DataCoordCatalog_SavePublishedDataView_Call) Run(run func(ctx context.Context, state *viewpb.CollectionDataVersionState, view *viewpb.DataViewOfCollection)) *DataCoordCatalog_SavePublishedDataView_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(*viewpb.CollectionDataVersionState), args[2].(*viewpb.DataViewOfCollection))
+	})
+	return _c
+}
+
+func (_c *DataCoordCatalog_SavePublishedDataView_Call) Return(_a0 error) *DataCoordCatalog_SavePublishedDataView_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *DataCoordCatalog_SavePublishedDataView_Call) RunAndReturn(run func(context.Context, *viewpb.CollectionDataVersionState, *viewpb.DataViewOfCollection) error) *DataCoordCatalog_SavePublishedDataView_Call {
 	_c.Call.Return(run)
 	return _c
 }

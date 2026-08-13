@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
@@ -24,6 +26,7 @@ import (
 	"github.com/milvus-io/milvus/internal/coordinator/snmanager"
 	"github.com/milvus-io/milvus/internal/datacoord/allocator"
 	"github.com/milvus-io/milvus/internal/datacoord/broker"
+	"github.com/milvus-io/milvus/internal/dataview"
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
 	datacoordkv "github.com/milvus-io/milvus/internal/metastore/kv/datacoord"
@@ -43,12 +46,14 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/broadcast"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/registry"
 	"github.com/milvus-io/milvus/internal/types"
+	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/kv"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/workerpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	types2 "github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
@@ -63,6 +68,38 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/tsoutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
+
+type trackingDataViewManager struct {
+	DataViewManager
+	requestedCollectionID int64
+	requestedVersion      qviews.DataVersion
+	derefCount            int
+}
+
+func (m *trackingDataViewManager) Get(
+	ctx context.Context,
+	collectionID int64,
+	version qviews.DataVersion,
+) (dataview.DataViewRef, error) {
+	m.requestedCollectionID = collectionID
+	m.requestedVersion = version
+	ref, err := m.DataViewManager.Get(ctx, collectionID, version)
+	if err != nil {
+		return nil, err
+	}
+	return &trackingDataViewRef{DataViewRef: ref, onDeref: func() { m.derefCount++ }}, nil
+}
+
+type trackingDataViewRef struct {
+	dataview.DataViewRef
+	onDeref func()
+	once    sync.Once
+}
+
+func (r *trackingDataViewRef) Deref() {
+	r.DataViewRef.Deref()
+	r.once.Do(r.onDeref)
+}
 
 type ServerSuite struct {
 	suite.Suite
@@ -97,6 +134,137 @@ func (s *ServerSuite) TearDownTest() {
 
 func TestServerSuite(t *testing.T) {
 	suite.Run(t, new(ServerSuite))
+}
+
+func TestGetStreamingNodeQueryViewResourcesUsesExactDataViewRef(t *testing.T) {
+	ctx := context.Background()
+	meta, err := newMemoryMeta(t)
+	require.NoError(t, err)
+
+	segments := []*SegmentInfo{
+		NewSegmentInfo(&datapb.SegmentInfo{
+			ID:             100,
+			CollectionID:   1,
+			PartitionID:    10,
+			InsertChannel:  "ch-1",
+			State:          commonpb.SegmentState_Flushed,
+			Level:          datapb.SegmentLevel_L1,
+			StorageVersion: 11,
+			ManifestPath:   "manifest-100",
+			Bm25Statslogs: []*datapb.FieldBinlog{{
+				FieldID: 101,
+			}},
+		}),
+		NewSegmentInfo(&datapb.SegmentInfo{
+			ID:             200,
+			CollectionID:   1,
+			PartitionID:    20,
+			InsertChannel:  "ch-1",
+			State:          commonpb.SegmentState_Flushed,
+			Level:          datapb.SegmentLevel_L1,
+			StorageVersion: 22,
+			ManifestPath:   "manifest-200",
+		}),
+		NewSegmentInfo(&datapb.SegmentInfo{
+			ID:            300,
+			CollectionID:  1,
+			PartitionID:   10,
+			InsertChannel: "ch-2",
+			State:         commonpb.SegmentState_Flushed,
+			Level:         datapb.SegmentLevel_L1,
+		}),
+	}
+	for _, segment := range segments {
+		require.NoError(t, meta.AddSegment(ctx, segment))
+	}
+
+	realManager := newDataViewManager(meta.catalog, meta)
+	_, err = realManager.InitializeCollection(ctx, DataViewCollectionInitialization{
+		CollectionID: 1,
+		VChannels:    []string{"ch-1", "ch-2"},
+	})
+	require.NoError(t, err)
+	version, err := realManager.CommitStreamingView(ctx, 1, PublishedMutation{Add: []SegmentMembership{
+		{SegmentID: 100, CollectionID: 1, VChannel: "ch-1", PartitionID: 10, State: commonpb.SegmentState_Flushed, Level: datapb.SegmentLevel_L1},
+		{SegmentID: 200, CollectionID: 1, VChannel: "ch-1", PartitionID: 20, State: commonpb.SegmentState_Flushed, Level: datapb.SegmentLevel_L1},
+		{SegmentID: 300, CollectionID: 1, VChannel: "ch-2", PartitionID: 10, State: commonpb.SegmentState_Flushed, Level: datapb.SegmentLevel_L1},
+	}})
+	require.NoError(t, err)
+
+	manager := &trackingDataViewManager{DataViewManager: realManager}
+	server := &Server{meta: meta, dataViewManager: manager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	resp, err := server.GetStreamingNodeQueryViewResources(ctx, &datapb.GetStreamingNodeQueryViewResourcesRequest{
+		CollectionId: 1,
+		Vchannel:     "ch-1",
+		DataVersion:  version,
+		PartitionIds: []int64{10},
+	})
+	require.NoError(t, err)
+	require.NoError(t, merr.Error(resp.GetStatus()))
+	require.Equal(t, int64(1), manager.requestedCollectionID)
+	require.Equal(t, qviews.FromProtoDataVersion(version), manager.requestedVersion)
+	require.Equal(t, 1, manager.derefCount)
+	require.Equal(t, []*datapb.StreamingNodeBM25Resource{{
+		SegmentId:      100,
+		PartitionId:    10,
+		Bm25Binlogs:    segments[0].GetBm25Statslogs(),
+		StorageVersion: 11,
+		ManifestPath:   "manifest-100",
+	}}, resp.GetBm25Resources())
+}
+
+func TestGetStreamingNodeQueryViewResourcesUnavailableDataView(t *testing.T) {
+	ctx := context.Background()
+	meta, err := newMemoryMeta(t)
+	require.NoError(t, err)
+	manager := newDataViewManager(meta.catalog, meta)
+	version, err := manager.InitializeCollection(ctx, DataViewCollectionInitialization{CollectionID: 1, VChannels: []string{"ch-1"}})
+	require.NoError(t, err)
+	server := &Server{meta: meta, dataViewManager: manager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	t.Run("missing version", func(t *testing.T) {
+		resp, err := server.GetStreamingNodeQueryViewResources(ctx, &datapb.GetStreamingNodeQueryViewResourcesRequest{
+			CollectionId: 1,
+			Vchannel:     "ch-1",
+			DataVersion:  &viewpb.DataVersion{StreamingVersion: 99},
+		})
+		require.NoError(t, err)
+		require.Error(t, merr.Error(resp.GetStatus()))
+	})
+
+	t.Run("terminal collection", func(t *testing.T) {
+		err := manager.MarkCollectionTerminal(ctx, 1)
+		require.NoError(t, err)
+		resp, err := server.GetStreamingNodeQueryViewResources(ctx, &datapb.GetStreamingNodeQueryViewResourcesRequest{
+			CollectionId: 1,
+			Vchannel:     "ch-1",
+			DataVersion:  version,
+		})
+		require.NoError(t, err)
+		require.Error(t, merr.Error(resp.GetStatus()))
+	})
+}
+
+func TestGetStreamingNodeQueryViewResourcesRejectsMissingShard(t *testing.T) {
+	ctx := context.Background()
+	meta, err := newMemoryMeta(t)
+	require.NoError(t, err)
+	manager := newDataViewManager(meta.catalog, meta)
+	version, err := manager.InitializeCollection(ctx, DataViewCollectionInitialization{CollectionID: 1, VChannels: []string{"ch-1"}})
+	require.NoError(t, err)
+	server := &Server{meta: meta, dataViewManager: manager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	resp, err := server.GetStreamingNodeQueryViewResources(ctx, &datapb.GetStreamingNodeQueryViewResourcesRequest{
+		CollectionId: 1,
+		Vchannel:     "ch-missing",
+		DataVersion:  version,
+	})
+	require.NoError(t, err)
+	require.Error(t, merr.Error(resp.GetStatus()))
 }
 
 func (s *ServerSuite) TestGetFlushState_ByFlushTs() {
@@ -311,6 +479,13 @@ func (s *ServerSuite) TestSaveBinlogPath_StorageVersionImmutable() {
 
 func (s *ServerSuite) TestSaveBinlogPath_SaveDroppedSegment() {
 	s.testServer.meta.AddCollection(&collectionInfo{ID: 0})
+	manager := newDataViewManager(s.testServer.meta.catalog, s.testServer.meta)
+	s.testServer.dataViewManager = manager
+	_, err := manager.InitializeCollection(context.Background(), DataViewCollectionInitialization{
+		CollectionID: 0,
+		VChannels:    []string{"ch1"},
+	})
+	s.Require().NoError(err)
 
 	segments := map[int64]commonpb.SegmentState{
 		0: commonpb.SegmentState_Flushed,
@@ -348,6 +523,8 @@ func (s *ServerSuite) TestSaveBinlogPath_SaveDroppedSegment() {
 		{"segID=2, sealed to dropped", 2, false, true, 0, commonpb.SegmentState_Dropped},
 	}
 
+	paramtable.Get().Save(Params.DataCoordCfg.EnableSortCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableSortCompaction.Key)
 	paramtable.Get().Save(paramtable.Get().DataCoordCfg.EnableAutoCompaction.Key, "False")
 	defer paramtable.Get().Reset(paramtable.Get().DataCoordCfg.EnableAutoCompaction.Key)
 	for _, test := range tests {
@@ -512,8 +689,525 @@ func (s *ServerSuite) TestSaveBinlogPath_L0Segment() {
 	segment = s.testServer.meta.GetHealthySegment(context.TODO(), 1)
 	s.NotNil(segment)
 	s.EqualValues(datapb.SegmentLevel_L0, segment.GetLevel())
-	s.Empty(manager.l0CompactEvents)
-	s.Empty(manager.flushEvents)
+}
+
+func (s *ServerSuite) TestSaveBinlogPathsReturnsExactAssignedDataVersion() {
+	paramtable.Get().Save(Params.DataCoordCfg.EnableSortCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableSortCompaction.Key)
+	paramtable.Get().Save(Params.DataCoordCfg.EnableAutoCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableAutoCompaction.Key)
+
+	assigned := &viewpb.DataVersion{StreamingVersion: 7}
+	manager := &fakeGCDataViewManager{
+		assignedVersion:  assigned,
+		publishedVersion: proto.Clone(assigned).(*viewpb.DataVersion),
+	}
+	s.testServer.dataViewManager = manager
+	s.addSaveBinlogPathsDataVersionSegment(s.T(), 100)
+
+	resp, err := s.testServer.SaveBinlogPaths(context.Background(), saveBinlogPathsDataVersionRequest(100))
+	s.Require().NoError(err)
+	s.Require().NoError(merr.Error(resp))
+	s.Require().Equal("7", resp.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
+	s.Require().Equal("0", resp.GetExtraInfo()[statusExtraInfoDataViewCompactVersion])
+	s.Require().Equal([]int64{100}, manager.assignedSegments)
+	s.Require().Len(manager.publishedMutations, 1)
+	s.Require().Equal([]int64{100}, lo.Map(manager.publishedMutations[0].Add, func(membership dataview.SegmentMembership, _ int) int64 {
+		return membership.SegmentID
+	}))
+}
+
+func (s *ServerSuite) TestSaveBinlogPathsPersistsExactAssignedDataVersion() {
+	paramtable.Get().Save(Params.DataCoordCfg.EnableSortCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableSortCompaction.Key)
+	paramtable.Get().Save(Params.DataCoordCfg.EnableAutoCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableAutoCompaction.Key)
+
+	s.testServer.dataViewManager = newDataViewManager(s.testServer.meta.catalog, s.testServer.meta)
+	s.addSaveBinlogPathsDataVersionSegment(s.T(), 104)
+
+	resp, err := s.testServer.SaveBinlogPaths(context.Background(), saveBinlogPathsDataVersionRequest(104))
+	s.Require().NoError(err)
+	s.Require().NoError(merr.Error(resp))
+	s.Require().Equal("1", resp.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
+	s.Require().Equal("0", resp.GetExtraInfo()[statusExtraInfoDataViewCompactVersion])
+	s.Require().True(proto.Equal(
+		&viewpb.DataVersion{StreamingVersion: 1},
+		s.testServer.meta.GetSegment(context.Background(), 104).GetSealedAtDataVersion(),
+	))
+}
+
+func (s *ServerSuite) TestSaveBinlogPathsLostResponseRetryReturnsOriginalAssignedVersion() {
+	paramtable.Get().Save(Params.DataCoordCfg.EnableSortCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableSortCompaction.Key)
+	paramtable.Get().Save(Params.DataCoordCfg.EnableAutoCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableAutoCompaction.Key)
+
+	manager := newDataViewManager(s.testServer.meta.catalog, s.testServer.meta)
+	s.testServer.dataViewManager = manager
+	s.addSaveBinlogPathsDataVersionSegment(s.T(), 105)
+	s.addSaveBinlogPathsDataVersionSegment(s.T(), 106)
+
+	first, err := s.testServer.SaveBinlogPaths(context.Background(), saveBinlogPathsDataVersionRequest(105))
+	s.Require().NoError(err)
+	s.Require().NoError(merr.Error(first))
+	s.Require().Equal("1", first.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
+
+	second, err := s.testServer.SaveBinlogPaths(context.Background(), saveBinlogPathsDataVersionRequest(106))
+	s.Require().NoError(err)
+	s.Require().NoError(merr.Error(second))
+	s.Require().Equal("2", second.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
+
+	retried, err := s.testServer.SaveBinlogPaths(context.Background(), saveBinlogPathsDataVersionRequest(105))
+	s.Require().NoError(err)
+	s.Require().NoError(merr.Error(retried))
+	s.Require().Equal("1", retried.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
+
+	latest, err := latestPublishedDataView(context.Background(), manager, 1)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(2), latest.GetDataVersion().GetStreamingVersion())
+}
+
+func (s *ServerSuite) TestSaveBinlogPathsEmptyFlushCompletesAssignedVersionAndRetries() {
+	paramtable.Get().Save(Params.DataCoordCfg.EnableSortCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableSortCompaction.Key)
+	paramtable.Get().Save(Params.DataCoordCfg.EnableAutoCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableAutoCompaction.Key)
+
+	ctx := context.Background()
+	manager := newDataViewManager(s.testServer.meta.catalog, s.testServer.meta)
+	s.testServer.dataViewManager = manager
+	s.testServer.meta.AddCollection(&collectionInfo{ID: 1, VChannelNames: []string{"ch-1"}})
+	_, err := manager.InitializeCollection(ctx, DataViewCollectionInitialization{
+		CollectionID: 1,
+		VChannels:    []string{"ch-1"},
+	})
+	s.Require().NoError(err)
+	s.Require().NoError(s.testServer.meta.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            107,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-1",
+		State:         commonpb.SegmentState_Flushing,
+		Level:         datapb.SegmentLevel_L1,
+		NumOfRows:     0,
+	})))
+	request := &datapb.SaveBinlogPathsRequest{
+		SegmentID:    107,
+		CollectionID: 1,
+		PartitionID:  10,
+		SegLevel:     datapb.SegmentLevel_L1,
+		Flushed:      true,
+		CheckPoints: []*datapb.CheckPoint{{
+			SegmentID: 107,
+			NumOfRows: 0,
+		}},
+	}
+
+	first, err := s.testServer.SaveBinlogPaths(ctx, proto.Clone(request).(*datapb.SaveBinlogPathsRequest))
+	s.Require().NoError(err)
+	s.Require().NoError(merr.Error(first))
+	s.Require().Equal("2", first.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
+	s.Require().Equal(commonpb.SegmentState_Dropped, s.testServer.meta.GetSegment(ctx, 107).GetState())
+	s.Require().True(proto.Equal(
+		&viewpb.DataVersion{StreamingVersion: 2},
+		s.testServer.meta.GetSegment(ctx, 107).GetSealedAtDataVersion(),
+	))
+	state, err := s.testServer.meta.catalog.GetDataViewVersionState(ctx, 1)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(2), state.GetAllocatedStreamingVersion())
+	s.Require().True(proto.Equal(&viewpb.DataVersion{StreamingVersion: 2}, state.GetPublishedDataVersion()))
+
+	retried, err := s.testServer.SaveBinlogPaths(ctx, proto.Clone(request).(*datapb.SaveBinlogPathsRequest))
+	s.Require().NoError(err)
+	s.Require().NoError(merr.Error(retried))
+	s.Require().Equal("2", retried.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
+	state, err = s.testServer.meta.catalog.GetDataViewVersionState(ctx, 1)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(2), state.GetAllocatedStreamingVersion())
+
+	s.Require().NoError(s.testServer.meta.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            108,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-1",
+		State:         commonpb.SegmentState_Flushed,
+		Level:         datapb.SegmentLevel_L1,
+		NumOfRows:     1,
+	})))
+	later, err := s.testServer.meta.commitDataViewStreaming(ctx, 1, []int64{108})
+	s.Require().NoError(err)
+	s.Require().Equal(int64(3), later.GetStreamingVersion())
+	s.Require().Zero(later.GetCompactVersion())
+}
+
+func (s *ServerSuite) TestSaveBinlogPathsEmptyFlushRetryCompletesFailedPublication() {
+	paramtable.Get().Save(Params.DataCoordCfg.EnableSortCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableSortCompaction.Key)
+	paramtable.Get().Save(Params.DataCoordCfg.EnableAutoCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableAutoCompaction.Key)
+
+	ctx := context.Background()
+	catalog := &failPublishedDataViewCatalog{DataCoordCatalog: s.testServer.meta.catalog}
+	manager := newDataViewManager(catalog, s.testServer.meta)
+	s.testServer.dataViewManager = manager
+	s.testServer.meta.AddCollection(&collectionInfo{ID: 1, VChannelNames: []string{"ch-1"}})
+	_, err := manager.InitializeCollection(ctx, DataViewCollectionInitialization{
+		CollectionID: 1,
+		VChannels:    []string{"ch-1"},
+	})
+	s.Require().NoError(err)
+	s.Require().NoError(s.testServer.meta.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            109,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-1",
+		State:         commonpb.SegmentState_Flushing,
+		Level:         datapb.SegmentLevel_L1,
+		NumOfRows:     0,
+	})))
+	request := &datapb.SaveBinlogPathsRequest{
+		SegmentID:    109,
+		CollectionID: 1,
+		PartitionID:  10,
+		SegLevel:     datapb.SegmentLevel_L1,
+		Flushed:      true,
+		CheckPoints: []*datapb.CheckPoint{{
+			SegmentID: 109,
+			NumOfRows: 0,
+		}},
+	}
+	catalog.errOnce = errors.New("raw metastore publication failure")
+
+	first, err := s.testServer.SaveBinlogPaths(ctx, proto.Clone(request).(*datapb.SaveBinlogPathsRequest))
+	s.Require().NoError(err)
+	firstErr := merr.Error(first)
+	s.Require().ErrorIs(firstErr, merr.ErrServiceUnavailable)
+	s.Require().True(merr.IsRetryableErr(firstErr))
+	s.Require().Equal(commonpb.SegmentState_Dropped, s.testServer.meta.GetSegment(ctx, 109).GetState())
+	s.Require().True(proto.Equal(
+		&viewpb.DataVersion{StreamingVersion: 2},
+		s.testServer.meta.GetSegment(ctx, 109).GetSealedAtDataVersion(),
+	))
+	state, err := s.testServer.meta.catalog.GetDataViewVersionState(ctx, 1)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(2), state.GetAllocatedStreamingVersion())
+	s.Require().True(proto.Equal(&viewpb.DataVersion{StreamingVersion: 1}, state.GetPublishedDataVersion()))
+
+	retried, err := s.testServer.SaveBinlogPaths(ctx, proto.Clone(request).(*datapb.SaveBinlogPathsRequest))
+	s.Require().NoError(err)
+	s.Require().NoError(merr.Error(retried))
+	s.Require().Equal("2", retried.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
+	state, err = s.testServer.meta.catalog.GetDataViewVersionState(ctx, 1)
+	s.Require().NoError(err)
+	s.Require().True(proto.Equal(&viewpb.DataVersion{StreamingVersion: 2}, state.GetPublishedDataVersion()))
+
+	s.Require().NoError(s.testServer.meta.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            110,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-1",
+		State:         commonpb.SegmentState_Flushed,
+		Level:         datapb.SegmentLevel_L1,
+		NumOfRows:     1,
+	})))
+	later, err := s.testServer.meta.commitDataViewStreaming(ctx, 1, []int64{110})
+	s.Require().NoError(err)
+	s.Require().Equal(int64(3), later.GetStreamingVersion())
+	s.Require().Zero(later.GetCompactVersion())
+}
+
+func (s *ServerSuite) TestSaveBinlogPathsExplicitDroppedNonEmptyFlushCompletesAssignedVersion() {
+	paramtable.Get().Save(Params.DataCoordCfg.EnableSortCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableSortCompaction.Key)
+	paramtable.Get().Save(Params.DataCoordCfg.EnableAutoCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableAutoCompaction.Key)
+
+	ctx := context.Background()
+	manager := newDataViewManager(s.testServer.meta.catalog, s.testServer.meta)
+	s.testServer.dataViewManager = manager
+	s.testServer.meta.AddCollection(&collectionInfo{ID: 1, VChannelNames: []string{"ch-1"}})
+	_, err := manager.InitializeCollection(ctx, DataViewCollectionInitialization{
+		CollectionID: 1,
+		VChannels:    []string{"ch-1"},
+	})
+	s.Require().NoError(err)
+	s.Require().NoError(s.testServer.meta.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            114,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-1",
+		State:         commonpb.SegmentState_Flushing,
+		Level:         datapb.SegmentLevel_L1,
+		NumOfRows:     10,
+	})))
+	request := &datapb.SaveBinlogPathsRequest{
+		SegmentID:    114,
+		CollectionID: 1,
+		PartitionID:  10,
+		SegLevel:     datapb.SegmentLevel_L1,
+		Flushed:      true,
+		Dropped:      true,
+		CheckPoints: []*datapb.CheckPoint{{
+			SegmentID: 114,
+			NumOfRows: 10,
+		}},
+	}
+
+	first, err := s.testServer.SaveBinlogPaths(ctx, proto.Clone(request).(*datapb.SaveBinlogPathsRequest))
+	s.Require().NoError(err)
+	s.Require().NoError(merr.Error(first))
+	s.Require().Equal("2", first.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
+	s.Require().Equal(commonpb.SegmentState_Dropped, s.testServer.meta.GetSegment(ctx, 114).GetState())
+	state, err := s.testServer.meta.catalog.GetDataViewVersionState(ctx, 1)
+	s.Require().NoError(err)
+	s.Require().True(proto.Equal(&viewpb.DataVersion{StreamingVersion: 2}, state.GetPublishedDataVersion()))
+
+	retried, err := s.testServer.SaveBinlogPaths(ctx, proto.Clone(request).(*datapb.SaveBinlogPathsRequest))
+	s.Require().NoError(err)
+	s.Require().NoError(merr.Error(retried))
+	s.Require().Equal("2", retried.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
+
+	s.Require().NoError(s.testServer.meta.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            115,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-1",
+		State:         commonpb.SegmentState_Flushed,
+		Level:         datapb.SegmentLevel_L1,
+		NumOfRows:     1,
+	})))
+	later, err := s.testServer.meta.commitDataViewStreaming(ctx, 1, []int64{115})
+	s.Require().NoError(err)
+	s.Require().Equal(int64(3), later.GetStreamingVersion())
+	s.Require().Zero(later.GetCompactVersion())
+}
+
+func (s *ServerSuite) TestSaveBinlogPathsDroppedSegmentWithoutAssignmentRemainsCompatible() {
+	ctx := context.Background()
+	s.Require().NoError(s.testServer.meta.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            111,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-1",
+		State:         commonpb.SegmentState_Dropped,
+		Level:         datapb.SegmentLevel_L1,
+	})))
+
+	status, err := s.testServer.SaveBinlogPaths(ctx, &datapb.SaveBinlogPathsRequest{
+		SegmentID:    111,
+		CollectionID: 1,
+		PartitionID:  10,
+		SegLevel:     datapb.SegmentLevel_L1,
+		Flushed:      true,
+	})
+
+	s.Require().NoError(err)
+	s.Require().NoError(merr.Error(status))
+	s.Require().Empty(status.GetExtraInfo())
+}
+
+func (s *ServerSuite) TestSaveBinlogPathsDroppedRetryUsesDurableAssignedSnapshot() {
+	paramtable.Get().Save(Params.DataCoordCfg.EnableSortCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableSortCompaction.Key)
+	paramtable.Get().Save(Params.DataCoordCfg.EnableAutoCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableAutoCompaction.Key)
+
+	ctx := context.Background()
+	manager := newDataViewManager(s.testServer.meta.catalog, s.testServer.meta)
+	s.testServer.dataViewManager = manager
+	s.testServer.meta.AddCollection(&collectionInfo{ID: 1, VChannelNames: []string{"ch-1"}})
+	_, err := manager.InitializeCollection(ctx, DataViewCollectionInitialization{
+		CollectionID: 1,
+		VChannels:    []string{"ch-1"},
+	})
+	s.Require().NoError(err)
+	s.Require().NoError(s.testServer.meta.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            112,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-1",
+		State:         commonpb.SegmentState_Flushing,
+		Level:         datapb.SegmentLevel_L1,
+		NumOfRows:     10,
+	})))
+	request := &datapb.SaveBinlogPathsRequest{
+		SegmentID:    112,
+		CollectionID: 1,
+		PartitionID:  10,
+		SegLevel:     datapb.SegmentLevel_L1,
+		Flushed:      true,
+		CheckPoints: []*datapb.CheckPoint{{
+			SegmentID: 112,
+			NumOfRows: 10,
+		}},
+	}
+
+	first, err := s.testServer.SaveBinlogPaths(ctx, proto.Clone(request).(*datapb.SaveBinlogPathsRequest))
+	s.Require().NoError(err)
+	s.Require().NoError(merr.Error(first))
+	s.Require().Equal("2", first.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
+	viewsBeforeRetry, err := s.testServer.meta.catalog.ListDataViews(ctx, 1)
+	s.Require().NoError(err)
+	s.Require().Len(viewsBeforeRetry, 2)
+
+	s.Require().NoError(s.testServer.meta.UpdateSegmentsInfo(
+		ctx,
+		UpdateStatusOperator(112, commonpb.SegmentState_Dropped),
+	))
+
+	retried, err := s.testServer.SaveBinlogPaths(ctx, proto.Clone(request).(*datapb.SaveBinlogPathsRequest))
+	s.Require().NoError(err)
+	s.Require().NoError(merr.Error(retried))
+	s.Require().Equal("2", retried.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
+	state, err := s.testServer.meta.catalog.GetDataViewVersionState(ctx, 1)
+	s.Require().NoError(err)
+	s.Require().True(proto.Equal(&viewpb.DataVersion{StreamingVersion: 2}, state.GetPublishedDataVersion()))
+	viewsAfterRetry, err := s.testServer.meta.catalog.ListDataViews(ctx, 1)
+	s.Require().NoError(err)
+	s.Require().Len(viewsAfterRetry, len(viewsBeforeRetry))
+}
+
+func (s *ServerSuite) TestSaveBinlogPathsDroppedNonEmptyRetryRejectsOrphanAssignedSnapshot() {
+	ctx := context.Background()
+	manager := newDataViewManager(s.testServer.meta.catalog, s.testServer.meta)
+	s.testServer.dataViewManager = manager
+	s.testServer.meta.AddCollection(&collectionInfo{ID: 1, VChannelNames: []string{"ch-1"}})
+	_, err := manager.InitializeCollection(ctx, DataViewCollectionInitialization{
+		CollectionID: 1,
+		VChannels:    []string{"ch-1"},
+	})
+	s.Require().NoError(err)
+	s.Require().NoError(s.testServer.meta.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            113,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-1",
+		State:         commonpb.SegmentState_Flushing,
+		Level:         datapb.SegmentLevel_L1,
+		NumOfRows:     10,
+	})))
+	assigned, err := manager.AssignFlushVersion(ctx, 1, 113)
+	s.Require().NoError(err)
+	s.Require().True(proto.Equal(&viewpb.DataVersion{StreamingVersion: 2}, assigned))
+	s.Require().NoError(s.testServer.meta.catalog.SaveDataView(ctx, &viewpb.DataViewOfCollection{
+		CollectionId: 1,
+		DataVersion:  proto.Clone(assigned).(*viewpb.DataVersion),
+		Shards: []*viewpb.DataViewOfShard{{
+			Vchannel: "ch-1",
+			Partitions: []*viewpb.DataViewOfPartition{{
+				PartitionId: 10,
+				SegmentIds:  []int64{113},
+			}},
+		}},
+	}))
+	s.Require().NoError(s.testServer.meta.UpdateSegmentsInfo(
+		ctx,
+		UpdateStatusOperator(113, commonpb.SegmentState_Dropped),
+	))
+	s.testServer.dataViewManager = newDataViewManager(s.testServer.meta.catalog, s.testServer.meta)
+
+	status, err := s.testServer.SaveBinlogPaths(ctx, &datapb.SaveBinlogPathsRequest{
+		SegmentID:    113,
+		CollectionID: 1,
+		PartitionID:  10,
+		SegLevel:     datapb.SegmentLevel_L1,
+		Flushed:      true,
+	})
+
+	s.Require().NoError(err)
+	statusErr := merr.Error(status)
+	s.Require().Error(statusErr)
+	s.Require().True(merr.IsRetryableErr(statusErr))
+	state, err := s.testServer.meta.catalog.GetDataViewVersionState(ctx, 1)
+	s.Require().NoError(err)
+	s.Require().True(proto.Equal(&viewpb.DataVersion{StreamingVersion: 1}, state.GetPublishedDataVersion()))
+}
+
+func (s *ServerSuite) TestSaveBinlogPathsReturnsPublicationFailure() {
+	paramtable.Get().Save(Params.DataCoordCfg.EnableSortCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableSortCompaction.Key)
+	paramtable.Get().Save(Params.DataCoordCfg.EnableAutoCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableAutoCompaction.Key)
+
+	manager := &fakeGCDataViewManager{
+		assignedVersion:   &viewpb.DataVersion{StreamingVersion: 7},
+		publishVersionErr: merr.WrapErrServiceUnavailableMsg("publication failed"),
+	}
+	s.testServer.dataViewManager = manager
+	s.addSaveBinlogPathsDataVersionSegment(s.T(), 101)
+
+	resp, err := s.testServer.SaveBinlogPaths(context.Background(), saveBinlogPathsDataVersionRequest(101))
+	s.Require().NoError(err)
+	s.Require().ErrorIs(merr.Error(resp), merr.ErrServiceUnavailable)
+	s.Require().Empty(resp.GetExtraInfo())
+}
+
+func (s *ServerSuite) TestSaveBinlogPathsRejectsPublishedVersionMismatch() {
+	paramtable.Get().Save(Params.DataCoordCfg.EnableSortCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableSortCompaction.Key)
+	paramtable.Get().Save(Params.DataCoordCfg.EnableAutoCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableAutoCompaction.Key)
+
+	manager := &fakeGCDataViewManager{
+		assignedVersion:  &viewpb.DataVersion{StreamingVersion: 7},
+		publishedVersion: &viewpb.DataVersion{StreamingVersion: 8},
+	}
+	s.testServer.dataViewManager = manager
+	s.addSaveBinlogPathsDataVersionSegment(s.T(), 102)
+
+	resp, err := s.testServer.SaveBinlogPaths(context.Background(), saveBinlogPathsDataVersionRequest(102))
+	s.Require().NoError(err)
+	s.Require().ErrorIs(merr.Error(resp), merr.ErrDataIntegrity)
+	s.Require().Empty(resp.GetExtraInfo())
+}
+
+func (s *ServerSuite) TestSaveBinlogPathsDelayedFlushSkipsPublication() {
+	paramtable.Get().Save(Params.DataCoordCfg.EnableSortCompaction.Key, "true")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableSortCompaction.Key)
+	paramtable.Get().Save(Params.DataCoordCfg.EnableCompaction.Key, "true")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableCompaction.Key)
+	paramtable.Get().Save(Params.DataCoordCfg.EnableAutoCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableAutoCompaction.Key)
+
+	manager := &fakeGCDataViewManager{
+		assignedVersion:   &viewpb.DataVersion{StreamingVersion: 7},
+		publishVersionErr: merr.WrapErrServiceUnavailableMsg("must not publish delayed flush"),
+	}
+	s.testServer.dataViewManager = manager
+	s.addSaveBinlogPathsDataVersionSegment(s.T(), 103)
+
+	resp, err := s.testServer.SaveBinlogPaths(context.Background(), saveBinlogPathsDataVersionRequest(103))
+	s.Require().NoError(err)
+	s.Require().NoError(merr.Error(resp))
+	s.Require().Equal("7", resp.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
+	s.Require().True(s.testServer.meta.GetSegment(context.Background(), 103).GetIsInvisible())
+}
+
+func (s *ServerSuite) addSaveBinlogPathsDataVersionSegment(t *testing.T, segmentID int64) {
+	s.testServer.meta.AddCollection(&collectionInfo{ID: 1})
+	require.NoError(t, s.testServer.meta.AddSegment(context.Background(), NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            segmentID,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-1",
+		State:         commonpb.SegmentState_Sealed,
+		Level:         datapb.SegmentLevel_L1,
+		NumOfRows:     1,
+	})))
+}
+
+func saveBinlogPathsDataVersionRequest(segmentID int64) *datapb.SaveBinlogPathsRequest {
+	return &datapb.SaveBinlogPathsRequest{
+		SegmentID:    segmentID,
+		CollectionID: 1,
+		PartitionID:  10,
+		Flushed:      true,
+		CheckPoints: []*datapb.CheckPoint{{
+			SegmentID: segmentID,
+			NumOfRows: 1,
+		}},
+	}
 }
 
 func (s *ServerSuite) TestSaveBinlogPath_NormalCase() {
@@ -2388,6 +3082,9 @@ func TestServer_DropSegmentsByTime(t *testing.T) {
 		meta, err := newMemoryMeta(t)
 		assert.NoError(t, err)
 		s.meta = meta
+		manager := &fakeGCDataViewManager{}
+		s.dataViewManager = manager
+		meta.dataViewManager = manager
 
 		// Set channel checkpoint to satisfy WatchChannelCheckpoint
 		pos := &msgpb.MsgPosition{
@@ -2444,7 +3141,739 @@ func TestServer_DropSegmentsByTime(t *testing.T) {
 		seg2After := meta.GetSegment(ctx, seg2.ID)
 		assert.NotNil(t, seg2After)
 		assert.NotEqual(t, commonpb.SegmentState_Dropped, seg2After.GetState())
+		require.Len(t, manager.rewriteMutations, 1)
+		require.Equal(t, []int64{1}, manager.rewriteMutations[0].Remove)
 	})
+}
+
+func TestServer_NotifyDropPartitionCommitsRewriteAndRemovalFence(t *testing.T) {
+	ctx := context.Background()
+	meta, err := newMemoryMeta(t)
+	require.NoError(t, err)
+	meta.AddCollection(&collectionInfo{ID: 1, Partitions: []int64{10}})
+	require.NoError(t, meta.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            100,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-0",
+		State:         commonpb.SegmentState_Flushed,
+		Level:         datapb.SegmentLevel_L1,
+	})))
+	manager := &fakeGCDataViewManager{}
+	meta.dataViewManager = manager
+	segmentManager := NewMockManager(t)
+	segmentManager.EXPECT().DropSegmentsOfPartition(mock.Anything, "ch-0", []int64{10}).Once()
+	server := &Server{meta: meta, dataViewManager: manager, segmentManager: segmentManager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	err = server.NotifyDropPartition(ctx, "ch-0", []int64{10})
+
+	require.NoError(t, err)
+	require.Len(t, manager.rewriteMutations, 1)
+	require.Equal(t, []int64{100}, manager.rewriteMutations[0].Remove)
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
+}
+
+func TestServer_NotifyDropPartitionPublicationFailurePersistsRemovalFence(t *testing.T) {
+	ctx := context.Background()
+	meta, err := newMemoryMeta(t)
+	require.NoError(t, err)
+	meta.AddCollection(&collectionInfo{ID: 1, Partitions: []int64{10}})
+	require.NoError(t, meta.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            100,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-0",
+		State:         commonpb.SegmentState_Flushed,
+		Level:         datapb.SegmentLevel_L1,
+	})))
+	manager := &fakeGCDataViewManager{publishVersionErr: merr.WrapErrServiceUnavailableMsg("publication failed")}
+	meta.dataViewManager = manager
+	server := &Server{meta: meta, dataViewManager: manager, segmentManager: NewMockManager(t)}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	err = server.NotifyDropPartition(ctx, "ch-0", []int64{10})
+
+	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
+}
+
+func TestServer_NotifyDropPartitionCompletesTargetedAssignedEpochAfterRemovalFence(t *testing.T) {
+	ctx := context.Background()
+	meta, manager, catalog := newDDLTrimDataViewTest(t)
+	addDDLTrimSegment(t, meta, 100, 10, "ch-0", 100)
+	assigned := assignDDLTrimSegment(t, manager, 100, 2)
+	catalog.errOnce = errors.New("raw metastore publication failure")
+	_, err := manager.CommitPublishedView(ctx, 1, assigned, PublishedMutation{
+		Add: []SegmentMembership{publishedSegmentMembership(meta.GetSegment(ctx, 100))},
+	})
+	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+
+	segmentManager := NewMockManager(t)
+	segmentManager.EXPECT().DropSegmentsOfPartition(mock.Anything, "ch-0", []int64{10}).Once()
+	server := &Server{meta: meta, dataViewManager: manager, segmentManager: segmentManager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	err = server.NotifyDropPartition(ctx, "ch-0", []int64{10})
+
+	require.NoError(t, err)
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
+	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 0)
+	visible, err := latestPublishedDataView(ctx, manager, 1)
+	require.NoError(t, err)
+	require.Empty(t, visible.GetShards())
+
+	addDDLTrimSegment(t, meta, 200, 20, "ch-0", 200)
+	later, err := meta.commitDataViewStreaming(ctx, 1, []int64{200})
+	require.NoError(t, err)
+	require.EqualValues(t, 3, later.GetStreamingVersion())
+}
+
+func TestServer_DropSegmentsByTimeCompletesTargetedAssignedEpochAfterRemovalFence(t *testing.T) {
+	ctx := context.Background()
+	meta, manager, catalog := newDDLTrimDataViewTest(t)
+	addDDLTrimSegment(t, meta, 100, 10, "ch-0", 900)
+	assigned := assignDDLTrimSegment(t, manager, 100, 2)
+	catalog.errOnce = errors.New("raw metastore publication failure")
+	_, err := manager.CommitPublishedView(ctx, 1, assigned, PublishedMutation{
+		Add: []SegmentMembership{publishedSegmentMembership(meta.GetSegment(ctx, 100))},
+	})
+	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+	require.NoError(t, meta.UpdateChannelCheckpoint(ctx, "ch-0", &msgpb.MsgPosition{
+		ChannelName: "ch-0",
+		MsgID:       []byte{0},
+		Timestamp:   1000,
+	}))
+	server := &Server{meta: meta, dataViewManager: manager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	err = server.DropSegmentsByTime(ctx, 1, map[string]uint64{"ch-0": 1000})
+
+	require.NoError(t, err)
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
+	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 0)
+
+	addDDLTrimSegment(t, meta, 200, 20, "ch-0", 1100)
+	later, err := meta.commitDataViewStreaming(ctx, 1, []int64{200})
+	require.NoError(t, err)
+	require.EqualValues(t, 3, later.GetStreamingVersion())
+}
+
+func TestServer_DropSegmentsByTimeRemovalFenceSurvivesPublicationFailureAndRestart(t *testing.T) {
+	ctx := context.Background()
+	meta, manager, catalog := newDDLTrimDataViewTest(t)
+	addDDLTrimSegment(t, meta, 100, 10, "ch-0", 900)
+	assignDDLTrimSegment(t, manager, 100, 2)
+	require.NoError(t, meta.UpdateChannelCheckpoint(ctx, "ch-0", &msgpb.MsgPosition{
+		ChannelName: "ch-0",
+		MsgID:       []byte{0},
+		Timestamp:   1000,
+	}))
+	server := &Server{meta: meta, dataViewManager: manager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+	catalog.errOnce = errors.New("publication failure after trim removal fence")
+
+	err := server.DropSegmentsByTime(ctx, 1, map[string]uint64{"ch-0": 1000})
+
+	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
+	requireLatestPublishedDataViewVersion(t, meta, 1, 1, 0)
+
+	recoveryCatalog, ok := meta.catalog.(dataview.RecoveryCatalog)
+	require.True(t, ok)
+	restarted, err := dataview.RecoverManager(ctx, recoveryCatalog, &dataViewSegmentStore{meta: meta})
+	require.NoError(t, err)
+	meta.dataViewManager = restarted
+	state, err := meta.catalog.GetDataViewVersionState(ctx, 1)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, state.GetPublishedDataVersion().GetStreamingVersion())
+	visible, err := latestPublishedDataView(ctx, restarted, 1)
+	require.NoError(t, err)
+	require.Empty(t, dataViewShardSegmentIDs(dataViewShard(visible, "ch-0"), nil))
+
+	server.dataViewManager = restarted
+	require.NoError(t, server.DropSegmentsByTime(ctx, 1, map[string]uint64{"ch-0": 1000}))
+	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 0)
+	visible, err = latestPublishedDataView(ctx, restarted, 1)
+	require.NoError(t, err)
+	require.Empty(t, dataViewShardSegmentIDs(dataViewShard(visible, "ch-0"), nil))
+}
+
+func TestServer_NotifyDropPartitionRemovalFenceKeepsPublishedViewUntilRetry(t *testing.T) {
+	ctx := context.Background()
+	meta, manager, catalog := newDDLTrimDataViewTest(t)
+	addDDLTrimSegment(t, meta, 100, 10, "ch-0", 100)
+	assigned := assignDDLTrimSegment(t, manager, 100, 2)
+	_, err := manager.CommitPublishedView(ctx, 1, assigned, PublishedMutation{
+		Add: []SegmentMembership{publishedSegmentMembership(meta.GetSegment(ctx, 100))},
+	})
+	require.NoError(t, err)
+	catalog.errOnce = errors.New("publication failure after trim removal fence")
+	segmentManager := NewMockManager(t)
+	segmentManager.EXPECT().DropSegmentsOfPartition(mock.Anything, "ch-0", []int64{10}).Once()
+	server := &Server{meta: meta, dataViewManager: manager, segmentManager: segmentManager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	err = server.NotifyDropPartition(ctx, "ch-0", []int64{10})
+
+	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
+	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 0)
+	visible, err := latestPublishedDataView(ctx, manager, 1)
+	require.NoError(t, err)
+	require.Equal(t, []int64{100}, visible.GetShards()[0].GetPartitions()[0].GetSegmentIds())
+
+	require.NoError(t, server.NotifyDropPartition(ctx, "ch-0", []int64{10}))
+	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 1)
+	visible, err = latestPublishedDataView(ctx, manager, 1)
+	require.NoError(t, err)
+	require.Empty(t, visible.GetShards())
+}
+
+func TestServer_NotifyDropPartitionDoesNotOvertakeEarlierNonTargetedAssignedEpoch(t *testing.T) {
+	ctx := context.Background()
+	meta, manager, _ := newDDLTrimDataViewTest(t)
+	addDDLTrimSegment(t, meta, 100, 20, "ch-0", 100)
+	assignDDLTrimSegment(t, manager, 100, 2)
+	addDDLTrimSegment(t, meta, 200, 10, "ch-0", 200)
+	assignDDLTrimSegment(t, manager, 200, 3)
+
+	segmentManager := NewMockManager(t)
+	segmentManager.EXPECT().DropSegmentsOfPartition(mock.Anything, "ch-0", []int64{10}).Maybe()
+	server := &Server{meta: meta, dataViewManager: manager, segmentManager: segmentManager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	err := server.NotifyDropPartition(ctx, "ch-0", []int64{10})
+
+	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+	require.True(t, merr.IsRetryableErr(err))
+	require.Equal(t, commonpb.SegmentState_Flushed, meta.GetSegment(ctx, 200).GetState())
+	requireLatestPublishedDataViewVersion(t, meta, 1, 1, 0)
+}
+
+func TestServer_NotifyDropPartitionCompletesTargetBeforeUnrelatedLaterAssignedEpoch(t *testing.T) {
+	ctx := context.Background()
+	meta, manager, _ := newDDLTrimDataViewTest(t)
+	addDDLTrimSegment(t, meta, 100, 10, "ch-0", 100)
+	assignDDLTrimSegment(t, manager, 100, 2)
+	addDDLTrimSegment(t, meta, 200, 20, "ch-0", 200)
+	laterAssigned := assignDDLTrimSegment(t, manager, 200, 3)
+
+	segmentManager := NewMockManager(t)
+	segmentManager.EXPECT().DropSegmentsOfPartition(mock.Anything, "ch-0", []int64{10}).Once()
+	server := &Server{meta: meta, dataViewManager: manager, segmentManager: segmentManager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	err := server.NotifyDropPartition(ctx, "ch-0", []int64{10})
+
+	require.NoError(t, err)
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
+	require.Equal(t, commonpb.SegmentState_Flushed, meta.GetSegment(ctx, 200).GetState())
+	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 0)
+	published, err := manager.CommitPublishedView(ctx, 1, laterAssigned, PublishedMutation{
+		Add: []SegmentMembership{publishedSegmentMembership(meta.GetSegment(ctx, 200))},
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 3, published.GetStreamingVersion())
+}
+
+func TestServer_NotifyDropPartitionCompactRemovesAlreadyPublishedTarget(t *testing.T) {
+	ctx := context.Background()
+	meta, manager, _ := newDDLTrimDataViewTest(t)
+	addDDLTrimSegment(t, meta, 100, 10, "ch-0", 100)
+	assigned := assignDDLTrimSegment(t, manager, 100, 2)
+	_, err := manager.CommitPublishedView(ctx, 1, assigned, PublishedMutation{
+		Add: []SegmentMembership{publishedSegmentMembership(meta.GetSegment(ctx, 100))},
+	})
+	require.NoError(t, err)
+
+	segmentManager := NewMockManager(t)
+	segmentManager.EXPECT().DropSegmentsOfPartition(mock.Anything, "ch-0", []int64{10}).Once()
+	server := &Server{meta: meta, dataViewManager: manager, segmentManager: segmentManager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	err = server.NotifyDropPartition(ctx, "ch-0", []int64{10})
+
+	require.NoError(t, err)
+	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 1)
+	visible, err := latestPublishedDataView(ctx, manager, 1)
+	require.NoError(t, err)
+	require.Empty(t, visible.GetShards())
+}
+
+func TestServer_NotifyDropPartitionRefreshesDurableAssignedPublicationBeforeTrim(t *testing.T) {
+	ctx := context.Background()
+	meta, manager, catalog := newDDLTrimDataViewTest(t)
+	addDDLTrimSegment(t, meta, 100, 10, "ch-0", 100)
+	assigned := assignDDLTrimSegment(t, manager, 100, 2)
+	catalog.persistThenErrOnce = errors.New("lost publication response")
+	_, err := manager.CommitPublishedView(ctx, 1, assigned, PublishedMutation{
+		Add: []SegmentMembership{publishedSegmentMembership(meta.GetSegment(ctx, 100))},
+	})
+	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 0)
+
+	segmentManager := NewMockManager(t)
+	segmentManager.EXPECT().DropSegmentsOfPartition(mock.Anything, "ch-0", []int64{10}).Once()
+	server := &Server{meta: meta, dataViewManager: manager, segmentManager: segmentManager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	err = server.NotifyDropPartition(ctx, "ch-0", []int64{10})
+
+	require.NoError(t, err)
+	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 1)
+	visible, err := latestPublishedDataView(ctx, manager, 1)
+	require.NoError(t, err)
+	require.Empty(t, visible.GetShards())
+}
+
+func TestServer_NotifyDropPartitionDropsUnassignedSegmentWithoutStreamingAdvance(t *testing.T) {
+	ctx := context.Background()
+	meta, manager, _ := newDDLTrimDataViewTest(t)
+	addDDLTrimSegment(t, meta, 100, 10, "ch-0", 100)
+	segment := meta.GetSegment(ctx, 100).Clone()
+	segment.IsImporting = true
+	meta.segments.SetSegment(100, segment)
+
+	segmentManager := NewMockManager(t)
+	segmentManager.EXPECT().DropSegmentsOfPartition(mock.Anything, "ch-0", []int64{10}).Once()
+	server := &Server{meta: meta, dataViewManager: manager, segmentManager: segmentManager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	err := server.NotifyDropPartition(ctx, "ch-0", []int64{10})
+
+	require.NoError(t, err)
+	require.Nil(t, meta.GetSegment(ctx, 100).GetSealedAtDataVersion())
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
+	state, err := meta.catalog.GetDataViewVersionState(ctx, 1)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, state.GetPublishedDataVersion().GetStreamingVersion())
+}
+
+func TestServer_NotifyDropPartitionRereadsAssignmentAfterAdapterSnapshot(t *testing.T) {
+	ctx := context.Background()
+	meta, realManager, _ := newDDLTrimDataViewTest(t)
+	addDDLTrimSegment(t, meta, 100, 10, "ch-0", 100)
+	beforeCore := make(chan struct{})
+	continueCore := make(chan struct{})
+	manager := &blockingDDLTrimDataViewManager{
+		DataViewManager: realManager,
+		beforeCore:      beforeCore,
+		continueCore:    continueCore,
+	}
+	meta.dataViewManager = manager
+	segmentManager := NewMockManager(t)
+	segmentManager.EXPECT().DropSegmentsOfPartition(mock.Anything, "ch-0", []int64{10}).Once()
+	server := &Server{meta: meta, dataViewManager: manager, segmentManager: segmentManager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	trimDone := make(chan error, 1)
+	go func() {
+		trimDone <- server.NotifyDropPartition(ctx, "ch-0", []int64{10})
+	}()
+	waitDDLTrimSignal(t, beforeCore)
+	assigned := assignDDLTrimSegment(t, realManager, 100, 2)
+	close(continueCore)
+
+	require.NoError(t, <-trimDone)
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
+	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 0)
+	visible, err := latestPublishedDataView(ctx, realManager, 1)
+	require.NoError(t, err)
+	require.Empty(t, visible.GetShards())
+	require.EqualValues(t, 2, assigned.GetStreamingVersion())
+
+	addDDLTrimSegment(t, meta, 200, 20, "ch-0", 200)
+	later, err := meta.commitDataViewStreaming(ctx, 1, []int64{200})
+	require.NoError(t, err)
+	require.EqualValues(t, 3, later.GetStreamingVersion())
+}
+
+func TestServer_NotifyDropPartitionKeepsLockThroughMetadataFinalize(t *testing.T) {
+	ctx := context.Background()
+	meta, realManager, _ := newDDLTrimDataViewTest(t)
+	addDDLTrimSegment(t, meta, 100, 10, "ch-0", 100)
+	beforeFinalize := make(chan struct{})
+	continueFinalize := make(chan struct{})
+	manager := &blockingDDLTrimDataViewManager{
+		DataViewManager:  realManager,
+		beforeFinalize:   beforeFinalize,
+		continueFinalize: continueFinalize,
+	}
+	meta.dataViewManager = manager
+	segmentManager := NewMockManager(t)
+	segmentManager.EXPECT().DropSegmentsOfPartition(mock.Anything, "ch-0", []int64{10}).Once()
+	server := &Server{meta: meta, dataViewManager: manager, segmentManager: segmentManager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	trimDone := make(chan error, 1)
+	go func() {
+		trimDone <- server.NotifyDropPartition(ctx, "ch-0", []int64{10})
+	}()
+	waitDDLTrimSignal(t, beforeFinalize)
+	type assignmentResult struct {
+		version *viewpb.DataVersion
+		err     error
+	}
+	assignmentStarted := make(chan struct{})
+	assignmentDone := make(chan assignmentResult, 1)
+	go func() {
+		close(assignmentStarted)
+		version, err := realManager.AssignFlushVersion(ctx, 1, 100)
+		assignmentDone <- assignmentResult{version: version, err: err}
+	}()
+	waitDDLTrimSignal(t, assignmentStarted)
+	select {
+	case result := <-assignmentDone:
+		require.FailNowf(t, "flush assignment completed while metadata finalization was paused", "result: %+v", result)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(continueFinalize)
+
+	require.NoError(t, <-trimDone)
+	result := <-assignmentDone
+	require.Error(t, result.err)
+	require.Nil(t, result.version)
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
+	require.Nil(t, meta.GetSegment(ctx, 100).GetSealedAtDataVersion())
+	requireLatestPublishedDataViewVersion(t, meta, 1, 1, 0)
+
+	addDDLTrimSegment(t, meta, 200, 20, "ch-0", 200)
+	later, err := meta.commitDataViewStreaming(ctx, 1, []int64{200})
+	require.NoError(t, err)
+	require.EqualValues(t, 2, later.GetStreamingVersion())
+}
+
+func TestServer_NotifyDropPartitionRefreshesTargetsAfterPreLockEnumeration(t *testing.T) {
+	ctx := context.Background()
+	meta, realManager, _ := newDDLTrimDataViewTest(t)
+	addDDLTrimSegment(t, meta, 100, 10, "ch-0", 100)
+	assigned := assignDDLTrimSegment(t, realManager, 100, 2)
+	_, err := realManager.CommitPublishedView(ctx, 1, assigned, PublishedMutation{
+		Add: []SegmentMembership{publishedSegmentMembership(meta.GetSegment(ctx, 100))},
+	})
+	require.NoError(t, err)
+
+	beforeCore := make(chan struct{})
+	continueCore := make(chan struct{})
+	manager := &blockingDDLTrimDataViewManager{
+		DataViewManager: realManager,
+		beforeCore:      beforeCore,
+		continueCore:    continueCore,
+	}
+	meta.dataViewManager = manager
+	segmentManager := NewMockManager(t)
+	segmentManager.EXPECT().DropSegmentsOfPartition(mock.Anything, "ch-0", []int64{10}).Once()
+	server := &Server{meta: meta, dataViewManager: manager, segmentManager: segmentManager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	trimDone := make(chan error, 1)
+	go func() {
+		trimDone <- server.NotifyDropPartition(ctx, "ch-0", []int64{10})
+	}()
+	waitDDLTrimSignal(t, beforeCore)
+
+	addDDLTrimSegment(t, meta, 200, 10, "ch-0", 200)
+	rewritten, err := realManager.CommitRewrite(ctx, 1, PublishedMutation{
+		Add:    []SegmentMembership{publishedSegmentMembership(meta.GetSegment(ctx, 200))},
+		Remove: []int64{100},
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 2, rewritten.GetStreamingVersion())
+	require.EqualValues(t, 1, rewritten.GetCompactVersion())
+	close(continueCore)
+
+	require.NoError(t, <-trimDone)
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 200).GetState())
+	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 2)
+	visible, err := latestPublishedDataView(ctx, realManager, 1)
+	require.NoError(t, err)
+	require.Empty(t, visible.GetShards())
+}
+
+func TestServer_DropSegmentsByTimeRefreshesTargetsAfterPreLockEnumeration(t *testing.T) {
+	ctx := context.Background()
+	meta, realManager, _ := newDDLTrimDataViewTest(t)
+	addDDLTrimSegment(t, meta, 100, 10, "ch-0", 900)
+	assigned := assignDDLTrimSegment(t, realManager, 100, 2)
+	_, err := realManager.CommitPublishedView(ctx, 1, assigned, PublishedMutation{
+		Add: []SegmentMembership{publishedSegmentMembership(meta.GetSegment(ctx, 100))},
+	})
+	require.NoError(t, err)
+	require.NoError(t, meta.UpdateChannelCheckpoint(ctx, "ch-0", &msgpb.MsgPosition{
+		ChannelName: "ch-0",
+		MsgID:       []byte{0},
+		Timestamp:   1000,
+	}))
+
+	beforeCore := make(chan struct{})
+	continueCore := make(chan struct{})
+	manager := &blockingDDLTrimDataViewManager{
+		DataViewManager: realManager,
+		beforeCore:      beforeCore,
+		continueCore:    continueCore,
+	}
+	meta.dataViewManager = manager
+	server := &Server{meta: meta, dataViewManager: manager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	trimDone := make(chan error, 1)
+	go func() {
+		trimDone <- server.DropSegmentsByTime(ctx, 1, map[string]uint64{"ch-0": 1000})
+	}()
+	waitDDLTrimSignal(t, beforeCore)
+
+	addDDLTrimSegment(t, meta, 200, 10, "ch-0", 900)
+	rewritten, err := realManager.CommitRewrite(ctx, 1, PublishedMutation{
+		Add:    []SegmentMembership{publishedSegmentMembership(meta.GetSegment(ctx, 200))},
+		Remove: []int64{100},
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 2, rewritten.GetStreamingVersion())
+	require.EqualValues(t, 1, rewritten.GetCompactVersion())
+	close(continueCore)
+
+	require.NoError(t, <-trimDone)
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 200).GetState())
+	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 2)
+	visible, err := latestPublishedDataView(ctx, realManager, 1)
+	require.NoError(t, err)
+	require.Empty(t, visible.GetShards())
+}
+
+func TestServer_NotifyDropPartitionDoesNotFinalizeLaterCollectionBeforeItsDataView(t *testing.T) {
+	ctx := context.Background()
+	meta, err := newMemoryMeta(t)
+	require.NoError(t, err)
+	for collectionID, channel := range map[int64]string{1: "ch-1", 2: "ch-2"} {
+		meta.AddCollection(&collectionInfo{
+			ID:            collectionID,
+			Partitions:    []int64{10},
+			VChannelNames: []string{channel},
+		})
+	}
+	manager := newDataViewManager(meta.catalog, meta)
+	meta.dataViewManager = manager
+	for collectionID, channel := range map[int64]string{1: "ch-1", 2: "ch-2"} {
+		_, err := manager.InitializeCollection(ctx, DataViewCollectionInitialization{
+			CollectionID: collectionID,
+			VChannels:    []string{channel},
+		})
+		require.NoError(t, err)
+		segmentID := collectionID * 100
+		require.NoError(t, meta.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+			ID:            segmentID,
+			CollectionID:  collectionID,
+			PartitionID:   10,
+			InsertChannel: channel,
+			State:         commonpb.SegmentState_Flushed,
+			Level:         datapb.SegmentLevel_L1,
+			NumOfRows:     100,
+		})))
+		assigned, err := manager.AssignFlushVersion(ctx, collectionID, segmentID)
+		require.NoError(t, err)
+		_, err = manager.CommitPublishedView(ctx, collectionID, assigned, PublishedMutation{
+			Add: []SegmentMembership{publishedSegmentMembership(meta.GetSegment(ctx, segmentID))},
+		})
+		require.NoError(t, err)
+	}
+
+	orderedCollections := mockey.Mock((*meta).GetCollectionIDsByPartition).
+		Return([]int64{1, 2}).
+		Build()
+	defer orderedCollections.UnPatch()
+	failingManager := &failCollectionDDLTrimDataViewManager{
+		DataViewManager:  manager,
+		failCollectionID: 2,
+	}
+	meta.dataViewManager = failingManager
+	server := &Server{meta: meta, dataViewManager: failingManager, segmentManager: NewMockManager(t)}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	err = server.NotifyDropPartition(ctx, "ch-1", []int64{10})
+
+	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
+	require.Equal(t, commonpb.SegmentState_Flushed, meta.GetSegment(ctx, 200).GetState())
+	visible1, err := latestPublishedDataView(ctx, manager, 1)
+	require.NoError(t, err)
+	require.Empty(t, visible1.GetShards())
+	visible2, err := latestPublishedDataView(ctx, manager, 2)
+	require.NoError(t, err)
+	require.Equal(t, []int64{200}, visible2.GetShards()[0].GetPartitions()[0].GetSegmentIds())
+}
+
+func TestServer_DropSegmentsByTimeDoesNotFinalizeOtherCollection(t *testing.T) {
+	ctx := context.Background()
+	meta, err := newMemoryMeta(t)
+	require.NoError(t, err)
+	manager := newDataViewManager(meta.catalog, meta)
+	meta.dataViewManager = manager
+	for _, collectionID := range []int64{1, 2} {
+		meta.AddCollection(&collectionInfo{
+			ID:            collectionID,
+			Partitions:    []int64{10},
+			VChannelNames: []string{"ch-0"},
+		})
+		_, err := manager.InitializeCollection(ctx, DataViewCollectionInitialization{
+			CollectionID: collectionID,
+			VChannels:    []string{"ch-0"},
+		})
+		require.NoError(t, err)
+		segmentID := collectionID * 100
+		require.NoError(t, meta.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+			ID:            segmentID,
+			CollectionID:  collectionID,
+			PartitionID:   10,
+			InsertChannel: "ch-0",
+			State:         commonpb.SegmentState_Flushed,
+			Level:         datapb.SegmentLevel_L1,
+			NumOfRows:     100,
+			DmlPosition: &msgpb.MsgPosition{
+				ChannelName: "ch-0",
+				Timestamp:   900,
+			},
+		})))
+		assigned, err := manager.AssignFlushVersion(ctx, collectionID, segmentID)
+		require.NoError(t, err)
+		_, err = manager.CommitPublishedView(ctx, collectionID, assigned, PublishedMutation{
+			Add: []SegmentMembership{publishedSegmentMembership(meta.GetSegment(ctx, segmentID))},
+		})
+		require.NoError(t, err)
+	}
+	require.NoError(t, meta.UpdateChannelCheckpoint(ctx, "ch-0", &msgpb.MsgPosition{
+		ChannelName: "ch-0",
+		MsgID:       []byte{0},
+		Timestamp:   1000,
+	}))
+	server := &Server{meta: meta, dataViewManager: manager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	err = server.DropSegmentsByTime(ctx, 1, map[string]uint64{"ch-0": 1000})
+
+	require.NoError(t, err)
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
+	require.Equal(t, commonpb.SegmentState_Flushed, meta.GetSegment(ctx, 200).GetState())
+	visible1, err := latestPublishedDataView(ctx, manager, 1)
+	require.NoError(t, err)
+	require.Empty(t, visible1.GetShards())
+	visible2, err := latestPublishedDataView(ctx, manager, 2)
+	require.NoError(t, err)
+	require.Equal(t, []int64{200}, visible2.GetShards()[0].GetPartitions()[0].GetSegmentIds())
+}
+
+type blockingDDLTrimDataViewManager struct {
+	DataViewManager
+	beforeCore       chan struct{}
+	continueCore     chan struct{}
+	beforeFinalize   chan struct{}
+	continueFinalize chan struct{}
+}
+
+func (m *blockingDDLTrimDataViewManager) CommitMetadataFirst(
+	ctx context.Context,
+	collectionID int64,
+	commit MetadataFirstCommit,
+) (*viewpb.DataVersion, error) {
+	if m.beforeCore != nil {
+		close(m.beforeCore)
+		<-m.continueCore
+	}
+	if m.beforeFinalize != nil {
+		originalCommit := commit
+		commit = func(ctx context.Context, validate MetadataFirstPlanValidator) (MetadataFirstPlan, error) {
+			close(m.beforeFinalize)
+			<-m.continueFinalize
+			return originalCommit(ctx, validate)
+		}
+	}
+	return m.DataViewManager.CommitMetadataFirst(ctx, collectionID, commit)
+}
+
+type failCollectionDDLTrimDataViewManager struct {
+	DataViewManager
+	failCollectionID int64
+}
+
+func (m *failCollectionDDLTrimDataViewManager) CommitMetadataFirst(
+	ctx context.Context,
+	collectionID int64,
+	commit MetadataFirstCommit,
+) (*viewpb.DataVersion, error) {
+	if collectionID == m.failCollectionID {
+		return nil, merr.WrapErrServiceUnavailableMsg("injected trim failure for collection %d", collectionID)
+	}
+	return m.DataViewManager.CommitMetadataFirst(ctx, collectionID, commit)
+}
+
+func waitDDLTrimSignal(t *testing.T, signal <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "timed out waiting for DDL trim synchronization point")
+	}
+}
+
+func newDDLTrimDataViewTest(t *testing.T) (*meta, DataViewManager, *failPublishedDataViewCatalog) {
+	t.Helper()
+	ctx := context.Background()
+	meta, err := newMemoryMeta(t)
+	require.NoError(t, err)
+	meta.AddCollection(&collectionInfo{
+		ID:            1,
+		Partitions:    []int64{10, 20},
+		VChannelNames: []string{"ch-0"},
+	})
+	catalog := &failPublishedDataViewCatalog{DataCoordCatalog: meta.catalog}
+	manager := newDataViewManager(catalog, meta)
+	meta.dataViewManager = manager
+	_, err = manager.InitializeCollection(ctx, DataViewCollectionInitialization{
+		CollectionID: 1,
+		VChannels:    []string{"ch-0"},
+	})
+	require.NoError(t, err)
+	return meta, manager, catalog
+}
+
+func addDDLTrimSegment(t *testing.T, meta *meta, segmentID, partitionID int64, channel string, timestamp uint64) {
+	t.Helper()
+	require.NoError(t, meta.AddSegment(context.Background(), NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            segmentID,
+		CollectionID:  1,
+		PartitionID:   partitionID,
+		InsertChannel: channel,
+		State:         commonpb.SegmentState_Flushed,
+		Level:         datapb.SegmentLevel_L1,
+		NumOfRows:     100,
+		DmlPosition: &msgpb.MsgPosition{
+			ChannelName: channel,
+			Timestamp:   timestamp,
+		},
+	})))
+}
+
+func assignDDLTrimSegment(t *testing.T, manager DataViewManager, segmentID, expectedStreaming int64) *viewpb.DataVersion {
+	t.Helper()
+	assigned, err := manager.AssignFlushVersion(context.Background(), 1, segmentID)
+	require.NoError(t, err)
+	require.Equal(t, expectedStreaming, assigned.GetStreamingVersion())
+	require.Zero(t, assigned.GetCompactVersion())
+	return assigned
+}
+
+func requireLatestPublishedDataViewVersion(
+	t *testing.T,
+	meta *meta,
+	collectionID, expectedStreaming, expectedCompact int64,
+) {
+	t.Helper()
+	state, err := meta.catalog.GetDataViewVersionState(context.Background(), collectionID)
+	require.NoError(t, err)
+	require.Equal(t, expectedStreaming, state.GetPublishedDataVersion().GetStreamingVersion())
+	require.Equal(t, expectedCompact, state.GetPublishedDataVersion().GetCompactVersion())
 }
 
 func TestGetSegmentInfo_WithCompaction(t *testing.T) {
@@ -5796,6 +7225,9 @@ func TestHandleCommitVchannelRPC_StoresCommitTimestamp(t *testing.T) {
 			segments: segments,
 		},
 	}
+	manager := &fakeGCDataViewManager{}
+	server.dataViewManager = manager
+	server.meta.dataViewManager = manager
 	server.stateCode.Store(commonpb.StateCode_Healthy)
 
 	resp, err := server.HandleCommitVchannel(ctx, &datapb.HandleCommitVchannelRequest{
@@ -5812,6 +7244,76 @@ func TestHandleCommitVchannelRPC_StoresCommitTimestamp(t *testing.T) {
 		assert.EqualValues(t, 500, seg.GetDeleteApplyStartAfterTimetick())
 		assert.False(t, seg.GetIsImporting())
 	}
+	require.Empty(t, manager.publishedMutations)
+	require.Len(t, manager.streamingMutations, 1)
+	require.ElementsMatch(t, segIDs, lo.Map(manager.streamingMutations[0].Add, func(membership dataview.SegmentMembership, _ int) int64 {
+		return membership.SegmentID
+	}))
+}
+
+func TestHandleCommitVchannelRPC_PublishesOnlyFinalSortedImportMembership(t *testing.T) {
+	ctx := context.Background()
+	meta, err := newMemoryMeta(t)
+	require.NoError(t, err)
+	importMeta, err := NewImportMeta(ctx, meta.catalog, nil, meta)
+	require.NoError(t, err)
+	require.NoError(t, importMeta.AddJob(ctx, &importJob{
+		ImportJob: &datapb.ImportJob{
+			JobID:        3001,
+			CollectionID: 100,
+			State:        internalpb.ImportJobState_Uncommitted,
+			Vchannels:    []string{"vchan-0"},
+		},
+		tr: timerecord.NewTimeRecorder("sorted import job"),
+	}))
+	task := &importTask{tr: timerecord.NewTimeRecorder("sorted import task")}
+	task.task.Store(&datapb.ImportTaskV2{
+		JobID:            3001,
+		TaskID:           4001,
+		CollectionID:     100,
+		SegmentIDs:       []int64{10},
+		SortedSegmentIDs: []int64{20},
+		State:            datapb.ImportTaskStateV2_Completed,
+	})
+	require.NoError(t, importMeta.AddTask(ctx, task))
+	require.NoError(t, meta.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            10,
+		CollectionID:  100,
+		PartitionID:   10,
+		InsertChannel: "vchan-0",
+		State:         commonpb.SegmentState_Dropped,
+		IsImporting:   true,
+	})))
+	require.NoError(t, meta.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            20,
+		CollectionID:  100,
+		PartitionID:   10,
+		InsertChannel: "vchan-0",
+		State:         commonpb.SegmentState_Flushed,
+		Level:         datapb.SegmentLevel_L1,
+		IsImporting:   true,
+	})))
+	manager := newDataViewManager(meta.catalog, meta)
+	_, err = manager.InitializeCollection(ctx, DataViewCollectionInitialization{CollectionID: 100, VChannels: []string{"vchan-0"}})
+	require.NoError(t, err)
+	meta.dataViewManager = manager
+	server := &Server{importMeta: importMeta, meta: meta, dataViewManager: manager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	resp, err := server.HandleCommitVchannel(ctx, &datapb.HandleCommitVchannelRequest{
+		JobId:           3001,
+		Vchannel:        "vchan-0",
+		CommitTimestamp: 500,
+	})
+
+	require.NoError(t, err)
+	require.NoError(t, merr.Error(resp))
+	view, err := latestPublishedDataView(ctx, manager, 100)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), view.GetDataVersion().GetStreamingVersion())
+	require.Zero(t, view.GetDataVersion().GetCompactVersion())
+	require.Equal(t, []int64{20}, view.GetShards()[0].GetPartitions()[0].GetSegmentIds())
+	require.Contains(t, importMeta.GetJob(ctx, 3001).GetCommittedVchannels(), "vchan-0")
 }
 
 func TestHandleCommitVchannelRPC_MissingJobReturnsError(t *testing.T) {

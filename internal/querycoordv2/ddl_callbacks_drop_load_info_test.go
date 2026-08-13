@@ -49,6 +49,7 @@ func TestDropLoadConfigV2AckCallbackUpdatesQViewsRuntime(t *testing.T) {
 		queryNodeClient:      &fakeRuntimeQueryNodeClient{},
 		resourceGroupManager: &fakeRuntimeResourceGroupManager{},
 		dataViewProvider:     &fakeRuntimeDataViewProvider{},
+		dataViewManager:      &fakeRuntimeDataViewManager{},
 		balancerFactory: func(*balancer.SnapshotBuilder) qviewsBalancer {
 			return fakeBalancer
 		},

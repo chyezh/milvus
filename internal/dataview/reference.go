@@ -1,0 +1,66 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package dataview
+
+import (
+	"context"
+	"sync"
+
+	"github.com/milvus-io/milvus/internal/views/qviews"
+)
+
+// DataViewRef protects one exact immutable DataView until Deref is called.
+type DataViewRef interface {
+	DataView() *DataView
+	Deref()
+}
+
+// ReferenceManager acquires references to exact immutable DataViews.
+type ReferenceManager interface {
+	Get(ctx context.Context, collectionID int64, version qviews.DataVersion) (DataViewRef, error)
+}
+
+type dataViewRef struct {
+	view    *DataView
+	release func()
+	once    sync.Once
+}
+
+func (r *dataViewRef) DataView() *DataView {
+	return r.view
+}
+
+func (r *dataViewRef) Deref() {
+	r.once.Do(r.release)
+}
+
+func newDataViewRef(state *collectionDataViewState, view *DataView) DataViewRef {
+	version := view.Version()
+	state.refs[version]++
+	return &dataViewRef{
+		view: view,
+		release: func() {
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			if state.refs[version] <= 1 {
+				delete(state.refs, version)
+				return
+			}
+			state.refs[version]--
+		},
+	}
+}

@@ -39,11 +39,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/atomic"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	broker2 "github.com/milvus-io/milvus/internal/datacoord/broker"
+	"github.com/milvus-io/milvus/internal/dataview"
 	kvmocks "github.com/milvus-io/milvus/internal/kv/mocks"
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/metastore/kv/binlog"
@@ -53,7 +55,7 @@ import (
 	"github.com/milvus-io/milvus/internal/mocks"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/storagev2/packed"
-	balancerapi "github.com/milvus-io/milvus/internal/views/coord/balancer/api"
+	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/common"
 	"github.com/milvus-io/milvus/pkg/v3/objectstorage"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
@@ -84,14 +86,84 @@ func (c *fakeDataViewGarbageCollector) GarbageCollect(_ context.Context, collect
 
 type fakeGCDataViewManager struct {
 	calls              []fakeGCDataViewCall
-	createEvents       []CreateCollectionDataViewEvent
+	createEvents       []DataViewCollectionInitialization
 	droppedCollections []int64
-	flushEvents        []FlushDataViewEvent
-	l0CompactEvents    []L0CompactDataViewEvent
-	snapshotRequested  []int64
+	assignedVersion    *viewpb.DataVersion
+	assignVersionErr   error
+	publishedVersion   *viewpb.DataVersion
+	publishVersionErr  error
+	assignedSegments   []int64
+	publishedMutations []dataview.PublishedMutation
+	publishedAssigned  []*viewpb.DataVersion
+	streamingMutations []dataview.PublishedMutation
+	rewriteMutations   []dataview.PublishedMutation
 	snapshotViews      []*viewpb.DataViewOfCollection
 	segmentReferenced  bool
 	segmentRefErr      error
+}
+
+func (m *fakeGCDataViewManager) AssignFlushVersion(ctx context.Context, collectionID, segmentID int64) (*viewpb.DataVersion, error) {
+	m.assignedSegments = append(m.assignedSegments, segmentID)
+	return m.assignedVersion, m.assignVersionErr
+}
+
+func (m *fakeGCDataViewManager) CommitPublishedView(
+	ctx context.Context,
+	collectionID int64,
+	assignedVersion *viewpb.DataVersion,
+	mutation dataview.PublishedMutation,
+) (*viewpb.DataVersion, error) {
+	m.publishedMutations = append(m.publishedMutations, mutation)
+	m.publishedAssigned = append(m.publishedAssigned, proto.Clone(assignedVersion).(*viewpb.DataVersion))
+	return m.publishedVersion, m.publishVersionErr
+}
+
+func (m *fakeGCDataViewManager) RetryAssignedFlushPublication(
+	ctx context.Context,
+	collectionID int64,
+	segmentID int64,
+	assignedVersion *viewpb.DataVersion,
+	removeOnly bool,
+) (*viewpb.DataVersion, error) {
+	if removeOnly {
+		m.publishedMutations = append(m.publishedMutations, dataview.PublishedMutation{Remove: []int64{segmentID}})
+	}
+	m.publishedAssigned = append(m.publishedAssigned, proto.Clone(assignedVersion).(*viewpb.DataVersion))
+	return m.publishedVersion, m.publishVersionErr
+}
+
+func (m *fakeGCDataViewManager) CommitRewrite(
+	ctx context.Context,
+	collectionID int64,
+	mutation dataview.PublishedMutation,
+) (*viewpb.DataVersion, error) {
+	m.rewriteMutations = append(m.rewriteMutations, mutation)
+	return m.publishedVersion, m.publishVersionErr
+}
+
+func (m *fakeGCDataViewManager) CommitMetadataFirst(
+	ctx context.Context,
+	collectionID int64,
+	commit dataview.MetadataFirstCommit,
+) (*viewpb.DataVersion, error) {
+	plan, err := commit(ctx, func(dataview.MetadataFirstPlan) error { return nil })
+	if err != nil {
+		return nil, err
+	}
+	m.rewriteMutations = append(m.rewriteMutations, plan.Rewrite)
+	if m.publishVersionErr != nil {
+		return m.publishedVersion, m.publishVersionErr
+	}
+	return m.publishedVersion, nil
+}
+
+func (m *fakeGCDataViewManager) CommitStreamingView(
+	ctx context.Context,
+	collectionID int64,
+	mutation dataview.PublishedMutation,
+) (*viewpb.DataVersion, error) {
+	m.streamingMutations = append(m.streamingMutations, mutation)
+	return m.publishedVersion, m.publishVersionErr
 }
 
 type fakeGCDataViewCall struct {
@@ -100,74 +172,38 @@ type fakeGCDataViewCall struct {
 	retainLatest int
 }
 
-func (m *fakeGCDataViewManager) OnCreateCollection(ctx context.Context, event CreateCollectionDataViewEvent) (*viewpb.DataVersion, error) {
+func (m *fakeGCDataViewManager) InitializeCollection(ctx context.Context, event dataview.CollectionInitialization) (*viewpb.DataVersion, error) {
 	m.createEvents = append(m.createEvents, event)
 	return nil, nil
 }
 
-func (m *fakeGCDataViewManager) OnFlush(ctx context.Context, event FlushDataViewEvent) (*viewpb.DataVersion, error) {
-	m.flushEvents = append(m.flushEvents, event)
-	return nil, nil
-}
-
-func (m *fakeGCDataViewManager) OnImport(ctx context.Context, event ImportDataViewEvent) (*viewpb.DataVersion, error) {
-	return nil, nil
-}
-
-func (m *fakeGCDataViewManager) OnCopySegmentComplete(ctx context.Context, event CopySegmentCompleteDataViewEvent) (*viewpb.DataVersion, error) {
-	return nil, nil
-}
-
-func (m *fakeGCDataViewManager) OnCompact(ctx context.Context, event CompactDataViewEvent) (*viewpb.DataVersion, error) {
-	return nil, nil
-}
-
-func (m *fakeGCDataViewManager) OnL0Compact(ctx context.Context, event L0CompactDataViewEvent) (*viewpb.DataVersion, error) {
-	m.l0CompactEvents = append(m.l0CompactEvents, event)
-	return nil, nil
-}
-
-func (m *fakeGCDataViewManager) OnExternalRefresh(ctx context.Context, event ExternalRefreshDataViewEvent) (*viewpb.DataVersion, error) {
-	return nil, nil
-}
-
-func (m *fakeGCDataViewManager) OnDropPartition(ctx context.Context, event DropPartitionDataViewEvent) (*viewpb.DataVersion, error) {
-	return nil, nil
-}
-
-func (m *fakeGCDataViewManager) OnTruncate(ctx context.Context, event TruncateDataViewEvent) (*viewpb.DataVersion, error) {
-	return nil, nil
-}
-
-func (m *fakeGCDataViewManager) OnDropCollection(ctx context.Context, collectionID int64) (*viewpb.DataVersion, error) {
+func (m *fakeGCDataViewManager) MarkCollectionTerminal(ctx context.Context, collectionID int64) error {
 	m.droppedCollections = append(m.droppedCollections, collectionID)
-	return nil, nil
-}
-
-func (m *fakeGCDataViewManager) RepairCollection(ctx context.Context, collectionID int64) error {
 	return nil
 }
 
-func (m *fakeGCDataViewManager) RepairCollections(ctx context.Context, collectionIDs []int64) error {
-	return nil
+func (m *fakeGCDataViewManager) Get(
+	ctx context.Context,
+	collectionID int64,
+	version qviews.DataVersion,
+) (dataview.DataViewRef, error) {
+	return nil, merr.WrapErrServiceNotReadyMsg("fake data view references are not available")
 }
 
-func (m *fakeGCDataViewManager) LatestVisibleDataView(ctx context.Context, collectionID int64) (*viewpb.DataViewOfCollection, error) {
-	return nil, nil
+func (m *fakeGCDataViewManager) LatestPublished(ctx context.Context, collectionID int64) (dataview.DataViewRef, error) {
+	return nil, merr.WrapErrServiceNotReadyMsg("fake data view references are not available")
 }
 
-func (m *fakeGCDataViewManager) DataView(ctx context.Context, collectionID int64, dataVersion *viewpb.DataVersion) (*viewpb.DataViewOfCollection, error) {
-	return nil, nil
+func (m *fakeGCDataViewManager) DataViewSnapshotRefForCollections(context.Context, map[int64]struct{}) (dataview.SnapshotRef, error) {
+	return &fakeGCDataViewSnapshotRef{snapshot: dataview.NewSnapshot(0, m.snapshotViews, nil)}, nil
 }
 
-func (m *fakeGCDataViewManager) Snapshot(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewOfCollection, error) {
-	m.snapshotRequested = append([]int64(nil), collectionIDs...)
-	return m.snapshotViews, nil
+type fakeGCDataViewSnapshotRef struct {
+	snapshot *dataview.Snapshot
 }
 
-func (m *fakeGCDataViewManager) DataViewSnapshot(ctx context.Context) *balancerapi.DataViewSnapshot {
-	return balancerapi.NewDataViewSnapshot(0, m.snapshotViews, nil)
-}
+func (r *fakeGCDataViewSnapshotRef) Snapshot() *dataview.Snapshot { return r.snapshot }
+func (*fakeGCDataViewSnapshotRef) Release()                       {}
 
 func (m *fakeGCDataViewManager) ShardTimeTicks(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewShardTimeTick, error) {
 	return nil, nil
@@ -177,10 +213,9 @@ func (m *fakeGCDataViewManager) IsSegmentReferenced(ctx context.Context, collect
 	return m.segmentReferenced, m.segmentRefErr
 }
 
-func (m *fakeGCDataViewManager) GarbageCollect(ctx context.Context, collectionID int64, protected []*viewpb.DataVersion, retainLatest int) error {
+func (m *fakeGCDataViewManager) GarbageCollect(ctx context.Context, collectionID int64, retainLatest int) error {
 	m.calls = append(m.calls, fakeGCDataViewCall{
 		collectionID: collectionID,
-		protected:    protected,
 		retainLatest: retainLatest,
 	})
 	return nil
@@ -249,6 +284,84 @@ func Test_garbageCollector_basic(t *testing.T) {
 		})
 
 		assert.NotPanics(t, func() {
+			gc.close()
+		})
+	})
+}
+
+func TestGarbageCollectorLifecycle(t *testing.T) {
+	t.Run("close before start prevents workers", func(t *testing.T) {
+		mockey.PatchConvey("closed collector cannot start", t, func() {
+			gc := newGarbageCollector(nil, nil, GcOption{
+				cli:     &mocks.ChunkManager{},
+				enabled: true,
+			})
+			var workCalls atomic.Int32
+			mockey.Mock((*garbageCollector).work).
+				To(func(*garbageCollector, context.Context) {
+					workCalls.Inc()
+				}).Build()
+
+			gc.close()
+			gc.start()
+
+			require.Zero(t, workCalls.Load())
+		})
+	})
+
+	t.Run("close waits for active worker", func(t *testing.T) {
+		mockey.PatchConvey("active worker drains before close returns", t, func() {
+			gc := newGarbageCollector(nil, nil, GcOption{
+				cli:     &mocks.ChunkManager{},
+				enabled: true,
+			})
+			workerStarted := make(chan struct{})
+			releaseWorker := make(chan struct{})
+			mockey.Mock((*garbageCollector).work).
+				To(func(gc *garbageCollector, _ context.Context) {
+					gc.wg.Add(1)
+					go func() {
+						defer gc.wg.Done()
+						close(workerStarted)
+						<-releaseWorker
+					}()
+				}).Build()
+
+			gc.start()
+			<-workerStarted
+			closeDone := make(chan struct{})
+			go func() {
+				gc.close()
+				close(closeDone)
+			}()
+			<-gc.ctx.Done()
+			select {
+			case <-closeDone:
+				t.Fatal("close returned before active worker stopped")
+			default:
+			}
+
+			close(releaseWorker)
+			<-closeDone
+		})
+	})
+
+	t.Run("start is idempotent", func(t *testing.T) {
+		mockey.PatchConvey("workers start only once", t, func() {
+			gc := newGarbageCollector(nil, nil, GcOption{
+				cli:     &mocks.ChunkManager{},
+				enabled: true,
+			})
+			var workCalls atomic.Int32
+			mockey.Mock((*garbageCollector).work).
+				To(func(*garbageCollector, context.Context) {
+					workCalls.Inc()
+				}).Build()
+
+			gc.start()
+			gc.start()
+
+			require.Equal(t, int32(1), workCalls.Load())
 			gc.close()
 		})
 	})

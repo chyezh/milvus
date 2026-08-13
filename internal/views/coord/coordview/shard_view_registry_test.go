@@ -2,19 +2,55 @@ package coordview
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/milvus-io/milvus/internal/dataview"
 	viewsyncer "github.com/milvus-io/milvus/internal/views/coord/coordview/syncer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
+	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
 type immediateLostRecoverySyncer struct {
 	lostCallbacks atomic.Int64
+}
+
+type blockingCloseHandle struct {
+	started chan struct{}
+	release chan struct{}
+	onWait  sync.Once
+}
+
+func (h *blockingCloseHandle) Cancel() {}
+func (h *blockingCloseHandle) Wait(context.Context) error {
+	h.onWait.Do(func() { close(h.started) })
+	<-h.release
+	return nil
+}
+
+func newRegistryWithBlockingClose(t *testing.T, dataViews DataViewManager) (*ShardViewRegistry, *blockingCloseHandle) {
+	t.Helper()
+	registry, err := RecoverShardViewRegistry(context.Background(), newMockCatalog(), newMockSyncer(), dataViews)
+	require.NoError(t, err)
+	handle := &blockingCloseHandle{started: make(chan struct{}), release: make(chan struct{})}
+	registry.flushScheduler.nodeScheduler = &blockingCloseScheduler{handle: handle}
+	return registry, handle
+}
+
+type blockingCloseScheduler struct {
+	handle *blockingCloseHandle
+}
+
+func (s *blockingCloseScheduler) Submit(nodescheduler.Task) nodescheduler.TaskHandle {
+	return s.handle
 }
 
 func (s *immediateLostRecoverySyncer) SyncViews(_ context.Context, group viewsyncer.SyncGroup) error {
@@ -37,10 +73,14 @@ func (*immediateLostRecoverySyncer) Close() error { return nil }
 // an empty catalog.
 func newTestRegistry(t *testing.T, catalog *mockCatalog, s *mockSyncer) *ShardViewRegistry {
 	t.Helper()
-	reg, err := RecoverShardViewRegistry(context.Background(), catalog, s)
+	reg, err := RecoverShardViewRegistry(context.Background(), catalog, s, newTestDataViewManager())
 	require.NoError(t, err)
 	t.Cleanup(reg.Close)
 	return reg
+}
+
+func newTestDataViewManager() *testDataViewManager {
+	return &testDataViewManager{refs: make(map[qviews.DataVersion][]*trackedDataViewRef)}
 }
 
 func TestRegistry_FlushesAcrossManagers(t *testing.T) {
@@ -65,6 +105,88 @@ func TestRegistry_EmptyRecovery(t *testing.T) {
 	reg := newTestRegistry(t, newMockCatalog(), newMockSyncer())
 	assert.Empty(t, reg.Snapshot().StatsMap())
 	assert.Nil(t, reg.Get(testShardID))
+}
+
+func TestShardViewRegistryCloseDerefsResidentDataViewRefsExactlyOnce(t *testing.T) {
+	dataViews := &testDataViewManager{refs: make(map[qviews.DataVersion][]*trackedDataViewRef)}
+	registry, err := RecoverShardViewRegistry(context.Background(), newMockCatalog(), newMockSyncer(), dataViews)
+	require.NoError(t, err)
+	manager := registry.Ensure(testShardID)
+	require.NoError(t, manager.AddPreparing(context.Background(), testBuilder(1, 1, 1)))
+	require.NoError(t, registry.flushScheduler.Flush(context.Background()))
+	ref := dataViews.refs[qviews.DataVersion{StreamingVersion: 1, CompactVersion: 1}][0]
+	require.Zero(t, ref.derefCount)
+
+	registry.Close()
+	require.Equal(t, 1, ref.derefCount)
+	registry.Close()
+	require.Equal(t, 1, ref.derefCount)
+}
+
+func TestShardViewRegistryCloseRejectsBlockedAddPreparingAndReleasesLateRef(t *testing.T) {
+	dataViews := &testDataViewManager{
+		refs:       make(map[qviews.DataVersion][]*trackedDataViewRef),
+		getStarted: make(chan struct{}),
+		getRelease: make(chan struct{}),
+	}
+	registry, err := RecoverShardViewRegistry(context.Background(), newMockCatalog(), newMockSyncer(), dataViews)
+	require.NoError(t, err)
+	manager := registry.Ensure(testShardID)
+
+	result := make(chan error, 1)
+	go func() { result <- manager.AddPreparing(context.Background(), testBuilder(1, 1, 1)) }()
+	select {
+	case <-dataViews.getStarted:
+	case <-time.After(time.Second):
+		t.Fatal("DataViewManager.Get did not start")
+	}
+	registry.Close()
+	close(dataViews.getRelease)
+	require.Error(t, <-result)
+	require.Len(t, dataViews.refs[qviews.DataVersion{StreamingVersion: 1, CompactVersion: 1}], 1)
+	require.Equal(t, 1, dataViews.refs[qviews.DataVersion{StreamingVersion: 1, CompactVersion: 1}][0].derefCount)
+}
+
+func TestShardViewRegistryEnsureAfterCloseDoesNotCreateManager(t *testing.T) {
+	registry, err := RecoverShardViewRegistry(context.Background(), newMockCatalog(), newMockSyncer(), newTestDataViewManager())
+	require.NoError(t, err)
+	registry.Close()
+	require.Nil(t, registry.Ensure(testShardID))
+	require.Nil(t, registry.Get(testShardID))
+}
+
+func TestShardViewRegistryPublishesNoNewWorkFenceBeforeSchedulerCloseReturns(t *testing.T) {
+	dataViews := &testDataViewManager{refs: make(map[qviews.DataVersion][]*trackedDataViewRef)}
+	registry, handle := newRegistryWithBlockingClose(t, dataViews)
+	manager := registry.Ensure(testShardID)
+	require.NoError(t, manager.AddPreparing(context.Background(), testBuilder(1, 1, 1)))
+
+	closeDone := make(chan struct{})
+	go func() {
+		registry.Close()
+		close(closeDone)
+	}()
+	select {
+	case <-handle.started:
+	case <-time.After(time.Second):
+		t.Fatal("scheduler Close did not begin waiting")
+	}
+
+	require.Nil(t, registry.Ensure(qviews.ShardID{ReplicaID: 2, VChannel: "late"}))
+	err := manager.AddPreparing(context.Background(), testBuilder(2, 1, 1))
+	require.ErrorIs(t, err, merr.ErrServiceNotReady)
+	lateRef := dataViews.refs[qviews.DataVersion{StreamingVersion: 2, CompactVersion: 1}][0]
+	require.Equal(t, 1, lateRef.derefCount)
+	residentRef := dataViews.refs[qviews.DataVersion{StreamingVersion: 1, CompactVersion: 1}][0]
+	require.Zero(t, residentRef.derefCount, "resident refs stay live until scheduler is fully stopped")
+
+	close(handle.release)
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("registry Close did not complete")
+	}
+	require.Equal(t, 1, residentRef.derefCount)
 }
 
 func TestRegistry_EnsureCreatesOnce(t *testing.T) {
@@ -143,7 +265,7 @@ func TestRegistry_RecoverWithPersistedViews(t *testing.T) {
 	// we need to populate the listed views manually.
 	catalog.listed = []*viewpb.QueryViewOfShard{viewA, viewB}
 
-	reg, err := RecoverShardViewRegistry(context.Background(), catalog, newMockSyncer())
+	reg, err := RecoverShardViewRegistry(context.Background(), catalog, newMockSyncer(), newTestDataViewManager())
 	require.NoError(t, err)
 	t.Cleanup(reg.Close)
 
@@ -181,7 +303,7 @@ func TestRegistry_RecoveryPublishesImmediateQueryNodeLoss(t *testing.T) {
 	catalog.listed = []*viewpb.QueryViewOfShard{view}
 	s := &immediateLostRecoverySyncer{}
 
-	reg, err := RecoverShardViewRegistry(context.Background(), catalog, s)
+	reg, err := RecoverShardViewRegistry(context.Background(), catalog, s, newTestDataViewManager())
 	require.NoError(t, err)
 	t.Cleanup(reg.Close)
 	require.Equal(t, int64(1), s.lostCallbacks.Load())
@@ -280,42 +402,18 @@ func TestRegistry_SnapshotForShards(t *testing.T) {
 	assert.Same(t, updatedStatsA, next.StatsMap()[shardA])
 }
 
-func TestRecoverShardViewRegistryRebuildsReferences(t *testing.T) {
+func TestRecoverShardViewRegistryRebuildsDataViewRefs(t *testing.T) {
 	catalog := newMockCatalog()
 	view := buildTestViewWithVersion(1, 3, 1, 2)
 	catalog.listed = []*viewpb.QueryViewOfShard{view}
-	refs := &testDataViewReferences{recoverPin: true}
+	dataViews := &testDataViewManager{refs: make(map[qviews.DataVersion][]*trackedDataViewRef)}
 
-	_, err := RecoverShardViewRegistry(context.Background(), catalog, newMockSyncer(), refs)
+	_, err := RecoverShardViewRegistry(context.Background(), catalog, newMockSyncer(), dataViews)
 	require.NoError(t, err)
-	require.Equal(t, []qviews.DataVersion{{StreamingVersion: 3, CompactVersion: 1}}, refs.recovered)
+	require.Equal(t, []qviews.DataVersion{{StreamingVersion: 3, CompactVersion: 1}}, dataViews.getCalls)
 }
 
-func TestRecoverShardViewRegistryAllowsTerminalCleanup(t *testing.T) {
-	catalog := newMockCatalog()
-	view := buildTestViewWithVersion(1, 3, 1, 2)
-	view.Meta.State = viewpb.QueryViewState_QueryViewStatePreparing
-	catalog.listed = []*viewpb.QueryViewOfShard{view}
-	refs := &testDataViewReferences{recoverPin: false}
-	s := newMockSyncer()
-
-	registry, err := RecoverShardViewRegistry(context.Background(), catalog, s, refs)
-	require.NoError(t, err)
-	manager := registry.Get(qviews.NewShardIDFromQVMeta(view.GetMeta()))
-	require.NotNil(t, manager)
-	manager.mu.Lock()
-	require.Equal(t, qviews.QueryViewStateDropping, manager.views[testVersion(3, 1, 2)].State())
-	manager.mu.Unlock()
-	require.Empty(t, refs.unpins)
-
-	version := testVersion(3, 1, 2)
-	simulateNodeResponse(t, s, testSN, version, qviews.QueryViewStateDropped)
-	simulateNodeResponse(t, s, testQN1, version, qviews.QueryViewStateDropped)
-	require.NoError(t, registry.flushScheduler.Flush(context.Background()))
-	require.Nil(t, registry.Get(qviews.NewShardIDFromQVMeta(view.GetMeta())))
-}
-
-func TestRecoverShardViewRegistryRollsBackReferencesOnFailure(t *testing.T) {
+func TestRecoverShardViewRegistryRollsBackDataViewRefsOnFailure(t *testing.T) {
 	catalog := newMockCatalog()
 	viewA := buildTestViewWithVersion(1, 3, 1, 1)
 	viewA.Meta.ReplicaId = 1
@@ -324,11 +422,105 @@ func TestRecoverShardViewRegistryRollsBackReferencesOnFailure(t *testing.T) {
 	viewB.Meta.ReplicaId = 2
 	viewB.Meta.Vchannel = "v1"
 	catalog.listed = []*viewpb.QueryViewOfShard{viewA, viewB}
-	refs := &testDataViewReferences{recoverPin: true, failRecoverAfter: 1}
+	dataViews := &testDataViewManager{
+		refs:      make(map[qviews.DataVersion][]*trackedDataViewRef),
+		err:       errors.New("recover failed"),
+		failAfter: 1,
+	}
 
-	_, err := RecoverShardViewRegistry(context.Background(), catalog, newMockSyncer(), refs)
+	_, err := RecoverShardViewRegistry(context.Background(), catalog, newMockSyncer(), dataViews)
 	require.EqualError(t, err, "recover failed")
-	require.Len(t, refs.unpins, 1)
+	require.Len(t, dataViews.refs, 1)
+	for _, refs := range dataViews.refs {
+		require.Len(t, refs, 1)
+		require.Equal(t, 1, refs[0].derefCount)
+	}
+}
+
+func TestRecoverShardViewRegistryDataViewRefPartialFailureReleasesAllAcquiredRefs(t *testing.T) {
+	catalog := newMockCatalog()
+	viewA := buildTestViewWithVersion(1, 3, 1, 1)
+	viewA.Meta.ReplicaId = 1
+	viewA.Meta.Vchannel = "v0"
+	viewB := buildTestViewWithVersion(1, 4, 1, 1)
+	viewB.Meta.ReplicaId = 2
+	viewB.Meta.Vchannel = "v1"
+	catalog.listed = []*viewpb.QueryViewOfShard{viewA, viewB}
+	dataViews := &testDataViewManager{
+		refs:      make(map[qviews.DataVersion][]*trackedDataViewRef),
+		err:       errors.New("recover failed"),
+		failAfter: 1,
+	}
+
+	_, err := RecoverShardViewRegistry(context.Background(), catalog, newMockSyncer(), dataViews)
+	require.EqualError(t, err, "recover failed")
+	require.NotEmpty(t, dataViews.refs)
+	for _, refs := range dataViews.refs {
+		for _, ref := range refs {
+			require.Equal(t, 1, ref.derefCount)
+		}
+	}
+}
+
+func TestRecoverShardViewRegistryUnavailableDataViewStartsTerminalCleanup(t *testing.T) {
+	for _, state := range []viewpb.QueryViewState{
+		viewpb.QueryViewState_QueryViewStatePreparing,
+		viewpb.QueryViewState_QueryViewStateUp,
+	} {
+		t.Run(state.String(), func(t *testing.T) {
+			catalog := newMockCatalog()
+			view := buildTestViewWithVersion(1, 3, 1, 1)
+			view.Meta.State = state
+			catalog.listed = []*viewpb.QueryViewOfShard{view}
+			dataViews := &testDataViewManager{
+				refs: make(map[qviews.DataVersion][]*trackedDataViewRef),
+				err:  dataview.NewUnavailableDataViewError(view.GetMeta().GetCollectionId(), qviews.DataVersion{StreamingVersion: 3, CompactVersion: 1}),
+			}
+
+			registry, err := RecoverShardViewRegistry(context.Background(), catalog, newMockSyncer(), dataViews)
+			require.NoError(t, err)
+			t.Cleanup(registry.Close)
+			manager := registry.Get(testShardID)
+			require.NotNil(t, manager)
+			manager.mu.Lock()
+			expectedState := qviews.QueryViewStateDropping
+			if state == viewpb.QueryViewState_QueryViewStateUp {
+				expectedState = qviews.QueryViewStateDown
+			}
+			require.Equal(t, expectedState, manager.views[testVersion(3, 1, 1)].State())
+			manager.mu.Unlock()
+			if state == viewpb.QueryViewState_QueryViewStatePreparing {
+				require.Contains(t, catalog.savedStates(), viewpb.QueryViewState_QueryViewStateUnrecoverable)
+			} else {
+				require.Contains(t, catalog.savedStates(), viewpb.QueryViewState_QueryViewStateDown)
+			}
+		})
+	}
+}
+
+func TestRecoverShardViewRegistrySystemServiceNotReadyFailsAndRollsBackRefs(t *testing.T) {
+	catalog := newMockCatalog()
+	viewA := buildTestViewWithVersion(1, 3, 1, 1)
+	viewA.Meta.ReplicaId = 1
+	viewA.Meta.Vchannel = "v0"
+	viewB := buildTestViewWithVersion(1, 4, 1, 1)
+	viewB.Meta.ReplicaId = 2
+	viewB.Meta.Vchannel = "v1"
+	catalog.listed = []*viewpb.QueryViewOfShard{viewA, viewB}
+	dataViews := &testDataViewManager{
+		refs:      make(map[qviews.DataVersion][]*trackedDataViewRef),
+		err:       merr.WrapErrServiceNotReadyMsg("catalog unavailable"),
+		failAfter: 1,
+	}
+
+	_, err := RecoverShardViewRegistry(context.Background(), catalog, newMockSyncer(), dataViews)
+	require.ErrorIs(t, err, merr.ErrServiceNotReady)
+	require.False(t, dataview.IsUnavailableDataViewError(err))
+	require.Len(t, dataViews.refs, 1)
+	for _, refs := range dataViews.refs {
+		require.Len(t, refs, 1)
+		require.Equal(t, 1, refs[0].derefCount)
+	}
 }
 
 func TestRegistry_SnapshotStatsForMultipleShards(t *testing.T) {

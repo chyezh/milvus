@@ -146,6 +146,10 @@ func (b *DefaultBalancer) Reconcile(ctx context.Context) error {
 		return nil
 	}
 	snap, dirty := b.snapshotBuilder.build(ctx, pending)
+	defer snap.Close()
+	if err := snap.BuildError(); err != nil {
+		return err
+	}
 	if len(dirty) == 0 {
 		return nil
 	}

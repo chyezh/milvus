@@ -10,6 +10,7 @@ import (
 	"github.com/milvus-io/milvus/internal/views/coord/coordview/syncer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/metautil"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
@@ -24,10 +25,12 @@ import (
 //
 // All methods are safe for concurrent use.
 type ShardViewRegistry struct {
-	mu                 sync.RWMutex
-	ctx                context.Context
-	flushScheduler     *DirtyViewFlushScheduler
-	dataViewReferences qviews.DataViewReferenceManager
+	mu             sync.RWMutex
+	closeOnce      sync.Once
+	closed         bool
+	ctx            context.Context
+	flushScheduler *DirtyViewFlushScheduler
+	dataViews      DataViewManager
 
 	version  uint64
 	shards   map[qviews.ShardID]*ShardViewManager
@@ -52,9 +55,11 @@ func RecoverShardViewRegistry(
 	ctx context.Context,
 	catalog queryview.QueryViewCatalog,
 	s syncer.ReliableSyncer,
-	dataViewReferences ...qviews.DataViewReferenceManager,
+	dataViews DataViewManager,
 ) (*ShardViewRegistry, error) {
-	refs := dataViewReferenceManagerOrNoop(dataViewReferences)
+	if dataViews == nil {
+		return nil, merr.WrapErrServiceInternalMsg("DataView manager is required to recover QueryView references")
+	}
 	views, err := catalog.ListQueryViews(ctx)
 	if err != nil {
 		return nil, err
@@ -78,10 +83,10 @@ func RecoverShardViewRegistry(
 	batch := flushScheduler.Begin()
 	shards := make(map[qviews.ShardID]*ShardViewManager, len(byShardID))
 	for sid, recovered := range byShardID {
-		manager, err := RecoverShardViewManager(ctx, sid, flushScheduler, refs, recovered)
+		manager, err := RecoverShardViewManager(ctx, sid, flushScheduler, dataViews, recovered)
 		if err != nil {
 			for _, recoveredManager := range shards {
-				recoveredManager.unpinAllReferences()
+				recoveredManager.derefAllReferences()
 			}
 			flushScheduler.Close()
 			return nil, err
@@ -90,14 +95,14 @@ func RecoverShardViewRegistry(
 	}
 
 	registry := &ShardViewRegistry{
-		ctx:                ctx,
-		flushScheduler:     flushScheduler,
-		dataViewReferences: refs,
-		version:            1,
-		shards:             shards,
-		stats:              make(map[qviews.ShardID]*ShardStats, len(shards)),
-		collectionShards:   make(map[int64]map[qviews.ShardID]struct{}),
-		nodeShards:         make(map[int64]map[qviews.ShardID]struct{}),
+		ctx:              ctx,
+		flushScheduler:   flushScheduler,
+		dataViews:        dataViews,
+		version:          1,
+		shards:           shards,
+		stats:            make(map[qviews.ShardID]*ShardStats, len(shards)),
+		collectionShards: make(map[int64]map[qviews.ShardID]struct{}),
+		nodeShards:       make(map[int64]map[qviews.ShardID]struct{}),
 	}
 	for sid, mgr := range shards {
 		stats := mgr.Stats()
@@ -113,7 +118,7 @@ func RecoverShardViewRegistry(
 	batch.Commit()
 	if err := flushScheduler.Flush(ctx); err != nil {
 		for _, manager := range shards {
-			manager.unpinAllReferences()
+			manager.derefAllReferences()
 		}
 		flushScheduler.Close()
 		return nil, err
@@ -126,19 +131,29 @@ func RecoverShardViewRegistry(
 func (r *ShardViewRegistry) Ensure(shardID qviews.ShardID) *ShardViewManager {
 	// Fast path: already present.
 	r.mu.RLock()
+	if r.closed {
+		r.mu.RUnlock()
+		return nil
+	}
 	if mgr, ok := r.shards[shardID]; ok {
 		r.mu.RUnlock()
 		return mgr
 	}
 	r.mu.RUnlock()
 
-	mgr := newShardViewManager(r.ctx, shardID, r.flushScheduler, nil, r.dataViewReferences)
+	mgr := newShardViewManager(r.ctx, shardID, r.flushScheduler, r.dataViews)
 	mgr.SetStatsObserver(r.onShardStatsChanged)
 	mgr.setOnEmpty(r.removeEmptyManager)
 	stats := emptyShardStats()
 
 	r.mu.Lock()
 	// Re-check under the write lock.
+	if r.closed {
+		r.mu.Unlock()
+		mgr.stopAccepting()
+		mgr.releaseReferences()
+		return nil
+	}
 	if mgr, ok := r.shards[shardID]; ok {
 		r.mu.Unlock()
 		return mgr
@@ -155,7 +170,22 @@ func (r *ShardViewRegistry) Close() {
 	if r == nil || r.flushScheduler == nil {
 		return
 	}
-	r.flushScheduler.Close()
+	r.closeOnce.Do(func() {
+		r.mu.Lock()
+		r.closed = true
+		managers := make([]*ShardViewManager, 0, len(r.shards))
+		for _, manager := range r.shards {
+			managers = append(managers, manager)
+		}
+		r.mu.Unlock()
+		for _, manager := range managers {
+			manager.stopAccepting()
+		}
+		r.flushScheduler.Close()
+		for _, manager := range managers {
+			manager.releaseReferences()
+		}
+	})
 }
 
 // Begin opens an explicit cross-shard QueryView flush batch. Existing flush

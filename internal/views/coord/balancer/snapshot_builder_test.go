@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/milvus-io/milvus/internal/dataview"
 	"github.com/milvus-io/milvus/internal/metastore/mocks"
 	"github.com/milvus-io/milvus/internal/views/coord/coordview"
 	"github.com/milvus-io/milvus/internal/views/coord/coordview/syncer"
@@ -16,6 +17,7 @@ import (
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 // --- fake providers used throughout the tests ---
@@ -45,16 +47,80 @@ type fakeDataViewProvider struct {
 	collections []*viewpb.DataViewOfCollection
 	segments    map[int64]*SegmentInfo
 
-	collectionRequests []map[int64]struct{}
-	segmentRequests    [][]int64
-	segmentRequestHook func()
+	collectionRequests  []map[int64]struct{}
+	segmentRequests     [][]int64
+	segmentRequestHook  func()
+	snapshotRefAcquires int
+	snapshotRefReleases int
+	nilSnapshotRef      bool
+	nilSnapshot         bool
 }
 
-func (f *fakeDataViewProvider) DataViewSnapshot(context.Context) *DataViewSnapshot {
-	return NewDataViewSnapshot(1, f.collections, newMapSegmentSnapshot(f.segments))
+type testDataViewSnapshotRef struct {
+	snapshot *DataViewSnapshot
+	release  func()
 }
 
-func (f *fakeDataViewProvider) DataViewSnapshotForCollections(_ context.Context, collectionIDs map[int64]struct{}) *DataViewSnapshot {
+func (r *testDataViewSnapshotRef) Snapshot() *DataViewSnapshot { return r.snapshot }
+func (r *testDataViewSnapshotRef) Release() {
+	if r.release != nil {
+		release := r.release
+		r.release = nil
+		release()
+	}
+}
+
+func (f *fakeDataViewProvider) DataViewSnapshotRefForCollections(ctx context.Context, collectionIDs map[int64]struct{}) (DataViewSnapshotRef, error) {
+	f.snapshotRefAcquires++
+	if f.nilSnapshotRef {
+		return nil, nil
+	}
+	var snapshot *DataViewSnapshot
+	if !f.nilSnapshot {
+		snapshot = f.snapshotForCollections(ctx, collectionIDs)
+	}
+	return &testDataViewSnapshotRef{
+		snapshot: snapshot,
+		release:  func() { f.snapshotRefReleases++ },
+	}, nil
+}
+
+func TestSnapshotBuilder_RejectsNilSnapshotRef(t *testing.T) {
+	store := emptyLoadConfigStore(t)
+	reg := emptyRegistry(t)
+	builder := NewSnapshotBuilder(
+		store,
+		reg,
+		&fakeNodeProvider{infos: map[int64]*NodeInfo{}},
+		&fakeDataViewProvider{nilSnapshotRef: true},
+		&BalanceConfig{},
+	)
+
+	snapshot := buildFullSnapshot(builder)
+	require.ErrorIs(t, snapshot.BuildError(), merr.ErrServiceInternal)
+}
+
+func TestSnapshotBuilder_RejectsNilReferencedSnapshotAndReleasesRef(t *testing.T) {
+	store := emptyLoadConfigStore(t)
+	reg := emptyRegistry(t)
+	provider := &fakeDataViewProvider{nilSnapshot: true}
+	builder := NewSnapshotBuilder(
+		store,
+		reg,
+		&fakeNodeProvider{infos: map[int64]*NodeInfo{}},
+		provider,
+		&BalanceConfig{},
+	)
+
+	snapshot := buildFullSnapshot(builder)
+	require.ErrorIs(t, snapshot.BuildError(), merr.ErrServiceInternal)
+	require.Equal(t, 1, provider.snapshotRefAcquires)
+	require.Equal(t, 1, provider.snapshotRefReleases)
+	snapshot.Close()
+	require.Equal(t, 1, provider.snapshotRefReleases)
+}
+
+func (f *fakeDataViewProvider) snapshotForCollections(_ context.Context, collectionIDs map[int64]struct{}) *DataViewSnapshot {
 	f.collectionRequests = append(f.collectionRequests, collectionIDs)
 	selected := f.collections
 	if collectionIDs != nil {
@@ -112,6 +178,17 @@ type stubSyncer struct{}
 func (s *stubSyncer) SyncViews(ctx context.Context, group syncer.SyncGroup) error { return nil }
 func (s *stubSyncer) Close() error                                                { return nil }
 
+type stubDataViewReferenceManager struct{}
+
+func (stubDataViewReferenceManager) Get(context.Context, int64, qviews.DataVersion) (dataview.DataViewRef, error) {
+	return stubDataViewRef{}, nil
+}
+
+type stubDataViewRef struct{}
+
+func (stubDataViewRef) DataView() *dataview.DataView { return nil }
+func (stubDataViewRef) Deref()                       {}
+
 // --- test helpers ---
 
 // emptyLoadConfigStore returns a fresh store after a clean Recover.
@@ -130,7 +207,7 @@ func emptyLoadConfigStore(t *testing.T) *loadmgr.LoadConfigStore {
 // emptyRegistry returns a fresh ShardViewRegistry backed by stub catalog/syncer.
 func emptyRegistry(t *testing.T) *coordview.ShardViewRegistry {
 	t.Helper()
-	reg, err := coordview.RecoverShardViewRegistry(context.Background(), &stubCatalog{}, &stubSyncer{})
+	reg, err := coordview.RecoverShardViewRegistry(context.Background(), &stubCatalog{}, &stubSyncer{}, stubDataViewReferenceManager{})
 	require.NoError(t, err)
 	return reg
 }
@@ -187,12 +264,13 @@ func addShardWithPreparingView(
 func TestSnapshotBuilder_EmptyInputs(t *testing.T) {
 	store := emptyLoadConfigStore(t)
 	reg := emptyRegistry(t)
+	provider := &fakeDataViewProvider{}
 
 	builder := NewSnapshotBuilder(
 		store,
 		reg,
 		&fakeNodeProvider{infos: map[int64]*NodeInfo{}},
-		&fakeDataViewProvider{},
+		provider,
 		&BalanceConfig{},
 	)
 
@@ -204,6 +282,11 @@ func TestSnapshotBuilder_EmptyInputs(t *testing.T) {
 	assert.Equal(t, uint64(1), snap.DataViewSnapshot.Version())
 	assert.Empty(t, snap.Nodes)
 	assert.NotNil(t, snap.Config)
+	require.Equal(t, 1, provider.snapshotRefAcquires)
+	require.Zero(t, provider.snapshotRefReleases)
+	snap.Close()
+	snap.Close()
+	require.Equal(t, 1, provider.snapshotRefReleases)
 }
 
 func TestSnapshotBuilder_NodeInfosCopied(t *testing.T) {
@@ -357,8 +440,11 @@ func TestSnapshotBuilder_CollectsSegmentsFromDataViewsAndPlacements(t *testing.T
 	assert.Equal(t, int64(300), info.MemSize)
 	assert.Equal(t, int64(30), info.RowNum)
 
-	// DataView stays owned by DataViewSnapshot and is exposed through lookup.
-	assert.Same(t, shardDV, snap.DataViewForShard(shardA))
+	// DataView stays owned by DataViewSnapshot and lookup returns an isolated
+	// immutable value rather than the provider's mutable proto pointer.
+	actualShard := snap.DataViewForShard(shardA)
+	assert.NotSame(t, shardDV, actualShard)
+	assert.Equal(t, shardDV, actualShard)
 
 	// DataVersion stays owned by DataViewSnapshot and is exposed through lookup.
 	dv, ok := snap.DataVersionForCollection(collID)
@@ -611,7 +697,7 @@ func TestSnapshotBuilder_ScopedRefreshUsesCachedNonTargetAndMatchesFullPlan(t *t
 		Config:             builder.config,
 		LoadConfigSnapshot: store.Snapshot(),
 		ShardViewSnapshot:  registry.Snapshot(),
-		DataViewSnapshot:   provider.DataViewSnapshot(context.Background()),
+		DataViewSnapshot:   provider.snapshotForCollections(context.Background(), nil),
 		NodeSnapshot:       nodeProvider.Snapshot(),
 	}
 	oracle.Nodes = buildBalanceNodes(oracle.NodeSnapshot)

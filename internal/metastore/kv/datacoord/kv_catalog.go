@@ -17,6 +17,7 @@
 package datacoord
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"path"
@@ -520,6 +521,108 @@ func (kc *Catalog) SaveDataView(ctx context.Context, dataView *viewpb.DataViewOf
 	return kc.MetaKv.Save(ctx, key, string(value))
 }
 
+func (kc *Catalog) SaveDataViewVersionState(ctx context.Context, state *viewpb.CollectionDataVersionState) error {
+	value, err := proto.Marshal(state)
+	if err != nil {
+		return merr.WrapErrSerializationFailed(err, "marshal data view version state for collection %d", state.GetCollectionId())
+	}
+	if err := kc.MetaKv.Save(ctx, buildDataViewVersionStateKey(state.GetCollectionId()), string(value)); err != nil {
+		return merr.Wrapf(err, "save data view version state for collection %d", state.GetCollectionId())
+	}
+	return nil
+}
+
+func (kc *Catalog) GetDataViewVersionState(ctx context.Context, collectionID int64) (*viewpb.CollectionDataVersionState, error) {
+	value, err := kc.MetaKv.Load(ctx, buildDataViewVersionStateKey(collectionID))
+	if err != nil {
+		if errors.Is(err, merr.ErrIoKeyNotFound) {
+			return nil, nil
+		}
+		return nil, merr.Wrapf(err, "load data view version state for collection %d", collectionID)
+	}
+
+	state := &viewpb.CollectionDataVersionState{}
+	if err := proto.Unmarshal([]byte(value), state); err != nil {
+		return nil, merr.WrapErrDataIntegrity(err, "unmarshal data view version state for collection %d", collectionID)
+	}
+	return state, nil
+}
+
+func (kc *Catalog) ListAllDataViewVersionStates(ctx context.Context) ([]*viewpb.CollectionDataVersionState, error) {
+	states := make([]*viewpb.CollectionDataVersionState, 0)
+	applyFn := func(key []byte, value []byte) error {
+		if !isDataViewVersionStateKey(string(key)) {
+			return nil
+		}
+		state := &viewpb.CollectionDataVersionState{}
+		if err := proto.Unmarshal(value, state); err != nil {
+			return merr.WrapErrDataIntegrity(err, "unmarshal data view version state at key %s", key)
+		}
+		collectionID, err := strconv.ParseInt(path.Base(path.Dir(string(key))), 10, 64)
+		if err != nil {
+			return merr.WrapErrDataIntegrityMsg("invalid data view version state key %s", key)
+		}
+		if state.GetCollectionId() != collectionID {
+			return merr.WrapErrDataIntegrityMsg(
+				"data view version state collection mismatch at key %s: key=%d, stored=%d",
+				key,
+				collectionID,
+				state.GetCollectionId(),
+			)
+		}
+		states = append(states, state)
+		return nil
+	}
+	if err := kc.MetaKv.WalkWithPrefix(ctx, DataViewPrefix+"/", kc.paginationSize, applyFn); err != nil {
+		return nil, err
+	}
+	slices.SortFunc(states, func(left, right *viewpb.CollectionDataVersionState) int {
+		return cmp.Compare(left.GetCollectionId(), right.GetCollectionId())
+	})
+	return states, nil
+}
+
+func (kc *Catalog) SavePublishedDataView(
+	ctx context.Context,
+	state *viewpb.CollectionDataVersionState,
+	view *viewpb.DataViewOfCollection,
+) error {
+	if state.GetCollectionId() != view.GetCollectionId() {
+		return merr.WrapErrServiceInternalMsg(
+			"data view publication collection mismatch: state=%d, view=%d",
+			state.GetCollectionId(),
+			view.GetCollectionId(),
+		)
+	}
+	if !proto.Equal(state.GetPublishedDataVersion(), view.GetDataVersion()) {
+		return merr.WrapErrServiceInternalMsg(
+			"data view publication version mismatch for collection %d: state=%s, view=%s",
+			state.GetCollectionId(),
+			state.GetPublishedDataVersion(),
+			view.GetDataVersion(),
+		)
+	}
+
+	stateValue, err := proto.Marshal(state)
+	if err != nil {
+		return merr.WrapErrSerializationFailed(err, "marshal data view version state for collection %d", state.GetCollectionId())
+	}
+	viewValue, err := proto.Marshal(view)
+	if err != nil {
+		return merr.WrapErrSerializationFailed(err, "marshal published data view for collection %d", view.GetCollectionId())
+	}
+
+	version := view.GetDataVersion()
+	kvs := map[string]string{
+		buildDataViewVersionStateKey(state.GetCollectionId()):                                                       string(stateValue),
+		buildDataViewVersionKey(view.GetCollectionId(), version.GetStreamingVersion(), version.GetCompactVersion()): string(viewValue),
+	}
+	if err := kc.MetaKv.MultiSave(ctx, kvs); err != nil {
+		return merr.Wrapf(err, "publish data view for collection %d", view.GetCollectionId())
+	}
+	return nil
+}
+
 func (kc *Catalog) ListDataViews(ctx context.Context, collectionID int64) ([]*viewpb.DataViewOfCollection, error) {
 	return kc.listDataViewsWithPrefix(ctx, buildDataViewVersionPrefix(collectionID))
 }
@@ -531,12 +634,12 @@ func (kc *Catalog) ListAllDataViews(ctx context.Context) ([]*viewpb.DataViewOfCo
 func (kc *Catalog) listDataViewsWithPrefix(ctx context.Context, prefix string) ([]*viewpb.DataViewOfCollection, error) {
 	dataViews := make([]*viewpb.DataViewOfCollection, 0)
 	applyFn := func(key []byte, value []byte) error {
-		if isDataViewDropMarkerKey(string(key)) {
+		if isDataViewDropMarkerKey(string(key)) || isDataViewVersionStateKey(string(key)) {
 			return nil
 		}
 		dataView := &viewpb.DataViewOfCollection{}
 		if err := proto.Unmarshal(value, dataView); err != nil {
-			return err
+			return merr.WrapErrDataIntegrity(err, "unmarshal data view at key %s", key)
 		}
 		dataViews = append(dataViews, dataView)
 		return nil
@@ -553,7 +656,7 @@ func (kc *Catalog) DropDataView(ctx context.Context, collectionID int64, dataVer
 }
 
 func (kc *Catalog) DropDataViews(ctx context.Context, collectionID int64) error {
-	return kc.MetaKv.RemoveWithPrefix(ctx, buildDataViewVersionPrefix(collectionID))
+	return kc.MetaKv.RemoveWithPrefix(ctx, buildDataViewCollectionPrefix(collectionID))
 }
 
 func (kc *Catalog) MarkDataViewCollectionDropped(ctx context.Context, collectionID int64) error {
@@ -582,6 +685,10 @@ func (kc *Catalog) ListDroppedDataViewCollections(ctx context.Context) ([]int64,
 func isDataViewDropMarkerKey(key string) bool {
 	markerPrefix := DataViewDropMarkerPrefix + "/"
 	return strings.HasPrefix(key, markerPrefix) || strings.Contains(key, "/"+markerPrefix)
+}
+
+func isDataViewVersionStateKey(key string) bool {
+	return strings.HasSuffix(key, "/state")
 }
 
 func (kc *Catalog) UnmarkDataViewCollectionDropped(ctx context.Context, collectionID int64) error {

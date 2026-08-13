@@ -104,6 +104,10 @@ func (t *commitL1SegmentTask) Execute(ctx context.Context) error {
 		segment.mu.Lock()
 		segment.MarkPendingDataDurable(t.timetick)
 		segment.finalCommitDone = true
+		// A successful response without DataVersion is valid during a rolling
+		// upgrade from a legacy DataCoord. New DataCoord versions guarantee the
+		// version in successful responses; actual RPC/status failures still return
+		// above and remain retriable through segmentTaskBase.execute.
 		sealedEvent, sealed := segment.markSealedAtDataVersionLocked(sealedAt)
 		segment.mu.Unlock()
 		segment.NotifyDataUpdated()

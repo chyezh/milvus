@@ -27,6 +27,7 @@ import (
 	"github.com/samber/lo"
 	"go.opentelemetry.io/otel"
 	"golang.org/x/time/rate"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
@@ -42,6 +43,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/importutilv2"
 	"github.com/milvus-io/milvus/internal/util/segmentutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil"
+	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/common"
 	"github.com/milvus-io/milvus/pkg/v3/metrics"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
@@ -661,6 +663,14 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 
 		if segment.State == commonpb.SegmentState_Dropped {
 			mlog.Info(context.TODO(), "save to dropped segment, ignore this request")
+			if req.GetFlushed() && req.GetSegLevel() != datapb.SegmentLevel_L0 && segment.GetSealedAtDataVersion() != nil {
+				if err := s.completeAssignedFlushDataViewPublication(ctx, req, segment, segment.GetSealedAtDataVersion()); err != nil {
+					mlog.Error(ctx, "failed to complete DataView publication retry after flush",
+						mlog.FieldSegmentID(req.GetSegmentID()), mlog.Err(err))
+					return merr.Status(err), nil
+				}
+				return successWithFlushedDataVersion(segment.GetSealedAtDataVersion()), nil
+			}
 			return merr.Success(), nil
 		}
 
@@ -720,6 +730,25 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 		UpdateSegmentStats(req.GetSegmentID(), req.GetStats()),
 	)
 
+	var flushedDataVersion *viewpb.DataVersion
+	if req.GetFlushed() && req.GetSegLevel() != datapb.SegmentLevel_L0 {
+		if s.dataViewManager == nil {
+			err := merr.WrapErrServiceNotReadyMsg("data view manager is not initialized")
+			return merr.Status(err), nil
+		}
+
+		assigned, err := s.dataViewManager.AssignFlushVersion(ctx, req.GetCollectionID(), req.GetSegmentID())
+		if err != nil {
+			mlog.Error(ctx, "failed to assign flush DataVersion", mlog.FieldSegmentID(req.GetSegmentID()), mlog.Err(err))
+			return merr.Status(err), nil
+		}
+		if assigned == nil {
+			err := merr.WrapErrDataIntegrityMsg("flush segment %d has no assigned DataVersion", req.GetSegmentID())
+			return merr.Status(err), nil
+		}
+		flushedDataVersion = assigned
+	}
+
 	// Update segment info in memory and meta. Stale updates (segment already
 	// flushed / outdated time tick) are swallowed inside UpdateSegmentsInfo as
 	// benign no-ops, so any error here is a real failure.
@@ -727,17 +756,12 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 		mlog.Error(context.TODO(), "save binlog and checkpoints failed", mlog.Err(err))
 		return merr.Status(err), nil
 	}
-	var flushedDataVersion *viewpb.DataVersion
-	if s.dataViewManager != nil && req.GetFlushed() && req.GetSegLevel() != datapb.SegmentLevel_L0 {
-		version, err := s.dataViewManager.OnFlush(ctx, FlushDataViewEvent{
-			CollectionID:         req.GetCollectionID(),
-			SegmentIDs:           []int64{req.GetSegmentID()},
-			TemporaryUnavailable: enableSortCompaction(),
-		})
-		if err != nil {
-			mlog.Warn(ctx, "failed to publish DataView after flush", mlog.Err(err))
-		} else {
-			flushedDataVersion = version
+
+	if flushedDataVersion != nil {
+		segment := s.meta.GetSegment(ctx, req.GetSegmentID())
+		if err := s.completeAssignedFlushDataViewPublication(ctx, req, segment, flushedDataVersion); err != nil {
+			mlog.Error(ctx, "failed to publish DataView after flush", mlog.FieldSegmentID(req.GetSegmentID()), mlog.Err(err))
+			return merr.Status(err), nil
 		}
 	}
 
@@ -782,6 +806,69 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 	}
 
 	return successWithFlushedDataVersion(flushedDataVersion), nil
+}
+
+func (s *Server) completeAssignedFlushDataViewPublication(
+	ctx context.Context,
+	req *datapb.SaveBinlogPathsRequest,
+	segment *SegmentInfo,
+	assigned *viewpb.DataVersion,
+) error {
+	if s.dataViewManager == nil {
+		return merr.WrapErrServiceNotReadyMsg("data view manager is not initialized")
+	}
+
+	mutation := PublishedMutation{}
+	var published *viewpb.DataVersion
+	var err error
+	switch {
+	case segment.GetState() == commonpb.SegmentState_Dropped:
+		published, err = s.dataViewManager.RetryAssignedFlushPublication(
+			ctx,
+			req.GetCollectionID(),
+			req.GetSegmentID(),
+			assigned,
+			req.GetDropped() || segment.GetNumOfRows() == 0,
+		)
+	case isImmediatelyLoadableFlushSegment(segment):
+		mutation.Add = []SegmentMembership{publishedSegmentMembership(segment)}
+		published, err = s.dataViewManager.CommitPublishedView(ctx, req.GetCollectionID(), assigned, mutation)
+	default:
+		return nil
+	}
+
+	if err != nil {
+		return dataViewPublicationError(req.GetSegmentID(), err)
+	}
+	if !proto.Equal(assigned, published) {
+		return merr.WrapErrDataIntegrityMsg(
+			"published DataVersion %d/%d differs from assigned flush version %d/%d for segment %d",
+			published.GetStreamingVersion(),
+			published.GetCompactVersion(),
+			assigned.GetStreamingVersion(),
+			assigned.GetCompactVersion(),
+			req.GetSegmentID(),
+		)
+	}
+	return nil
+}
+
+func dataViewPublicationError(segmentID int64, err error) error {
+	if merr.IsMilvusError(err) {
+		return merr.Wrapf(err, "publish DataView for flushed segment %d", segmentID)
+	}
+	return merr.WrapErrServiceUnavailable(
+		fmt.Sprintf("publish DataView for flushed segment %d", segmentID),
+		err.Error(),
+	)
+}
+
+func isImmediatelyLoadableFlushSegment(segment *SegmentInfo) bool {
+	return segment != nil &&
+		segment.GetState() == commonpb.SegmentState_Flushed &&
+		segment.GetLevel() != datapb.SegmentLevel_L0 &&
+		!segment.GetIsImporting() &&
+		!segment.GetIsInvisible()
 }
 
 func successWithFlushedDataVersion(version *viewpb.DataVersion) *commonpb.Status {
@@ -1181,13 +1268,14 @@ func (s *Server) GetStreamingNodeQueryViewResources(ctx context.Context, req *da
 		resp.Status = merr.Status(merr.WrapErrServiceInternalMsg("data view manager is nil"))
 		return resp, nil
 	}
-	dataView, err := s.dataViewManager.DataView(ctx, req.GetCollectionId(), req.GetDataVersion())
+	ref, err := s.dataViewManager.Get(ctx, req.GetCollectionId(), qviews.FromProtoDataVersion(req.GetDataVersion()))
 	if err != nil {
 		resp.Status = merr.Status(err)
 		return resp, nil
 	}
-	shard := dataViewShard(dataView, req.GetVchannel())
-	if shard == nil {
+	defer ref.Deref()
+	dataView := ref.DataView()
+	if !dataView.HasVChannel(req.GetVchannel()) {
 		resp.Status = merr.Status(merr.WrapErrServiceInternalMsg(
 			"data view shard not found, collectionID=%d, vchannel=%s, dataVersion=(%d,%d)",
 			req.GetCollectionId(),
@@ -1197,8 +1285,7 @@ func (s *Server) GetStreamingNodeQueryViewResources(ctx context.Context, req *da
 		))
 		return resp, nil
 	}
-
-	segmentIDs := dataViewShardSegmentIDs(shard, req.GetPartitionIds())
+	segmentIDs := dataView.SegmentIDsForVChannel(req.GetVchannel(), req.GetPartitionIds())
 	if len(segmentIDs) == 0 {
 		return resp, nil
 	}
@@ -2409,14 +2496,18 @@ func (s *Server) NotifyDropPartition(ctx context.Context, channel string, partit
 		mlog.String("channelname", channel),
 		mlog.Any("partitionID", partitionIDs))
 	if s.dataViewManager != nil {
+		partitionSet := make(map[int64]struct{}, len(partitionIDs))
+		for _, partitionID := range partitionIDs {
+			partitionSet[partitionID] = struct{}{}
+		}
+		trimFilter := dataViewPartitionTrimFilter(partitionSet)
 		for _, collectionID := range s.meta.GetCollectionIDsByPartition(ctx, partitionIDs) {
-			if _, err := s.dataViewManager.OnDropPartition(ctx, DropPartitionDataViewEvent{
-				CollectionID: collectionID,
-				PartitionIDs: partitionIDs,
-			}); err != nil {
+			if _, err := s.meta.commitDataViewTrim(ctx, collectionID, trimFilter); err != nil {
 				return err
 			}
 		}
+		s.segmentManager.DropSegmentsOfPartition(ctx, channel, partitionIDs)
+		return nil
 	}
 	s.segmentManager.DropSegmentsOfPartition(ctx, channel, partitionIDs)
 	// release all segments of the partition.
@@ -2440,21 +2531,19 @@ func (s *Server) DropSegmentsByTime(ctx context.Context, collectionID int64, flu
 			return err
 		}
 		if s.dataViewManager != nil {
-			_, err = s.dataViewManager.OnTruncate(ctx, TruncateDataViewEvent{
-				CollectionID: collectionID,
-				VChannel:     channelName,
-				FlushTs:      flushTs,
-			})
+			trimFilter := dataViewTruncateTrimFilter(channelName, flushTs)
+			_, err = s.meta.commitDataViewTrim(ctx, collectionID, trimFilter)
 			if err != nil {
-				mlog.Warn(ctx, "OnTruncate DataView failed", mlog.Err(err))
+				mlog.Warn(ctx, "trim truncated segments from DataView failed", mlog.Err(err))
 				return err
 			}
-		}
-		// drop segments that were updated before the flush timestamp
-		err = s.meta.TruncateChannelByTime(ctx, channelName, flushTs)
-		if err != nil {
-			mlog.Warn(context.TODO(), "TruncateChannelByTime failed", mlog.Err(err))
-			return err
+		} else {
+			// drop segments that were updated before the flush timestamp
+			err = s.meta.TruncateChannelByTime(ctx, channelName, flushTs)
+			if err != nil {
+				mlog.Warn(context.TODO(), "TruncateChannelByTime failed", mlog.Err(err))
+				return err
+			}
 		}
 	}
 
@@ -3362,14 +3451,8 @@ func (s *Server) HandleCommitVchannel(ctx context.Context, req *datapb.HandleCom
 			return err
 		}
 		if s.dataViewManager != nil && collectionID != 0 {
-			if _, err := s.dataViewManager.OnImport(ctx, ImportDataViewEvent{
-				CollectionID: collectionID,
-				SegmentIDs:   segIDs,
-			}); err != nil {
-				mlog.Warn(ctx, "failed to publish DataView after import commit",
-					mlog.FieldJobID(jobID),
-					mlog.String("vchannel", vchannel),
-					mlog.Err(err))
+			if _, err := s.meta.commitDataViewStreaming(ctx, collectionID, segIDs); err != nil {
+				return merr.Wrapf(err, "publish DataView after import job %d vchannel %s", jobID, vchannel)
 			}
 		}
 		return nil
@@ -3401,6 +3484,9 @@ func (s *Server) getImportSegmentIDsByVchannel(ctx context.Context, jobID int64,
 				continue
 			}
 			if seg.GetInsertChannel() != vchannel {
+				continue
+			}
+			if seg.GetState() == commonpb.SegmentState_Dropped {
 				continue
 			}
 			segIDs = append(segIDs, segID)

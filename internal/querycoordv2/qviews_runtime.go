@@ -22,6 +22,7 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/milvus-io/milvus/internal/coordinator/snmanager"
+	"github.com/milvus-io/milvus/internal/dataview"
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/metastore/kv/queryview"
 	qnmanager "github.com/milvus-io/milvus/internal/querynodev2/client/manager"
@@ -65,7 +66,7 @@ type qviewsRuntimeDependencies struct {
 	queryNodeClient      nodeview.QueryNodeClient
 	resourceGroupManager nodeview.ResourceGroupManager
 	dataViewProvider     balancer.DataViewProvider
-	dataViewReferences   qviews.DataViewReferenceManager
+	dataViewManager      dataview.ReferenceManager
 
 	queryNodeManager            qnmanager.ManagerClient
 	streamingCoordClient        streamingcoordclient.Client
@@ -86,10 +87,7 @@ func newQViewsRuntime(ctx context.Context, deps qviewsRuntimeDependencies) (*qvi
 		return nil, merr.WrapErrServiceInternalMsg("resource group manager is nil")
 	}
 	if deps.dataViewProvider == nil {
-		deps.dataViewProvider = emptyDataViewProvider{}
-	}
-	if deps.dataViewReferences == nil {
-		deps.dataViewReferences = noopDataViewReferences{}
+		return nil, merr.WrapErrServiceInternalMsg("data view provider is nil")
 	}
 
 	if deps.queryNodeClient == nil {
@@ -120,7 +118,7 @@ func newQViewsRuntime(ctx context.Context, deps qviewsRuntimeDependencies) (*qvi
 		return nil, err
 	}
 	reliableSyncer := syncer.NewReliableSyncer(deps.viewSyncClient)
-	shardViewRegistry, err := coordview.RecoverShardViewRegistry(ctx, deps.queryViewCatalog, reliableSyncer, deps.dataViewReferences)
+	shardViewRegistry, err := coordview.RecoverShardViewRegistry(ctx, deps.queryViewCatalog, reliableSyncer, deps.dataViewManager)
 	if err != nil {
 		_ = reliableSyncer.Close()
 		return nil, err
@@ -210,7 +208,11 @@ func newDefaultQViewsRuntimeDependencies(
 	queryCoordCatalog metastore.QueryCoordCatalog,
 	resourceGroupManager nodeview.ResourceGroupManager,
 	mixCoord types.MixCoord,
-) qviewsRuntimeDependencies {
+) (qviewsRuntimeDependencies, error) {
+	dataViewProvider, dataViewManager, err := resolveQViewsDataViewCapabilities(mixCoord)
+	if err != nil {
+		return qviewsRuntimeDependencies{}, err
+	}
 	queryNodeManager := qnmanager.NewManagerClient(etcdCli)
 	streamingCoordClient := streamingcoordclient.NewClient(etcdCli)
 	streamingNodeHandler := snhandler.NewHandlerClient(streamingCoordClient.Assignment())
@@ -219,80 +221,36 @@ func newDefaultQViewsRuntimeDependencies(
 		queryViewCatalog:            queryview.NewQueryViewCatalog(metaKV, "coord"),
 		queryNodeClient:             queryNodeManager,
 		resourceGroupManager:        resourceGroupManager,
-		dataViewProvider:            &mixCoordDataViewProvider{mixCoord: mixCoord},
+		dataViewProvider:            dataViewProvider,
+		dataViewManager:             dataViewManager,
 		queryNodeManager:            queryNodeManager,
 		streamingCoordClient:        streamingCoordClient,
 		streamingNodeHandler:        streamingNodeHandler,
 		streamingNodeViewSyncClient: streamingNodeHandler.QueryViewSyncClient(),
 	}
-	if references, ok := mixCoord.(qviews.DataViewReferenceManager); ok {
-		deps.dataViewReferences = references
-	}
-	return deps
+	return deps, nil
 }
 
-type noopDataViewReferences struct{}
-
-func (noopDataViewReferences) PinDataView(context.Context, int64, qviews.DataVersion) error {
-	return nil
-}
-
-func (noopDataViewReferences) RecoverDataViewReference(context.Context, int64, qviews.DataVersion) (bool, error) {
-	return true, nil
-}
-
-func (noopDataViewReferences) UnpinDataView(int64, qviews.DataVersion) {}
-
-type dataViewProviderSource interface {
+type dataViewCapabilitiesSource interface {
 	DataViewProvider() balancer.DataViewProvider
+	DataViewManager() dataview.ReferenceManager
 }
 
-type mixCoordDataViewProvider struct {
-	mixCoord types.MixCoord
-}
-
-func (p *mixCoordDataViewProvider) DataViewSnapshot(ctx context.Context) *balancer.DataViewSnapshot {
-	provider := p.provider()
-	if provider == nil {
-		return balancer.NewDataViewSnapshot(0, nil, nil)
+func resolveQViewsDataViewCapabilities(mixCoord interface{}) (balancer.DataViewProvider, dataview.ReferenceManager, error) {
+	if mixCoord == nil {
+		return nil, nil, merr.WrapErrServiceInternalMsg("mixcoord is nil")
 	}
-	return provider.DataViewSnapshot(ctx)
-}
-
-func (p *mixCoordDataViewProvider) DataViewSnapshotForCollections(ctx context.Context, collectionIDs map[int64]struct{}) *balancer.DataViewSnapshot {
-	provider := p.provider()
-	if provider == nil {
-		return balancer.NewDataViewSnapshot(0, nil, nil)
-	}
-	return provider.DataViewSnapshotForCollections(ctx, collectionIDs)
-}
-
-func (p *mixCoordDataViewProvider) SegmentSnapshot(ctx context.Context, segmentIDs []int64) balancer.SegmentSnapshot {
-	provider := p.provider()
-	if provider == nil {
-		return nil
-	}
-	return provider.SegmentSnapshot(ctx, segmentIDs)
-}
-
-func (p *mixCoordDataViewProvider) provider() balancer.DataViewProvider {
-	source, ok := p.mixCoord.(dataViewProviderSource)
+	source, ok := mixCoord.(dataViewCapabilitiesSource)
 	if !ok {
-		return nil
+		return nil, nil, merr.WrapErrServiceInternalMsg("mixcoord does not provide data view capabilities")
 	}
-	return source.DataViewProvider()
-}
-
-type emptyDataViewProvider struct{}
-
-func (emptyDataViewProvider) DataViewSnapshot(context.Context) *balancer.DataViewSnapshot {
-	return balancer.NewDataViewSnapshot(0, nil, nil)
-}
-
-func (emptyDataViewProvider) DataViewSnapshotForCollections(context.Context, map[int64]struct{}) *balancer.DataViewSnapshot {
-	return balancer.NewDataViewSnapshot(0, nil, nil)
-}
-
-func (emptyDataViewProvider) SegmentSnapshot(context.Context, []int64) balancer.SegmentSnapshot {
-	return nil
+	provider := source.DataViewProvider()
+	if provider == nil {
+		return nil, nil, merr.WrapErrServiceInternalMsg("data view provider is nil")
+	}
+	manager := source.DataViewManager()
+	if manager == nil {
+		return nil, nil, merr.WrapErrServiceInternalMsg("data view manager is nil")
+	}
+	return provider, manager, nil
 }

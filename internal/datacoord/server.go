@@ -48,7 +48,6 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/dependency"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
-	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/kv"
 	"github.com/milvus-io/milvus/pkg/v3/metrics"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
@@ -111,7 +110,7 @@ type Server struct {
 	metaRootPath              string
 	meta                      *meta
 	dataViewManager           DataViewManager
-	dataViewReferences        *dataViewReferenceManager
+	dataViewLifecycle         *dataViewLifecycle
 	queryViewLoadInfoNotifier QueryViewLoadInfoNotifier
 	segmentManager            Manager
 	allocator                 allocator.Allocator
@@ -492,7 +491,7 @@ func (s *Server) initGarbageCollection(cli storage.ChunkManager) {
 		scanInterval:     Params.DataCoordCfg.GCScanIntervalInHour.GetAsDuration(time.Hour),
 		missingTolerance: Params.DataCoordCfg.GCMissingTolerance.GetAsDuration(time.Second),
 		dropTolerance:    Params.DataCoordCfg.GCDropTolerance.GetAsDuration(time.Second),
-		dataViewGC:       s.dataViewReferences,
+		dataViewGC:       s.dataViewLifecycle,
 	})
 }
 
@@ -637,57 +636,35 @@ func (s *Server) initMeta(chunkManager storage.ChunkManager) error {
 	reloadEtcdFn := func() error {
 		var err error
 		catalog := datacoord.NewCatalog(s.kv, chunkManager.RootPath(), s.metaRootPath)
-		dataViewStore := &dataViewSegmentStore{}
-		type dataViewRecoveryResult struct {
-			manager DataViewManager
-			err     error
-		}
-		dataViewRecoveryCh := make(chan dataViewRecoveryResult, 1)
-		go func() {
-			manager, err := dataview.RecoverManager(s.ctx, catalog, dataViewStore)
-			dataViewRecoveryCh <- dataViewRecoveryResult{manager: manager, err: err}
-		}()
 		s.meta, err = newMeta(s.ctx, catalog, chunkManager, s.broker)
-		dataViewRecovery := <-dataViewRecoveryCh
 		if err != nil {
 			return err
 		}
 		s.meta.queryViewLoadInfoNotifier = s.queryViewLoadInfoNotifier
-		dataViewStore.meta = s.meta
-		if dataViewRecovery.err != nil {
-			return dataViewRecovery.err
-		}
-		s.dataViewManager = dataViewRecovery.manager
-		s.meta.dataViewManager = s.dataViewManager
-		if err := s.meta.reloadCollectionsFromRootcoord(s.ctx, s.broker); err != nil {
-			return err
-		}
-		s.dataViewReferences, err = recoverDataViewReferenceManager(
+		s.dataViewManager, err = dataview.RecoverManager(
 			s.ctx,
 			catalog,
-			s.dataViewManager,
-			func(collectionID int64) bool { return s.meta.GetCollection(collectionID) != nil },
+			&dataViewSegmentStore{meta: s.meta},
 		)
 		if err != nil {
 			return err
 		}
-		// DataView repair must see the current collection/partition cache so
-		// DDL trim intent from RootCoord is applied before reconciling segments.
-		repairCollectionIDs := make([]int64, 0, len(s.meta.recoveredCollectionIDs))
-		for _, collectionID := range s.meta.recoveredCollectionIDs {
-			if !s.dataViewReferences.IsTerminal(collectionID) {
-				repairCollectionIDs = append(repairCollectionIDs, collectionID)
-			}
+		s.meta.dataViewManager = s.dataViewManager
+		if err := s.meta.reloadCollectionsFromRootcoord(s.ctx, s.broker); err != nil {
+			return err
 		}
-		if err := s.dataViewManager.RepairCollections(s.ctx, repairCollectionIDs); err != nil {
+		s.dataViewLifecycle, err = recoverDataViewLifecycle(
+			s.ctx,
+			catalog,
+			s.dataViewManager,
+		)
+		if err != nil {
 			return err
 		}
 		return nil
 	}
 	return retry.Do(s.ctx, reloadEtcdFn, retry.Attempts(connMetaMaxRetryTime))
 }
-
-var _ qviews.DataViewReferenceManager = (*Server)(nil)
 
 func (s *Server) initAnalyzeInspector() {
 	if s.analyzeInspector == nil {
@@ -1075,6 +1052,13 @@ func (s *Server) initMixCoord() error {
 	return nil
 }
 
+// StopGarbageCollection synchronously fences DataCoord garbage collection.
+func (s *Server) StopGarbageCollection() {
+	if s.garbageCollector != nil {
+		s.garbageCollector.close()
+	}
+}
+
 // Stop do the Server finalize processes
 // it checks the server status is healthy, if not, just quit
 // if Server is healthy, set server state to stopped, release etcd session,
@@ -1085,7 +1069,7 @@ func (s *Server) Stop() error {
 		return nil
 	}
 	mlog.Info(s.ctx, "datacoord server shutdown")
-	s.garbageCollector.close()
+	s.StopGarbageCollection()
 	mlog.Info(s.ctx, "datacoord garbage collector stopped")
 
 	if s.meta != nil {

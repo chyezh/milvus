@@ -68,11 +68,11 @@ as `Dropped` or `Compacted` do not by themselves make the segment unloadable for
 retained DataViews that still reference it. Physical GC must wait until no
 retained DataView or QueryView can reference the segment.
 
-The current flush plus sort-compaction path has one transitional exception:
-DataCoord may persist an internal DataView that contains a temporary flushed
-segment, but it marks that DataView unavailable in memory and does not expose it
-to QueryCoord. Once sort compaction produces the final segment, DataCoord
-publishes a QueryCoord-visible DataView for QueryView construction.
+The flush plus sort-compaction path does not publish an intermediate DataView.
+The flushed segment receives and retains its `sealed_at_data_version`, while
+QueryCoord continues to consume the previous published head. Once sort
+compaction produces the final loadable segment, DataCoord publishes the
+inherited streaming epoch for the completed flush.
 
 ### 2.3 DataVersion
 
@@ -100,15 +100,11 @@ Version rules:
 
 `compact_version` resets to `0` whenever `streaming_version` advances.
 
-The first DataView version of a collection starts from `(1, 0)`. This applies
-to the first event-created DataView and to recovery rebuild when no previous
-DataView exists.
+The first published DataView version of a collection starts from `(1, 0)`.
 
-DataView is advanced by DataCoord events, not by QueryCoord or by a generic
-recalculation loop. Each event carries the segment mutation that may make
-segments join or leave the view. The event handler still checks the loadable
-predicate, so an event can be recorded as pending and complete only when its
-segments become allowed to load.
+DataView is advanced by explicit DataCoord business adapters, not by QueryCoord
+or by a generic recalculation loop. Each adapter submits the final loadable
+membership mutation after its business completion gates pass.
 
 Flush, import, and copy-segment completion advance DataVersion only when they
 introduce new loadable membership. Compaction, drop partition, and truncate
@@ -180,7 +176,7 @@ DataCoord is the source of truth for DataView.
 Responsibilities:
 
 1. Recover DataView from the metastore on startup.
-2. Keep an in-memory resident DataView per collection.
+2. Keep one in-memory published DataView per collection.
 3. Persist every loadable-membership mutation.
 4. Advance DataVersion according to the rules above.
 5. Expose DataView snapshots to QueryCoord.
@@ -203,30 +199,27 @@ QueryCoord must not modify DataView or assign DataVersion.
 
 ### 4.3 DataViewManager State Model
 
-The first implementation keeps one resident state per collection in DataCoord:
+DataCoord keeps one collection-scoped published state. It is the in-memory copy
+of the snapshot identified by the durable `published_data_version`.
 
 ```go
 type collectionDataViewState struct {
     collectionID int64
-
-    latestResident *viewpb.DataViewOfCollection
-    latestVisible  *viewpb.DataViewOfCollection
+    published    *viewpb.DataViewOfCollection
 }
 ```
 
 Definitions:
 
-- **latest persisted DataView**: the maximum DataVersion found under the
-  collection's DataView version prefix in the metastore.
-- **latest resident DataView**: the latest linear DataView held by DataCoord in
-  memory. It may be unavailable for QueryView construction, for example the
-  temporary flush DataView before sort-compaction handoff.
-- **latest visible DataView**: the latest resident DataView that DataCoord has
-  marked available for QueryCoord/Balancer.
+- **published DataView**: the immutable snapshot identified by the collection's
+  durable `published_data_version`.
+- **orphan snapshot**: a snapshot key that is not reachable from the durable
+  published head, for example because its head update did not complete.
 
-QueryCoord can only consume `latestVisible`. DataCoord internal event handling
-continues from `latestResident`, so unavailable temporary DataViews still keep
-the collection's DataView history linear.
+The published head is the sole QueryCoord membership authority. A flush whose
+output is not yet loadable receives and durably retains its
+`sealed_at_data_version`, but does not create or expose another DataView state.
+The later loadable completion publishes the inherited streaming epoch.
 
 ## 5. Persistence
 
@@ -248,15 +241,16 @@ Persistence and visibility semantics:
 
 - A DataView version is durably complete if and only if its full snapshot key
   exists.
-- The latest persisted DataView is the maximum DataVersion under the
-  collection's `versions/*` prefix.
-- QueryCoord-visible DataView snapshots may lag the latest persisted snapshot
-  when DataCoord marks a snapshot as temporarily unavailable in memory, for
-  example during the current flush plus sort-compaction path.
+- `published_data_version` selects the sole snapshot that new QueryCoord work
+  may consume. The maximum snapshot key is not an authority.
+- A delayed flush persists only its segment-level assigned version until final
+  loadable membership can be published; it does not persist an unavailable
+  DataView snapshot.
 - QueryCoord and DataViewProvider must obtain DataView from DataCoord or the
   DataViewProvider cache; they must not derive membership from segment metadata.
-- Failed writes may leave no new version key. Because each version is one full
-  snapshot value, a visible key is treated as a complete DataView snapshot.
+- Snapshot persistence and published-head advancement are atomic. A snapshot
+  not selected by `published_data_version` is an orphan and is never exposed as
+  the latest published DataView.
 
 ### 5.1 SegmentMeta-First Publication
 
@@ -268,11 +262,10 @@ Normal flow:
 
 ```
 1. Apply and persist segment metadata mutation.
-2. Build the next full DataView snapshot from the previous resident DataView
-   plus the DataCoord event.
-3. Persist `versions/{D'}`.
-4. If the new DataView is available for QueryView construction, notify
-   QueryCoord after `versions/{D'}` is persisted.
+2. After business completion gates pass, build the next full snapshot from the
+   previous published DataView plus an explicit membership mutation.
+3. Atomically persist `versions/{D'}` and advance `published_data_version`.
+4. Notify QueryCoord after publication succeeds.
 ```
 
 This is not a strict atomic transaction between segment metadata and DataView.
@@ -285,137 +278,168 @@ DataView must not publish membership that segment metadata cannot describe.
 ```
 
 If DataView persistence fails after segment metadata has already advanced,
-no new DataView version is persisted and QueryCoord is not notified. Later
-events or recovery may compact multiple segment metadata changes into one
-DataView update.
+the published head is unchanged and QueryCoord is not notified. The business
+adapter reports the failure and explicitly retries the same assigned epoch or
+membership rewrite. Recovery does not infer a replacement mutation or version
+from SegmentMeta.
 
-DropPartition and truncate are exceptions to the default ordering. These
-destructive trim operations should update DataView first, then update segment
-metadata. This prevents QueryCoord from building new QueryViews over membership
-that has already been logically removed by DDL/trim intent.
+DropPartition and truncate also follow SegmentMeta-first ordering, but their
+metadata mutation has a narrower meaning: it is a durable, collection-scoped
+logical-removal fence. DataCoord validates assigned-epoch ordering, persists
+the matching SegmentMeta records as `Dropped`, then publishes the DataView
+trim. QueryCoord-visible membership remains authoritative until that trim is
+durable; an older retained DataView may therefore continue to reference and
+load a fenced segment while publication is retried. DataView and QueryView
+references continue to protect the segment's physical lifetime.
 
-### 5.2 Reconciliation Semantics
+The core publication boundary is a generic metadata-first protocol rather than
+a trim-specific operation. DataView holds the collection publication lock while
+the business adapter performs its metadata transaction and returns the exact
+publications enabled by that transaction. The adapter validates the plan
+against the current DataView state before persisting the metadata fence; core
+validates the returned plan again before applying it. This keeps SegmentMeta
+ownership in DataCoord while keeping publication ordering and pending-epoch
+fencing in DataView.
 
-DataCoord may reconcile DataView from segment metadata only on recovery or when
-repairing a failed DataView publication. Normal event handling should remain
-event-driven.
+### 5.2 Recovery Authority
 
-If reconciliation finds that segment metadata has advanced beyond the latest
-persisted DataView, DataCoord persists one new full DataView snapshot that
-represents the final loadable membership. It does not need to replay every
-missed event.
+Recovery loads the collection version-state record and then loads exactly the
+snapshot identified by `published_data_version`. It does not compare the
+snapshot with SegmentMeta, reconstruct expected membership, classify a diff,
+or generate a new DataVersion.
 
-Version choice during reconciliation, in priority order:
+SegmentMeta may legitimately be ahead of the published head. In particular,
+`sealed_at_data_version` can identify assigned but unfinished Streaming epochs,
+and DDL removal fences can be durable before their DataView trim. The
+corresponding business adapter re-drives publication with an explicit mutation.
+Recovery preserves both sides without inventing the missing business decision.
 
-| Reconciliation Diff | Version Transition |
-|---|---|
-| New import or flush segments appear | `(S, C) -> (S+1, 0)` |
-| Compact handoff appears | `(S, C) -> (S, C+1)` |
-| Only delete frontier differs | unchanged; refresh the latest DataView-derived timetick |
-| No membership or delete frontier diff | unchanged |
-
-This means several segment events may be compacted into a single DataView
-snapshot. DataVersion reflects persisted DataView changes, not every
-individual segment metadata event.
-
-The priority is intentional. Recovery uses the same segment visibility rules as
-the current `GetRecoveryInfoV2` path to compute the expected DataView. If the
-computed DataView is identical to the latest DataView, recovery does not create
-another version. If it differs, recovery classifies the final diff rather than
-replaying every missed event. New flush/import data is treated as a streaming
-epoch update and has priority over compact handoff when both appear in the same
-recovery diff, because it is also the signal used by the query side to evict
-overlapped growing data. Compaction handoff is treated as a compact-version
-update only when no streaming-version event is present. A pure delete frontier
-mismatch only updates the in-memory/sync payload for the latest view and does
-not advance DataVersion.
-
-Recovery classification does not require a new durable reason field. It can use
-existing segment metadata, such as segment state and compact-from/compaction
-lineage, to distinguish flush/import additions from compaction handoff.
+A readable snapshot newer than the published head is an orphan. It is not
+adopted by recovery and GC removes it once no exact live reference protects it.
 
 ## 6. Mutation Semantics
 
-DataViewManager is the DataCoord component that applies DataCoord events to the
-persisted loadable membership.
+DataViewManager is the DataCoord component that applies explicit DataCoord
+membership commits to the persisted loadable membership. Business adapters use
+`CommitPublishedView`, `CommitStreamingView`, `CommitRewrite`, and the generic
+`CommitMetadataFirst` protocol with explicit mutations.
 
-Suggested interface shape:
+`CommitMetadataFirst` is used when a business operation must durably update
+SegmentMeta before publishing its DataView consequence, such as DropPartition
+and truncate. Its callback receives a core validator and returns an explicit
+plan:
+
+```go
+type AssignedMutation struct {
+    Version  *viewpb.DataVersion // an already allocated (S, 0) epoch
+    Mutation PublishedMutation
+}
+
+type MetadataFirstPlan struct {
+    Assigned []AssignedMutation // complete pending Streaming epochs
+    Rewrite  PublishedMutation  // independent membership rewrite
+}
+
+type MetadataFirstCommit func(
+    context.Context,
+    MetadataFirstPlanValidator,
+) (MetadataFirstPlan, error)
+```
+
+The callback owns collection-scoped SegmentMeta enumeration, business filters,
+lineage or lifecycle completion conditions, deterministic grouping of assigned
+epochs, and persistence of the metadata fence. It may return only already
+allocated epochs and must call the validator before persisting the fence.
+DataView revalidates the same plan after the callback returns, completes
+assigned epochs in order, and applies the explicit rewrite. It never discovers
+trim targets by scanning SegmentMeta itself and never infers whether a mutation
+is a flush, rewrite, or DDL operation.
+
+Current interface shape:
 
 ```go
 func RecoverManager(ctx context.Context, catalog RecoveryCatalog, segments SegmentStore) (Manager, error)
 
 type DataViewManager interface {
-    OnFlush(ctx context.Context, event FlushDataViewEvent) (*viewpb.DataVersion, error)
-    OnImport(ctx context.Context, event ImportDataViewEvent) (*viewpb.DataVersion, error)
-    OnCopySegmentComplete(ctx context.Context, event CopySegmentCompleteDataViewEvent) (*viewpb.DataVersion, error)
-    OnCompact(ctx context.Context, event CompactDataViewEvent) (*viewpb.DataVersion, error)
-    OnL0Compact(ctx context.Context, event L0CompactDataViewEvent) (*viewpb.DataVersion, error)
-    OnExternalRefresh(ctx context.Context, event ExternalRefreshDataViewEvent) (*viewpb.DataVersion, error)
-    OnDropPartition(ctx context.Context, event DropPartitionDataViewEvent) (*viewpb.DataVersion, error)
-    OnTruncate(ctx context.Context, event TruncateDataViewEvent) (*viewpb.DataVersion, error)
-    OnDropCollection(ctx context.Context, collectionID int64) (*viewpb.DataVersion, error)
+    AssignFlushVersion(ctx context.Context, collectionID, segmentID int64) (*viewpb.DataVersion, error)
+    CommitPublishedView(ctx context.Context, collectionID int64, assigned *viewpb.DataVersion, mutation PublishedMutation) (*viewpb.DataVersion, error)
+    RetryAssignedFlushPublication(ctx context.Context, collectionID, segmentID int64, assigned *viewpb.DataVersion, removeOnly bool) (*viewpb.DataVersion, error)
+    CommitStreamingView(ctx context.Context, collectionID int64, mutation PublishedMutation) (*viewpb.DataVersion, error)
+    CommitRewrite(ctx context.Context, collectionID int64, mutation PublishedMutation) (*viewpb.DataVersion, error)
+    CommitMetadataFirst(ctx context.Context, collectionID int64, commit MetadataFirstCommit) (*viewpb.DataVersion, error)
+    InitializeCollection(ctx context.Context, initialization CollectionInitialization) (*viewpb.DataVersion, error)
+    MarkCollectionTerminal(ctx context.Context, collectionID int64) error
 
-    RepairCollection(ctx context.Context, collectionID int64) error
-    RepairCollections(ctx context.Context, collectionIDs []int64) error
-    LatestVisibleDataView(ctx context.Context, collectionID int64) (*viewpb.DataViewOfCollection, error)
-    Snapshot(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewOfCollection, error)
+    Get(ctx context.Context, collectionID int64, version qviews.DataVersion) (DataViewRef, error)
+    LatestPublished(ctx context.Context, collectionID int64) (DataViewRef, error)
+    DataViewSnapshotRefForCollections(ctx context.Context, collectionIDs map[int64]struct{}) (dataview.SnapshotRef, error)
+    SegmentSnapshot(ctx context.Context, segmentIDs []int64) dataview.SegmentSnapshot
+    ShardTimeTicks(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewShardTimeTick, error)
+    IsSegmentReferenced(ctx context.Context, collectionID, segmentID int64) (bool, error)
+    GarbageCollect(ctx context.Context, collectionID int64, retainLatest int) error
 }
 ```
 
-`RecoverManager` restores all DataViews directly from metastore using a
-collection-hint-free full scan. `RepairCollection(s)` is the separate recovery
-repair step that reconciles DataView with SegmentMeta after SegmentMeta and
-collection/partition metadata have recovered.
+Collection-drop finalization is owned by the lifecycle wrapper around the core
+manager. It durably marks the collection terminal, calls
+`MarkCollectionTerminal`, waits for durable QueryView cleanup and live refs to
+drain, then removes the collection snapshots and version state.
 
-Every `On*` method returns the DataVersion generated or affected by the event.
-If the event only refreshes derived metadata, for example L0 compaction changing
-`delete_apply_start_after_timetick`, it returns the current DataVersion without
-advancing it.
+`RecoverManager` restores the durable published head directly from metastore.
+There is no generic post-recovery SegmentMeta repair phase. If an explicit
+business publication failed, that business workflow retries its `Commit*`
+operation after recovery. A metadata-first retry reconstructs the same
+collection-scoped plan from the durable SegmentMeta fence and submits it again;
+recovery does not invent a target set or a DataVersion.
 
-Internal helpers should keep the normal path event-driven:
+Internal helpers keep publication state-oriented and explicit:
 
 ```go
 buildNextView(base, mutation) -> next
-classifyVersionAdvance(mutation) -> streaming/compact/none
-isVisibleForQueryView(view, segmentMeta) -> bool
 deriveDeleteTimetick(view, segmentMeta) -> per-shard timetick
-persistFullSnapshot(view) error
-notifyQCIfVisible(view)
+persistSnapshotAndPublishedHead(view) error
 ```
 
-The event types should carry the affected collection, vchannel, partition, and
+Business adapters carry the affected collection, vchannel, partition, and
 segment IDs from the completed DataCoord mutation. DataViewManager must not
-discover the next view by scanning all segment metadata on the normal path.
-Scanning segment metadata is only a recovery/reconciliation fallback.
+discover the next view by scanning all segment metadata on the normal path or
+during recovery. The business-owned callback supplied to `CommitMetadataFirst`
+is DataCoord adapter code, not membership discovery inside DataViewManager; it
+runs under the collection publication lock and owns the SegmentMeta
+read/persist operation.
 
-The event handler checks whether each affected segment is already loadable:
+Business adapters own completion and loadability gates before calling the
+manager. They submit the final affected IDs as `SegmentMembership` values and
+explicit removals. The manager validates that every added membership is
+loadable and belongs to the target collection, but it never scans SegmentMeta
+to discover membership, classify the transition, or wait for a later business
+event. Metadata-only changes do not call a membership commit. Delayed outputs
+remain outside DataView until their owning adapter submits the final loadable
+membership at the already-assigned epoch.
 
-- If the affected segment is loadable and not already in DataView, add it.
-- If an old member is dropped, compacted away, or removed by DDL/truncate, remove
-  it.
-- If the event only changes segment content or delete frontier, keep
-  DataVersion unchanged.
-- If the event's output is still not loadable, keep it pending or ignore it
-  until the later visibility event completes the same logical operation.
+A normal explicit membership commit advances DataVersion at most once. One
+metadata-first transaction may complete multiple already allocated Streaming
+epochs in order and then apply at most one independent rewrite; it cannot
+allocate a new epoch or collapse those durable epoch identities into a guessed
+version.
 
-A single DataCoord mutation batch advances DataVersion at most once.
+Commit adapters must be idempotent. Repeated requests and mutations whose
+membership is already reflected in the published head are normal no-op success
+cases after durable verification.
 
-Event handlers must be idempotent. Repeated events, events already compacted by
-recovery, and events whose segments are no longer present in the resident view
-are normal no-op success cases.
+### 6.1 Flush Publication Flow
 
-### 6.1 Flush Events
+`SaveBinlogPaths` is the Streaming flush adapter. It first invokes
+`AssignFlushVersion`, then persists the SegmentMeta changes. For an immediately
+loadable output it invokes `CommitPublishedView` with the exact assigned epoch
+and explicit membership before returning success. A retry whose segment has
+already become Dropped uses `RetryAssignedFlushPublication` to verify a durable
+prior publication or explicitly complete an empty/remove-only epoch; the
+manager does not reconstruct the original mutation from current SegmentMeta.
 
-`OnFlush` is triggered by StreamingNode flush completion through
-`SaveBinlogPaths`.
-
-Flush is special in the current implementation. StreamingNode flush can first
-produce a temporary sealed segment. A DataView that contains this temporary
-segment is not yet usable by QueryView, because the system still needs the
-follow-up sort compaction to produce the final loadable segment. DataCoord
-therefore keeps an in-memory availability state for such DataViews and does not
-expose them to QueryCoord/Balancer as QueryView input until the sorted handoff
-is ready.
+StreamingNode flush can first produce a temporary sealed segment that still
+needs sort processing. Such a segment receives its deterministic
+`sealed_at_data_version`, but never enters a published DataView.
 
 If the flushed segment is immediately usable, it joins DataView and advances:
 
@@ -423,23 +447,17 @@ If the flushed segment is immediately usable, it joins DataView and advances:
 (S, C) -> (S+1, 0)
 ```
 
-If the flush output must pass through sort compaction first, the flush-side
-DataView advances to `(S+1, 0)` in DataCoord but remains unavailable to
-QueryView in memory. The later sort-compaction handoff replaces the temporary
-segment with the final segment, advances compact version in the same streaming
-epoch, for example `(S+1, 0) -> (S+1, 1)`, and makes the resulting DataView
-available. QueryCoord first observes this data with the increased
-`streaming_version`, which is the signal needed to evict overlapped growing
-data. In the future, when StreamingNode produces sorted flush output directly,
-this temporary unavailable state can disappear and `OnFlush` can add the usable
-segment directly.
+If the flush output must pass through sort compaction first, QueryCoord
+publication waits. The final sorted segment inherits the original assigned
+`(S+1, 0)` and is published at that exact streaming epoch. The handoff does not
+expose an intermediate DataView snapshot to QueryCoord.
 
 Dropped flush output, partial checkpoint updates, and binlog-only updates do
 not change DataView.
 
-### 6.2 Import Events
+### 6.2 Import Publication
 
-`OnImport` is triggered by import completion.
+The import adapter runs after import completion.
 
 Import preallocation and import progress do not affect DataView. Imported
 segments join only after the import path has completed all gates required for
@@ -454,9 +472,9 @@ When imported segments become loadable, they join DataView and advance:
 
 L0 import output follows the L0 rules and does not join membership.
 
-### 6.3 Compact Events
+### 6.3 Compaction Rewrite
 
-`OnCompact` is triggered by compaction completion.
+The compaction adapter runs after compaction completion.
 
 For non-L0 compaction, DataView changes only when loadable membership changes:
 
@@ -477,25 +495,26 @@ metadata without changing membership does not advance DataView. If a schema-bump
 task performs a full replacement with a different loadable segment ID, it is a
 compact rewrite and advances `compact_version`.
 
-### 6.4 L0 Compact Events
+### 6.4 L0 Compaction Projection
 
-`OnL0Compact` is triggered by Level-0 delete compaction.
+The L0 compaction adapter runs after Level-0 delete compaction.
 
 L0 segments are delete-log carriers, not loadable sealed segments. L0 compaction
 can update manifests, append deltalogs to target segments, and drop L0 input
 segments, but it does not add or remove `DataViewOfPartition.segment_ids`.
 
-Therefore `OnL0Compact` only refreshes the derived
+Therefore the L0 adapter only refreshes the derived
 `delete_apply_start_after_timetick`. It does not advance DataVersion unless the
 same mutation also changes non-L0 loadable membership.
 
-### 6.5 DDL / Trim Events
+### 6.5 DDL / Trim Commits
 
 Some membership changes are not caused by segment production:
 
-- `OnDropPartition` removes loadable segments in the dropped partition.
-- `OnTruncate` removes loadable segments before the truncate fence.
-- `OnDropCollection` deletes the whole DataView record.
+- DropPartition removes loadable segments in the dropped partition.
+- Truncate removes loadable segments before the truncate fence.
+- DropCollection first makes the collection terminal, then deletes DataView
+  snapshots only after durable QueryView cleanup and live-reference drainage.
 
 DropPartition and truncate advance `compact_version` if they remove loadable
 membership:
@@ -504,20 +523,39 @@ membership:
 (S, C) -> (S, C+1)
 ```
 
-DropCollection does not need to advance DataVersion because the collection view
-no longer exists.
+DropCollection does not advance DataVersion because the collection view no
+longer exists. The durable terminal marker rejects new exact-version and
+Balancer snapshot references while existing refs remain readable.
 
-DropPartition and truncate are DataView-first operations: DataCoord removes the
-membership from DataView before marking the affected segment metadata dropped or
-trimmed. This keeps QueryCoord from seeing a new QueryView candidate that still
-contains logically removed membership.
+DropPartition and truncate first persist a collection-scoped logical-removal
+fence by marking every matching SegmentMeta record `Dropped`, then publish the
+DataView consequence while holding the same collection serialization lock.
+DataCoord supplies a `MetadataFirstPlan` whose `Assigned` entries complete
+already allocated Streaming epochs and whose `Rewrite` removes the affected
+published members. Assigned entries are grouped and ordered deterministically;
+the plan cannot complete an unallocated epoch, overtake an earlier pending
+epoch, or advance compact version for a target that was never published. The
+plan is validated before the SegmentMeta fence is persisted and revalidated by
+DataView after the callback returns, so concurrent replacement outputs cannot
+escape the trim.
 
-Recovery must also respect the persisted DDL/trim intent, such as
-collection/partition metadata or truncate metadata, so a crash after DataView
-update but before segment metadata update does not cause the removed segments to
-be rebuilt back into DataView.
+The durable DataView head remains the sole QueryCoord membership authority.
+Physical segment GC consults manager-owned retained-membership accounting. The
+published head, configured retention window, and every live DataViewRef are
+protected; callers cannot provide an independent protected-version list.
+Balancer planning acquires refs for the exact snapshots it reads and releases
+them after planning and application. On process recovery, QueryView state
+machines reacquire their exact refs or enter cleanup before DataCoord starts GC.
+Until the trim publication succeeds, the prior head may still contain a fenced
+segment and existing QueryViews may continue to use it. The `Dropped` state
+prevents that segment from joining future repaired DataViews; it does not revoke
+membership from an already-published or retained DataView. A publication
+failure is retryable, and retry completes the assigned remove-only epoch or
+compact removal from the same authoritative head. Because SegmentMeta already
+contains the durable fence, retry reconstructs the same explicit plan rather
+than asking DataView recovery to infer a missing mutation.
 
-There is no separate `OnDropChannel` event in the current DataCoord behavior.
+There is no separate DropChannel commit in the current DataCoord behavior.
 Channel-level effects should be represented by the actual DDL/trim operation
 that changes membership, or by collection drop.
 
@@ -570,10 +608,10 @@ Rules:
   also changes.
 - L0 state can affect the derived `delete_apply_start_after_timetick`.
 
-### 6.9 Copy Segment Complete Events
+### 6.9 Copy Segment Completion
 
-`OnCopySegmentComplete` is triggered when a copy segment task has persisted the
-target segment result into DataCoord metadata.
+The copy-segment adapter runs after a copy segment task has persisted the target
+segment result into DataCoord metadata.
 
 Snapshot restore is the upstream business flow that creates copy segment jobs,
 but the restore request itself does not make data loadable. A copied target
@@ -597,10 +635,10 @@ Partial copy progress, restore job creation, copied index metadata before the
 target segment is loadable, and task state updates that do not change loadable
 membership do not change DataView.
 
-### 6.10 External Collection Refresh
+### 6.10 External Collection Refresh Commit
 
-`OnExternalRefresh` is triggered when an external collection refresh applies its
-segment patch.
+The external-refresh adapter runs after an external collection refresh applies
+its segment patch.
 
 External refresh can add new loadable segments, patch existing segment content,
 and remove stale loadable segments. DataView handles only membership changes:
@@ -616,19 +654,23 @@ external source snapshot and should advance `compact_version` once.
 
 ### 6.11 DropCollection
 
-DropCollection deletes the whole DataView. It does not need to advance
-DataVersion because the collection view no longer exists. QueryCoord releases
-QueryViews through the load-config release path.
+DropCollection does not advance DataVersion because the collection view no
+longer exists. The lifecycle owner first persists a terminal marker and invokes
+`MarkCollectionTerminal`, which rejects new exact-version and Balancer snapshot
+refs while preserving existing refs. QueryCoord releases QueryViews through the
+load-config release path. Only after durable QueryView cleanup and ref drainage
+does lifecycle-owned finalization remove the collection snapshots and version
+state and clear the terminal marker.
 
 ## 7. QueryCoord Consumption
 
 QueryCoord implements Balancer's `DataViewProvider` by reading DataCoord's
-visible DataView snapshot.
+published DataView snapshot.
 
 ```
 DataCoord DataViewManager
         |
-        | in-process snapshot / watch / refresh
+        | ref-owned in-process snapshot / watch / refresh
         v
 QueryCoord DataViewProvider
         |
@@ -642,14 +684,18 @@ BalancePolicy.Plan(...)
 QueryViewAtCoordBuilder(DataView, assignments)
 ```
 
-The Balancer treats DataView as immutable during one reconcile cycle. If
-DataVersion advances while a plan is being built, that new DataView is consumed
-by the next reconcile cycle.
+The immutable snapshot value, reference, and segment lookup types are owned by
+`internal/dataview`; the Balancer is only a consumer and must not define the
+DataView manager's output model. The Balancer acquires
+`DataViewSnapshotRefForCollections` and treats its DataViews as immutable during
+one reconcile cycle. It holds the snapshot ref through planning and
+application, then releases it. If DataVersion advances while a plan is being
+built, that new DataView is consumed by the next reconcile cycle.
 
-QueryCoord must request a visible view, for example through
-`LatestVisibleDataView(collectionID)`. It must not select the maximum persisted
-DataVersion by itself, because the latest persisted DataView may be a temporary
-flush view that is not yet allowed to participate in QueryView construction.
+QueryCoord must acquire a manager-owned reference, for example through
+`LatestPublished(collectionID)` or `Get(collectionID, version)`. It must not
+select the maximum persisted DataVersion by itself; only the durable published
+head is authoritative.
 
 Phase 1 uses DataVersion comparison:
 
@@ -810,6 +856,12 @@ Compaction, DropPartition, and truncate may mark segment metadata as
 segment should not join future DataViews; it does not mean the segment can no
 longer be loaded by an already-retained DataView.
 
+For DropPartition and truncate, this separation also covers the interval after
+the logical-removal fence is durable but before DataView trim publication
+succeeds. The old DataView remains valid and keeps the segment live; retrying
+publication must not allow physical cleanup to race ahead of retained DataView
+or QueryView references.
+
 Physical cleanup of segment files, binlogs, manifests, and indexes is allowed
 only after all of the following are true:
 
@@ -826,55 +878,55 @@ Because DataCoord and QueryCoord run in the same coordinator process for this
 design, DataView GC does not need a separate cross-service retention protocol in
 the first implementation:
 
-- If a collection is not loaded, DataCoord only keeps the latest DataView, or a
-  small configurable number of latest DataViews.
+- The durable published head is always retained.
+- The configured retention window is counted backward from the published head,
+  not from the maximum snapshot key.
+- Snapshots newer than the published head are unpublished orphans and are
+  collected unless an exact live ref protects them.
 - If a collection is loaded, any DataView referenced by a live QueryView cannot
   be GCed.
 - Segment physical GC runs after DataView GC. A segment can be deleted only
   after no retained DataView and no QueryCoord-side QueryView can still
   reference it.
 
-DataView history is linear, so the last retained DataView contains enough
-membership information for future event handling. GC only checks whether a
-DataView is referenced by QueryCoord-side QueryViews; it does not need to
-consider the DataView's visible/unavailable state.
+Published DataView history is linear. GC protects the durable head, retained
+history, and every manager-owned exact-version ref. The resulting retained
+membership index protects physical segments independently of current
+SegmentMeta lifecycle state.
 
 ## 11. Recovery
 
 On DataCoord startup:
 
-1. Load DataView records from the metastore.
-2. Load segment metadata.
-3. Compute the expected DataView from segment metadata using the same logic as
-   the current `GetRecoveryInfoV2` path.
-4. Select the maximum persisted DataVersion for each collection as the latest
-   persisted DataView.
-5. Compare the computed DataView with the latest persisted DataView.
-6. If they match, use segment metadata to decide whether the latest DataView can
-   participate in load. Expose it only when it is available for QueryView
-   construction.
-7. If they differ, persist one reconciled full snapshot using the priority rules
-   in Section 5.2, then use segment metadata to decide whether the reconciled
-   DataView can participate in load.
+1. Load each collection's durable version-state record.
+2. Load exactly the DataView snapshot identified by
+   `published_data_version`.
+3. Reject recovery if that authoritative snapshot is missing or malformed.
+4. Restore the in-memory published state from that snapshot.
+5. Restore the allocated Streaming watermark and exact assigned epochs from
+   durable version state and `SegmentMeta.sealed_at_data_version`.
+6. Rebuild retained-membership accounting from retained snapshots at or before
+   the published head.
+7. Ignore newer orphan snapshots for publication and let GC remove them.
 
-Recovery reconciliation must preserve DataVersion monotonicity. If DataView is
-missing or older than segment metadata for a collection, DataCoord rebuilds the
-loadable membership from segment metadata, assigns the next DataVersion using
-the reconciliation rules in Section 5.2, and persists the rebuilt version before
-exposing it to QueryCoord. A pure `delete_apply_start_after_timetick`
-difference does not create a new DataVersion; DataCoord refreshes the derived
-timetick for the latest view and syncs it through the normal DataView metadata
-refresh path.
+Recovery never creates a DataView snapshot or advances DataVersion. SegmentMeta
+may be ahead because an assigned flush, compaction, or DDL workflow has not yet
+completed publication. The owning business adapter explicitly retries the
+corresponding `CommitPublishedView`, `CommitRewrite`, or
+`CommitMetadataFirst` operation. Recovery does not infer membership, operation
+type, or version from that difference.
 
-For DataView-first DropPartition or truncate, recovery must apply the persisted
-DDL/trim metadata when computing the expected DataView, even if the segmentMeta
-state mutation has not completed yet.
+The only compatibility exception is migration of legacy collections that have
+snapshot records but no `published_data_version` field. That one-time migration
+may choose the newest already-persisted snapshot whose newly added membership
+is loadable, backfill the durable head to that existing snapshot, and never
+creates a reconstructed snapshot. Once the head exists, all later recovery is
+head-only.
 
 Because each DataView version is persisted as a single full snapshot value,
 DataCoord treats every readable version key as a complete persisted snapshot.
-There is no separate durable unpublished-version namespace in the first
-implementation. QueryCoord visibility for temporary flush snapshots is an
-in-memory DataCoord state recovered from segment metadata.
+Completeness does not imply publication: only `published_data_version` makes a
+snapshot authoritative. There is no temporary unavailable DataView state.
 
 DataView's shard-level `delete_apply_start_after_timetick` is recomputed during
 recovery from segment metadata. The per-segment source field is durable segment
@@ -894,21 +946,26 @@ QueryViews. If load config is absent, Balancer releases residual QueryViews.
 
 The first implementation should cover at least:
 
-1. SegmentMeta-first event succeeds in segment metadata but DataView persistence
-   fails; recovery later rebuilds one reconciled DataView.
-2. Flush temporary DataView `(S+1, 0)` is persisted but unavailable; after
-   restart it is still not exposed to QueryCoord.
-3. Sort-compaction handoff replaces the temporary flush segment, advances
-   `(S+1, 0) -> (S+1, 1)`, and makes the DataView visible.
-4. Recovery sees both flush/import additions and compact handoff; streaming
-   version wins and advances to `(S+1, 0)`.
-5. DropPartition or truncate updates DataView first, crashes before segmentMeta
-   mutation, and recovery does not add removed segments back.
-6. L0 compact refreshes `delete_apply_start_after_timetick` without advancing
+1. SegmentMeta-first mutation succeeds but DataView publication fails; restart
+   restores the old published head and the business retry publishes the exact
+   explicit mutation.
+2. Delayed flush persists `sealed_at_data_version` without creating a DataView;
+   the final sort output inherits and publishes that exact epoch.
+3. A later ready Streaming epoch cannot overtake an earlier assigned but
+   unfinished epoch, including across restart.
+4. Durable head S1 plus newer orphan S2 recovers S1; GC keeps S1, removes S2,
+   and the next restart still succeeds.
+5. Recovery with SegmentMeta ahead of the durable head does not add membership,
+   classify a diff, or allocate a new version.
+6. DropPartition or truncate persists the scoped SegmentMeta removal fence,
+   crashes before DataView trim publication, and explicit retry completes the
+   trim while retained older DataViews keep physical data live.
+7. L0 compact refreshes `delete_apply_start_after_timetick` without advancing
    DataVersion.
-7. Delete-timetick-only recovery refreshes metadata without creating a new
+8. Delete-timetick projection refreshes metadata without creating a new
    DataVersion.
-8. Duplicate, stale, or already-reconciled events are no-op success cases.
+9. Duplicate or stale explicit commits are idempotent after durable
+   verification.
 
 ## 13. Invariants
 
@@ -932,19 +989,22 @@ The first implementation should cover at least:
     QueryView can reference the segment.
 13. DataView may lag segment metadata, but DataView must not publish membership
     that segment metadata cannot describe.
-14. QueryCoord only consumes DataViews that DataCoord marks visible/available
-    for QueryView construction.
+14. QueryCoord only consumes the snapshot selected by the durable published
+    head.
+15. DropPartition and truncate persist a collection-scoped SegmentMeta removal
+    fence before DataView trim publication; recovery does not infer a trim from
+    the fence, while retained DataView and QueryView references remain the
+    authority for membership and physical lifetime until explicit retry
+    succeeds.
+16. Recovery never constructs membership or assigns a DataVersion from a
+    SegmentMeta diff.
+17. GC always retains the durable published head and does not count newer
+    orphan snapshots in its retention window.
 
 ## 14. Open Implementation Choices
 
 1. **Notification path**: QueryCoord can initially refresh DataView through
    polling or explicit trigger, then later switch to watch/event delivery.
-2. **Unavailable flush DataViews**: implementation should define the exact
-   in-memory state name and transition point for the current flush plus
-   sort-compaction path.
-3. **Rebuild trigger**: implementation should define when DataCoord performs
-   recovery-only reconciliation versus online repair after a failed DataView
-   persistence attempt.
-4. **Delete frontier notification**: implementation should decide whether
+2. **Delete frontier notification**: implementation should decide whether
    timetick-only refreshes are pushed directly by DataCoord to StreamingNode or
    routed through a QueryCoord cache before `SyncDataView`.

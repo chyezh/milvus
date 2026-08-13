@@ -24,6 +24,7 @@ import (
 	"github.com/bytedance/mockey"
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
@@ -1440,6 +1441,8 @@ func TestApplyExternalCollectionSegmentUpdateForBaseline_ReplayNewSegment(t *tes
 		segments:    NewSegmentsInfo(),
 		catalog:     catalog,
 	}
+	manager := &fakeGCDataViewManager{}
+	mt.dataViewManager = manager
 	incoming := newTestExternalRefreshSegment(segmentID, collectionID, 100)
 	incoming.ManifestPath = packed.MarshalManifestPath(manifestBasePath, 1)
 
@@ -1452,6 +1455,9 @@ func TestApplyExternalCollectionSegmentUpdateForBaseline_ReplayNewSegment(t *tes
 		[]*datapb.SegmentInfo{incoming},
 	)
 	assert.NoError(t, err)
+	assert.Empty(t, manager.publishedMutations)
+	assert.Len(t, manager.streamingMutations, 1)
+	assert.Equal(t, segmentID, manager.streamingMutations[0].Add[0].SegmentID)
 
 	// Match the V3 catalog representation after a DataCoord restart: the
 	// manifest and aggregate stats survive, while fake binlogs do not. Also
@@ -1504,6 +1510,43 @@ func TestApplyExternalCollectionSegmentUpdateForBaseline_ReplayNewSegment(t *tes
 	)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "collides with existing metadata")
+}
+
+func TestApplyExternalCollectionSegmentUpdateForBaseline_AddOnlyPublishesStreamingVersion(t *testing.T) {
+	ctx := context.Background()
+	collectionID := int64(100)
+	segmentID := int64(10)
+	mt, err := newMemoryMeta(t)
+	require.NoError(t, err)
+	mt.AddCollection(&collectionInfo{
+		ID:            collectionID,
+		VChannelNames: []string{"by-dev-rootcoord-dml_0_v1"},
+		Partitions:    []int64{1},
+	})
+	manager := newDataViewManager(mt.catalog, mt)
+	_, err = manager.InitializeCollection(ctx, DataViewCollectionInitialization{
+		CollectionID: collectionID,
+		VChannels:    []string{"by-dev-rootcoord-dml_0_v1"},
+	})
+	require.NoError(t, err)
+	mt.dataViewManager = manager
+	incoming := newTestExternalRefreshSegment(segmentID, collectionID, 100)
+
+	err = applyExternalCollectionSegmentUpdateForBaseline(
+		ctx,
+		mt,
+		collectionID,
+		nil,
+		nil,
+		[]*datapb.SegmentInfo{incoming},
+	)
+	require.NoError(t, err)
+
+	view, err := latestPublishedDataView(ctx, manager, collectionID)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), view.GetDataVersion().GetStreamingVersion())
+	require.Zero(t, view.GetDataVersion().GetCompactVersion())
+	require.Equal(t, []int64{segmentID}, view.GetShards()[0].GetPartitions()[0].GetSegmentIds())
 }
 
 func TestApplyExternalRefreshPatchClearsStatsPlaceholders(t *testing.T) {

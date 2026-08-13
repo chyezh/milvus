@@ -4,16 +4,86 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/milvus-io/milvus/internal/dataview"
 	"github.com/milvus-io/milvus/internal/views/coord/coordview/syncer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
+
+type trackedDataViewRef struct {
+	view       *dataview.DataView
+	once       sync.Once
+	derefCount int
+}
+
+func (r *trackedDataViewRef) DataView() *dataview.DataView { return r.view }
+
+func (r *trackedDataViewRef) Deref() { r.once.Do(func() { r.derefCount++ }) }
+
+type testDataViewManager struct {
+	mu         sync.Mutex
+	refs       map[qviews.DataVersion][]*trackedDataViewRef
+	err        error
+	failAfter  int
+	getCalls   []qviews.DataVersion
+	getStarted chan struct{}
+	getRelease chan struct{}
+	getBarrier chan struct{}
+	getArrived chan struct{}
+}
+
+type noopTestDataViewManager struct{}
+
+func (noopTestDataViewManager) Get(context.Context, int64, qviews.DataVersion) (dataview.DataViewRef, error) {
+	return noopDataViewRef{}, nil
+}
+
+type blockingDirtyViewSubmitter struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingDirtyViewSubmitter) Submit(dirtyViewEvent) {
+	s.once.Do(func() { close(s.started) })
+	<-s.release
+}
+
+func (m *testDataViewManager) Get(_ context.Context, _ int64, version qviews.DataVersion) (dataview.DataViewRef, error) {
+	if m.getStarted != nil {
+		select {
+		case <-m.getStarted:
+		default:
+			close(m.getStarted)
+		}
+	}
+	if m.getRelease != nil {
+		<-m.getRelease
+	}
+	if m.getBarrier != nil {
+		select {
+		case m.getArrived <- struct{}{}:
+		default:
+		}
+		<-m.getBarrier
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.getCalls = append(m.getCalls, version)
+	if m.err != nil && (m.failAfter == 0 || len(m.getCalls) > m.failAfter) {
+		return nil, m.err
+	}
+	ref := &trackedDataViewRef{}
+	m.refs[version] = append(m.refs[version], ref)
+	return ref, nil
+}
 
 // ---------------------------------------------------------------------------
 // Test mocks
@@ -59,54 +129,6 @@ func (c *mockCatalog) SaveQueryViews(ctx context.Context, views []*viewpb.QueryV
 	c.saveCalls = append(c.saveCalls, batch)
 	c.saved = append(c.saved, batch...)
 	return nil
-}
-
-type testDataViewReferences struct {
-	mu               sync.Mutex
-	pinErr           error
-	recoverErr       error
-	recoverPin       bool
-	failRecoverAfter int
-	pins             []qviews.DataVersion
-	recovered        []qviews.DataVersion
-	unpins           []qviews.DataVersion
-	onPin            func()
-	onUnpin          func()
-}
-
-func (r *testDataViewReferences) PinDataView(_ context.Context, _ int64, version qviews.DataVersion) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.onPin != nil {
-		r.onPin()
-	}
-	if r.pinErr != nil {
-		return r.pinErr
-	}
-	r.pins = append(r.pins, version)
-	return nil
-}
-
-func (r *testDataViewReferences) RecoverDataViewReference(_ context.Context, _ int64, version qviews.DataVersion) (bool, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.recoverErr != nil {
-		return false, r.recoverErr
-	}
-	if r.failRecoverAfter > 0 && len(r.recovered) >= r.failRecoverAfter {
-		return false, errors.New("recover failed")
-	}
-	r.recovered = append(r.recovered, version)
-	return r.recoverPin, nil
-}
-
-func (r *testDataViewReferences) UnpinDataView(_ int64, version qviews.DataVersion) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.onUnpin != nil {
-		r.onUnpin()
-	}
-	r.unpins = append(r.unpins, version)
 }
 
 func (c *mockCatalog) savedStates() []viewpb.QueryViewState {
@@ -300,8 +322,16 @@ func (m *testShardViewManager) waitFlush() {
 func newTestManager(t *testing.T, catalog *mockCatalog, s *mockSyncer, recovered ...*viewpb.QueryViewOfShard) *testShardViewManager {
 	t.Helper()
 	scheduler := newTestDirtyViewFlushScheduler(t, catalog, s, 128)
+	var shardManager *ShardViewManager
+	if len(recovered) > 0 {
+		var err error
+		shardManager, err = RecoverShardViewManager(context.Background(), testShardID, scheduler, noopTestDataViewManager{}, recovered)
+		require.NoError(t, err)
+	} else {
+		shardManager = newShardViewManager(context.Background(), testShardID, scheduler, noopTestDataViewManager{})
+	}
 	manager := &testShardViewManager{
-		ShardViewManager: newShardViewManager(context.Background(), testShardID, scheduler, recovered),
+		ShardViewManager: shardManager,
 		t:                t,
 		scheduler:        scheduler,
 	}
@@ -312,11 +342,11 @@ func newTestManager(t *testing.T, catalog *mockCatalog, s *mockSyncer, recovered
 	return manager
 }
 
-func newTestManagerWithReferences(t *testing.T, catalog *mockCatalog, s *mockSyncer, refs qviews.DataViewReferenceManager) *testShardViewManager {
+func newTestManagerWithDataViewManager(t *testing.T, catalog *mockCatalog, s *mockSyncer, dataViews *testDataViewManager) *testShardViewManager {
 	t.Helper()
 	scheduler := newTestDirtyViewFlushScheduler(t, catalog, s, 128)
 	manager := &testShardViewManager{
-		ShardViewManager: newShardViewManager(context.Background(), testShardID, scheduler, nil, refs),
+		ShardViewManager: newShardViewManager(context.Background(), testShardID, scheduler, dataViews),
 		t:                t,
 		scheduler:        scheduler,
 	}
@@ -359,30 +389,158 @@ func simulateNodeResponse(t *testing.T, s *mockSyncer, node qviews.WorkNode, ver
 // AddPreparing tests
 // ===========================================================================
 
-func TestShardViewManagerPinsBeforePersist(t *testing.T) {
+func TestShardViewManagerDataViewRefAcquiredBeforePersist(t *testing.T) {
 	events := make([]string, 0, 2)
-	refs := &testDataViewReferences{onPin: func() { events = append(events, "pin") }}
+	dataViews := &testDataViewManager{refs: make(map[qviews.DataVersion][]*trackedDataViewRef)}
 	catalog := newMockCatalog()
 	catalog.onSave = func() { events = append(events, "persist") }
-	mgr := newTestManagerWithReferences(t, catalog, newMockSyncer(), refs)
+	mgr := newTestManagerWithDataViewManager(t, catalog, newMockSyncer(), dataViews)
 
 	require.NoError(t, mgr.AddPreparing(context.Background(), testBuilder(1, 1, 1)))
-	require.Equal(t, []string{"pin", "persist"}, events)
+	require.NotEmpty(t, dataViews.getCalls)
+	require.Equal(t, []string{"persist"}, events)
 }
 
-func TestShardViewManagerPinFailureDoesNotPreemptCurrentView(t *testing.T) {
-	refs := &testDataViewReferences{}
+func TestShardViewManagerDataViewRefGetDoesNotHoldManagerLock(t *testing.T) {
+	dataViews := &testDataViewManager{
+		refs:       make(map[qviews.DataVersion][]*trackedDataViewRef),
+		getStarted: make(chan struct{}),
+		getRelease: make(chan struct{}),
+	}
+	mgr := newTestManagerWithDataViewManager(t, newMockCatalog(), newMockSyncer(), dataViews)
+
+	addDone := make(chan error, 1)
+	go func() {
+		addDone <- mgr.AddPreparing(context.Background(), testBuilder(1, 1, 1))
+	}()
+
+	select {
+	case <-dataViews.getStarted:
+	case <-time.After(time.Second):
+		t.Fatal("DataViewManager.Get was not called")
+	}
+
+	statsDone := make(chan struct{})
+	go func() {
+		_ = mgr.Stats()
+		close(statsDone)
+	}()
+	select {
+	case <-statsDone:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("manager lock was held while DataViewManager.Get was blocked")
+	}
+
+	close(dataViews.getRelease)
+	select {
+	case err := <-addDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("AddPreparing did not complete")
+	}
+}
+
+func TestShardViewManagerCloseCannotFenceBetweenMutationAndSubmit(t *testing.T) {
+	dataViews := &testDataViewManager{refs: make(map[qviews.DataVersion][]*trackedDataViewRef)}
+	submit := &blockingDirtyViewSubmitter{started: make(chan struct{}), release: make(chan struct{})}
+	mgr := newShardViewManager(context.Background(), testShardID, submit, dataViews)
+
+	addDone := make(chan error, 1)
+	go func() { addDone <- mgr.AddPreparing(context.Background(), testBuilder(1, 1, 1)) }()
+	select {
+	case <-submit.started:
+	case <-time.After(time.Second):
+		t.Fatal("AddPreparing did not reach Submit")
+	}
+
+	closeDone := make(chan struct{})
+	go func() {
+		mgr.stopAccepting()
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+		t.Fatal("shutdown fence passed before AddPreparing submitted its event")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(submit.release)
+	require.NoError(t, <-addDone)
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown fence did not complete")
+	}
+}
+
+func TestShardViewManagerConcurrentAddPreparingAssignsDistinctQueryVersions(t *testing.T) {
+	dataViews := &testDataViewManager{
+		refs:       make(map[qviews.DataVersion][]*trackedDataViewRef),
+		getBarrier: make(chan struct{}),
+		getArrived: make(chan struct{}, 2),
+	}
+	mgr := newTestManagerWithDataViewManager(t, newMockCatalog(), newMockSyncer(), dataViews)
+
+	results := make(chan error, 2)
+	go func() { results <- mgr.ShardViewManager.AddPreparing(context.Background(), testBuilder(1, 1, 1)) }()
+	go func() { results <- mgr.ShardViewManager.AddPreparing(context.Background(), testBuilder(1, 1, 1)) }()
+	select {
+	case <-dataViews.getArrived:
+	case <-time.After(time.Second):
+		t.Fatal("first DataViewManager.Get did not start")
+	}
+	select {
+	case <-dataViews.getArrived:
+	case <-time.After(time.Second):
+		t.Fatal("second DataViewManager.Get did not start")
+	}
+	close(dataViews.getBarrier)
+	require.NoError(t, <-results)
+	require.NoError(t, <-results)
+	mgr.waitFlush()
+
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	require.Len(t, mgr.views, 2)
+	require.Contains(t, mgr.views, testVersion(1, 1, 1))
+	require.Contains(t, mgr.views, testVersion(1, 1, 2))
+}
+
+func TestShardViewManagerDataViewRefTransfersOwnershipUntilDroppedPersist(t *testing.T) {
+	dataViews := &testDataViewManager{refs: make(map[qviews.DataVersion][]*trackedDataViewRef)}
 	catalog := newMockCatalog()
 	s := newMockSyncer()
-	mgr := newTestManagerWithReferences(t, catalog, s, refs)
+	mgr := newTestManagerWithDataViewManager(t, catalog, s, dataViews)
+
+	require.NoError(t, mgr.AddPreparing(context.Background(), testBuilder(1, 1, 1)))
+	dataViews.mu.Lock()
+	refs := append([]*trackedDataViewRef(nil), dataViews.refs[qviews.DataVersion{StreamingVersion: 1, CompactVersion: 1}]...)
+	dataViews.mu.Unlock()
+	require.Len(t, refs, 1)
+
+	require.NoError(t, mgr.RequestRelease(context.Background()))
+	require.Zero(t, refs[0].derefCount, "preemption/release must not deref before durable Dropped persistence")
+	simulateNodeResponse(t, s, testSN, testVersion(1, 1, 1), qviews.QueryViewStateDropped)
+	simulateNodeResponse(t, s, testQN1, testVersion(1, 1, 1), qviews.QueryViewStateDropped)
+	require.NoError(t, mgr.scheduler.Flush(context.Background()))
+	require.Equal(t, 1, refs[0].derefCount)
+
+	refs[0].Deref()
+	require.Equal(t, 1, refs[0].derefCount, "Deref must be idempotent")
+}
+
+func TestShardViewManagerDataViewRefFailureDoesNotPreemptCurrentView(t *testing.T) {
+	dataViews := &testDataViewManager{refs: make(map[qviews.DataVersion][]*trackedDataViewRef)}
+	catalog := newMockCatalog()
+	s := newMockSyncer()
+	mgr := newTestManagerWithDataViewManager(t, catalog, s, dataViews)
 
 	require.NoError(t, mgr.AddPreparing(context.Background(), testBuilder(1, 1, 1)))
 	catalog.reset()
 	s.reset()
-	refs.pinErr = errors.New("pin failed")
+	dataViews.err = errors.New("get failed")
 
 	err := mgr.AddPreparing(context.Background(), testBuilder(2, 1, 1))
-	require.EqualError(t, err, "pin failed")
+	require.EqualError(t, err, "get failed")
 	require.Empty(t, catalog.saved)
 	require.Zero(t, s.syncViewCount())
 	mgr.mu.Lock()
@@ -391,11 +549,26 @@ func TestShardViewManagerPinFailureDoesNotPreemptCurrentView(t *testing.T) {
 	mgr.mu.Unlock()
 }
 
-func TestShardViewManagerUnpinsOnlyAfterDroppedPersist(t *testing.T) {
-	refs := &testDataViewReferences{}
+func TestShardViewManagerDataViewRefFailureDoesNotMutateBuilder(t *testing.T) {
+	dataViews := &testDataViewManager{
+		refs: make(map[qviews.DataVersion][]*trackedDataViewRef),
+		err:  errors.New("get failed"),
+	}
+	mgr := newTestManagerWithDataViewManager(t, newMockCatalog(), newMockSyncer(), dataViews)
+	builder := testBuilder(1, 1, 1).SetQueryVersion(77)
+
+	require.EqualError(t, mgr.AddPreparing(context.Background(), builder), "get failed")
+	require.Equal(t, int64(77), builder.Build().GetMeta().GetVersion().GetQueryVersion())
+	mgr.mu.Lock()
+	require.Empty(t, mgr.views)
+	mgr.mu.Unlock()
+}
+
+func TestShardViewManagerDataViewRefReleasedOnlyAfterDroppedPersist(t *testing.T) {
+	dataViews := &testDataViewManager{refs: make(map[qviews.DataVersion][]*trackedDataViewRef)}
 	catalog := newMockCatalog()
 	s := newMockSyncer()
-	mgr := newTestManagerWithReferences(t, catalog, s, refs)
+	mgr := newTestManagerWithDataViewManager(t, catalog, s, dataViews)
 	version := testVersion(1, 1, 1)
 
 	require.NoError(t, mgr.AddPreparing(context.Background(), testBuilder(1, 1, 1)))
@@ -408,9 +581,8 @@ func TestShardViewManagerUnpinsOnlyAfterDroppedPersist(t *testing.T) {
 	s.mu.Unlock()
 	simulateNodeResponse(t, s, testQN1, version, qviews.QueryViewStateDropped)
 	require.EqualError(t, mgr.scheduler.Flush(context.Background()), "persist failed")
-	refs.mu.Lock()
-	require.Empty(t, refs.unpins)
-	refs.mu.Unlock()
+	ref := dataViews.refs[version.DataVersion][0]
+	require.Zero(t, ref.derefCount)
 	mgr.mu.Lock()
 	require.Contains(t, mgr.views, version)
 	mgr.mu.Unlock()
@@ -418,11 +590,11 @@ func TestShardViewManagerUnpinsOnlyAfterDroppedPersist(t *testing.T) {
 	catalog.saveErr = nil
 	recovered := buildTestViewWithVersion(1, 1, 1, 1)
 	recovered.Meta.State = viewpb.QueryViewState_QueryViewStateUnrecoverable
-	recoveryRefs := &testDataViewReferences{recoverPin: true}
+	recoveryDataViews := &testDataViewManager{refs: make(map[qviews.DataVersion][]*trackedDataViewRef)}
 	recoveryCatalog := newMockCatalog()
 	recoverySyncer := newMockSyncer()
 	recoveryScheduler := newTestDirtyViewFlushScheduler(t, recoveryCatalog, recoverySyncer, 128)
-	recoveredManager, err := RecoverShardViewManager(context.Background(), testShardID, recoveryScheduler, recoveryRefs, []*viewpb.QueryViewOfShard{recovered})
+	recoveredManager, err := RecoverShardViewManager(context.Background(), testShardID, recoveryScheduler, recoveryDataViews, []*viewpb.QueryViewOfShard{recovered})
 	require.NoError(t, err)
 	recoveredTestManager := &testShardViewManager{
 		ShardViewManager: recoveredManager,
@@ -439,9 +611,7 @@ func TestShardViewManagerUnpinsOnlyAfterDroppedPersist(t *testing.T) {
 	recoveredVersion := testVersion(1, 1, 1)
 	simulateNodeResponse(t, recoverySyncer, testSN, recoveredVersion, qviews.QueryViewStateDropped)
 	simulateNodeResponse(t, recoverySyncer, testQN1, recoveredVersion, qviews.QueryViewStateDropped)
-	recoveryRefs.mu.Lock()
-	require.Equal(t, []qviews.DataVersion{recoveredVersion.DataVersion}, recoveryRefs.unpins)
-	recoveryRefs.mu.Unlock()
+	require.Equal(t, 1, recoveryDataViews.refs[recoveredVersion.DataVersion][0].derefCount)
 }
 
 func TestAddPreparing_Success(t *testing.T) {
@@ -968,7 +1138,7 @@ func TestRecovery_PreparingView(t *testing.T) {
 	mgr.mu.Unlock()
 }
 
-func TestRecovery_UnrecoverableView(t *testing.T) {
+func TestRecovery_UnrecoverableViewAdvancesToDropping(t *testing.T) {
 	catalog := newMockCatalog()
 	s := newMockSyncer()
 
@@ -977,15 +1147,15 @@ func TestRecovery_UnrecoverableView(t *testing.T) {
 	v1.Meta.State = viewpb.QueryViewState_QueryViewStateUnrecoverable
 	mgr := newTestManager(t, catalog, s, v1)
 
-	// Stays Unrecoverable, waits for AddPreparing to advance to Dropping.
+	// Recovery advances terminal work so cleanup resumes immediately.
 	ver1 := testVersion(1, 1, 1)
 	mgr.mu.Lock()
 	require.Len(t, mgr.views, 1)
-	assert.Equal(t, qviews.QueryViewStateUnrecoverable, mgr.views[ver1].State())
+	assert.Equal(t, qviews.QueryViewStateDropping, mgr.views[ver1].State())
 	mgr.mu.Unlock()
 
-	// No sync pushed.
-	assert.Equal(t, 0, s.syncViewCount())
+	// Dropping is re-pushed to SN and QN so durable cleanup can complete.
+	assert.Equal(t, 2, s.syncViewCount())
 }
 
 func TestRecovery_FastForward_SNReportsUp(t *testing.T) {
@@ -1089,17 +1259,19 @@ func TestOnQueryNodeLost_RemovedView_NoOp(t *testing.T) {
 func TestShardViewManagerConsumesOnlyProcessedStateMachineEffects(t *testing.T) {
 	untouched := NewCoordQueryViewStateMachine(buildTestViewWithVersion(1, 1, 1, 1))
 	processed := NewCoordQueryViewStateMachine(buildTestViewWithVersion(1, 1, 1, 2))
+	untouchedManaged := &managedQueryView{stateMachine: untouched, dataViewRef: noopDataViewRef{}}
+	processedManaged := &managedQueryView{stateMachine: processed, dataViewRef: noopDataViewRef{}}
 	manager := &ShardViewManager{
 		ctx:     context.Background(),
 		shardID: testShardID,
-		views: map[qviews.QueryViewVersion]*CoordQueryViewStateMachine{
-			untouched.Version(): untouched,
-			processed.Version(): processed,
+		views: map[qviews.QueryViewVersion]*managedQueryView{
+			untouched.Version(): untouchedManaged,
+			processed.Version(): processedManaged,
 		},
 	}
 
 	manager.mu.Lock()
-	manager.processStateMachine(processed)
+	manager.processStateMachine(processedManaged)
 	event := manager.consumeDirtyEventLocked()
 	manager.mu.Unlock()
 

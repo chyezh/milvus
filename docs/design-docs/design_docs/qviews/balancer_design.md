@@ -158,11 +158,12 @@ a scoped trigger cannot be narrowed safely, it uses the same full planning
 scope; only an explicit or periodic full trigger also rebuilds the row-count
 ledger.
 
-The DataView provider exposes both full and collection-scoped reads:
+The DataView provider exposes referenced collection-scoped reads. Snapshot
+values and references are owned by `internal/dataview`; Balancer only aliases
+the consumer-facing names used by its planning code:
 
 ```go
-DataViewSnapshot(ctx context.Context) *DataViewSnapshot
-DataViewSnapshotForCollections(ctx context.Context, collectionIDs map[int64]struct{}) *DataViewSnapshot
+DataViewSnapshotRefForCollections(ctx context.Context, collectionIDs map[int64]struct{}) (dataview.SnapshotRef, error)
 SegmentSnapshot(ctx context.Context, segmentIDs []int64) SegmentSnapshot
 ```
 
@@ -310,7 +311,7 @@ func RecoverShardViewRegistry(
     ctx context.Context,
     catalog queryview.QueryViewCatalog,
     syncer syncer.ReliableSyncer,
-    dataViewReferences ...qviews.DataViewReferenceManager,
+    dataViews ...dataview.ReferenceManager,
 ) (*ShardViewRegistry, error)
 func (r *ShardViewRegistry) Ensure(shardID qviews.ShardID) *ShardViewManager
 func (r *ShardViewRegistry) Get(shardID qviews.ShardID) *ShardViewManager
@@ -321,6 +322,14 @@ func (r *ShardViewRegistry) NodeShards(nodeID int64) []qviews.ShardID
 func (r *ShardViewRegistry) ShardIDs() []qviews.ShardID
 func (r *ShardViewRegistry) RegisterStatsObserver(observer func(qviews.ShardID, *ShardStats))
 ```
+
+Each recovered or newly constructed QueryView acquires an exact immutable
+`DataViewRef` through the supplied `dataview.ReferenceManager`. The reference
+is owned beside the QueryView state machine and is released only after its
+Dropped removal is durably persisted. Recovery reacquires the same exact
+version; an unavailable exact view enters terminal QueryView cleanup, while
+other acquisition errors abort recovery and release refs already acquired by
+that attempt.
 
 Maintains live per-shard stats via callbacks from each `ShardViewManager`.
 `collectionShards` supports collection-scoped reconciliation, while

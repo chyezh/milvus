@@ -31,6 +31,14 @@ message DataVersion {
     int64 compact_version = 2;    // Incremented when segments are compacted.
 }
 
+// CollectionDataVersionState is the durable publication head and allocator
+// state for one collection's immutable data view snapshots.
+message CollectionDataVersionState {
+    int64 collection_id = 1;
+    int64 allocated_streaming_version = 2;
+    DataVersion published_data_version = 3;
+}
+
 // DataViewOfCollection represents the complete storage view of a collection,
 // containing all sealed segments (no duplicates).
 message DataViewOfCollection {

@@ -50,6 +50,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/rootcoordpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/conc"
 	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/lock"
@@ -915,6 +916,37 @@ func (m *meta) UpdateSegment(segmentID int64, operators ...SegmentOperator) erro
 
 	mlog.Info(context.TODO(), "meta update: update segment - complete",
 		mlog.Int64("segmentID", segmentID))
+	return nil
+}
+
+func (m *meta) SetSegmentSealedAtDataVersion(ctx context.Context, segmentID int64, version *viewpb.DataVersion) error {
+	m.segMu.Lock()
+	defer m.segMu.Unlock()
+
+	segment := m.segments.GetSegment(segmentID)
+	if segment == nil {
+		return merr.WrapErrSegmentNotFound(segmentID)
+	}
+	if current := segment.GetSealedAtDataVersion(); current != nil {
+		if proto.Equal(current, version) {
+			return nil
+		}
+		return merr.WrapErrDataIntegrityMsg(
+			"segment %d sealed data version changed from %d/%d to %d/%d",
+			segmentID,
+			current.GetStreamingVersion(),
+			current.GetCompactVersion(),
+			version.GetStreamingVersion(),
+			version.GetCompactVersion(),
+		)
+	}
+
+	cloned := segment.Clone()
+	cloned.SealedAtDataVersion = proto.Clone(version).(*viewpb.DataVersion)
+	if err := m.catalog.AlterSegments(ctx, []*datapb.SegmentInfo{cloned.SegmentInfo}); err != nil {
+		return err
+	}
+	m.segments.SetSegment(segmentID, cloned)
 	return nil
 }
 
@@ -2775,6 +2807,9 @@ func (m *meta) ValidateSegmentStateBeforeCompleteCompactionMutation(t *datapb.Co
 }
 
 func (m *meta) CompleteCompactionMutation(ctx context.Context, t *datapb.CompactionTask, result *datapb.CompactionPlanResult) ([]*SegmentInfo, *segMetricMutation, error) {
+	if err := m.ensureCompactionInputsPublished(ctx, t); err != nil {
+		return nil, nil, err
+	}
 	var (
 		newSegments    []*SegmentInfo
 		metricMutation *segMetricMutation
@@ -2799,28 +2834,103 @@ func (m *meta) CompleteCompactionMutation(ctx context.Context, t *datapb.Compact
 	if err != nil {
 		return nil, nil, err
 	}
-	m.publishDataViewAfterCompaction(ctx, t, lo.Map(newSegments, func(segment *SegmentInfo, _ int) int64 {
-		return segment.GetID()
-	}))
 	return newSegments, metricMutation, nil
 }
 
-func (m *meta) publishDataViewAfterCompaction(ctx context.Context, t *datapb.CompactionTask, compactTo []int64) {
+func (m *meta) ensureCompactionInputsPublished(ctx context.Context, task *datapb.CompactionTask) error {
+	if m.dataViewManager == nil || task.GetType() == datapb.CompactionType_SortCompaction {
+		return nil
+	}
+
+	m.segMu.RLock()
+	var required *viewpb.DataVersion
+	var requiredSegmentID int64
+	for _, segmentID := range task.GetInputSegments() {
+		segment := m.segments.GetSegment(segmentID)
+		if segment == nil {
+			continue
+		}
+		assigned := segment.GetSealedAtDataVersion()
+		if assigned.GetStreamingVersion() > required.GetStreamingVersion() {
+			required = proto.Clone(assigned).(*viewpb.DataVersion)
+			requiredSegmentID = segmentID
+		}
+	}
+	m.segMu.RUnlock()
+	if required == nil {
+		return nil
+	}
+
+	state, err := m.catalog.GetDataViewVersionState(ctx, task.GetCollectionID())
+	if err != nil {
+		if merr.IsMilvusError(err) {
+			return merr.Wrapf(err, "read durable DataView head before compaction %d", task.GetPlanID())
+		}
+		return merr.WrapErrServiceUnavailable(
+			fmt.Sprintf("read durable DataView head before compaction %d", task.GetPlanID()),
+			err.Error(),
+		)
+	}
+	published := state.GetPublishedDataVersion()
+	if published.GetStreamingVersion() < required.GetStreamingVersion() {
+		return merr.WrapErrServiceUnavailableMsg(
+			"compaction %d input segment %d is assigned to unpublished DataVersion %d/0; durable head is %d/%d",
+			task.GetPlanID(),
+			requiredSegmentID,
+			required.GetStreamingVersion(),
+			published.GetStreamingVersion(),
+			published.GetCompactVersion(),
+		)
+	}
+	latest, err := m.dataViewManager.LatestPublished(ctx, task.GetCollectionID())
+	if err != nil {
+		return merr.Wrapf(err, "read resident published DataView before compaction %d", task.GetPlanID())
+	}
+	defer latest.Deref()
+	resident := latest.DataView().Version()
+	if resident.StreamingVersion < required.GetStreamingVersion() {
+		return merr.WrapErrServiceUnavailableMsg(
+			"compaction %d input segment %d is assigned to DataVersion %d/0, but the resident published head is %s",
+			task.GetPlanID(),
+			requiredSegmentID,
+			required.GetStreamingVersion(),
+			resident.String(),
+		)
+	}
+	return nil
+}
+
+func (m *meta) publishDataViewAfterCompaction(ctx context.Context, t *datapb.CompactionTask, compactTo []int64) error {
 	if m.dataViewManager == nil {
-		return
+		return nil
 	}
-	if _, err := m.dataViewManager.OnCompact(ctx, CompactDataViewEvent{
-		CollectionID: t.GetCollectionID(),
-		CompactFrom:  t.GetInputSegments(),
-		CompactTo:    compactTo,
-	}); err != nil {
-		mlog.Warn(ctx, "failed to publish DataView after compaction",
-			mlog.Int64("planID", t.GetPlanID()),
-			mlog.FieldCollectionID(t.GetCollectionID()),
-			mlog.Int64s("compactFrom", t.GetInputSegments()),
-			mlog.Int64s("compactTo", compactTo),
-			mlog.Err(err))
+	memberships, ready := m.loadableCompactionMemberships(compactTo)
+	if !ready {
+		return merr.WrapErrServiceUnavailableMsg(
+			"compaction %d output membership is not loadable",
+			t.GetPlanID(),
+		)
 	}
+	mutation := PublishedMutation{
+		Add:    memberships,
+		Remove: append([]int64(nil), t.GetInputSegments()...),
+	}
+	var err error
+	if t.GetType() == datapb.CompactionType_SortCompaction {
+		input := m.segments.GetSegment(t.GetInputSegments()[0])
+		assigned := input.GetSealedAtDataVersion()
+		if input.GetIsInvisible() && assigned != nil {
+			_, err = m.dataViewManager.CommitPublishedView(ctx, t.GetCollectionID(), assigned, mutation)
+		} else {
+			_, err = m.dataViewManager.CommitRewrite(ctx, t.GetCollectionID(), mutation)
+		}
+	} else {
+		_, err = m.dataViewManager.CommitRewrite(ctx, t.GetCollectionID(), mutation)
+	}
+	if err != nil {
+		return merr.Wrapf(err, "publish DataView after compaction %d", t.GetPlanID())
+	}
+	return nil
 }
 
 // buildSegment utility function for compose datapb.SegmentInfo struct with provided info
@@ -3476,6 +3586,7 @@ func (m *meta) completeSortCompactionMutation(
 		SchemaVersion:                 outputSchemaVersion,
 		CommitTimestamp:               0, // Normalized: row timestamps already rewritten
 		DeleteApplyStartAfterTimetick: deleteApplyStartAfterTimetick,
+		SealedAtDataVersion:           clonePublishedDataVersion(oldSegment.GetSealedAtDataVersion()),
 	}
 	// Statistics is computed at the compactor and shipped on the
 	// CompactionSegment. V3 outputs whose stats live in the manifest are

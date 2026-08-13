@@ -3,7 +3,7 @@ package balancer
 import (
 	"context"
 
-	balancerapi "github.com/milvus-io/milvus/internal/views/coord/balancer/api"
+	"github.com/milvus-io/milvus/internal/dataview"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
@@ -61,19 +61,21 @@ func (s *NodeSnapshot) Range(fn func(int64, *NodeInfo) bool) {
 	}
 }
 
-// DataViewProvider supplies the immutable data-view snapshot consumed by the
-// Balancer. The method name intentionally does not collide with
-// dataview.Manager.Snapshot(ctx, collectionIDs).
+// DataViewProvider supplies manager-referenced immutable data-view snapshots
+// consumed by the Balancer.
 type DataViewProvider interface {
-	DataViewSnapshot(ctx context.Context) *DataViewSnapshot
-	DataViewSnapshotForCollections(ctx context.Context, collectionIDs map[int64]struct{}) *DataViewSnapshot
+	DataViewSnapshotRefForCollections(ctx context.Context, collectionIDs map[int64]struct{}) (DataViewSnapshotRef, error)
 	SegmentSnapshot(ctx context.Context, segmentIDs []int64) SegmentSnapshot
 }
 
+// DataViewSnapshotRef keeps the immutable DataView snapshot's manager-owned
+// references live for the duration of one planning cycle.
+type DataViewSnapshotRef = dataview.SnapshotRef
+
 type (
-	DataViewSnapshot = balancerapi.DataViewSnapshot
-	SegmentInfo      = balancerapi.SegmentInfo
-	SegmentSnapshot  = balancerapi.SegmentSnapshot
+	DataViewSnapshot = dataview.Snapshot
+	SegmentInfo      = dataview.SegmentInfo
+	SegmentSnapshot  = dataview.SegmentSnapshot
 )
 
 func NewDataViewSnapshot(
@@ -81,5 +83,5 @@ func NewDataViewSnapshot(
 	collections []*viewpb.DataViewOfCollection,
 	segments SegmentSnapshot,
 ) *DataViewSnapshot {
-	return balancerapi.NewDataViewSnapshot(version, collections, segments)
+	return dataview.NewSnapshot(version, collections, segments)
 }

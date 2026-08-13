@@ -310,6 +310,7 @@ func (suite *ServiceSuite) SetupTest() {
 		queryNodeClient:      &fakeRuntimeQueryNodeClient{},
 		resourceGroupManager: suite.meta,
 		dataViewProvider:     &fakeRuntimeDataViewProvider{},
+		dataViewManager:      &fakeRuntimeDataViewManager{},
 	})
 	suite.Require().NoError(err)
 	suite.server.qviewsRuntime = runtime

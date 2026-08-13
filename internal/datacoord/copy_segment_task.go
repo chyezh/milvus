@@ -482,6 +482,11 @@ func (t *copySegmentTask) QueryTaskOnWorker(cluster session.Cluster) {
 	// Sync task state and binlog info
 	err = SyncCopySegmentTask(t, resp, t.copyMeta, t.meta)
 	if err != nil {
+		if merr.IsRetryableErr(err) {
+			mlog.Warn(context.TODO(), "retryable error syncing completed copy segment task",
+				WrapCopySegmentTaskLog(t, mlog.Err(err))...)
+			return
+		}
 		t.markTaskAndJobFailed(fmt.Sprintf("failed to sync segment metadata: %v", err))
 		return
 	}
@@ -799,14 +804,8 @@ func SyncCopySegmentTask(task CopySegmentTask, resp *datapb.QueryCopySegmentResp
 				return err
 			}
 			if meta.dataViewManager != nil {
-				if _, err := meta.dataViewManager.OnCopySegmentComplete(ctx, CopySegmentCompleteDataViewEvent{
-					CollectionID: task.GetCollectionId(),
-					SegmentIDs:   []int64{result.GetSegmentId()},
-				}); err != nil {
-					mlog.Warn(ctx, "failed to publish DataView after copy segment completion",
-						WrapCopySegmentTaskLog(task,
-							mlog.Int64("segmentID", result.GetSegmentId()),
-							mlog.Err(err))...)
+				if _, err := meta.commitDataViewStreaming(ctx, task.GetCollectionId(), []int64{result.GetSegmentId()}); err != nil {
+					return merr.Wrapf(err, "publish DataView after copy segment task %d", task.GetTaskId())
 				}
 			}
 

@@ -10,6 +10,7 @@ import (
 	"github.com/milvus-io/milvus/internal/views/coord/loadmgr"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 // SnapshotBuilder assembles a BalancerSnapshot from the various sources:
@@ -115,7 +116,27 @@ func (b *SnapshotBuilder) build(ctx context.Context, pending triggerBatch) (*Bal
 	scope := pending.resolveScope(loadSnapshot, b.viewRegistry)
 
 	// 2. Read scoped DataViews and expand collection triggers into target shards.
-	dataViewSnapshot := b.dataViewProvider.DataViewSnapshotForCollections(ctx, scope.collectionIDs)
+	ref, err := b.dataViewProvider.DataViewSnapshotRefForCollections(ctx, scope.collectionIDs)
+	if err != nil {
+		return &BalancerSnapshot{Config: b.config, LoadConfigSnapshot: loadSnapshot, buildErr: err}, nil
+	}
+	if ref == nil {
+		return &BalancerSnapshot{
+			Config:             b.config,
+			LoadConfigSnapshot: loadSnapshot,
+			buildErr:           merr.WrapErrServiceInternalMsg("data view provider returned a nil snapshot reference"),
+		}, nil
+	}
+	dataViewSnapshot := ref.Snapshot()
+	if dataViewSnapshot == nil {
+		ref.Release()
+		return &BalancerSnapshot{
+			Config:             b.config,
+			LoadConfigSnapshot: loadSnapshot,
+			buildErr:           merr.WrapErrServiceInternalMsg("data view provider returned a nil referenced snapshot"),
+		}, nil
+	}
+	releaseDataView := ref.Release
 	scope.AddDataViewShards(loadSnapshot, dataViewSnapshot)
 	targetShards := maps.Keys(scope.targetShards)
 
@@ -136,6 +157,7 @@ func (b *SnapshotBuilder) build(ctx context.Context, pending triggerBatch) (*Bal
 		ShardViewSnapshot:     targetSnapshot,
 		DataViewSnapshot:      dataViewSnapshot,
 		ShardRowStatsSnapshot: b.rowCountLedger.shardRowStatsSnapshot(targetShards),
+		closeDataView:         releaseDataView,
 	}
 
 	// 5. Attach cluster-wide row counts to the current node snapshot.
