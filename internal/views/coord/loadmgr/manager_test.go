@@ -109,7 +109,7 @@ func TestCollectionLoadManager_DiscoverableShardAssignments(t *testing.T) {
 	catalog := mocks.NewQueryCoordCatalog(t)
 	store := newEmptyLoadConfigStore(t, catalog)
 	var assignmentUpdates int
-	manager := NewCollectionLoadManager(store, nil, nil)
+	manager := NewCollectionLoadManager(store, nil)
 	manager.SetShardAssignmentNotifier(func() { assignmentUpdates++ })
 
 	shardID := qviews.ShardID{
