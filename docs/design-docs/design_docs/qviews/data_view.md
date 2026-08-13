@@ -168,7 +168,9 @@ segment. This may be represented by a durable segment-to-join-version index or
 an equivalent derivation from retained DataView history. It is an internal
 DataCoord idempotency record and is not part of the QueryCoord-facing DataView
 membership payload. Looking only at `latestResident.DataVersion` is not a valid
-derivation for an already-present segment.
+derivation for an already-present segment. If recovery cannot derive the stable
+first-join version from retained history, the result remains unknown (`nil`);
+DataCoord must not invent the current latest resident version.
 
 `DataViewOfShard.transform_start_after_timetick` is a snapshot/transport
 field derived from the current loadable membership. It does not need to be
@@ -885,6 +887,13 @@ exposing it to QueryCoord. A pure `delete_apply_start_after_timetick`
 difference does not create a new DataVersion; DataCoord refreshes the derived
 timetick for the latest view and syncs it through the normal DataView metadata
 refresh path.
+
+Recovery may see a dropped segment that is no longer present in retained
+DataView history. A repeated Flush for that segment succeeds idempotently but
+returns no `SealedAtDataVersion` when its original first-join version is
+unknown. Falling back to the latest collection DataVersion would falsely delay
+StreamingNode retention and can create a visibility conflict with an older
+QueryView.
 
 For DataView-first DropPartition or truncate, recovery must apply the persisted
 DDL/trim metadata when computing the expected DataView, even if the segmentMeta

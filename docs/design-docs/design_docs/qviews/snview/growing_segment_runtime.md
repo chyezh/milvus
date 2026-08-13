@@ -257,6 +257,13 @@ old WAL entry and must be ignored instead of recreating a queryable growing
 segment. A `CreateSegment` or `Insert` after the flush timetick is invalid for
 that segment and is treated as corrupted runtime input.
 
+For a queryable segment recovered from `SegmentSnapshot.Segments`,
+`SegmentAssignmentMeta.DataCheckpointTimeTick` is an additional segment-local
+Insert replay boundary. An Insert at or before that point is already represented
+by the segment's persisted storage and is skipped even when the VChannel-level
+`BaseGrowingTimeTick` is older. This segment boundary is only a duplicate replay
+filter; it does not advance the runtime's global MVCC frontier.
+
 ## 5. Actual Behavior
 
 ### 5.1 Preparation
@@ -328,6 +335,9 @@ Recovery baselines are the WALView's independent `BaseGrowingTimeTick` and
 already represented by the captured WALView state; it is not automatically
 advanced to the startup `RecoveryBarrier`. Later DataScanner replay is applied
 through live events and filtered against the corresponding runtime frontier.
+For Inserts, each recovered segment also filters through its persisted
+`DataCheckpointTimeTick`; this prevents duplicate rows when a segment's object
+storage checkpoint is ahead of the PChannel Data checkpoint.
 
 ### 5.3 Segment Seal DataVersion
 

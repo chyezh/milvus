@@ -61,9 +61,11 @@ release A Owner -> enqueue A
   -> enqueue/submit B
 ```
 
-If local consumers are unfinished, the task returns the scheduler delay signal.
-If Coordinator ACK fails, the task remains the queue head and retries. It does
-not complete the Tracker entry or advance the queue.
+The queue head is submitted only after `ConsumersDone` is closed, so an
+unfinished local consumer does not create scheduler polling. If Coordinator
+ACK fails, the task remains the queue head and schedules one delayed retry
+outside the scheduler's delay/requeue path. It does not complete the Tracker
+entry or advance the queue.
 
 Coordinator ACK is idempotent. If the process crashes after Coordinator has
 accepted the ACK but before the Tracker entry or checkpoint is persisted, WAL
@@ -79,9 +81,9 @@ TransformLog materialization, or QueryRuntime readiness.
 ## 5. Close And Recovery
 
 An unfinished BroadcastAck task retains no Owner handle, but its Tracker entry
-remains live through the Tracker's original message reference. Close does not
-mark the task complete. On restart, WAL replay reconstructs the task and
-Coordinator ACK may be repeated safely.
+remains live through the Tracker's original message reference. Close cancels
+the wait and retry timers without marking the task complete. On restart, WAL
+replay reconstructs the task and Coordinator ACK may be repeated safely.
 
 ## 6. Invariants
 

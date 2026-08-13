@@ -91,7 +91,7 @@ owner, tracked = Tracker.Track(raw)
        -> route by message scope
        -> concrete Segment/TransformLog consumers Clone(owner)
        -> synchronous metadata mutations are marked dirty
-       -> QueryRuntime receives a normal immutable copy
+       -> QueryRuntime receives the underlying immutable message
   -> update MetaPoint
   -> BroadcastAck.Accept(owner, tracked)
        -> release owner immediately
@@ -225,5 +225,6 @@ whose final top-level release is routed through the dedicated BroadcastAck sink.
    Tracker frontier.
 7. DirtySnapshots are persisted before the checkpoint that covers them.
 8. TransformLog message completion does not wait for materialization.
-9. QueryRuntime copies live messages and never participates in Message Ack.
+9. QueryRuntime borrows live immutable messages and never participates in
+   Message Ack.
 10. Recovery uses `LastConfirmedMessageID + DeliverPolicyStartFrom`.

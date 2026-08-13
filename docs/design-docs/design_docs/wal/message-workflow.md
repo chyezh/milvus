@@ -176,4 +176,5 @@ not pass data whose recovery metadata has not been captured by the batch.
 8. Checkpoint MessageID is `LastConfirmedMessageID` and resume uses
    `DeliverPolicyStartFrom`.
 9. Ack observes completion but does not impose task execution order.
-10. QueryRuntime receives copies and never participates in RecoveryStorage Ack.
+10. QueryRuntime borrows the underlying immutable message and never participates
+    in RecoveryStorage Ack.

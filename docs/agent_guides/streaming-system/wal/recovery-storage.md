@@ -61,7 +61,9 @@ snapshots:
 - Meta checkpoint is the latest completely observed WAL point frozen for the
   batch.
 - Data checkpoint is the minimum of that Meta point and the frozen continuous
-  Message Ack completed frontier.
+  Message Ack completed frontier. It is clamped against the persisted Data
+  checkpoint and never moves backward when `DeliverPolicyStartFrom` replays an
+  already completed message.
 - All captured DirtySnapshots are persisted before the batch checkpoint.
 - Every actual Segment and TransformLog data consumer retains a direct message
   handle until its object-storage work succeeds and its metadata changes are
@@ -69,8 +71,9 @@ snapshots:
 - Broadcast acknowledgement adds no reference. Its sink unconditionally
   releases the Owner; it uses the Tracker entry's fixed broadcast requirement
   to decide whether to enqueue a FIFO ACK task. That task waits for the local
-  consumer completion event and completes the broadcast Tracker condition only
-  after Coordinator Ack succeeds.
+  consumer completion event before scheduler submission and completes the
+  broadcast Tracker condition only after Coordinator Ack succeeds. Failed ACKs
+  use delayed resubmission while retaining the FIFO head.
 - `AckSyncUp` disables Coordinator FastAck and waits for the RecoveryStorage
   consumer Ack; it does not require checkpoint persistence before that Ack.
 - Retry, cancellation, and close keep incomplete handles retained. Restart

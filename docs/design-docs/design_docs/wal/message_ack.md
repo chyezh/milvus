@@ -184,7 +184,7 @@ read M
   -> PChannelRecoveryManager.ObserveMessage(owner)
        -> affected VChannel modules
        -> actual Segment/TransformLog consumers synchronously Clone(owner)
-       -> QueryRuntime receives a normal immutable copy
+       -> QueryRuntime receives the underlying immutable message
   -> RecoveryStorage updates Meta checkpoint from M
   -> BroadcastAck accepts owner and tracked
        -> owner.Release() unconditionally
@@ -288,7 +288,10 @@ freeze MetaPoint and DataPoint
 
 The checkpoint uses `LastConfirmedMessageID` and recovery resumes with
 `DeliverPolicyStartFrom`. Replaying an already completed message is acceptable;
-advancing past an unfinished entry is not.
+advancing past an unfinished entry is not. Both the Tracker frontier and the
+persist batch clamp their candidate against the already persisted DataPoint,
+so conservative replay can discard old completed entries without publishing a
+checkpoint regression.
 
 Meta-only replay does not create message Ack entries. It consumes DirtySnapshot
 state and advances the Meta checkpoint as part of bounded metadata recovery.
@@ -333,9 +336,13 @@ before a crash may be repeated safely.
 5. The finalizer closes local `ConsumersDone` exactly once.
 6. Broadcast ACK success is required before a broadcast entry can complete.
 7. Data checkpoint advancement uses only the continuous completed entry prefix,
-   bounded by the frozen MetaPoint.
+   bounded by the frozen MetaPoint, and is monotonic. Conservative replay may
+   complete an entry that is older than the persisted DataPoint, but it must
+   never move the DataPoint backward.
 8. TransformLog handle release waits for chunk durability, not materialization.
 9. Async consumers mark metadata dirty before releasing their handles.
-10. QueryRuntime copies messages and never participates in WAL Ack.
+10. QueryRuntime borrows the underlying immutable message and never participates
+    in WAL Ack. Its Go object reachability is independent of persistence
+    completion tracking.
 11. Txn messages are retained and completed as one whole message.
 12. Ack observes completion but does not define asynchronous task ordering.

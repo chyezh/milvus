@@ -190,7 +190,8 @@ After construction:
 3. VChannel metadata publication is part of the frozen persist batch.
 4. Data checkpoint advancement is Message Ack based and bounded by the batch
    MetaPoint.
-5. QueryRuntime observation does not participate in Message Ack.
+5. QueryRuntime borrows the underlying immutable message; its observation does
+   not participate in Message Ack.
 6. Every broadcast-related Segment/TransformLog consumer retains its own message
    handle.
 7. Async VChannel-owned consumers mark metadata dirty before releasing a handle.
