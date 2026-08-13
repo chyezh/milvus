@@ -73,10 +73,14 @@ func (*immediateLostRecoverySyncer) Close() error { return nil }
 // an empty catalog.
 func newTestRegistry(t *testing.T, catalog *mockCatalog, s *mockSyncer) *ShardViewRegistry {
 	t.Helper()
-	reg, err := RecoverShardViewRegistry(context.Background(), catalog, s)
+	reg, err := RecoverShardViewRegistry(context.Background(), catalog, s, newTestDataViewManager())
 	require.NoError(t, err)
 	t.Cleanup(reg.Close)
 	return reg
+}
+
+func newTestDataViewManager() *testDataViewManager {
+	return &testDataViewManager{refs: make(map[qviews.DataVersion][]*trackedDataViewRef)}
 }
 
 func TestRegistry_FlushesAcrossManagers(t *testing.T) {
@@ -144,7 +148,7 @@ func TestShardViewRegistryCloseRejectsBlockedAddPreparingAndReleasesLateRef(t *t
 }
 
 func TestShardViewRegistryEnsureAfterCloseDoesNotCreateManager(t *testing.T) {
-	registry, err := RecoverShardViewRegistry(context.Background(), newMockCatalog(), newMockSyncer())
+	registry, err := RecoverShardViewRegistry(context.Background(), newMockCatalog(), newMockSyncer(), newTestDataViewManager())
 	require.NoError(t, err)
 	registry.Close()
 	require.Nil(t, registry.Ensure(testShardID))
@@ -261,7 +265,7 @@ func TestRegistry_RecoverWithPersistedViews(t *testing.T) {
 	// we need to populate the listed views manually.
 	catalog.listed = []*viewpb.QueryViewOfShard{viewA, viewB}
 
-	reg, err := RecoverShardViewRegistry(context.Background(), catalog, newMockSyncer())
+	reg, err := RecoverShardViewRegistry(context.Background(), catalog, newMockSyncer(), newTestDataViewManager())
 	require.NoError(t, err)
 	t.Cleanup(reg.Close)
 
@@ -299,7 +303,7 @@ func TestRegistry_RecoveryPublishesImmediateQueryNodeLoss(t *testing.T) {
 	catalog.listed = []*viewpb.QueryViewOfShard{view}
 	s := &immediateLostRecoverySyncer{}
 
-	reg, err := RecoverShardViewRegistry(context.Background(), catalog, s)
+	reg, err := RecoverShardViewRegistry(context.Background(), catalog, s, newTestDataViewManager())
 	require.NoError(t, err)
 	t.Cleanup(reg.Close)
 	require.Equal(t, int64(1), s.lostCallbacks.Load())

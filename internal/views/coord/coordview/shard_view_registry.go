@@ -10,6 +10,7 @@ import (
 	"github.com/milvus-io/milvus/internal/views/coord/coordview/syncer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/metautil"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
@@ -54,9 +55,11 @@ func RecoverShardViewRegistry(
 	ctx context.Context,
 	catalog queryview.QueryViewCatalog,
 	s syncer.ReliableSyncer,
-	dataViews ...DataViewManager,
+	dataViews DataViewManager,
 ) (*ShardViewRegistry, error) {
-	refs := dataViewManagerOrNoop(dataViews)
+	if dataViews == nil {
+		return nil, merr.WrapErrServiceInternalMsg("DataView manager is required to recover QueryView references")
+	}
 	views, err := catalog.ListQueryViews(ctx)
 	if err != nil {
 		return nil, err
@@ -80,7 +83,7 @@ func RecoverShardViewRegistry(
 	batch := flushScheduler.Begin()
 	shards := make(map[qviews.ShardID]*ShardViewManager, len(byShardID))
 	for sid, recovered := range byShardID {
-		manager, err := RecoverShardViewManager(ctx, sid, flushScheduler, refs, recovered)
+		manager, err := RecoverShardViewManager(ctx, sid, flushScheduler, dataViews, recovered)
 		if err != nil {
 			for _, recoveredManager := range shards {
 				recoveredManager.derefAllReferences()
@@ -94,7 +97,7 @@ func RecoverShardViewRegistry(
 	registry := &ShardViewRegistry{
 		ctx:              ctx,
 		flushScheduler:   flushScheduler,
-		dataViews:        refs,
+		dataViews:        dataViews,
 		version:          1,
 		shards:           shards,
 		stats:            make(map[qviews.ShardID]*ShardStats, len(shards)),

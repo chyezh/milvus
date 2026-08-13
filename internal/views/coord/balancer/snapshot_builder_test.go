@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/milvus-io/milvus/internal/dataview"
 	"github.com/milvus-io/milvus/internal/metastore/mocks"
 	"github.com/milvus-io/milvus/internal/views/coord/coordview"
 	"github.com/milvus-io/milvus/internal/views/coord/coordview/syncer"
@@ -177,6 +178,17 @@ type stubSyncer struct{}
 func (s *stubSyncer) SyncViews(ctx context.Context, group syncer.SyncGroup) error { return nil }
 func (s *stubSyncer) Close() error                                                { return nil }
 
+type stubDataViewReferenceManager struct{}
+
+func (stubDataViewReferenceManager) Get(context.Context, int64, qviews.DataVersion) (dataview.DataViewRef, error) {
+	return stubDataViewRef{}, nil
+}
+
+type stubDataViewRef struct{}
+
+func (stubDataViewRef) DataView() *dataview.DataView { return nil }
+func (stubDataViewRef) Deref()                       {}
+
 // --- test helpers ---
 
 // emptyLoadConfigStore returns a fresh store after a clean Recover.
@@ -195,7 +207,7 @@ func emptyLoadConfigStore(t *testing.T) *loadmgr.LoadConfigStore {
 // emptyRegistry returns a fresh ShardViewRegistry backed by stub catalog/syncer.
 func emptyRegistry(t *testing.T) *coordview.ShardViewRegistry {
 	t.Helper()
-	reg, err := coordview.RecoverShardViewRegistry(context.Background(), &stubCatalog{}, &stubSyncer{})
+	reg, err := coordview.RecoverShardViewRegistry(context.Background(), &stubCatalog{}, &stubSyncer{}, stubDataViewReferenceManager{})
 	require.NoError(t, err)
 	return reg
 }

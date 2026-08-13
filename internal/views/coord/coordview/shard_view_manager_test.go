@@ -39,6 +39,12 @@ type testDataViewManager struct {
 	getArrived chan struct{}
 }
 
+type noopTestDataViewManager struct{}
+
+func (noopTestDataViewManager) Get(context.Context, int64, qviews.DataVersion) (dataview.DataViewRef, error) {
+	return noopDataViewRef{}, nil
+}
+
 type blockingDirtyViewSubmitter struct {
 	started chan struct{}
 	release chan struct{}
@@ -317,7 +323,7 @@ func newTestManager(t *testing.T, catalog *mockCatalog, s *mockSyncer, recovered
 	t.Helper()
 	scheduler := newTestDirtyViewFlushScheduler(t, catalog, s, 128)
 	manager := &testShardViewManager{
-		ShardViewManager: newShardViewManager(context.Background(), testShardID, scheduler, recovered),
+		ShardViewManager: newShardViewManager(context.Background(), testShardID, scheduler, recovered, noopTestDataViewManager{}),
 		t:                t,
 		scheduler:        scheduler,
 	}
@@ -467,8 +473,8 @@ func TestShardViewManagerConcurrentAddPreparingAssignsDistinctQueryVersions(t *t
 	mgr := newTestManagerWithDataViewManager(t, newMockCatalog(), newMockSyncer(), dataViews)
 
 	results := make(chan error, 2)
-	go func() { results <- mgr.AddPreparing(context.Background(), testBuilder(1, 1, 1)) }()
-	go func() { results <- mgr.AddPreparing(context.Background(), testBuilder(1, 1, 1)) }()
+	go func() { results <- mgr.ShardViewManager.AddPreparing(context.Background(), testBuilder(1, 1, 1)) }()
+	go func() { results <- mgr.ShardViewManager.AddPreparing(context.Background(), testBuilder(1, 1, 1)) }()
 	select {
 	case <-dataViews.getArrived:
 	case <-time.After(time.Second):
@@ -482,6 +488,7 @@ func TestShardViewManagerConcurrentAddPreparingAssignsDistinctQueryVersions(t *t
 	close(dataViews.getBarrier)
 	require.NoError(t, <-results)
 	require.NoError(t, <-results)
+	mgr.waitFlush()
 
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()

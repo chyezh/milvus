@@ -62,6 +62,7 @@ func TestNewQViewsRuntimeRecoversLoadConfigAndQueryViews(t *testing.T) {
 		queryNodeClient:      &fakeRuntimeQueryNodeClient{},
 		resourceGroupManager: &fakeRuntimeResourceGroupManager{},
 		dataViewProvider:     &fakeRuntimeDataViewProvider{},
+		dataViewManager:      &fakeRuntimeDataViewManager{},
 	})
 	require.NoError(t, err)
 	require.NotNil(t, runtime)
@@ -135,6 +136,7 @@ func TestQViewsRuntimeLoadManagerTriggersBalancer(t *testing.T) {
 		queryNodeClient:      &fakeRuntimeQueryNodeClient{},
 		resourceGroupManager: &fakeRuntimeResourceGroupManager{},
 		dataViewProvider:     &fakeRuntimeDataViewProvider{},
+		dataViewManager:      &fakeRuntimeDataViewManager{},
 		balancerFactory: func(*balancer.SnapshotBuilder) qviewsBalancer {
 			return fakeBalancer
 		},

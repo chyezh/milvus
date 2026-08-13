@@ -89,14 +89,14 @@ func newShardViewManager(
 	shardID qviews.ShardID,
 	eventSubmitter dirtyViewEventSubmitter,
 	recoveredViews []*viewpb.QueryViewOfShard,
-	dataViews ...DataViewManager,
+	dataViews DataViewManager,
 ) *ShardViewManager {
 	m := &ShardViewManager{
 		ctx:            ctx,
 		shardID:        shardID,
 		eventSubmitter: eventSubmitter,
 		views:          make(map[qviews.QueryViewVersion]*managedQueryView, len(recoveredViews)),
-		dataViews:      dataViewManagerOrNoop(dataViews),
+		dataViews:      dataViews,
 	}
 
 	// Recover state machines from persisted views.
@@ -138,7 +138,7 @@ func RecoverShardViewManager(
 		shardID:        shardID,
 		eventSubmitter: eventSubmitter,
 		views:          make(map[qviews.QueryViewVersion]*managedQueryView, len(recoveredViews)),
-		dataViews:      dataViewManagerOrNoop([]DataViewManager{dataViews}),
+		dataViews:      dataViews,
 	}
 
 	recovered := make([]*managedQueryView, 0, len(recoveredViews))
@@ -186,23 +186,10 @@ func prepareTerminalRecovery(sm *CoordQueryViewStateMachine) {
 	}
 }
 
-type noopDataViewManager struct{}
-
-func (noopDataViewManager) Get(context.Context, int64, qviews.DataVersion) (dataview.DataViewRef, error) {
-	return noopDataViewRef{}, nil
-}
-
 type noopDataViewRef struct{}
 
 func (noopDataViewRef) DataView() *dataview.DataView { return nil }
 func (noopDataViewRef) Deref()                       {}
-
-func dataViewManagerOrNoop(dataViews []DataViewManager) DataViewManager {
-	if len(dataViews) == 0 || dataViews[0] == nil {
-		return noopDataViewManager{}
-	}
-	return dataViews[0]
-}
 
 func (m *ShardViewManager) SetStatsObserver(observer func(qviews.ShardID, *ShardStats)) {
 	m.mu.Lock()

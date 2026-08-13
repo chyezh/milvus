@@ -183,6 +183,7 @@ func newLoadConfigQViewsServer(t *testing.T) (*Server, *metastoremocks.QueryCoor
 		queryNodeClient:      &fakeRuntimeQueryNodeClient{},
 		resourceGroupManager: &fakeRuntimeResourceGroupManager{},
 		dataViewProvider:     &fakeRuntimeDataViewProvider{},
+		dataViewManager:      &fakeRuntimeDataViewManager{},
 		balancerFactory: func(*balancer.SnapshotBuilder) qviewsBalancer {
 			return fakeBalancer
 		},
