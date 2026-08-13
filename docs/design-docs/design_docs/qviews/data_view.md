@@ -292,6 +292,15 @@ durable; an older retained DataView may therefore continue to reference and
 load a fenced segment while publication is retried. DataView and QueryView
 references continue to protect the segment's physical lifetime.
 
+The core publication boundary is a generic metadata-first protocol rather than
+a trim-specific operation. DataView holds the collection publication lock while
+the business adapter performs its metadata transaction and returns the exact
+publications enabled by that transaction. The adapter validates the plan
+against the current DataView state before persisting the metadata fence; core
+validates the returned plan again before applying it. This keeps SegmentMeta
+ownership in DataCoord while keeping publication ordering and pending-epoch
+fencing in DataView.
+
 ### 5.2 Recovery Authority
 
 Recovery loads the collection version-state record and then loads exactly the
@@ -312,8 +321,39 @@ adopted by recovery and GC removes it once no exact live reference protects it.
 
 DataViewManager is the DataCoord component that applies explicit DataCoord
 membership commits to the persisted loadable membership. Business adapters use
-`CommitPublishedView`, `CommitStreamingView`, `CommitRewrite`, and
-`CommitSegmentTrim` with explicit mutations.
+`CommitPublishedView`, `CommitStreamingView`, `CommitRewrite`, and the generic
+`CommitMetadataFirst` protocol with explicit mutations.
+
+`CommitMetadataFirst` is used when a business operation must durably update
+SegmentMeta before publishing its DataView consequence, such as DropPartition
+and truncate. Its callback receives a core validator and returns an explicit
+plan:
+
+```go
+type AssignedMutation struct {
+    Version  *viewpb.DataVersion // an already allocated (S, 0) epoch
+    Mutation PublishedMutation
+}
+
+type MetadataFirstPlan struct {
+    Assigned []AssignedMutation // complete pending Streaming epochs
+    Rewrite  PublishedMutation  // independent membership rewrite
+}
+
+type MetadataFirstCommit func(
+    context.Context,
+    MetadataFirstPlanValidator,
+) (MetadataFirstPlan, error)
+```
+
+The callback owns collection-scoped SegmentMeta enumeration, business filters,
+lineage or lifecycle completion conditions, deterministic grouping of assigned
+epochs, and persistence of the metadata fence. It may return only already
+allocated epochs and must call the validator before persisting the fence.
+DataView revalidates the same plan after the callback returns, completes
+assigned epochs in order, and applies the explicit rewrite. It never discovers
+trim targets by scanning SegmentMeta itself and never infers whether a mutation
+is a flush, rewrite, or DDL operation.
 
 Current interface shape:
 
@@ -326,7 +366,7 @@ type DataViewManager interface {
     RetryAssignedFlushPublication(ctx context.Context, collectionID, segmentID int64, assigned *viewpb.DataVersion, removeOnly bool) (*viewpb.DataVersion, error)
     CommitStreamingView(ctx context.Context, collectionID int64, mutation PublishedMutation) (*viewpb.DataVersion, error)
     CommitRewrite(ctx context.Context, collectionID int64, mutation PublishedMutation) (*viewpb.DataVersion, error)
-    CommitSegmentTrim(ctx context.Context, collectionID int64, resolve SegmentTrimTargetResolver, finalize SegmentTrimFinalize) (*viewpb.DataVersion, error)
+    CommitMetadataFirst(ctx context.Context, collectionID int64, commit MetadataFirstCommit) (*viewpb.DataVersion, error)
     InitializeCollection(ctx context.Context, initialization CollectionInitialization) (*viewpb.DataVersion, error)
     MarkCollectionTerminal(ctx context.Context, collectionID int64) error
 
@@ -348,7 +388,9 @@ drain, then removes the collection snapshots and version state.
 `RecoverManager` restores the durable published head directly from metastore.
 There is no generic post-recovery SegmentMeta repair phase. If an explicit
 business publication failed, that business workflow retries its `Commit*`
-operation after recovery.
+operation after recovery. A metadata-first retry reconstructs the same
+collection-scoped plan from the durable SegmentMeta fence and submits it again;
+recovery does not invent a target set or a DataVersion.
 
 Internal helpers keep publication state-oriented and explicit:
 
@@ -361,7 +403,10 @@ persistSnapshotAndPublishedHead(view) error
 Business adapters carry the affected collection, vchannel, partition, and
 segment IDs from the completed DataCoord mutation. DataViewManager must not
 discover the next view by scanning all segment metadata on the normal path or
-during recovery.
+during recovery. The business-owned callback supplied to `CommitMetadataFirst`
+is DataCoord adapter code, not membership discovery inside DataViewManager; it
+runs under the collection publication lock and owns the SegmentMeta
+read/persist operation.
 
 Business adapters own completion and loadability gates before calling the
 manager. They submit the final affected IDs as `SegmentMembership` values and
@@ -372,7 +417,11 @@ event. Metadata-only changes do not call a membership commit. Delayed outputs
 remain outside DataView until their owning adapter submits the final loadable
 membership at the already-assigned epoch.
 
-A single DataCoord mutation batch advances DataVersion at most once.
+A normal explicit membership commit advances DataVersion at most once. One
+metadata-first transaction may complete multiple already allocated Streaming
+epochs in order and then apply at most one independent rewrite; it cannot
+allocate a new epoch or collapse those durable epoch identities into a guessed
+version.
 
 Commit adapters must be idempotent. Repeated requests and mutations whose
 membership is already reflected in the published head are normal no-op success
@@ -480,9 +529,15 @@ Balancer snapshot references while existing refs remain readable.
 
 DropPartition and truncate first persist a collection-scoped logical-removal
 fence by marking every matching SegmentMeta record `Dropped`, then publish the
-DataView trim while holding the same collection serialization lock. The target
-scope and assigned epochs are resolved again after metadata finalization so
-concurrent replacement outputs cannot escape the trim.
+DataView consequence while holding the same collection serialization lock.
+DataCoord supplies a `MetadataFirstPlan` whose `Assigned` entries complete
+already allocated Streaming epochs and whose `Rewrite` removes the affected
+published members. Assigned entries are grouped and ordered deterministically;
+the plan cannot complete an unallocated epoch, overtake an earlier pending
+epoch, or advance compact version for a target that was never published. The
+plan is validated before the SegmentMeta fence is persisted and revalidated by
+DataView after the callback returns, so concurrent replacement outputs cannot
+escape the trim.
 
 The durable DataView head remains the sole QueryCoord membership authority.
 Physical segment GC consults manager-owned retained-membership accounting. The
@@ -496,7 +551,9 @@ segment and existing QueryViews may continue to use it. The `Dropped` state
 prevents that segment from joining future repaired DataViews; it does not revoke
 membership from an already-published or retained DataView. A publication
 failure is retryable, and retry completes the assigned remove-only epoch or
-compact removal from the same authoritative head.
+compact removal from the same authoritative head. Because SegmentMeta already
+contains the durable fence, retry reconstructs the same explicit plan rather
+than asking DataView recovery to infer a missing mutation.
 
 There is no separate DropChannel commit in the current DataCoord behavior.
 Channel-level effects should be represented by the actual DDL/trim operation
@@ -855,9 +912,9 @@ On DataCoord startup:
 Recovery never creates a DataView snapshot or advances DataVersion. SegmentMeta
 may be ahead because an assigned flush, compaction, or DDL workflow has not yet
 completed publication. The owning business adapter explicitly retries the
-corresponding `CommitPublishedView`, `CommitRewrite`, or `CommitSegmentTrim`
-operation. Recovery does not infer membership, operation type, or version from
-that difference.
+corresponding `CommitPublishedView`, `CommitRewrite`, or
+`CommitMetadataFirst` operation. Recovery does not infer membership, operation
+type, or version from that difference.
 
 The only compatibility exception is migration of legacy collections that have
 snapshot records but no `published_data_version` field. That one-time migration
