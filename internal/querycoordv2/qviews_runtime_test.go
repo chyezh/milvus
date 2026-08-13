@@ -37,7 +37,58 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
+
+func TestNewQViewsRuntimeRequiresDataViewProvider(t *testing.T) {
+	ctx := context.Background()
+	catalog := metastoremocks.NewQueryCoordCatalog(t)
+
+	runtime, err := newQViewsRuntime(ctx, qviewsRuntimeDependencies{
+		queryCoordCatalog:    catalog,
+		queryViewCatalog:     &fakeQueryViewCatalog{},
+		viewSyncClient:       &fakeRuntimeViewSyncClient{},
+		queryNodeClient:      &fakeRuntimeQueryNodeClient{},
+		resourceGroupManager: &fakeRuntimeResourceGroupManager{},
+		dataViewManager:      &fakeRuntimeDataViewManager{},
+	})
+	if runtime != nil {
+		runtime.stop()
+	}
+	require.ErrorIs(t, err, merr.ErrServiceInternal)
+	require.Nil(t, runtime)
+}
+
+func TestResolveQViewsDataViewCapabilitiesRequiresProvider(t *testing.T) {
+	_, _, err := resolveQViewsDataViewCapabilities(&fakeQViewsMixCoord{
+		dataViewManager: &fakeRuntimeDataViewManager{},
+	})
+	require.ErrorIs(t, err, merr.ErrServiceInternal)
+}
+
+func TestResolveQViewsDataViewCapabilitiesRejectsNilMixCoord(t *testing.T) {
+	_, _, err := resolveQViewsDataViewCapabilities(nil)
+	require.ErrorIs(t, err, merr.ErrServiceInternal)
+}
+
+func TestResolveQViewsDataViewCapabilitiesRequiresManager(t *testing.T) {
+	_, _, err := resolveQViewsDataViewCapabilities(&fakeQViewsMixCoord{
+		dataViewProvider: &fakeRuntimeDataViewProvider{},
+	})
+	require.ErrorIs(t, err, merr.ErrServiceInternal)
+}
+
+func TestResolveQViewsDataViewCapabilitiesReturnsExactDependencies(t *testing.T) {
+	provider := &fakeRuntimeDataViewProvider{}
+	manager := &fakeRuntimeDataViewManager{}
+	gotProvider, gotManager, err := resolveQViewsDataViewCapabilities(&fakeQViewsMixCoord{
+		dataViewProvider: provider,
+		dataViewManager:  manager,
+	})
+	require.NoError(t, err)
+	assert.Same(t, provider, gotProvider)
+	assert.Same(t, manager, gotManager)
+}
 
 func TestNewQViewsRuntimeRecoversLoadConfigAndQueryViews(t *testing.T) {
 	ctx := context.Background()
@@ -87,6 +138,19 @@ func (r *fakeRuntimeDataViewRef) Deref() { r.dereferenced = true }
 type fakeRuntimeDataViewManager struct {
 	versions []qviews.DataVersion
 	refs     []*fakeRuntimeDataViewRef
+}
+
+type fakeQViewsMixCoord struct {
+	dataViewProvider balancer.DataViewProvider
+	dataViewManager  dataview.ReferenceManager
+}
+
+func (f *fakeQViewsMixCoord) DataViewProvider() balancer.DataViewProvider {
+	return f.dataViewProvider
+}
+
+func (f *fakeQViewsMixCoord) DataViewManager() dataview.ReferenceManager {
+	return f.dataViewManager
 }
 
 func (m *fakeRuntimeDataViewManager) Get(_ context.Context, _ int64, version qviews.DataVersion) (dataview.DataViewRef, error) {
@@ -232,12 +296,20 @@ func (m *fakeRuntimeResourceGroupManager) GetNodes(context.Context, string) ([]i
 type fakeRuntimeDataViewProvider struct{}
 
 func (p *fakeRuntimeDataViewProvider) DataViewSnapshotRefForCollections(context.Context, map[int64]struct{}) (balancer.DataViewSnapshotRef, error) {
-	return emptyDataViewSnapshotRef{}, nil
+	return fakeRuntimeDataViewSnapshotRef{}, nil
 }
 
 func (p *fakeRuntimeDataViewProvider) SegmentSnapshot(context.Context, []int64) balancer.SegmentSnapshot {
 	return nil
 }
+
+type fakeRuntimeDataViewSnapshotRef struct{}
+
+func (fakeRuntimeDataViewSnapshotRef) Snapshot() *balancer.DataViewSnapshot {
+	return balancer.NewDataViewSnapshot(0, nil, nil)
+}
+
+func (fakeRuntimeDataViewSnapshotRef) Release() {}
 
 type fakeRuntimeBalancer struct {
 	started  bool

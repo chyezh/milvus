@@ -87,7 +87,7 @@ func newQViewsRuntime(ctx context.Context, deps qviewsRuntimeDependencies) (*qvi
 		return nil, merr.WrapErrServiceInternalMsg("resource group manager is nil")
 	}
 	if deps.dataViewProvider == nil {
-		deps.dataViewProvider = emptyDataViewProvider{}
+		return nil, merr.WrapErrServiceInternalMsg("data view provider is nil")
 	}
 
 	if deps.queryNodeClient == nil {
@@ -208,7 +208,11 @@ func newDefaultQViewsRuntimeDependencies(
 	queryCoordCatalog metastore.QueryCoordCatalog,
 	resourceGroupManager nodeview.ResourceGroupManager,
 	mixCoord types.MixCoord,
-) qviewsRuntimeDependencies {
+) (qviewsRuntimeDependencies, error) {
+	dataViewProvider, dataViewManager, err := resolveQViewsDataViewCapabilities(mixCoord)
+	if err != nil {
+		return qviewsRuntimeDependencies{}, err
+	}
 	queryNodeManager := qnmanager.NewManagerClient(etcdCli)
 	streamingCoordClient := streamingcoordclient.NewClient(etcdCli)
 	streamingNodeHandler := snhandler.NewHandlerClient(streamingCoordClient.Assignment())
@@ -217,68 +221,36 @@ func newDefaultQViewsRuntimeDependencies(
 		queryViewCatalog:            queryview.NewQueryViewCatalog(metaKV, "coord"),
 		queryNodeClient:             queryNodeManager,
 		resourceGroupManager:        resourceGroupManager,
-		dataViewProvider:            &mixCoordDataViewProvider{mixCoord: mixCoord},
+		dataViewProvider:            dataViewProvider,
+		dataViewManager:             dataViewManager,
 		queryNodeManager:            queryNodeManager,
 		streamingCoordClient:        streamingCoordClient,
 		streamingNodeHandler:        streamingNodeHandler,
 		streamingNodeViewSyncClient: streamingNodeHandler.QueryViewSyncClient(),
 	}
-	if dataViews, ok := mixCoord.(dataViewManagerSource); ok {
-		deps.dataViewManager = dataViews.DataViewManager()
-	}
-	return deps
+	return deps, nil
 }
 
-type dataViewManagerSource interface {
+type dataViewCapabilitiesSource interface {
+	DataViewProvider() balancer.DataViewProvider
 	DataViewManager() dataview.ReferenceManager
 }
 
-type dataViewProviderSource interface {
-	DataViewProvider() balancer.DataViewProvider
-}
-
-type mixCoordDataViewProvider struct {
-	mixCoord types.MixCoord
-}
-
-func (p *mixCoordDataViewProvider) DataViewSnapshotRefForCollections(ctx context.Context, collectionIDs map[int64]struct{}) (balancer.DataViewSnapshotRef, error) {
-	provider := p.provider()
-	if provider == nil {
-		return nil, merr.WrapErrServiceNotReadyMsg("data view provider is not initialized")
+func resolveQViewsDataViewCapabilities(mixCoord interface{}) (balancer.DataViewProvider, dataview.ReferenceManager, error) {
+	if mixCoord == nil {
+		return nil, nil, merr.WrapErrServiceInternalMsg("mixcoord is nil")
 	}
-	return provider.DataViewSnapshotRefForCollections(ctx, collectionIDs)
-}
-
-func (p *mixCoordDataViewProvider) SegmentSnapshot(ctx context.Context, segmentIDs []int64) balancer.SegmentSnapshot {
-	provider := p.provider()
-	if provider == nil {
-		return nil
-	}
-	return provider.SegmentSnapshot(ctx, segmentIDs)
-}
-
-func (p *mixCoordDataViewProvider) provider() balancer.DataViewProvider {
-	source, ok := p.mixCoord.(dataViewProviderSource)
+	source, ok := mixCoord.(dataViewCapabilitiesSource)
 	if !ok {
-		return nil
+		return nil, nil, merr.WrapErrServiceInternalMsg("mixcoord does not provide data view capabilities")
 	}
-	return source.DataViewProvider()
+	provider := source.DataViewProvider()
+	if provider == nil {
+		return nil, nil, merr.WrapErrServiceInternalMsg("data view provider is nil")
+	}
+	manager := source.DataViewManager()
+	if manager == nil {
+		return nil, nil, merr.WrapErrServiceInternalMsg("data view manager is nil")
+	}
+	return provider, manager, nil
 }
-
-type emptyDataViewProvider struct{}
-
-func (emptyDataViewProvider) DataViewSnapshotRefForCollections(context.Context, map[int64]struct{}) (balancer.DataViewSnapshotRef, error) {
-	return emptyDataViewSnapshotRef{}, nil
-}
-
-func (emptyDataViewProvider) SegmentSnapshot(context.Context, []int64) balancer.SegmentSnapshot {
-	return nil
-}
-
-type emptyDataViewSnapshotRef struct{}
-
-func (emptyDataViewSnapshotRef) Snapshot() *balancer.DataViewSnapshot {
-	return balancer.NewDataViewSnapshot(0, nil, nil)
-}
-
-func (emptyDataViewSnapshotRef) Release() {}
