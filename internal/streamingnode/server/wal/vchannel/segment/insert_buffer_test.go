@@ -15,12 +15,13 @@ func TestInsertBufferSnapshotMessagesOutliveRetainedHandles(t *testing.T) {
 		IntoImmutableMessage(walimplstest.NewTestMessageID(11))
 	owner := message.NewOwnedImmutableMessage(raw, nil)
 	handle := owner.Clone()
-	buffer := writeOnlyInsertBuffer{entries: []retainedInsertMessage{{message: raw, retained: handle}}}
+	buffer := writeOnlyInsertBuffer{entries: []message.RetainedImmutableMessage{handle}}
 
 	snapshot := buffer.Messages()
 	owner.Release()
 	handle.Release()
 
 	require.Len(t, snapshot, 1)
+	assert.Same(t, raw, snapshot[0])
 	assert.Equal(t, uint64(20), snapshot[0].TimeTick())
 }

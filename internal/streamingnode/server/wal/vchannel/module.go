@@ -225,9 +225,6 @@ func (m *VChannelRecoveryModule) ObserveMessage(
 	if m.metaAndData && msg.TimeTick() > m.dataObservedTimeTick {
 		m.dataObservedTimeTick = msg.TimeTick()
 	}
-	if m.metaAndData {
-		msg = message.CloneImmutableMessage(msg)
-	}
 	m.observeQueryResourceEvent(ctx, walview.VChannelResourceEvent{Message: msg})
 }
 

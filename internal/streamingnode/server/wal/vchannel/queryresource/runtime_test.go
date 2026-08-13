@@ -92,8 +92,10 @@ func TestQueryRuntimeOwnsQueuedImmutableMessage(t *testing.T) {
 	runtime := NewQueryRuntime(module)
 	raw := message.CreateTestTimeTickSyncMessage(t, 1, 20, walimplstest.NewTestMessageID(10)).
 		IntoImmutableMessage(walimplstest.NewTestMessageID(11))
-	cloned := message.CloneImmutableMessage(raw)
-	require.True(t, runtime.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: cloned}))
+	owner := message.NewOwnedImmutableMessage(raw, nil)
+	queued := owner.Message()
+	require.True(t, runtime.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: queued}))
+	owner.Release()
 	require.NoError(t, runtime.Initialize(context.Background(), testWALView(1, "ch", qviews.DataVersion{})))
 	require.Equal(t, uint64(20), module.timeTick)
 	runtime.Close()

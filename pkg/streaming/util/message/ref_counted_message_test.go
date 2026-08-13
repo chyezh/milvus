@@ -175,15 +175,15 @@ func TestMustAsOwnedImmutableTxnMessage(t *testing.T) {
 	owner.Release()
 }
 
-func TestCloneImmutableMessageCanOutliveOwner(t *testing.T) {
+func TestImmutableMessageCanOutliveOwner(t *testing.T) {
 	raw := CreateTestInsertMessage(t, 100, 2, 20, testMessageID("10")).
 		IntoImmutableMessage(testMessageID("11"))
 	owner := NewOwnedImmutableMessage(raw, nil)
-	cloned := CloneImmutableMessage(owner.Message())
+	borrowed := owner.Message()
 	owner.Release()
 
-	assert.Equal(t, uint64(20), cloned.TimeTick())
-	assert.NotSame(t, &raw.Payload()[0], &cloned.Payload()[0])
+	assert.Same(t, raw, borrowed)
+	assert.Equal(t, uint64(20), borrowed.TimeTick())
 }
 
 func buildRefCountedTestTxn(t *testing.T) ImmutableTxnMessage {

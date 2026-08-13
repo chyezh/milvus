@@ -74,10 +74,13 @@ is always retained as one complete message; a child returned by `RangeOver` does
 not have an independent lifetime.
 
 `Message()` exposes the underlying `ImmutableMessage` through the handle. It is
-invalid to call it after that handle has been released. When the final
-reference is released, the wrapper clears its pointer to the underlying
-message after running the finalizer, allowing the message, payload, properties,
-and complete transaction to become eligible for Go GC.
+invalid to call `Message()` on that handle after the handle has been released,
+but an `ImmutableMessage` interface value obtained before release may outlive
+the handle. Such an interface value keeps the Go object reachable without
+participating in RecoveryStorage completion tracking. When the final tracked
+reference is released, the wrapper clears its own pointer to the underlying
+message after running the finalizer. The message becomes eligible for Go GC
+only after all ordinary Go references have also disappeared.
 
 Typed specialization is a view over the same owner or retained handle. It is
 defined directly alongside `SpecializedImmutableMessage`; there is no generic
@@ -242,8 +245,10 @@ separate downstream operation and is not a message-consumer reference.
 
 ### QueryRuntime
 
-QueryRuntime receives a synchronous deep copy of the immutable message when it
-needs to enqueue a live event. It never retains a RecoveryStorage handle and
+QueryRuntime receives the underlying immutable message directly when it needs
+to enqueue a live event. The Go interface value keeps the immutable message
+object reachable; this is independent of RecoveryStorage's persistence
+completion tracking. QueryRuntime never retains a RecoveryStorage handle and
 never delays the Data checkpoint.
 
 ### BroadcastAck
