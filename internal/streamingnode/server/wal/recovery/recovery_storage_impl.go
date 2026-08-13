@@ -148,7 +148,6 @@ type recoveryStorageImpl struct {
 	broadcastAck           *broadcastAckModule
 	checkpointDirty        bool
 	vchannelManager        *vchannel.PChannelRecoveryManager
-	modules                []moduleapi.Module
 	nodeScheduler          nodescheduler.Scheduler
 	taskScheduler          *scopedTaskScheduler
 	dirtyCounter           int // records the message count since last persist snapshot.
@@ -238,9 +237,6 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 		return err
 	}
 	r.vchannelManager = manager
-	// BroadcastAck is a dedicated owner-release sink. It is not part of the
-	// metadata/data recovery module set.
-	r.modules = []moduleapi.Module{r.vchannelManager}
 	return nil
 }
 
@@ -339,11 +335,9 @@ func (r *recoveryStorageImpl) consumeDirtySnapshot() *dirtyPersistSnapshot {
 		}
 	}
 	moduleSnapshots := make([]moduleapi.DirtySnapshot, 0)
-	for _, module := range r.modules {
-		if cleanupModule, ok := module.(moduleapi.CleanupModule); ok {
-			moduleSnapshots = append(moduleSnapshots, cleanupModule.ConsumeCleanupSnapshots(cleanup)...)
-		}
-		moduleSnapshots = append(moduleSnapshots, module.ConsumeDirtySnapshots()...)
+	if r.vchannelManager != nil {
+		moduleSnapshots = append(moduleSnapshots, r.vchannelManager.ConsumeCleanupSnapshots(cleanup)...)
+		moduleSnapshots = append(moduleSnapshots, r.vchannelManager.ConsumeDirtySnapshots()...)
 	}
 	if !checkpointDirty && salvageCP == nil && len(moduleSnapshots) == 0 {
 		return nil
@@ -435,12 +429,10 @@ func (r *recoveryStorageImpl) observeModulesMessage(
 	ctx context.Context,
 	owner message.OwnedImmutableMessage,
 ) {
-	if len(r.modules) == 0 {
+	if r.vchannelManager == nil {
 		panic("recovery modules are not initialized")
 	}
-	for _, module := range r.modules {
-		module.ObserveMessage(ctx, owner)
-	}
+	r.vchannelManager.ObserveMessage(ctx, owner)
 }
 
 func consumePointFromMessage(msg message.ImmutableMessage) utility.WALConsumeCheckpoint {

@@ -141,10 +141,6 @@ func (m *PChannelRecoveryManager) releaseInitialState() {
 	m.segmentsByVChannel = nil
 }
 
-func (m *PChannelRecoveryManager) Name() moduleapi.ModuleName {
-	return moduleapi.ModuleNameVChannel
-}
-
 func (m *PChannelRecoveryManager) ObserveMessage(
 	ctx context.Context,
 	owner message.OwnedImmutableMessage,
@@ -503,8 +499,6 @@ func (n *dirtyTrackingNotifier) NotifyModuleUpdated(name moduleapi.ModuleName) {
 }
 
 var (
-	_ moduleapi.Module                    = (*PChannelRecoveryManager)(nil)
-	_ moduleapi.PendingCleanupModule      = (*PChannelRecoveryManager)(nil)
 	_ wal.TransformLogStreamManager       = (*PChannelRecoveryManager)(nil)
 	_ snview.StreamingNodeResourceManager = (*PChannelRecoveryManager)(nil)
 	_ snview.QueryRuntimeProvider         = (*PChannelRecoveryManager)(nil)

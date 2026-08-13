@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bytedance/mockey"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -22,62 +23,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
-type testRecoveryModule struct {
-	snapshot moduleapi.ModuleSnapshot
-}
-
-func (m *testRecoveryModule) Name() moduleapi.ModuleName {
-	return moduleapi.ModuleName("test")
-}
-
-func (m *testRecoveryModule) ObserveMessage(context.Context, message.OwnedImmutableMessage) {}
-
-func (m *testRecoveryModule) SwitchIntoMetaAndData() moduleapi.ModuleSnapshot {
-	return m.snapshot
-}
-
-func (m *testRecoveryModule) ConsumeDirtySnapshots() []moduleapi.DirtySnapshot {
-	return nil
-}
-
-type notifyingDirtyModule struct {
-	testRecoveryModule
-	notify func()
-}
-
-type recordingCleanupModule struct {
-	testRecoveryModule
-	cleanup moduleapi.CleanupContext
-}
-
-func (m *recordingCleanupModule) ConsumeCleanupSnapshots(cleanup moduleapi.CleanupContext) []moduleapi.DirtySnapshot {
-	m.cleanup = cleanup
-	return nil
-}
-
-type pendingCleanupModule struct {
-	testRecoveryModule
-	pending  bool
-	consumed int
-}
-
-func (m *pendingCleanupModule) ConsumeCleanupSnapshots(moduleapi.CleanupContext) []moduleapi.DirtySnapshot {
-	m.consumed++
-	m.pending = false
-	return nil
-}
-
-func (m *pendingCleanupModule) HasPendingCleanup() bool {
-	return m.pending
-}
-
-func (m *notifyingDirtyModule) ConsumeDirtySnapshots() []moduleapi.DirtySnapshot {
-	if m.notify != nil {
-		m.notify()
-	}
-	return nil
-}
-
 type recordingRecoveryStreamBuilder struct {
 	param BuildRecoveryStreamParam
 }
@@ -86,11 +31,23 @@ func newTestRecoveryStorage(t *testing.T, checkpoint *utility.WALCheckpoint) *re
 	t.Helper()
 	nodeScheduler := nodescheduler.New(4)
 	t.Cleanup(nodeScheduler.Close)
-	return newRecoveryStorage(
+	storage := newRecoveryStorage(
 		types.PChannelInfo{Name: "test-pchannel"},
 		checkpoint,
 		WithNodeScheduler(nodeScheduler),
 	)
+	manager, err := vchannel.NewPChannelRecoveryManager(vchannel.PChannelManagerConfig{
+		PChannel:      "test-pchannel",
+		NodeScheduler: nodeScheduler,
+		Runtime: moduleapi.Runtime{
+			Scheduler: storage.taskScheduler,
+			Notifier:  storage,
+		},
+	})
+	require.NoError(t, err)
+	storage.vchannelManager = manager
+	t.Cleanup(manager.Close)
+	return storage
 }
 
 func TestConsumeDirtySnapshotUsesLastPersistedPhysicalCheckpointsForCleanup(t *testing.T) {
@@ -102,14 +59,21 @@ func TestConsumeDirtySnapshotUsesLastPersistedPhysicalCheckpointsForCleanup(t *t
 			TimeTick:  9,
 		},
 	})
-	module := &recordingCleanupModule{}
-	storage.modules = []moduleapi.Module{module}
 	storage.checkpoint.TimeTick = 100
 	storage.checkpoint.DataCheckpoint.TimeTick = 90
+	var cleanup moduleapi.CleanupContext
+	mock := mockey.Mock((*vchannel.PChannelRecoveryManager).ConsumeCleanupSnapshots).To(func(
+		_ *vchannel.PChannelRecoveryManager,
+		current moduleapi.CleanupContext,
+	) []moduleapi.DirtySnapshot {
+		cleanup = current
+		return nil
+	}).Build()
+	defer mock.UnPatch()
 
 	assert.Nil(t, storage.consumeDirtySnapshot())
-	assert.Equal(t, uint64(10), module.cleanup.MetaPhysicalTimeTick)
-	assert.Equal(t, uint64(9), module.cleanup.DataPhysicalTimeTick)
+	assert.Equal(t, uint64(10), cleanup.MetaPhysicalTimeTick)
+	assert.Equal(t, uint64(9), cleanup.DataPhysicalTimeTick)
 }
 
 func TestRecoveryStorageCloseDrainsPendingCleanup(t *testing.T) {
@@ -121,11 +85,25 @@ func TestRecoveryStorageCloseDrainsPendingCleanup(t *testing.T) {
 			TimeTick:  9,
 		},
 	})
-	module := &pendingCleanupModule{pending: true}
-	storage.modules = []moduleapi.Module{module}
-
+	pending := true
+	consumed := 0
+	pendingMock := mockey.Mock((*vchannel.PChannelRecoveryManager).HasPendingCleanup).To(func(
+		*vchannel.PChannelRecoveryManager,
+	) bool {
+		return pending
+	}).Build()
+	defer pendingMock.UnPatch()
+	consumeMock := mockey.Mock((*vchannel.PChannelRecoveryManager).ConsumeCleanupSnapshots).To(func(
+		_ *vchannel.PChannelRecoveryManager,
+		_ moduleapi.CleanupContext,
+	) []moduleapi.DirtySnapshot {
+		consumed++
+		pending = false
+		return nil
+	}).Build()
+	defer consumeMock.UnPatch()
 	require.NoError(t, storage.persistDritySnapshotWhenClosing())
-	assert.Equal(t, 1, module.consumed)
+	assert.Equal(t, 1, consumed)
 }
 
 func (b *recordingRecoveryStreamBuilder) WALName() message.WALName {
@@ -199,8 +177,6 @@ func TestRecoveryStorageCompletesMessageWithoutConsumerRefs(t *testing.T) {
 	storage := newTestRecoveryStorage(t, checkpoint)
 	defer storage.metrics.Close()
 	defer storage.taskScheduler.Close()
-	storage.modules = []moduleapi.Module{&testRecoveryModule{}}
-
 	lastConfirmed := walimplstest.NewTestMessageID(2)
 	mutableMsg, err := message.NewTimeTickMessageBuilderV1().
 		WithHeader(&message.TimeTickMessageHeader{}).
@@ -244,13 +220,12 @@ func TestRecoveryStorageUsesVChannelRecoveryManagerForQueryResourcesAndTransform
 	require.NoError(t, err)
 	manager.SwitchIntoMetaAndData()
 	storage.vchannelManager = manager
-	storage.modules = []moduleapi.Module{manager}
 
 	assert.Same(t, manager, storage.TransformLog())
 	assert.Same(t, manager, storage.VChannelManager())
 }
 
-func TestRecoveryStorageSwitchModulesMergesModuleSnapshots(t *testing.T) {
+func TestRecoveryStorageSwitchesVChannelManagerIntoMetaAndData(t *testing.T) {
 	checkpoint := &utility.WALCheckpoint{
 		MessageID: walimplstest.NewTestMessageID(1),
 		TimeTick:  1,
@@ -259,35 +234,28 @@ func TestRecoveryStorageSwitchModulesMergesModuleSnapshots(t *testing.T) {
 	defer storage.metrics.Close()
 	defer storage.taskScheduler.Close()
 
-	storage.modules = []moduleapi.Module{
-		&testRecoveryModule{snapshot: moduleapi.CompositeModuleSnapshot{
-			&moduleapi.VChannelModuleSnapshot{VChannels: map[string]*streamingpb.VChannelMeta{
-				"v1": {Vchannel: "v1"},
-			}},
-			&moduleapi.SegmentModuleSnapshot{
-				Segments: map[int64]*streamingpb.SegmentAssignmentMeta{
-					1: {SegmentId: 1, Vchannel: "v1"},
-				},
-			},
-		}},
-		&testRecoveryModule{snapshot: moduleapi.CompositeModuleSnapshot{
-			&moduleapi.VChannelModuleSnapshot{VChannels: map[string]*streamingpb.VChannelMeta{
-				"v2": {Vchannel: "v2"},
-			}},
-			&moduleapi.SegmentModuleSnapshot{
-				Segments: map[int64]*streamingpb.SegmentAssignmentMeta{
-					2: {SegmentId: 2, Vchannel: "v2"},
-				},
-			},
-		}},
-	}
+	manager, err := vchannel.NewPChannelRecoveryManager(vchannel.PChannelManagerConfig{
+		PChannel: "test-pchannel",
+		VChannelMetas: map[string]*streamingpb.VChannelMeta{
+			"v1": newRecoveryTestVChannelMeta("v1", 1),
+			"v2": newRecoveryTestVChannelMeta("v2", 2),
+		},
+		Segments: map[int64]*streamingpb.SegmentAssignmentMeta{
+			1: newRecoveryTestGrowingSegment("v1", 1, 1),
+			2: newRecoveryTestGrowingSegment("v2", 2, 2),
+		},
+		NodeScheduler: storage.nodeScheduler,
+	})
+	require.NoError(t, err)
+	storage.vchannelManager = manager
 
 	snapshot := storage.switchModulesIntoMetaAndData()
 
-	assert.Contains(t, snapshot.VChannels, "v1")
-	assert.Contains(t, snapshot.VChannels, "v2")
-	assert.Contains(t, snapshot.SegmentAssignments, int64(1))
-	assert.Contains(t, snapshot.SegmentAssignments, int64(2))
+	require.NotNil(t, snapshot.WritePathRecovery)
+	assert.Contains(t, snapshot.WritePathRecovery.VChannels, "v1")
+	assert.Contains(t, snapshot.WritePathRecovery.VChannels, "v2")
+	assert.Contains(t, snapshot.WritePathRecovery.GrowingSegments, int64(1))
+	assert.Contains(t, snapshot.WritePathRecovery.GrowingSegments, int64(2))
 }
 
 func TestRecoveryStorageMetaOnlyObserveDoesNotAdvanceDataCheckpoint(t *testing.T) {
@@ -302,8 +270,6 @@ func TestRecoveryStorageMetaOnlyObserveDoesNotAdvanceDataCheckpoint(t *testing.T
 	storage := newTestRecoveryStorage(t, checkpoint)
 	defer storage.metrics.Close()
 	defer storage.taskScheduler.Close()
-	storage.modules = []moduleapi.Module{&testRecoveryModule{}}
-
 	lastConfirmed := walimplstest.NewTestMessageID(2)
 	mutableMsg, err := message.NewTimeTickMessageBuilderV1().
 		WithHeader(&message.TimeTickMessageHeader{}).
@@ -335,11 +301,13 @@ func TestRecoveryStorageConsumeDirtySnapshotDoesNotHoldLockWhileCollectingModule
 	storage := newTestRecoveryStorage(t, checkpoint)
 	defer storage.metrics.Close()
 	defer storage.taskScheduler.Close()
-	storage.modules = []moduleapi.Module{&notifyingDirtyModule{
-		notify: func() {
-			storage.NotifyModuleUpdated(moduleapi.ModuleName("test"))
-		},
-	}}
+	mock := mockey.Mock((*vchannel.PChannelRecoveryManager).ConsumeDirtySnapshots).To(func(
+		*vchannel.PChannelRecoveryManager,
+	) []moduleapi.DirtySnapshot {
+		storage.NotifyModuleUpdated(moduleapi.ModuleNameVChannel)
+		return nil
+	}).Build()
+	defer mock.UnPatch()
 
 	done := make(chan struct{})
 	go func() {
@@ -356,6 +324,29 @@ func TestRecoveryStorageConsumeDirtySnapshotDoesNotHoldLockWhileCollectingModule
 		}
 	}, time.Second, 10*time.Millisecond)
 	assert.True(t, storage.isDirty())
+}
+
+func newRecoveryTestVChannelMeta(vchannel string, collectionID int64) *streamingpb.VChannelMeta {
+	return &streamingpb.VChannelMeta{
+		Vchannel: vchannel,
+		State:    streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
+		CollectionInfo: &streamingpb.CollectionInfoOfVChannel{
+			CollectionId: collectionID,
+			Schemas: []*streamingpb.CollectionSchemaOfVChannel{
+				{Schema: &schemapb.CollectionSchema{}},
+			},
+		},
+	}
+}
+
+func newRecoveryTestGrowingSegment(vchannel string, collectionID, segmentID int64) *streamingpb.SegmentAssignmentMeta {
+	return &streamingpb.SegmentAssignmentMeta{
+		Vchannel:     vchannel,
+		CollectionId: collectionID,
+		SegmentId:    segmentID,
+		State:        streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING,
+		Stat:         &streamingpb.SegmentAssignmentStat{},
+	}
 }
 
 func TestValidateRecoveredViewMetaNormalizesBackwardCompatibleDefaults(t *testing.T) {

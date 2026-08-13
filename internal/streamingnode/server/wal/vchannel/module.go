@@ -165,10 +165,6 @@ func (m *VChannelRecoveryModule) segmentViewConfig() segment.ViewConfig {
 	}
 }
 
-func (m *VChannelRecoveryModule) Name() moduleapi.ModuleName {
-	return moduleapi.ModuleNameVChannel
-}
-
 func (m *VChannelRecoveryModule) ObserveMessage(
 	ctx context.Context,
 	owner message.OwnedImmutableMessage,
@@ -771,7 +767,3 @@ func max(a, b uint64) uint64 {
 	}
 	return b
 }
-
-var (
-	_ moduleapi.Module = (*VChannelRecoveryModule)(nil)
-)

@@ -1,43 +1,16 @@
 package moduleapi
 
 import (
-	"context"
-
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
-	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
-
-type Module interface {
-	Name() ModuleName
-	// ObserveMessage receives the message owner for both Meta-only and
-	// MetaAndData replay. Meta-only owners are not tracked by RecoveryStorage.
-	// Implementations must clone the owner synchronously for asynchronous work.
-	ObserveMessage(ctx context.Context, owner message.OwnedImmutableMessage)
-	SwitchIntoMetaAndData() ModuleSnapshot
-	// ConsumeDirtySnapshots captures module-local dirty views as stable
-	// snapshots for RecoveryStorage-owned catalog persistence. It does not
-	// return an error because it only snapshots in-memory state.
-	ConsumeDirtySnapshots() []DirtySnapshot
-}
 
 type CleanupContext struct {
 	MetaPhysicalTimeTick uint64
 	DataPhysicalTimeTick uint64
-}
-
-type CleanupModule interface {
-	ConsumeCleanupSnapshots(CleanupContext) []DirtySnapshot
-}
-
-// PendingCleanupModule exposes whether a cleanup module still has work that
-// RecoveryStorage must drain before closing.
-type PendingCleanupModule interface {
-	CleanupModule
-	HasPendingCleanup() bool
 }
 
 type ModuleName string

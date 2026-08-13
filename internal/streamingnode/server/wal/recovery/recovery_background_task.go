@@ -34,10 +34,8 @@ func (rs *recoveryStorageImpl) isDirty() bool {
 		return true
 	}
 
-	for _, module := range rs.modules {
-		if cleanupModule, ok := module.(moduleapi.PendingCleanupModule); ok && cleanupModule.HasPendingCleanup() {
-			return true
-		}
+	if rs.vchannelManager != nil && rs.vchannelManager.HasPendingCleanup() {
+		return true
 	}
 	return false
 }

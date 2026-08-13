@@ -14,6 +14,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
@@ -28,25 +29,35 @@ type retainingRecoveryModule struct {
 	handle  message.RetainedImmutableMessage
 }
 
-func (m *retainingRecoveryModule) Name() moduleapi.ModuleName {
-	return moduleapi.ModuleName("retaining-test")
+func installManager(t *testing.T, storage *recoveryStorageImpl) *vchannel.PChannelRecoveryManager {
+	t.Helper()
+	manager, err := vchannel.NewPChannelRecoveryManager(vchannel.PChannelManagerConfig{
+		PChannel:      storage.channel.Name,
+		NodeScheduler: storage.nodeScheduler,
+		Runtime: moduleapi.Runtime{
+			Scheduler: storage.taskScheduler,
+			Notifier:  storage,
+		},
+	})
+	require.NoError(t, err)
+	storage.vchannelManager = manager
+	t.Cleanup(manager.Close)
+	return manager
 }
 
-func (m *retainingRecoveryModule) ObserveMessage(
-	_ context.Context,
-	owner message.OwnedImmutableMessage,
-) {
-	m.owner = owner
-	m.message = owner.Message()
-	m.handle = owner.Clone()
-}
-
-func (m *retainingRecoveryModule) SwitchIntoMetaAndData() moduleapi.ModuleSnapshot {
-	return nil
-}
-
-func (m *retainingRecoveryModule) ConsumeDirtySnapshots() []moduleapi.DirtySnapshot {
-	return nil
+func installRetainingManager(t *testing.T, storage *recoveryStorageImpl, retained *retainingRecoveryModule) {
+	t.Helper()
+	installManager(t, storage)
+	mock := mockey.Mock((*vchannel.PChannelRecoveryManager).ObserveMessage).To(func(
+		_ *vchannel.PChannelRecoveryManager,
+		_ context.Context,
+		owner message.OwnedImmutableMessage,
+	) {
+		retained.owner = owner
+		retained.message = owner.Message()
+		retained.handle = owner.Clone()
+	}).Build()
+	t.Cleanup(func() { mock.UnPatch() })
 }
 
 func TestDataScannerReleasesOwnerAfterAllModulesObserve(t *testing.T) {
@@ -67,7 +78,7 @@ func TestDataScannerReleasesOwnerAfterAllModulesObserve(t *testing.T) {
 	)
 	t.Cleanup(storage.metrics.Close)
 	module := &retainingRecoveryModule{}
-	storage.modules = []moduleapi.Module{module}
+	installRetainingManager(t, storage, module)
 	msg := newAckTestTimeTickMessage(t, 20, 2)
 
 	storage.observeDataScannerMessage(context.Background(), msg)
@@ -97,7 +108,7 @@ func TestBroadcastDataMessageCompletesAfterConsumersAndCoordinatorAck(t *testing
 	storage := newTestRecoveryStorage(t, checkpoint)
 	t.Cleanup(storage.metrics.Close)
 	module := &retainingRecoveryModule{}
-	storage.modules = []moduleapi.Module{module}
+	installRetainingManager(t, storage, module)
 	scheduler := &recordingAckTaskScheduler{}
 	storage.broadcastAck = newBroadcastAckModule(moduleapi.Runtime{Scheduler: scheduler})
 	storage.broadcastAck.retryDelay = time.Millisecond
@@ -154,7 +165,7 @@ func TestMetaScannerOwnerIsNotTracked(t *testing.T) {
 	)
 	t.Cleanup(storage.metrics.Close)
 	module := &retainingRecoveryModule{}
-	storage.modules = []moduleapi.Module{module}
+	installRetainingManager(t, storage, module)
 	msg := newAckTestTimeTickMessage(t, 20, 2)
 
 	storage.observeMetaScannerMessage(context.Background(), msg)
@@ -187,7 +198,7 @@ func TestDataScannerReplayDoesNotRegressMetaCheckpoint(t *testing.T) {
 		WithNodeScheduler(scheduler),
 	)
 	t.Cleanup(storage.metrics.Close)
-	storage.modules = []moduleapi.Module{&testRecoveryModule{}}
+	installManager(t, storage)
 	msg := newAckTestTimeTickMessage(t, 20, 2)
 
 	storage.observeDataScannerMessage(context.Background(), msg)
@@ -219,7 +230,6 @@ func TestDataScannerReplayDoesNotRegressDataCheckpoint(t *testing.T) {
 	}
 	storage := newTestRecoveryStorage(t, checkpoint)
 	t.Cleanup(storage.metrics.Close)
-	storage.modules = []moduleapi.Module{&testRecoveryModule{}}
 
 	storage.observeDataScannerMessage(context.Background(), newAckTestTimeTickMessage(t, 20, 1))
 
@@ -245,7 +255,6 @@ func TestDataScannerAdvancesBothCheckpointsAcrossSameTimeTick(t *testing.T) {
 	}
 	storage := newTestRecoveryStorage(t, checkpoint)
 	t.Cleanup(storage.metrics.Close)
-	storage.modules = []moduleapi.Module{&testRecoveryModule{}}
 	first := newAckTestTimeTickMessage(t, 20, 2)
 	second := newAckTestTimeTickMessage(t, 20, 3)
 
@@ -277,7 +286,6 @@ func TestDataScannerAdvancesBothCheckpointsAcrossSameLastConfirmedMessageID(t *t
 	}
 	storage := newTestRecoveryStorage(t, checkpoint)
 	t.Cleanup(storage.metrics.Close)
-	storage.modules = []moduleapi.Module{&testRecoveryModule{}}
 	msg := newAckTestTimeTickMessage(t, 20, 1)
 
 	storage.observeDataScannerMessage(context.Background(), msg)
@@ -316,7 +324,7 @@ func TestPersistRetryKeepsFrozenCheckpointAndSchedulesAckFollowUp(t *testing.T) 
 	t.Cleanup(storage.metrics.Close)
 	storage.SetLogger(mlog.With())
 	module := &retainingRecoveryModule{}
-	storage.modules = []moduleapi.Module{module}
+	installRetainingManager(t, storage, module)
 	msg := newAckTestTimeTickMessage(t, 20, 2)
 	storage.observeDataScannerMessage(context.Background(), msg)
 
