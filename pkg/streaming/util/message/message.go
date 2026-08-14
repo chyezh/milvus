@@ -196,7 +196,7 @@ type ImmutableMessage interface {
 type OwnedImmutableMessage interface {
 	Message() ImmutableMessage
 	Clone() RetainedImmutableMessage
-	Exclusive() <-chan struct{}
+	RegisterExclusiveCallback(callback func())
 	Release()
 }
 

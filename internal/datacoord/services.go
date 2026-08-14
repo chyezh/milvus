@@ -3172,8 +3172,8 @@ func (s *Server) ListRefreshExternalCollectionJobs(ctx context.Context, req *dat
 // broadcastCommitImportMessage broadcasts a CommitImport WAL message for the given import job.
 // The message is broadcast to the job's data vchannels so each vchannel's WAL flusher
 // can observe the commit fence, flush pending DML, and call HandleCommitVchannel.
-// (Control-channel-only broadcast is dropped by the flusher's IsControlChannel guard
-// before reaching the CommitImport case, so it cannot drive per-vchannel commits.)
+// CChannel provides the common ordering point used by replicated broadcasts and is
+// ignored by the per-vchannel CommitImport AckOnce callback.
 func (s *Server) broadcastCommitImportMessage(ctx context.Context, job ImportJob) error {
 	vchannels := job.GetVchannels()
 	if len(vchannels) == 0 {
@@ -3192,7 +3192,7 @@ func (s *Server) broadcastCommitImportMessage(ctx context.Context, job ImportJob
 			JobId:        job.GetJobID(),
 		}).
 		WithBody(&messagespb.CommitImportMessageBody{}).
-		WithBroadcast(vchannels).
+		WithBroadcast(importBroadcastChannels(vchannels)).
 		MustBuildBroadcast()
 
 	_, err = broadcaster.Broadcast(ctx, msg)
@@ -3208,7 +3208,7 @@ func (s *Server) broadcastCommitImportMessage(ctx context.Context, job ImportJob
 var errRollbackImportNoVchannels = errors.New("import job has no vchannels")
 
 // broadcastRollbackImportMessage broadcasts a RollbackImport WAL message for the given import job.
-// Targets the job's data vchannels, matching the CommitImport routing.
+// It targets the job's data vchannels and CChannel, matching CommitImport ordering.
 func (s *Server) broadcastRollbackImportMessage(ctx context.Context, job ImportJob) error {
 	vchannels := job.GetVchannels()
 	if len(vchannels) == 0 {
@@ -3227,7 +3227,7 @@ func (s *Server) broadcastRollbackImportMessage(ctx context.Context, job ImportJ
 			JobId:        job.GetJobID(),
 		}).
 		WithBody(&messagespb.RollbackImportMessageBody{}).
-		WithBroadcast(vchannels).
+		WithBroadcast(importBroadcastChannels(vchannels)).
 		MustBuildBroadcast()
 
 	_, err = broadcaster.Broadcast(ctx, msg)

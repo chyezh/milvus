@@ -15,8 +15,9 @@ type refCountedImmutableMessageCore struct {
 	ownerReleased bool
 	finalized     bool
 	finalizer     func()
-	exclusive     bool
-	exclusiveCh   chan struct{}
+
+	exclusiveCallback           func()
+	exclusiveCallbackRegistered bool
 }
 
 // NewOwnedImmutableMessage takes ownership of msg and creates its unique root
@@ -28,14 +29,10 @@ func NewOwnedImmutableMessage(
 	if msg == nil {
 		panic("ref-counted immutable message is nil")
 	}
-	exclusiveCh := make(chan struct{})
-	close(exclusiveCh)
 	core := &refCountedImmutableMessageCore{
-		message:     msg,
-		refCount:    1,
-		finalizer:   finalizer,
-		exclusive:   true,
-		exclusiveCh: exclusiveCh,
+		message:   msg,
+		refCount:  1,
+		finalizer: finalizer,
 	}
 	return &ownedImmutableMessage{core: core}
 }
@@ -67,10 +64,6 @@ func (c *refCountedImmutableMessageCore) ownerClone() RetainedImmutableMessage {
 	if c.ownerReleased {
 		panic("ref-counted immutable message owner cloned after release")
 	}
-	if c.refCount == 1 {
-		c.exclusive = false
-		c.exclusiveCh = make(chan struct{})
-	}
 	c.refCount++
 	handle := &retainedImmutableMessage{}
 	handle.core.Store(c)
@@ -84,32 +77,64 @@ func (c *refCountedImmutableMessageCore) releaseOwner() {
 		return
 	}
 	c.ownerReleased = true
-	finalizer, finalized := c.releaseLocked()
+	exclusiveCallback, finalizer, finalized := c.releaseLocked()
 	c.mu.Unlock()
+	c.invokeExclusiveCallback(exclusiveCallback)
 	c.finishFinalization(finalizer, finalized)
 }
 
 func (c *refCountedImmutableMessageCore) release() {
 	c.mu.Lock()
-	finalizer, finalized := c.releaseLocked()
+	exclusiveCallback, finalizer, finalized := c.releaseLocked()
 	c.mu.Unlock()
+	c.invokeExclusiveCallback(exclusiveCallback)
 	c.finishFinalization(finalizer, finalized)
 }
 
-func (c *refCountedImmutableMessageCore) releaseLocked() (func(), bool) {
+func (c *refCountedImmutableMessageCore) releaseLocked() (func(), func(), bool) {
 	if c.refCount <= 0 {
 		panic("ref-counted immutable message reference count underflow")
 	}
 	c.refCount--
-	if c.refCount == 1 && !c.ownerReleased && !c.exclusive {
-		c.exclusive = true
-		close(c.exclusiveCh)
+	var exclusiveCallback func()
+	if c.refCount == 1 && !c.ownerReleased && c.exclusiveCallback != nil {
+		exclusiveCallback = c.exclusiveCallback
+		c.exclusiveCallback = nil
 	}
 	if c.refCount != 0 || c.finalized {
-		return nil, false
+		return exclusiveCallback, nil, false
 	}
 	c.finalized = true
-	return c.finalizer, true
+	return exclusiveCallback, c.finalizer, true
+}
+
+func (c *refCountedImmutableMessageCore) registerExclusiveCallback(callback func()) {
+	if callback == nil {
+		panic("ref-counted immutable message exclusive callback is nil")
+	}
+	c.mu.Lock()
+	if c.ownerReleased {
+		c.mu.Unlock()
+		panic("ref-counted immutable message owner accessed after release")
+	}
+	if c.exclusiveCallbackRegistered {
+		c.mu.Unlock()
+		panic("ref-counted immutable message exclusive callback already registered")
+	}
+	c.exclusiveCallbackRegistered = true
+	if c.refCount == 1 {
+		c.mu.Unlock()
+		callback()
+		return
+	}
+	c.exclusiveCallback = callback
+	c.mu.Unlock()
+}
+
+func (c *refCountedImmutableMessageCore) invokeExclusiveCallback(callback func()) {
+	if callback != nil {
+		callback()
+	}
 }
 
 func (c *refCountedImmutableMessageCore) finishFinalization(finalizer func(), finalized bool) {
@@ -145,16 +170,11 @@ func (m *ownedImmutableMessage) Clone() RetainedImmutableMessage {
 	return m.core.ownerClone()
 }
 
-func (m *ownedImmutableMessage) Exclusive() <-chan struct{} {
+func (m *ownedImmutableMessage) RegisterExclusiveCallback(callback func()) {
 	if m.core == nil {
 		panic("ref-counted immutable message owner accessed after release")
 	}
-	m.core.mu.Lock()
-	defer m.core.mu.Unlock()
-	if m.core.ownerReleased {
-		panic("ref-counted immutable message owner accessed after release")
-	}
-	return m.core.exclusiveCh
+	m.core.registerExclusiveCallback(callback)
 }
 
 func (m *ownedImmutableMessage) Release() {

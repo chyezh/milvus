@@ -56,11 +56,9 @@ func TestTransformLogDoesNotCloneUnrelatedMessage(t *testing.T) {
 	owner := newRefCountedTransformMessage(raw)
 
 	observeRetainedTransformMessage(transformLog, owner)
-	select {
-	case <-owner.Exclusive():
-	default:
-		t.Fatal("unrelated message should not retain an asynchronous handle")
-	}
+	exclusive := false
+	owner.RegisterExclusiveCallback(func() { exclusive = true })
+	assert.True(t, exclusive, "unrelated message should not retain an asynchronous handle")
 	owner.Release()
 
 	assert.Panics(t, func() { _ = owner.Message() })

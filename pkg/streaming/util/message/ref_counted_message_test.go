@@ -40,30 +40,53 @@ func TestOwnedImmutableMessageCloneAndFinalize(t *testing.T) {
 	first.Release()
 }
 
-func TestOwnedImmutableMessageExclusiveTracksRetainedReferences(t *testing.T) {
+func TestOwnedImmutableMessageRegistersExclusiveCallbackImmediately(t *testing.T) {
 	raw := CreateTestTimeTickSyncMessage(t, 1, 20, testMessageID("10")).
 		IntoImmutableMessage(testMessageID("11"))
 	owner := NewOwnedImmutableMessage(raw, nil)
+	var calls atomic.Int32
 
-	select {
-	case <-owner.Exclusive():
-	default:
-		t.Fatal("owner should initially be exclusive")
-	}
+	owner.RegisterExclusiveCallback(func() {
+		calls.Add(1)
+	})
 
+	assert.Equal(t, int32(1), calls.Load())
+	owner.Release()
+}
+
+func TestOwnedImmutableMessageInvokesExclusiveCallbackAfterRetainedRelease(t *testing.T) {
+	raw := CreateTestTimeTickSyncMessage(t, 1, 20, testMessageID("10")).
+		IntoImmutableMessage(testMessageID("11"))
+	owner := NewOwnedImmutableMessage(raw, nil)
 	retained := owner.Clone()
-	select {
-	case <-owner.Exclusive():
-		t.Fatal("owner should not be exclusive while retained reference exists")
-	default:
-	}
+	var calls atomic.Int32
+
+	owner.RegisterExclusiveCallback(func() {
+		calls.Add(1)
+	})
+	assert.Zero(t, calls.Load())
 
 	retained.Release()
-	select {
-	case <-owner.Exclusive():
-	default:
-		t.Fatal("owner should become exclusive after retained release")
-	}
+	assert.Equal(t, int32(1), calls.Load())
+
+	retained = owner.Clone()
+	retained.Release()
+	assert.Equal(t, int32(1), calls.Load())
+	owner.Release()
+}
+
+func TestOwnedImmutableMessageRejectsDuplicateExclusiveCallback(t *testing.T) {
+	raw := CreateTestTimeTickSyncMessage(t, 1, 20, testMessageID("10")).
+		IntoImmutableMessage(testMessageID("11"))
+	owner := NewOwnedImmutableMessage(raw, nil)
+	retained := owner.Clone()
+	owner.RegisterExclusiveCallback(func() {})
+
+	assert.Panics(t, func() {
+		owner.RegisterExclusiveCallback(func() {})
+	})
+
+	retained.Release()
 	owner.Release()
 }
 

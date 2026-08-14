@@ -488,13 +488,20 @@ func newBroadcastAckMessage(t *testing.T, builder interface {
 	MustBuildBroadcast() message.BroadcastMutableMessage
 },
 ) message.ImmutableMessage {
+	return newBroadcastAckMessageWith(t, builder, 1, 10)
+}
+
+func newBroadcastAckMessageWith(t *testing.T, builder interface {
+	MustBuildBroadcast() message.BroadcastMutableMessage
+}, broadcastID, timeTick uint64, resourceKeys ...message.ResourceKey,
+) message.ImmutableMessage {
 	t.Helper()
 	msgs := builder.MustBuildBroadcast().
-		WithBroadcastID(1).
+		OverwriteBroadcastHeader(broadcastID, resourceKeys...).
 		SplitIntoMutableMessage()
 	require.Len(t, msgs, 1)
 	return msgs[0].
-		WithTimeTick(10).
+		WithTimeTick(timeTick).
 		WithLastConfirmed(walimplstest.NewTestMessageID(9)).
 		IntoImmutableMessage(walimplstest.NewTestMessageID(10))
 }

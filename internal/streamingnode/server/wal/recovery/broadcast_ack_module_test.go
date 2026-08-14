@@ -20,6 +20,7 @@ import (
 func TestBroadcastAckHoldsOwnerUntilExclusiveAndAckSucceeds(t *testing.T) {
 	scheduler := &recordingAckTaskScheduler{}
 	module := newBroadcastAckModule(moduleapi.Runtime{Scheduler: scheduler})
+	t.Cleanup(module.Close)
 	module.retryDelay = time.Millisecond
 	module.ack = func(context.Context, message.ImmutableMessage) error { return nil }
 	msg := newBroadcastAckMessage(t, message.NewCreateCollectionMessageBuilderV1().
@@ -46,6 +47,7 @@ func TestBroadcastAckHoldsOwnerUntilExclusiveAndAckSucceeds(t *testing.T) {
 func TestBroadcastAckSubmitsExclusiveOwnerImmediately(t *testing.T) {
 	scheduler := &recordingAckTaskScheduler{}
 	module := newBroadcastAckModule(moduleapi.Runtime{Scheduler: scheduler})
+	t.Cleanup(module.Close)
 	module.retryDelay = time.Millisecond
 	module.ack = func(context.Context, message.ImmutableMessage) error { return nil }
 	msg := newBroadcastAckMessage(t, message.NewCreateCollectionMessageBuilderV1().
@@ -66,6 +68,7 @@ func TestBroadcastAckSubmitsExclusiveOwnerImmediately(t *testing.T) {
 func TestBroadcastAckReleasesNonBroadcastOwnerImmediately(t *testing.T) {
 	scheduler := &recordingAckTaskScheduler{}
 	module := newBroadcastAckModule(moduleapi.Runtime{Scheduler: scheduler})
+	t.Cleanup(module.Close)
 	raw := message.CreateTestTimeTickSyncMessage(t, 1, 20, walimplstest.NewTestMessageID(10)).
 		IntoImmutableMessage(walimplstest.NewTestMessageID(11))
 	tracker := messageack.NewTracker(utility.WALConsumeCheckpoint{}, nil)
@@ -78,9 +81,10 @@ func TestBroadcastAckReleasesNonBroadcastOwnerImmediately(t *testing.T) {
 	assert.Panics(t, func() { _ = owner.Message() })
 }
 
-func TestBroadcastAckRetriesSameQueueHeadAfterFailure(t *testing.T) {
+func TestBroadcastAckRetriesSameTaskAfterFailure(t *testing.T) {
 	scheduler := &recordingAckTaskScheduler{}
 	module := newBroadcastAckModule(moduleapi.Runtime{Scheduler: scheduler})
+	t.Cleanup(module.Close)
 	attempts := 0
 	module.ack = func(context.Context, message.ImmutableMessage) error {
 		attempts++
@@ -108,29 +112,62 @@ func TestBroadcastAckRetriesSameQueueHeadAfterFailure(t *testing.T) {
 	assert.Equal(t, msg.TimeTick(), tracker.CompletedPoint().TimeTick)
 }
 
-func TestBroadcastAckKeepsFIFOUntilQueueHeadSucceeds(t *testing.T) {
+func TestBroadcastAckAllowsReadyNonConflictingTaskToPass(t *testing.T) {
 	scheduler := &recordingAckTaskScheduler{}
 	module := newBroadcastAckModule(moduleapi.Runtime{Scheduler: scheduler})
+	t.Cleanup(module.Close)
+	module.ack = func(context.Context, message.ImmutableMessage) error { return nil }
+	firstMsg := newBroadcastAckMessageWith(t, message.NewCreateCollectionMessageBuilderV1().
+		WithBroadcast([]string{"v1"}).
+		WithHeader(&message.CreateCollectionMessageHeader{CollectionId: 1, PartitionIds: []int64{10}}).
+		WithBody(&msgpb.CreateCollectionRequest{}), 1, 10,
+		message.NewExclusiveCollectionNameResourceKey("db", "c1"))
+	secondMsg := newBroadcastAckMessageWith(t, message.NewCreateCollectionMessageBuilderV1().
+		WithBroadcast([]string{"v2"}).
+		WithHeader(&message.CreateCollectionMessageHeader{CollectionId: 2, PartitionIds: []int64{20}}).
+		WithBody(&msgpb.CreateCollectionRequest{}), 2, 20,
+		message.NewExclusiveCollectionNameResourceKey("db", "c2"))
+	tracker := messageack.NewTracker(utility.WALConsumeCheckpoint{}, nil)
+	firstOwner := tracker.Track(firstMsg)
+	firstConsumer := firstOwner.Clone()
+	secondOwner := tracker.Track(secondMsg)
+
+	module.Accept(firstOwner)
+	module.Accept(secondOwner)
+	secondTask := scheduler.waitTask(t)
+	require.NoError(t, secondTask.Execute(context.Background()))
+	assert.Same(t, firstMsg, firstOwner.Message())
+	assert.Panics(t, func() { _ = secondOwner.Message() })
+
+	firstConsumer.Release()
+	firstTask := scheduler.waitTaskAfter(t, 1)
+	require.NoError(t, firstTask.Execute(context.Background()))
+	assert.Panics(t, func() { _ = firstOwner.Message() })
+}
+
+func TestBroadcastAckKeepsConflictingTasksOrderedAcrossRetry(t *testing.T) {
+	scheduler := &recordingAckTaskScheduler{}
+	module := newBroadcastAckModule(moduleapi.Runtime{Scheduler: scheduler})
+	t.Cleanup(module.Close)
 	var acked []uint64
 	failFirst := true
 	module.ack = func(_ context.Context, msg message.ImmutableMessage) error {
-		if failFirst {
+		if msg.TimeTick() == 10 && failFirst {
 			failFirst = false
 			return errors.New("coordinator unavailable")
 		}
 		acked = append(acked, msg.TimeTick())
 		return nil
 	}
-	firstMsg := newBroadcastAckMessage(t, message.NewCreateCollectionMessageBuilderV1().
+	key := message.NewExclusiveCollectionNameResourceKey("db", "collection")
+	firstMsg := newBroadcastAckMessageWith(t, message.NewCreateCollectionMessageBuilderV1().
 		WithBroadcast([]string{"v1"}).
 		WithHeader(&message.CreateCollectionMessageHeader{CollectionId: 1, PartitionIds: []int64{10}}).
-		WithBody(&msgpb.CreateCollectionRequest{}))
-	secondMsg := newBroadcastAckMessage(t, message.NewCreateCollectionMessageBuilderV1().
+		WithBody(&msgpb.CreateCollectionRequest{}), 1, 10, key)
+	secondMsg := newBroadcastAckMessageWith(t, message.NewCreateCollectionMessageBuilderV1().
 		WithBroadcast([]string{"v2"}).
 		WithHeader(&message.CreateCollectionMessageHeader{CollectionId: 2, PartitionIds: []int64{20}}).
-		WithBody(&msgpb.CreateCollectionRequest{}))
-	firstTimeTick := firstMsg.TimeTick()
-	secondTimeTick := secondMsg.TimeTick()
+		WithBody(&msgpb.CreateCollectionRequest{}), 2, 20, key)
 	tracker := messageack.NewTracker(utility.WALConsumeCheckpoint{}, nil)
 	firstOwner := tracker.Track(firstMsg)
 	secondOwner := tracker.Track(secondMsg)
@@ -143,6 +180,7 @@ func TestBroadcastAckKeepsFIFOUntilQueueHeadSucceeds(t *testing.T) {
 	assert.Empty(t, acked)
 	assert.Same(t, firstMsg, firstOwner.Message())
 	assert.Same(t, secondMsg, secondOwner.Message())
+	assert.Len(t, scheduler.snapshot(), 1)
 
 	retryTask := scheduler.waitTaskAfter(t, 1)
 	require.NoError(t, retryTask.Execute(context.Background()))
@@ -151,12 +189,106 @@ func TestBroadcastAckKeepsFIFOUntilQueueHeadSucceeds(t *testing.T) {
 	secondTask := scheduler.waitTaskAfter(t, 2)
 	require.NoError(t, secondTask.Execute(context.Background()))
 	assert.Panics(t, func() { _ = secondOwner.Message() })
-	assert.Equal(t, []uint64{firstTimeTick, secondTimeTick}, acked)
+	assert.Equal(t, []uint64{10, 20}, acked)
+}
+
+func TestBroadcastAckSharedTasksDoNotConflict(t *testing.T) {
+	scheduler := &recordingAckTaskScheduler{}
+	module := newBroadcastAckModule(moduleapi.Runtime{Scheduler: scheduler})
+	t.Cleanup(module.Close)
+	module.ack = func(context.Context, message.ImmutableMessage) error { return nil }
+	key := message.NewSharedCollectionNameResourceKey("db", "collection")
+	firstMsg := newBroadcastAckMessageWith(t, message.NewCreateCollectionMessageBuilderV1().
+		WithBroadcast([]string{"v1"}).
+		WithHeader(&message.CreateCollectionMessageHeader{CollectionId: 1}).
+		WithBody(&msgpb.CreateCollectionRequest{}), 1, 10, key)
+	secondMsg := newBroadcastAckMessageWith(t, message.NewCreateCollectionMessageBuilderV1().
+		WithBroadcast([]string{"v2"}).
+		WithHeader(&message.CreateCollectionMessageHeader{CollectionId: 2}).
+		WithBody(&msgpb.CreateCollectionRequest{}), 2, 20, key)
+	tracker := messageack.NewTracker(utility.WALConsumeCheckpoint{}, nil)
+	firstOwner := tracker.Track(firstMsg)
+	firstConsumer := firstOwner.Clone()
+	secondOwner := tracker.Track(secondMsg)
+
+	module.Accept(firstOwner)
+	module.Accept(secondOwner)
+	secondTask := scheduler.waitTask(t)
+	require.NoError(t, secondTask.Execute(context.Background()))
+
+	firstConsumer.Release()
+	firstTask := scheduler.waitTaskAfter(t, 1)
+	require.NoError(t, firstTask.Execute(context.Background()))
+}
+
+func TestBroadcastAckExclusiveClusterPreservesBarrierOrder(t *testing.T) {
+	scheduler := &recordingAckTaskScheduler{}
+	module := newBroadcastAckModule(moduleapi.Runtime{Scheduler: scheduler})
+	t.Cleanup(module.Close)
+	module.ack = func(context.Context, message.ImmutableMessage) error { return nil }
+	firstMsg := newBroadcastAckMessageWith(t, message.NewCreateCollectionMessageBuilderV1().
+		WithBroadcast([]string{"v1"}).
+		WithHeader(&message.CreateCollectionMessageHeader{CollectionId: 1}).
+		WithBody(&msgpb.CreateCollectionRequest{}), 1, 10,
+		message.NewSharedClusterResourceKey())
+	barrierMsg := newBroadcastAckMessageWith(t, message.NewCreateCollectionMessageBuilderV1().
+		WithBroadcast([]string{"v2"}).
+		WithHeader(&message.CreateCollectionMessageHeader{CollectionId: 2}).
+		WithBody(&msgpb.CreateCollectionRequest{}), 2, 20,
+		message.NewExclusiveClusterResourceKey())
+	lastMsg := newBroadcastAckMessageWith(t, message.NewCreateCollectionMessageBuilderV1().
+		WithBroadcast([]string{"v3"}).
+		WithHeader(&message.CreateCollectionMessageHeader{CollectionId: 3}).
+		WithBody(&msgpb.CreateCollectionRequest{}), 3, 30,
+		message.NewSharedClusterResourceKey())
+	tracker := messageack.NewTracker(utility.WALConsumeCheckpoint{}, nil)
+	firstOwner := tracker.Track(firstMsg)
+	firstConsumer := firstOwner.Clone()
+	barrierOwner := tracker.Track(barrierMsg)
+	lastOwner := tracker.Track(lastMsg)
+
+	module.Accept(firstOwner)
+	module.Accept(barrierOwner)
+	module.Accept(lastOwner)
+	require.Never(t, func() bool { return len(scheduler.snapshot()) != 0 }, 50*time.Millisecond, time.Millisecond)
+
+	firstConsumer.Release()
+	firstTask := scheduler.waitTask(t)
+	require.NoError(t, firstTask.Execute(context.Background()))
+	barrierTask := scheduler.waitTaskAfter(t, 1)
+	require.Never(t, func() bool { return len(scheduler.snapshot()) > 2 }, 50*time.Millisecond, time.Millisecond)
+
+	require.NoError(t, barrierTask.Execute(context.Background()))
+	lastTask := scheduler.waitTaskAfter(t, 2)
+	require.NoError(t, lastTask.Execute(context.Background()))
+}
+
+func TestNormalizeBroadcastAckResourceKeys(t *testing.T) {
+	collectionKey := message.NewExclusiveCollectionNameResourceKey("db", "collection")
+
+	keys := normalizeBroadcastAckResourceKeys(nil)
+	require.Equal(t, []message.ResourceKey{message.NewExclusiveClusterResourceKey()}, keys)
+
+	keys = normalizeBroadcastAckResourceKeys([]message.ResourceKey{collectionKey})
+	assert.ElementsMatch(t, []message.ResourceKey{
+		collectionKey,
+		message.NewSharedClusterResourceKey(),
+	}, keys)
+
+	keys = normalizeBroadcastAckResourceKeys([]message.ResourceKey{
+		collectionKey,
+		message.NewExclusiveClusterResourceKey(),
+	})
+	assert.ElementsMatch(t, []message.ResourceKey{
+		collectionKey,
+		message.NewExclusiveClusterResourceKey(),
+	}, keys)
 }
 
 func TestBroadcastAckCloseCancelsPendingConsumerWait(t *testing.T) {
 	scheduler := &recordingAckTaskScheduler{}
 	module := newBroadcastAckModule(moduleapi.Runtime{Scheduler: scheduler})
+	t.Cleanup(module.Close)
 	msg := newBroadcastAckMessage(t, message.NewCreateCollectionMessageBuilderV1().
 		WithBroadcast([]string{"v1"}).
 		WithHeader(&message.CreateCollectionMessageHeader{CollectionId: 1}).
@@ -177,6 +309,7 @@ func TestBroadcastAckCloseCancelsPendingConsumerWait(t *testing.T) {
 func TestBroadcastAckCloseCancelsPendingRetry(t *testing.T) {
 	scheduler := &recordingAckTaskScheduler{}
 	module := newBroadcastAckModule(moduleapi.Runtime{Scheduler: scheduler})
+	t.Cleanup(module.Close)
 	module.retryDelay = time.Hour
 	module.ack = func(context.Context, message.ImmutableMessage) error {
 		return errors.New("coordinator unavailable")

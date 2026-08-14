@@ -3,6 +3,7 @@ package recovery
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
@@ -14,31 +15,35 @@ import (
 const broadcastAckRetryInterval = 200 * time.Millisecond
 
 type broadcastAckModule struct {
-	runtime     moduleapi.Runtime
-	ctx         context.Context
-	cancel      context.CancelFunc
-	retryDelay  time.Duration
-	closeOnce   sync.Once
-	workerMu    sync.Mutex
-	closed      bool
-	workerWG    sync.WaitGroup
-	ackTaskMu   sync.Mutex
-	ackTaskHead *broadcastAckTask
-	ackTaskTail *broadcastAckTask
-	ack         func(context.Context, message.ImmutableMessage) error
+	runtime    moduleapi.Runtime
+	ctx        context.Context
+	cancel     context.CancelFunc
+	retryDelay time.Duration
+	closeOnce  sync.Once
+	workerMu   sync.Mutex
+	closed     bool
+	workerWG   sync.WaitGroup
+	ackTaskMu  sync.Mutex
+	ackTasks   []*broadcastAckTask
+	wakeup     chan struct{}
+	ack        func(context.Context, message.ImmutableMessage) error
 }
 
 func newBroadcastAckModule(runtime moduleapi.Runtime) *broadcastAckModule {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &broadcastAckModule{
+	m := &broadcastAckModule{
 		runtime:    runtime,
 		ctx:        ctx,
 		cancel:     cancel,
 		retryDelay: broadcastAckRetryInterval,
+		wakeup:     make(chan struct{}, 1),
 		ack: func(ctx context.Context, msg message.ImmutableMessage) error {
 			return streaming.WAL().Broadcast().Ack(ctx, msg)
 		},
 	}
+	m.workerWG.Add(1)
+	go m.background()
+	return m
 }
 
 func (m *broadcastAckModule) Accept(
@@ -49,47 +54,61 @@ func (m *broadcastAckModule) Accept(
 		return
 	}
 	task := &broadcastAckTask{
-		module: m,
-		owner:  owner,
+		module:       m,
+		owner:        owner,
+		resourceKeys: normalizeBroadcastAckResourceKeys(owner.Message().BroadcastHeader().ResourceKeys.Collect()),
 	}
-	m.enqueueTask(task)
-}
-
-func (m *broadcastAckModule) enqueueTask(task *broadcastAckTask) {
 	m.ackTaskMu.Lock()
-	shouldSubmit := m.ackTaskTail == nil
-	if shouldSubmit {
-		m.ackTaskHead = task
-	} else {
-		m.ackTaskTail.next = task
-	}
-	m.ackTaskTail = task
+	m.ackTasks = append(m.ackTasks, task)
 	m.ackTaskMu.Unlock()
-
-	if shouldSubmit && m.runtime.Scheduler != nil {
-		m.submitWhenExclusive(task)
-	}
+	owner.RegisterExclusiveCallback(func() {
+		task.exclusive.Store(true)
+		m.wakeDispatcher()
+	})
 }
 
-func (m *broadcastAckModule) submitWhenExclusive(task *broadcastAckTask) {
-	if !m.beginWorker() {
-		return
-	}
-	go func() {
-		defer m.workerWG.Done()
+func (m *broadcastAckModule) background() {
+	defer m.workerWG.Done()
+	for {
 		select {
-		case <-task.owner.Exclusive():
-			m.submit(task)
 		case <-m.ctx.Done():
+			return
+		case <-m.wakeup:
+			m.dispatchReadyTasks()
 		}
-	}()
+	}
 }
 
-func (m *broadcastAckModule) submit(task *broadcastAckTask) {
+func (m *broadcastAckModule) wakeDispatcher() {
+	select {
+	case m.wakeup <- struct{}{}:
+	default:
+	}
+}
+
+func (m *broadcastAckModule) dispatchReadyTasks() {
 	if m.runtime.Scheduler == nil || m.ctx.Err() != nil {
 		return
 	}
-	m.runtime.Scheduler.Submit(task)
+
+	m.ackTaskMu.Lock()
+	m.compactCompletedTasksLocked()
+	readyTasks := make([]*broadcastAckTask, 0)
+	for idx, task := range m.ackTasks {
+		if !task.exclusive.Load() || task.inFlight {
+			continue
+		}
+		if hasEarlierBroadcastAckConflict(m.ackTasks[:idx], task) {
+			continue
+		}
+		task.inFlight = true
+		readyTasks = append(readyTasks, task)
+	}
+	m.ackTaskMu.Unlock()
+
+	for _, task := range readyTasks {
+		m.runtime.Scheduler.Submit(task)
+	}
 }
 
 func (m *broadcastAckModule) retry(task *broadcastAckTask) {
@@ -102,7 +121,12 @@ func (m *broadcastAckModule) retry(task *broadcastAckTask) {
 		defer timer.Stop()
 		select {
 		case <-timer.C:
-			m.submit(task)
+			m.ackTaskMu.Lock()
+			if !task.completed {
+				task.inFlight = false
+			}
+			m.ackTaskMu.Unlock()
+			m.wakeDispatcher()
 		case <-m.ctx.Done():
 		}
 	}()
@@ -130,27 +154,30 @@ func (m *broadcastAckModule) beginWorker() bool {
 
 func (m *broadcastAckModule) finishTask(task *broadcastAckTask) {
 	m.ackTaskMu.Lock()
-	if m.ackTaskHead != task {
-		m.ackTaskMu.Unlock()
-		return
-	}
-	next := task.next
-	task.next = nil
-	m.ackTaskHead = next
-	if next == nil {
-		m.ackTaskTail = nil
-	}
+	task.completed = true
+	task.inFlight = false
 	m.ackTaskMu.Unlock()
+	m.wakeDispatcher()
+}
 
-	if next != nil && m.runtime.Scheduler != nil {
-		m.submitWhenExclusive(next)
+func (m *broadcastAckModule) compactCompletedTasksLocked() {
+	pending := m.ackTasks[:0]
+	for _, task := range m.ackTasks {
+		if !task.completed {
+			pending = append(pending, task)
+		}
 	}
+	clear(m.ackTasks[len(pending):])
+	m.ackTasks = pending
 }
 
 type broadcastAckTask struct {
-	module *broadcastAckModule
-	owner  message.OwnedImmutableMessage
-	next   *broadcastAckTask
+	module       *broadcastAckModule
+	owner        message.OwnedImmutableMessage
+	resourceKeys []message.ResourceKey
+	exclusive    atomic.Bool
+	inFlight     bool
+	completed    bool
 }
 
 func (t *broadcastAckTask) Execute(ctx context.Context) error {
@@ -161,6 +188,40 @@ func (t *broadcastAckTask) Execute(ctx context.Context) error {
 	t.owner.Release()
 	t.module.finishTask(t)
 	return nil
+}
+
+func normalizeBroadcastAckResourceKeys(keys []message.ResourceKey) []message.ResourceKey {
+	if len(keys) == 0 {
+		return []message.ResourceKey{message.NewExclusiveClusterResourceKey()}
+	}
+	for _, key := range keys {
+		if key.Domain == message.NewSharedClusterResourceKey().Domain {
+			return keys
+		}
+	}
+	return append(keys, message.NewSharedClusterResourceKey())
+}
+
+func hasEarlierBroadcastAckConflict(earlier []*broadcastAckTask, task *broadcastAckTask) bool {
+	for _, candidate := range earlier {
+		if broadcastAckResourceKeysConflict(candidate.resourceKeys, task.resourceKeys) {
+			return true
+		}
+	}
+	return false
+}
+
+func broadcastAckResourceKeysConflict(left, right []message.ResourceKey) bool {
+	for _, leftKey := range left {
+		for _, rightKey := range right {
+			if leftKey.Domain == rightKey.Domain &&
+				leftKey.Key == rightKey.Key &&
+				(!leftKey.Shared || !rightKey.Shared) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 var _ nodescheduler.Task = (*broadcastAckTask)(nil)
