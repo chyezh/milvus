@@ -119,9 +119,10 @@ ref-counted immutable message:
 
 - Segment handles release after segment data/lifecycle work succeeds;
 - TransformLog handles release after containing chunks are durable;
-- BroadcastAck retains a broadcast Owner and waits for Owner exclusivity,
-  which proves that all Segment and TransformLog Retained handles are gone,
-  before performing its FIFO Coordinator Ack.
+- BroadcastAck registers the Owner's one-shot exclusive callback, which proves
+  that all Segment and TransformLog Retained handles are gone, then lets its
+  background dispatcher perform Coordinator Ack under the ResourceKey partial
+  order.
 
 Historical schema lookup is an internal VChannel ownership operation when a new
 SegmentView is created. TransformLog does not inspect Segment private state for

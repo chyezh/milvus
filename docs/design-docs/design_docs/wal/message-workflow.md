@@ -22,10 +22,12 @@ raw message M
 ```
 
 For non-broadcast messages, BroadcastAck releases `O` immediately. For
-broadcast messages it retains `O` in FIFO order, waits for `O.Exclusive()`,
-performs Coordinator Ack, and releases `O` only after success. The Tracker
-finalizer then clears the entry's message and advances the continuous completed
-checkpoint prefix.
+broadcast messages it registers a one-shot exclusive callback on `O`. The
+callback only marks the task ready and nonblockingly wakes one module background
+dispatcher. The dispatcher preserves observation order for conflicting
+ResourceKeys and may Ack non-conflicting tasks concurrently. It releases `O`
+only after Coordinator Ack succeeds. The Tracker finalizer then clears the
+entry's message and advances the continuous completed checkpoint prefix.
 
 The Tracker point is:
 
@@ -78,7 +80,8 @@ therefore releases its Owner immediately and the Tracker advances.
 
 The VChannel updates collection metadata and marks it dirty. A broadcast copy
 is processed independently by each target VChannel. BroadcastAck waits for
-Owner exclusivity, then performs FIFO Coordinator Ack and releases the Owner.
+the Owner's exclusive callback, then performs Coordinator Ack when no earlier
+unfinished task conflicts by ResourceKey and releases the Owner.
 
 ### Insert
 
@@ -98,7 +101,7 @@ Flush, ManualFlush, FlushAll, DropCollection, DropPartition,
 TruncateCollection, schema-changing AlterCollection, and AlterWAL may trigger
 several Segment flushes and a TransformLog chunk flush. Each async unit clones
 the same Retained dispatch handle. A broadcast version is acknowledged only
-after all those clones are released and Owner exclusivity is reached.
+after all those clones are released and the Owner's exclusive callback fires.
 
 ### Txn
 
@@ -131,8 +134,11 @@ completion means chunk durability, not materialization.
 2. Every async consumer receives an independent Retained clone before dispatch
    returns.
 3. Tracker stores points and message references, not BroadcastAck state.
-4. Owner exclusivity is the BroadcastAck readiness condition; refcount zero is
-   Tracker finalization.
+4. The one-shot Owner exclusive callback is the BroadcastAck readiness signal;
+   refcount zero is Tracker finalization.
 5. Meta-only messages use a temporary Owner and do not affect DataPoint.
 6. QueryRuntime uses plain immutable messages and its own TimeTick filtering.
-7. Ack observes completion but does not define task execution order.
+7. Ack observes persistence completion but does not define Segment or
+   TransformLog task execution order.
+8. Broadcast Ack uses ResourceKeys only to order conflicting Coordinator Acks;
+   non-conflicting tasks may run concurrently.

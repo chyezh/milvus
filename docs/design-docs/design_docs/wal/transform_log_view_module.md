@@ -10,8 +10,8 @@ Current design is split across:
   durability, subscription, materialization, truncation, and recovery;
 - [WAL Message Ack Design](message_ack.md): per-message reference-count
   completion and checkpoint gating;
-- [Broadcast Ack Module](broadcast_ack_module.md): Owner exclusivity, retry, and
-  FIFO acknowledgement semantics;
+- [Broadcast Ack Module](broadcast_ack_module.md): one-shot Owner exclusive
+  callbacks, ResourceKey partial ordering, and retry semantics;
 - [StreamingNode VChannel WAL Input View](streamingnode_vchannel_wal_view.md):
   QueryRuntime preparation from the VChannel-owned TransformLog stream.
 

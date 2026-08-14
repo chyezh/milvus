@@ -70,9 +70,11 @@ snapshots:
   handle until its object-storage work succeeds and its metadata changes are
   marked dirty.
 - BroadcastAck takes the Owner after dispatch. It immediately releases an
-  ordinary message; for a broadcast it keeps the Owner in FIFO order, waits for
-  `Owner.Exclusive()`, and releases it only after Coordinator Ack succeeds.
-  Failed ACKs retain the same Owner and retry the FIFO head.
+  ordinary message; for a broadcast it registers a one-shot exclusive callback
+  that nonblockingly wakes one background dispatcher. The dispatcher preserves
+  observation order for conflicting ResourceKeys and submits non-conflicting
+  Acks concurrently. It releases the Owner only after Coordinator Ack succeeds.
+  Failed Acks retain the same Owner and ResourceKey claim through retry.
 - `AckSyncUp` disables Coordinator FastAck and waits for the RecoveryStorage
   consumer Ack; it does not require checkpoint persistence before that Ack.
 - Retry, cancellation, and close keep incomplete handles retained. Restart

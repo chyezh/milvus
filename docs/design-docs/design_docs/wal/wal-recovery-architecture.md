@@ -64,9 +64,12 @@ checkpoint prefix. A later completed message is allowed to release its payload
 while an earlier message remains incomplete.
 
 BroadcastAck releases ordinary Owners immediately. For broadcast Owners it
-waits for `Exclusive()`, calls Coordinator Ack, and releases only after success.
-Thus reference count zero means local persistence consumers and broadcast Ack
-have both completed for a broadcast message.
+registers a one-shot exclusive callback. The callback marks the task ready and
+nonblockingly wakes one background dispatcher. The dispatcher calls Coordinator
+Ack after all earlier conflicting ResourceKey tasks finish, while independent
+tasks may run concurrently. It releases the Owner only after Ack success. Thus
+reference count zero means local persistence consumers and broadcast Ack have
+both completed for a broadcast message.
 
 ## 4. Persistence And Checkpoints
 
@@ -107,7 +110,8 @@ advance DataVersions independently; segment selection uses each segment's own
    readiness or L0 materialization.
 6. TransformLog completion is chunk durability, not materialization.
 7. DirtySnapshots precede the WALCheckpoint in every persist batch.
-8. BroadcastAck waits for Owner exclusivity but not checkpoint persistence.
+8. BroadcastAck waits for the Owner's exclusive callback and earlier
+   conflicting ResourceKey tasks, but not checkpoint persistence.
 9. Meta-only processing uses a temporary Owner and does not create DataPoint
    entries.
 10. QueryRuntime's ordinary Go message reachability is independent of message

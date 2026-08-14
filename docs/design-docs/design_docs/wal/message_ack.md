@@ -36,7 +36,7 @@ The common wrapper lives in `pkg/streaming/util/message`:
 type OwnedImmutableMessage interface {
     Message() ImmutableMessage
     Clone() RetainedImmutableMessage
-    Exclusive() <-chan struct{}
+    RegisterExclusiveCallback(callback func())
     Release()
 }
 
@@ -61,16 +61,19 @@ reference count one. It does not copy `msg`.
 - One handle is not promised to be concurrently safe. A caller gives each
   independent asynchronous unit its own clone.
 
-`Owner.Exclusive()` returns the current Owner-exclusive event. The returned
-channel is closed exactly while the Owner is the only remaining tracked
-reference, meaning the reference count is one. A new Retained clone created
-from an exclusive Owner installs a new open event; the last Retained release
-closes that event when the count returns to one. Exclusive is not completion:
-the finalizer still waits for `Owner.Release()` and reference count zero.
+`Owner.RegisterExclusiveCallback(callback)` registers one non-nil, one-shot
+callback. Registration panics if a callback was already registered. If the
+Owner is already the only remaining tracked reference, registration invokes the
+callback immediately after releasing the reference-count lock. Otherwise the
+last Retained release invokes it when the count returns to one. The callback is
+not completion: the finalizer still waits for `Owner.Release()` and reference
+count zero.
 
 The Owner lifecycle is linear at the top level. Once BroadcastAck accepts the
-Owner, no caller may clone it again. This makes the Exclusive transition a
-stable precondition for the queued broadcast task.
+Owner, no caller may clone it again. This makes the one-shot callback a stable
+readiness transition for the broadcast task. The registered callback must not
+block; BroadcastAck uses it only to set readiness and wake its background
+dispatcher through a buffered nonblocking signal.
 
 `Message()` exposes the shared underlying `ImmutableMessage`. An ordinary Go
 interface value obtained before handle release may outlive the handle. Such a
@@ -172,12 +175,19 @@ non-broadcast:
   O.Release()
 
 broadcast:
-  enqueue O in FIFO order
-  wait until <-O.Exclusive()
+  append O in RecoveryStorage observation order
+  register O's one-shot exclusive callback
+  background dispatcher waits for callback readiness and ResourceKey order
   Coordinator Ack(O.Message())
-  on success: O.Release()
-  on failure: keep O and retry the same queue head
+  on success: O.Release() and unblock later conflicting tasks
+  on failure: keep O and its ResourceKey claim, then retry
 ```
+
+Two broadcast tasks conflict when they share `(ResourceKey.Domain,
+ResourceKey.Key)` and at least one side is exclusive. Conflicting tasks preserve
+observation order; non-conflicting tasks and shared/shared tasks may Ack
+concurrently. Empty legacy ResourceKeys are treated as ExclusiveCluster;
+non-empty legacy sets without a Cluster key receive SharedCluster.
 
 For a broadcast message, reference count zero therefore proves both that all
 local Retained consumers finished and that Coordinator Ack succeeded.
@@ -268,10 +278,11 @@ the consuming-side Ack. It does not alter RecoveryStorage observation,
 checkpoint persistence, TransformLog materialization, or QueryRuntime startup.
 
 There is no explicit message failure state. Incomplete work is represented by
-an unreleased handle. Coordinator Ack failure keeps the broadcast Owner at the
-FIFO head and retries. Close cancels waiters and retries but does not release an
-unfinished Owner or fabricate completion. WAL replay reconstructs all state
-from the persisted Data checkpoint; Coordinator Ack is idempotent.
+an unreleased handle. Coordinator Ack failure keeps the broadcast Owner and its
+ResourceKey claim and retries; only later conflicting tasks remain blocked.
+Close cancels the dispatcher and retries but does not release an unfinished
+Owner or fabricate completion. WAL replay reconstructs all state from the
+persisted Data checkpoint; Coordinator Ack is idempotent.
 
 ## 9. Invariants
 
@@ -281,8 +292,8 @@ from the persisted Data checkpoint; Coordinator Ack is idempotent.
    finalization; it owns no BroadcastAck state.
 4. Each asynchronous Segment or TransformLog unit owns an independent Retained
    clone created during synchronous observation.
-5. BroadcastAck is the final Owner holder and waits for Owner exclusivity before
-   Coordinator Ack.
+5. BroadcastAck is the final Owner holder and registers the one-shot Owner
+   exclusive callback before Coordinator Ack.
 6. Finalization occurs only at reference count zero and clears each completed
    message independently of checkpoint-prefix advancement.
 7. Async consumers mark metadata dirty before releasing their handles.
@@ -291,4 +302,6 @@ from the persisted Data checkpoint; Coordinator Ack is idempotent.
 10. Txn messages are retained and completed as one whole message.
 11. Data checkpoint advancement uses only the continuous completed Tracker
     prefix and never moves backward.
-12. Ack does not define asynchronous task execution order.
+12. Ack does not define Segment or TransformLog task execution order.
+13. Broadcast Ack ordering is a ResourceKey partial order: conflicts preserve
+    observation order and non-conflicts may run concurrently.
