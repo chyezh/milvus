@@ -57,9 +57,9 @@ PChannelRecoveryManager
               +-- per-vchannel subscriptions
 ```
 
-`VChannelRecoveryModule.ObserveMessage` is the message dispatch owner for a
-single vchannel. It first handles vchannel metadata and segment state, then
-forwards the same WAL message to its `TransformLog.ObserveMessage`.
+`VChannelRecoveryModule.ObserveMessage` receives one Retained dispatch handle
+for a single vchannel. It first handles vchannel metadata and segment state,
+then forwards that same handle to `TransformLog.ObserveMessage`.
 
 `PChannelRecoveryManager` owns the vchannel index and registers active
 vchannels into `transformlog.StreamManager`. QueryNode accesses TransformLog
@@ -153,7 +153,8 @@ For every observed WAL message:
    `checkpoint_time_tick` or the open buffer tail.
 6. Append Delete entries to the open buffer.
 7. Notify local scanners and the PChannel stream manager.
-8. Call `Clone()` on the Owner and attach the returned retained immutable message to the
+8. Call `Clone()` on the Retained dispatch handle and attach the returned
+   retained immutable message to the
    entry or barrier before exposing required asynchronous flush work.
 9. Submit flush or materialization tasks when the message requires them.
 10. Return after synchronous observation. Metadata is exposed later through

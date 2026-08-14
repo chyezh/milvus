@@ -143,24 +143,24 @@ func (m *PChannelRecoveryManager) releaseInitialState() {
 
 func (m *PChannelRecoveryManager) ObserveMessage(
 	ctx context.Context,
-	owner message.OwnedImmutableMessage,
+	retained message.RetainedImmutableMessage,
 ) {
 	if m == nil {
 		return
 	}
-	msg := owner.Message()
+	msg := retained.Message()
 	if funcutil.IsControlChannel(msg.VChannel()) && !msg.IsPChannelLevel() {
 		return
 	}
 	if m.shouldBroadcast(msg) {
-		m.observeBroadcastMessage(ctx, owner)
+		m.observeBroadcastMessage(ctx, retained)
 		return
 	}
 	module := m.moduleForMessage(msg)
 	if module == nil {
 		return
 	}
-	module.ObserveMessage(ctx, owner)
+	module.ObserveMessage(ctx, retained)
 	m.markModuleUpdated(module)
 	m.syncTransformLogStream(module)
 }
@@ -366,10 +366,12 @@ func (m *PChannelRecoveryManager) shouldBroadcast(msg message.ImmutableMessage) 
 
 func (m *PChannelRecoveryManager) observeBroadcastMessage(
 	ctx context.Context,
-	owner message.OwnedImmutableMessage,
+	retained message.RetainedImmutableMessage,
 ) {
 	m.modules.Range(func(_ string, module *VChannelRecoveryModule) bool {
-		module.ObserveMessage(ctx, owner)
+		dispatch := retained.Clone()
+		module.ObserveMessage(ctx, dispatch)
+		dispatch.Release()
 		m.markModuleUpdated(module)
 		m.syncTransformLogStream(module)
 		return true

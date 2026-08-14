@@ -1,98 +1,82 @@
 # Broadcast Ack Module
 
 `broadcastAckModule` sends consuming-side acknowledgements for broadcast WAL
-messages to StreamingCoord. It is a dedicated RecoveryStorage sink, not an
-additional message consumer and not a `moduleapi.Module`.
+messages to StreamingCoord. It is a dedicated RecoveryStorage sink, not a
+`moduleapi.Module` and not a data persistence consumer.
 
-The common ownership and checkpoint rules are defined in
+The common lifetime contract is defined in
 [WAL Message Ack Design](message_ack.md).
 
-## 1. Ownership
+## 1. Accept Ownership
 
-BroadcastAck receives the Owner and the Tracker's `TrackedMessage` for the
-same data-scanner message. It does not clone the Owner and does not retain a
-separate handle. `Accept` is called only from the data-scanner path. Its only
-operation on the Owner is an unconditional `Release`; it uses the Tracker
-handle, rather than the Owner, to decide whether a Coordinator ACK is needed:
-
-```text
-owner.Release()
-if tracked.RequiresBroadcastAck():
-    queue TrackedMessage
+```go
+func (m *broadcastAckModule) Accept(owner message.OwnedImmutableMessage)
 ```
 
-The queued task retains the original immutable message indirectly through the
-Tracker entry. The Tracker keeps that entry until both local consumers and
-Coordinator ACK have completed.
+`Accept` takes exclusive top-level ownership of the Owner. The caller must not
+use or clone it afterward.
 
-## 2. Task Preconditions
+- If `owner.Message().BroadcastHeader() == nil`, BroadcastAck immediately calls
+  `owner.Release()` and creates no task.
+- Otherwise, BroadcastAck enqueues the Owner in its per-PChannel FIFO queue and
+  keeps it until Coordinator Ack succeeds.
 
-The FIFO queue head is eligible when:
+Tracker is not passed to BroadcastAck. The Owner finalizer established by
+Tracker is sufficient to mark the message complete after BroadcastAck finally
+releases the root reference.
 
-```text
-TrackedMessage.ConsumersDone is closed
-```
+## 2. Exclusive Precondition
 
-This event means that the Owner and every Segment/TransformLog retained handle
-have been released. BroadcastAck does not inspect the Owner, a raw refcount, or
-an exclusive-handle predicate, and does not wait for a checkpoint frontier.
-The sink itself has no retained handle; the Tracker event is the only local
-consumer completion signal it observes.
-
-When eligible, the task calls:
+The queue head becomes schedulable when:
 
 ```text
-streaming.WAL().Broadcast().Ack(ctx, tracked.Message())
+<-owner.Exclusive()
 ```
 
-After the call succeeds it invokes `tracked.CompleteBroadcastAck()` and removes
-itself from the FIFO queue. The Tracker can then advance the continuous
-completed prefix if this message is next in WAL order.
+This means reference count is one: BroadcastAck's Owner is the only remaining
+tracked reference and every Segment/TransformLog Retained handle has been
+released. It does not mean the message is complete, because BroadcastAck still
+owns the root reference.
 
-## 3. Ordering And Retry
+Once the Owner is accepted, no new Retained clones may be created. Therefore a
+closed Exclusive event remains a stable precondition for the Ack task.
 
-Broadcast ACK remains FIFO within one PChannel:
+## 3. Ack, FIFO, And Retry
 
 ```text
-release A Owner -> enqueue A
-  -> wait A ConsumersDone
-  -> Coordinator Ack(A)
-  -> CompleteBroadcastAck(A)
-  -> enqueue/submit B
+enqueue A Owner
+  -> wait A Exclusive
+  -> Coordinator Ack(A.Message())
+  -> A.Release()
+  -> submit next FIFO owner
 ```
 
-The queue head is submitted only after `ConsumersDone` is closed, so an
-unfinished local consumer does not create scheduler polling. If Coordinator
-ACK fails, the task remains the queue head and schedules one delayed retry
-outside the scheduler's delay/requeue path. It does not complete the Tracker
-entry or advance the queue.
-
-Coordinator ACK is idempotent. If the process crashes after Coordinator has
-accepted the ACK but before the Tracker entry or checkpoint is persisted, WAL
-replay may issue the same ACK again.
+Only the queue head can run. If Coordinator Ack fails, the task retains the same
+Owner and schedules a delayed retry; it does not release the Owner or advance
+the queue. Ack is idempotent, so replay may repeat an Ack accepted before a
+crash but not covered by a persisted Data checkpoint.
 
 ## 4. AckSyncUp
 
-`BroadcastHeader.AckSyncUp` only changes Coordinator behavior: it disables
-FastAck and makes Coordinator wait for the consuming-side ACK. It does not make
-BroadcastAck wait for Meta checkpoint persistence, Data checkpoint persistence,
-TransformLog materialization, or QueryRuntime readiness.
+`BroadcastHeader.AckSyncUp` affects only StreamingCoord: it skips FastAck and
+waits for this consuming-side Ack. BroadcastAck still waits only for local
+Retained consumers. It does not wait for Meta/Data checkpoint publication,
+DirtySnapshot persistence, TransformLog materialization, or QueryRuntime
+readiness.
 
-## 5. Close And Recovery
+## 5. Close
 
-An unfinished BroadcastAck task retains no Owner handle, but its Tracker entry
-remains live through the Tracker's original message reference. Close cancels
-the wait and retry timers without marking the task complete. On restart, WAL
-replay reconstructs the task and Coordinator ACK may be repeated safely.
+Close cancels Exclusive waiters and retry timers. It does not release queued
+Owners or mark unfinished work successful. Restart reconstructs the queue by
+replaying from the persisted Data checkpoint.
 
 ## 6. Invariants
 
-1. BroadcastAck is not a `moduleapi.Module` and is absent from the module
-   dirty-snapshot and Meta-only replay paths.
-2. BroadcastAck never calls `Message()` or `Clone()` on the Owner.
-3. BroadcastAck releases the Owner exactly once for every data-scanner message.
-4. Only actual Segment and TransformLog work creates retained handles.
-5. Coordinator ACK happens after `ConsumersDone` and before
-   `CompleteBroadcastAck`.
-6. Broadcast ACK order is FIFO per PChannel.
-7. BroadcastAck does not wait for checkpoint publication or materialization.
+1. BroadcastAck is outside the recovery component dirty-snapshot lifecycle.
+2. `Accept` consumes the Owner exactly once.
+3. Non-broadcast Owners are released immediately.
+4. Broadcast Owners remain live through every failed Ack attempt.
+5. Coordinator Ack runs only after Owner exclusivity.
+6. Successful Ack releases the Owner before the next FIFO task is submitted.
+7. BroadcastAck has no Tracker handle, checkpoint frontier, or materialization
+   dependency.

@@ -196,6 +196,7 @@ type ImmutableMessage interface {
 type OwnedImmutableMessage interface {
 	Message() ImmutableMessage
 	Clone() RetainedImmutableMessage
+	Exclusive() <-chan struct{}
 	Release()
 }
 
@@ -204,6 +205,7 @@ type RetainedImmutableMessage interface {
 	Message() ImmutableMessage
 	Clone() RetainedImmutableMessage
 	Release()
+	retainedImmutableMessage()
 }
 
 // ImmutableTxnMessage is the read-only transaction message interface.
@@ -303,6 +305,7 @@ type SpecializedOwnedImmutableMessage[H proto.Message, B proto.Message] interfac
 type SpecializedRetainedImmutableMessage[H proto.Message, B proto.Message] interface {
 	Message() SpecializedImmutableMessage[H, B]
 	Clone() SpecializedRetainedImmutableMessage[H, B]
+	CloneHandle() RetainedImmutableMessage
 	Release()
 }
 
@@ -320,5 +323,6 @@ type OwnedImmutableTxnMessage interface {
 type RetainedImmutableTxnMessage interface {
 	Message() ImmutableTxnMessage
 	Clone() RetainedImmutableTxnMessage
+	CloneHandle() RetainedImmutableMessage
 	Release()
 }

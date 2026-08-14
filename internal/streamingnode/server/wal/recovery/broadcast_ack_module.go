@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/messageack"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
@@ -44,15 +43,14 @@ func newBroadcastAckModule(runtime moduleapi.Runtime) *broadcastAckModule {
 
 func (m *broadcastAckModule) Accept(
 	owner message.OwnedImmutableMessage,
-	tracked *messageack.TrackedMessage,
 ) {
-	owner.Release()
-	if !tracked.RequiresBroadcastAck() {
+	if owner.Message().BroadcastHeader() == nil {
+		owner.Release()
 		return
 	}
 	task := &broadcastAckTask{
-		module:  m,
-		tracked: tracked,
+		module: m,
+		owner:  owner,
 	}
 	m.enqueueTask(task)
 }
@@ -69,18 +67,18 @@ func (m *broadcastAckModule) enqueueTask(task *broadcastAckTask) {
 	m.ackTaskMu.Unlock()
 
 	if shouldSubmit && m.runtime.Scheduler != nil {
-		m.submitWhenConsumersDone(task)
+		m.submitWhenExclusive(task)
 	}
 }
 
-func (m *broadcastAckModule) submitWhenConsumersDone(task *broadcastAckTask) {
+func (m *broadcastAckModule) submitWhenExclusive(task *broadcastAckTask) {
 	if !m.beginWorker() {
 		return
 	}
 	go func() {
 		defer m.workerWG.Done()
 		select {
-		case <-task.tracked.ConsumersDone():
+		case <-task.owner.Exclusive():
 			m.submit(task)
 		case <-m.ctx.Done():
 		}
@@ -145,22 +143,22 @@ func (m *broadcastAckModule) finishTask(task *broadcastAckTask) {
 	m.ackTaskMu.Unlock()
 
 	if next != nil && m.runtime.Scheduler != nil {
-		m.submitWhenConsumersDone(next)
+		m.submitWhenExclusive(next)
 	}
 }
 
 type broadcastAckTask struct {
-	module  *broadcastAckModule
-	tracked *messageack.TrackedMessage
-	next    *broadcastAckTask
+	module *broadcastAckModule
+	owner  message.OwnedImmutableMessage
+	next   *broadcastAckTask
 }
 
 func (t *broadcastAckTask) Execute(ctx context.Context) error {
-	if err := t.module.ack(ctx, t.tracked.Message()); err != nil {
+	if err := t.module.ack(ctx, t.owner.Message()); err != nil {
 		t.module.retry(t)
 		return nil
 	}
-	t.tracked.CompleteBroadcastAck()
+	t.owner.Release()
 	t.module.finishTask(t)
 	return nil
 }

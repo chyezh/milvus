@@ -1,26 +1,22 @@
 # WAL Message Ack Design
 
-This document defines the message lifetime and completion model used by
-RecoveryStorage while persisting WAL data into object storage and recovery
-metadata into etcd. QueryView and QueryRuntime resource references are outside
-this design.
+This document defines how RecoveryStorage tracks one WAL message until every
+required persistence consumer and Coordinator broadcast acknowledgement has
+finished. QueryView and QueryRuntime resource lifetimes are outside this model.
 
-## 1. Goals And Boundaries
+## 1. Scope
 
-One WAL message may cause work in multiple VChannels, SegmentViews, and
-TransformLogs. RecoveryStorage needs to advance its Data checkpoint only after
-the continuous WAL prefix has completed all required local work. It also needs
-to acknowledge broadcast messages to StreamingCoord after local consumers have
-finished.
+One WAL message may create asynchronous work in several SegmentViews and
+TransformLogs. RecoveryStorage may advance its Data checkpoint only after the
+continuous WAL prefix has completed that work. Broadcast messages must also be
+acknowledged to StreamingCoord after their local consumers finish.
 
-The model uses ordinary reference counting. It does not use a module reason
-map, reason bitset, per-module frontier, DataBarrier, `Seal`, or a special
-completion state on the message wrapper. Ack does not define asynchronous task
-ordering. Segment and TransformLog retain and release according to their own
-ordering and retry rules. BroadcastAck only releases the data-scanner Owner and
-tracks the separate Coordinator ACK condition.
+The design uses ordinary reference counting. It has no reason map or bitset,
+module frontier, DataBarrier, `Seal`, explicit failure state, or generic
+`moduleapi.Module` consumer API. Ack observes completion; component-local
+schedulers and preconditions define asynchronous execution order.
 
-RecoveryStorage has these runtime owners:
+The runtime ownership is:
 
 ```text
 RecoveryStorage
@@ -29,23 +25,18 @@ RecoveryStorage
   |     +-- VChannelRecoveryModule*
   |           +-- SegmentView*
   |           +-- TransformLog
-  +-- broadcastAck sink
+  +-- BroadcastAck
 ```
 
-SegmentView and TransformLog are VChannel-owned components, not independent
-top-level RecoveryStorage modules. BroadcastAck is a dedicated RecoveryStorage
-sink rather than a `moduleapi.Module`: it has no Meta-only observer, mode
-transition, or dirty snapshot.
+## 2. Message Handles
 
-## 2. Immutable Message Ownership
-
-The generic wrapper is implemented in `pkg/streaming/util/message`. It owns the
-underlying `ImmutableMessage` until the final reference is released.
+The common wrapper lives in `pkg/streaming/util/message`:
 
 ```go
 type OwnedImmutableMessage interface {
     Message() ImmutableMessage
     Clone() RetainedImmutableMessage
+    Exclusive() <-chan struct{}
     Release()
 }
 
@@ -56,293 +47,248 @@ type RetainedImmutableMessage interface {
 }
 ```
 
-`NewOwnedImmutableMessage(msg, finalizer)` takes ownership of `msg`
-and creates the unique root reference. The constructor does not copy the
-message. The finalizer is invoked exactly once, after the reference count
-reaches zero, and is the wrapper's only completion callback.
+`NewOwnedImmutableMessage(msg, finalizer)` creates the unique Owner root with
+reference count one. It does not copy `msg`.
 
-The Owner is the root reference. A retained handle is one independent
-reference. `Owner.Release()` releases the root reference and invalidates that
-Owner object immediately. Other retained handles remain valid until they are
-released. `RetainedImmutableMessage.Release()` is idempotent for that handle.
+- `Owner.Clone()` and `Retained.Clone()` create independently releasable
+  Retained handles.
+- `Owner.Release()` releases only the root reference and invalidates that Owner
+  handle.
+- `Retained.Release()` releases only that handle and is idempotent for the
+  handle.
+- The finalizer runs exactly once when the total reference count reaches zero.
+- A handle must not be used after its own `Release()`.
+- One handle is not promised to be concurrently safe. A caller gives each
+  independent asynchronous unit its own clone.
 
-The wrapper itself does not promise that one handle can be used concurrently.
-Callers that need independent concurrent access call `Clone()` before handing a
-handle to another goroutine. The underlying immutable message is shared by all
-clones and is safe to access while the caller owns a valid handle. A transaction
-is always retained as one complete message; a child returned by `RangeOver` does
-not have an independent lifetime.
+`Owner.Exclusive()` returns the current Owner-exclusive event. The returned
+channel is closed exactly while the Owner is the only remaining tracked
+reference, meaning the reference count is one. A new Retained clone created
+from an exclusive Owner installs a new open event; the last Retained release
+closes that event when the count returns to one. Exclusive is not completion:
+the finalizer still waits for `Owner.Release()` and reference count zero.
 
-`Message()` exposes the underlying `ImmutableMessage` through the handle. It is
-invalid to call `Message()` on that handle after the handle has been released,
-but an `ImmutableMessage` interface value obtained before release may outlive
-the handle. Such an interface value keeps the Go object reachable without
-participating in RecoveryStorage completion tracking. When the final tracked
-reference is released, the wrapper clears its own pointer to the underlying
-message after running the finalizer. The message becomes eligible for Go GC
-only after all ordinary Go references have also disappeared.
+The Owner lifecycle is linear at the top level. Once BroadcastAck accepts the
+Owner, no caller may clone it again. This makes the Exclusive transition a
+stable precondition for the queued broadcast task.
 
-Typed specialization is a view over the same owner or retained handle. It is
-defined directly alongside `SpecializedImmutableMessage`; there is no generic
-`OwnedImmutable[T]` or `RetainedImmutable[T]` layer:
+`Message()` exposes the shared underlying `ImmutableMessage`. An ordinary Go
+interface value obtained before handle release may outlive the handle. Such a
+reference affects Go GC reachability but does not participate in RecoveryStorage
+completion. The wrapper clears its own message pointer after finalization; the
+object becomes GC-eligible only after all ordinary Go references also vanish.
+
+Transactions are retained as one whole `ImmutableTxnMessage`. Child messages
+visited through `RangeOver` never get independently tracked lifetimes.
+
+### Typed Handles
+
+Typed Owner and Retained interfaces are direct peers of
+`SpecializedImmutableMessage`; they do not add a nested generic ownership layer.
+Retained specializations provide `CloneHandle()` when an asynchronous consumer
+needs an untyped Retained clone:
 
 ```go
-type SpecializedOwnedImmutableMessage[H proto.Message, B proto.Message] interface {
-    Message() SpecializedImmutableMessage[H, B]
-    Clone() SpecializedRetainedImmutableMessage[H, B]
-    CloneHandle() RetainedImmutableMessage
-    Untyped() OwnedImmutableMessage
-}
-
 type SpecializedRetainedImmutableMessage[H proto.Message, B proto.Message] interface {
     Message() SpecializedImmutableMessage[H, B]
     Clone() SpecializedRetainedImmutableMessage[H, B]
+    CloneHandle() RetainedImmutableMessage
     Release()
 }
 ```
 
-Generated concrete types such as `OwnedImmutableInsertMessageV1` and
-`RetainedImmutableInsertMessageV1` alias these specialized interfaces. They do
-not nest another generic ownership interface and carry no second lifecycle or
-separate Ack argument. A specialized retained value must release its handle
-when its asynchronous operation ends.
-
-The consumer-assembled `ImmutableTxnMessage` is not a header/body specialized
-message. It therefore uses the direct `OwnedImmutableTxnMessage` and
-`RetainedImmutableTxnMessage` interfaces. These interfaces still retain the
-complete transaction as one message; child messages never receive independent
-ownership.
+Generated `MustAsRetainedImmutableXxx` helpers bind an existing Retained handle
+to its specialized immutable message. This is a view over the same handle, not
+a new reference.
 
 ## 3. Tracker
 
-`messageack.Tracker` owns WAL-order tracking and the message itself. The
-message wrapper does not contain a checkpoint point.
-
-Conceptually each entry is:
+`messageack.Tracker` owns WAL-order checkpoint state and retains the raw message
+only while its Owner graph is live:
 
 ```go
 type trackedEntry struct {
-    point                 utility.WALConsumeCheckpoint
-    message               message.ImmutableMessage
-    broadcastAckRequired  bool
-    consumersDone         chan struct{}
-    consumersCompleted    bool
-    broadcastAckCompleted bool
-    completed             bool
+    point     utility.WALConsumeCheckpoint
+    message   message.ImmutableMessage
+    completed bool
 }
 ```
 
-`Tracker.Track(raw)` derives and stores:
+`Tracker.Track(raw)` stores:
 
 ```text
 point.MessageID = raw.LastConfirmedMessageID()
 point.TimeTick  = raw.TimeTick()
 ```
 
-It then creates the Owner with a finalizer. The finalizer marks the local
-consumer phase complete and closes `ConsumersDone`. The Tracker does not remove
-the entry until every required completion condition is true.
+It appends the entry and returns an Owner whose finalizer:
 
-The returned `TrackedMessage` supplies the internal coordination boundary:
+1. immediately clears this entry's `message` reference;
+2. marks this entry completed;
+3. removes the continuous completed prefix;
+4. advances the completed checkpoint monotonically to the last removed point.
 
-```go
-type TrackedMessage struct {
-    Message() ImmutableMessage
-    ConsumersDone() <-chan struct{}
-    RequiresBroadcastAck() bool
-    CompleteBroadcastAck()
-}
-```
+Tracker does not expose a `TrackedMessage`, consumer event, broadcast flag, or
+Coordinator Ack method. BroadcastAck interacts only with the Owner.
 
-`TrackedMessage` is not a second message owner. It is a Tracker handle used by
-RecoveryStorage sinks. `RequiresBroadcastAck` is fixed when the entry is
-created from the original message and does not change after ACK completion.
-`CompleteBroadcastAck` is idempotent and is called only after Coordinator
-`Broadcast().Ack` succeeds. For a non-broadcast message the Tracker initializes
-the broadcast condition as already complete.
-
-An entry is complete when:
+Completion may be out of order. For example:
 
 ```text
-consumersCompleted && broadcastAckCompleted
+M1 incomplete: message != nil, completed=false
+M2 complete:   message == nil, completed=true
+M3 complete:   message == nil, completed=true
 ```
 
-Only then does the Tracker remove a continuous completed prefix and publish a
-new Data checkpoint candidate. Out-of-order entries remain in the Tracker with
-their message and point until the prefix reaches them. This intentionally keeps
-the message available for future message-level Defrag work. Once an entry is
-removed from the completed prefix, its message reference is cleared.
+M2 and M3 do not retain their payloads merely because M1 blocks checkpoint
+advancement. Their entries remain only as lightweight ordered checkpoint
+records until M1 completes.
 
 ## 4. Data Scanner Flow
 
-The data scanner processes a message while RecoveryStorage's observation mutex
-is held:
+RecoveryStorage serializes observation of one data-scanner message:
 
 ```text
-read M
-  -> owner, tracked = Tracker.Track(M)
-  -> PChannelRecoveryManager.ObserveMessage(owner)
-       -> affected VChannel modules
-       -> actual Segment/TransformLog consumers synchronously Clone(owner)
-       -> QueryRuntime receives the underlying immutable message
-  -> RecoveryStorage updates Meta checkpoint from M
-  -> BroadcastAck accepts owner and tracked
-       -> owner.Release() unconditionally
-       -> if tracked.RequiresBroadcastAck(), enqueue tracked
+raw message M
+  -> Owner O = Tracker.Track(M)
+  -> dispatch Retained D = O.Clone()
+  -> PChannelRecoveryManager.ObserveMessage(D)
+       -> synchronous routing through affected VChannels
+       -> Segment/TransformLog clone D only for actual async work
+       -> QueryRuntime receives plain ImmutableMessage
+  -> D.Release()
+  -> update Meta checkpoint from M
+  -> BroadcastAck.Accept(O)
 ```
 
-BroadcastAck is the final top-level Owner-release sink. No module needs to
-acknowledge a message just because it observed it. A module that has no work for
-a message simply does not clone it.
+For PChannel-wide dispatch, the manager gives each VChannel an independent
+Retained clone and releases it after that VChannel's synchronous observation.
+Every asynchronous clone must therefore be created before its Observe call
+returns.
 
-All clones required by asynchronous work are created before the corresponding
-`ObserveMessage` call returns. There is no later global retain operation.
+BroadcastAck becomes the sole Owner holder after `Accept`:
 
-For a non-broadcast message, BroadcastAck releases the Owner and does nothing
-else. The last actual consumer release invokes the Tracker finalizer, which
-completes the entry. For a broadcast message, the same Owner release happens
-immediately, while the Tracker's fixed broadcast requirement keeps the entry
-alive for the ACK task.
+```text
+non-broadcast:
+  O.Release()
 
-For a broadcast message, BroadcastAck does not read, retain, or clone the
-Owner. It stores only the `TrackedMessage` in its FIFO task and immediately
-releases the Owner. The task waits for `TrackedMessage.ConsumersDone`, calls
-Coordinator ACK with the Tracker-owned message, and calls
-`CompleteBroadcastAck` only after ACK succeeds. The sink therefore performs
-the top-level Owner release but does not become an Owner or add an ownership
-condition of its own.
+broadcast:
+  enqueue O in FIFO order
+  wait until <-O.Exclusive()
+  Coordinator Ack(O.Message())
+  on success: O.Release()
+  on failure: keep O and retry the same queue head
+```
 
-## 5. Consumer Rules
+For a broadcast message, reference count zero therefore proves both that all
+local Retained consumers finished and that Coordinator Ack succeeded.
+
+## 5. Meta-Only Flow
+
+Meta-only recovery uses the same Retained observation contract but does not
+enter Tracker or BroadcastAck:
+
+```text
+raw message M
+  -> temporary Owner O = NewOwnedImmutableMessage(M, nil)
+  -> dispatch Retained D = O.Clone()
+  -> PChannelRecoveryManager.ObserveMessage(D)
+  -> D.Release()
+  -> O.Release()
+  -> advance Meta checkpoint
+```
+
+Modules are still in MetaOnly mode, so they rebuild metadata and transaction
+state without scheduling data persistence work. The bounded Meta scanner later
+persists the resulting DirtySnapshots before its checkpoint.
+
+## 6. Consumer Completion
 
 ### Segment
 
-SegmentView clones for concrete asynchronous work:
+SegmentView clones a Retained handle only for concrete asynchronous work such
+as ensure-growing, Insert chunk persistence, and flush/final-commit lifecycle
+work. It releases the clone after the required object or lifecycle operation
+succeeds, after installing resulting metadata and marking the view dirty.
 
-- CreateSegment ensure-growing work;
-- Insert data retained in a pending object-storage chunk;
-- a whole Txn retained by every affected SegmentView;
-- Flush, ManualFlush, FlushAll, and other lifecycle operations that flush or
-  commit data.
-
-The handle is released only after the required object write or lifecycle side
-effect succeeds. Before release, the consumer installs the resulting in-memory
-metadata and marks the Segment dirty. A failed or canceled task keeps the
-handle.
-
-One object-storage chunk can contain messages from many WAL entries. It keeps
-one retained handle per entry and releases all of them only after the shared
-write succeeds.
+One chunk may hold handles for several WAL messages. A failed or retrying task
+keeps all uncovered handles live.
 
 ### TransformLog
 
-TransformLog clones for Delete, Txn(Delete), and barrier messages that require
-preceding Delete entries to be flushed. It releases each handle after the
-covering TransformLog chunk is durably written and committed into in-memory
-TransformLog state. It marks its dirty metadata before release.
+TransformLog clones for Delete, Txn(Delete), or a barrier that requires
+preceding Delete data to be flushed. It releases covered handles after the
+TransformLog chunk is durable and committed into dirty in-memory metadata.
 
-TransformLog does not wait for materialization. L0 materialization is a
-separate downstream operation and is not a message-consumer reference.
+L0 materialization is a separate downstream operation. It does not retain the
+source message and does not delay Message Ack or BroadcastAck.
 
 ### QueryRuntime
 
-QueryRuntime receives the underlying immutable message directly when it needs
-to enqueue a live event. The Go interface value keeps the immutable message
-object reachable; this is independent of RecoveryStorage's persistence
-completion tracking. QueryRuntime never retains a RecoveryStorage handle and
-never delays the Data checkpoint.
+QueryRuntime receives the plain `ImmutableMessage` through its live event. It
+uses its own TimeTick filtering and ordering and never receives an Owner or
+Retained persistence handle.
 
-### BroadcastAck
+## 7. Checkpoint Persistence
 
-BroadcastAck is a completion sink, not a data consumer. It does not add a
-reference. It releases the Owner immediately, then uses `TrackedMessage` to
-wait for local consumer completion and perform FIFO Coordinator ACK. Its
-Coordinator ACK completion is itself required for a broadcast Tracker entry.
-
-## 6. Checkpoint Persistence
-
-RecoveryStorage keeps separate logical points:
+RecoveryStorage freezes:
 
 ```text
 MetaPoint = latest completely observed WAL point
-DataPoint = min(MetaPoint, Tracker completed continuous frontier)
+DataPoint = min(MetaPoint, Tracker completed continuous point)
 ```
 
-Before each batch, RecoveryStorage freezes the checkpoint boundary, then
-collects stable DirtySnapshots. An asynchronous consumer follows:
+Every asynchronous consumer follows:
 
 ```text
-object-storage/lifecycle work succeeds
-  -> update in-memory recovery metadata
-  -> mark metadata dirty
+required work succeeds
+  -> install recovery metadata
+  -> mark component dirty
   -> Release retained handle
 ```
 
-The persist order is:
+The persist batch then runs:
 
 ```text
 freeze MetaPoint and DataPoint
-  -> persist every captured DirtySnapshot
-  -> mark those snapshots persisted
-  -> persist the WALCheckpoint
+  -> consume stable DirtySnapshots
+  -> persist all DirtySnapshots
+  -> MarkPersisted
+  -> persist WALCheckpoint last
 ```
 
-The checkpoint uses `LastConfirmedMessageID` and recovery resumes with
-`DeliverPolicyStartFrom`. Replaying an already completed message is acceptable;
-advancing past an unfinished entry is not. Both the Tracker frontier and the
-persist batch clamp their candidate against the already persisted DataPoint,
-so conservative replay can discard old completed entries without publishing a
-checkpoint regression.
+The checkpoint MessageID is `LastConfirmedMessageID`; recovery resumes with
+`DeliverPolicyStartFrom`. Replay may conservatively repeat a completed message,
+but an unfinished message must never be skipped. DataPoint is monotonic and is
+clamped against the already persisted checkpoint.
 
-Meta-only replay does not create message Ack entries. It consumes DirtySnapshot
-state and advances the Meta checkpoint as part of bounded metadata recovery.
-RecoveryStorage still creates an `OwnedImmutableMessage` for each Meta-only
-message so every module uses the same `ObserveMessage` contract. That Owner is
-not registered with the Tracker and RecoveryStorage releases it immediately
-after synchronous module dispatch.
+## 8. AckSyncUp, Retry, And Close
 
-## 7. Broadcast And AckSyncUp
+`AckSyncUp` only disables Coordinator FastAck and makes StreamingCoord wait for
+the consuming-side Ack. It does not alter RecoveryStorage observation,
+checkpoint persistence, TransformLog materialization, or QueryRuntime startup.
 
-Coordinator FastAck remains an optimization. If `AckSyncUp` is false, the
-Coordinator may self-ack after WAL append. If it is true, the Coordinator skips
-FastAck and waits for RecoveryStorage's Coordinator ACK. This does not alter
-RecoveryStorage's local ordering or checkpoint persistence.
-
-RecoveryStorage BroadcastAck does not wait for either Meta checkpoint or Data
-checkpoint persistence. It waits only for the actual local message consumers,
-then performs the idempotent Coordinator ACK. The Tracker entry is not complete
-until that ACK succeeds.
-
-## 8. Retry, Close, And Recovery
-
-There is no failure state in the message wrapper or Tracker entry. A retained
-handle is released only after its operation succeeds. Coordinator ACK failures
-keep the FIFO task pending and leave `broadcastAckCompleted` false. Close does
-not convert incomplete work into completion.
-
-After restart, the persisted Data checkpoint is the conservative resume anchor.
-Recovery reconstructs the Tracker entries, messages, and all required handles
-by replaying the WAL. Coordinator ACK is idempotent, so an ACK that succeeded
-before a crash may be repeated safely.
+There is no explicit message failure state. Incomplete work is represented by
+an unreleased handle. Coordinator Ack failure keeps the broadcast Owner at the
+FIFO head and retries. Close cancels waiters and retries but does not release an
+unfinished Owner or fabricate completion. WAL replay reconstructs all state
+from the persisted Data checkpoint; Coordinator Ack is idempotent.
 
 ## 9. Invariants
 
-1. Every observed message has one Owner; only data-scanner messages have a
-   Tracker entry.
-2. The Tracker entry owns the WAL point and retains the original message until
-   the entry leaves the completed prefix.
-3. Each actual asynchronous consumer owns one retained message handle.
-4. Owner `Release` is the only top-level dispatch release; BroadcastAck does not
-   add a reference.
-5. The finalizer closes local `ConsumersDone` exactly once.
-6. Broadcast ACK success is required before a broadcast entry can complete.
-7. Data checkpoint advancement uses only the continuous completed entry prefix,
-   bounded by the frozen MetaPoint, and is monotonic. Conservative replay may
-   complete an entry that is older than the persisted DataPoint, but it must
-   never move the DataPoint backward.
-8. TransformLog handle release waits for chunk durability, not materialization.
-9. Async consumers mark metadata dirty before releasing their handles.
-10. QueryRuntime borrows the underlying immutable message and never participates
-    in WAL Ack. Its Go object reachability is independent of persistence
-    completion tracking.
-11. Txn messages are retained and completed as one whole message.
-12. Ack observes completion but does not define asynchronous task ordering.
+1. Every data-scanner message has one Tracker entry and one Owner.
+2. Meta-only messages use a temporary Owner but no Tracker entry.
+3. Tracker owns only ordered points and a per-entry message reference until
+   finalization; it owns no BroadcastAck state.
+4. Each asynchronous Segment or TransformLog unit owns an independent Retained
+   clone created during synchronous observation.
+5. BroadcastAck is the final Owner holder and waits for Owner exclusivity before
+   Coordinator Ack.
+6. Finalization occurs only at reference count zero and clears each completed
+   message independently of checkpoint-prefix advancement.
+7. Async consumers mark metadata dirty before releasing their handles.
+8. TransformLog completion requires chunk durability, not materialization.
+9. QueryRuntime and Go GC reachability are independent of persistence Ack.
+10. Txn messages are retained and completed as one whole message.
+11. Data checkpoint advancement uses only the continuous completed Tracker
+    prefix and never moves backward.
+12. Ack does not define asynchronous task execution order.

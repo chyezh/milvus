@@ -15,6 +15,8 @@ type refCountedImmutableMessageCore struct {
 	ownerReleased bool
 	finalized     bool
 	finalizer     func()
+	exclusive     bool
+	exclusiveCh   chan struct{}
 }
 
 // NewOwnedImmutableMessage takes ownership of msg and creates its unique root
@@ -26,10 +28,14 @@ func NewOwnedImmutableMessage(
 	if msg == nil {
 		panic("ref-counted immutable message is nil")
 	}
+	exclusiveCh := make(chan struct{})
+	close(exclusiveCh)
 	core := &refCountedImmutableMessageCore{
-		message:   msg,
-		refCount:  1,
-		finalizer: finalizer,
+		message:     msg,
+		refCount:    1,
+		finalizer:   finalizer,
+		exclusive:   true,
+		exclusiveCh: exclusiveCh,
 	}
 	return &ownedImmutableMessage{core: core}
 }
@@ -61,6 +67,10 @@ func (c *refCountedImmutableMessageCore) ownerClone() RetainedImmutableMessage {
 	if c.ownerReleased {
 		panic("ref-counted immutable message owner cloned after release")
 	}
+	if c.refCount == 1 {
+		c.exclusive = false
+		c.exclusiveCh = make(chan struct{})
+	}
 	c.refCount++
 	handle := &retainedImmutableMessage{}
 	handle.core.Store(c)
@@ -91,6 +101,10 @@ func (c *refCountedImmutableMessageCore) releaseLocked() (func(), bool) {
 		panic("ref-counted immutable message reference count underflow")
 	}
 	c.refCount--
+	if c.refCount == 1 && !c.ownerReleased && !c.exclusive {
+		c.exclusive = true
+		close(c.exclusiveCh)
+	}
 	if c.refCount != 0 || c.finalized {
 		return nil, false
 	}
@@ -131,6 +145,18 @@ func (m *ownedImmutableMessage) Clone() RetainedImmutableMessage {
 	return m.core.ownerClone()
 }
 
+func (m *ownedImmutableMessage) Exclusive() <-chan struct{} {
+	if m.core == nil {
+		panic("ref-counted immutable message owner accessed after release")
+	}
+	m.core.mu.Lock()
+	defer m.core.mu.Unlock()
+	if m.core.ownerReleased {
+		panic("ref-counted immutable message owner accessed after release")
+	}
+	return m.core.exclusiveCh
+}
+
 func (m *ownedImmutableMessage) Release() {
 	if m.core != nil {
 		m.core.releaseOwner()
@@ -155,6 +181,8 @@ func (m *retainedImmutableMessage) Release() {
 		core.release()
 	}
 }
+
+func (*retainedImmutableMessage) retainedImmutableMessage() {}
 
 func (m *retainedImmutableMessage) loadCore() *refCountedImmutableMessageCore {
 	core := m.core.Load()
@@ -204,6 +232,10 @@ func (m *specializedRetainedImmutableMessage[H, B]) Clone() SpecializedRetainedI
 		message:  m.message,
 		retained: m.retained.Clone(),
 	}
+}
+
+func (m *specializedRetainedImmutableMessage[H, B]) CloneHandle() RetainedImmutableMessage {
+	return m.retained.Clone()
 }
 
 func (m *specializedRetainedImmutableMessage[H, B]) Release() {
@@ -256,6 +288,10 @@ func (m *retainedImmutableTxnMessage) Clone() RetainedImmutableTxnMessage {
 	}
 }
 
+func (m *retainedImmutableTxnMessage) CloneHandle() RetainedImmutableMessage {
+	return m.retained.Clone()
+}
+
 func (m *retainedImmutableTxnMessage) Release() {
 	if m.retained != nil {
 		m.retained.Release()
@@ -273,6 +309,13 @@ func MustAsSpecializedOwnedImmutableMessage[H proto.Message, B proto.Message](
 	return &specializedOwnedImmutableMessage[H, B]{message: msg, owner: owner}
 }
 
+func MustAsSpecializedRetainedImmutableMessage[H proto.Message, B proto.Message](
+	retained RetainedImmutableMessage,
+) SpecializedRetainedImmutableMessage[H, B] {
+	msg := MustAsSpecializedImmutableMessage[H, B](retained.Message())
+	return &specializedRetainedImmutableMessage[H, B]{message: msg, retained: retained}
+}
+
 // MustAsOwnedImmutableTxnMessage binds owner to its transaction message.
 // The transaction and all of its child messages share one lifetime.
 func MustAsOwnedImmutableTxnMessage(owner OwnedImmutableMessage) OwnedImmutableTxnMessage {
@@ -281,6 +324,14 @@ func MustAsOwnedImmutableTxnMessage(owner OwnedImmutableMessage) OwnedImmutableT
 		panic("failed to parse immutable transaction message")
 	}
 	return &ownedImmutableTxnMessage{message: txn, owner: owner}
+}
+
+func MustAsRetainedImmutableTxnMessage(retained RetainedImmutableMessage) RetainedImmutableTxnMessage {
+	txn := AsImmutableTxnMessage(retained.Message())
+	if txn == nil {
+		panic("failed to parse immutable transaction message")
+	}
+	return &retainedImmutableTxnMessage{message: txn, retained: retained}
 }
 
 var (

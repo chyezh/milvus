@@ -386,12 +386,12 @@ func consumePointReached(current, point utility.WALConsumeCheckpoint) bool {
 
 // observeMessage observes a message and update the recovery storage.
 func (r *recoveryStorageImpl) observeMessage(ctx context.Context, msg message.ImmutableMessage) {
-	owner, tracked := r.ackTracker.Track(msg)
-	r.observeModulesMessage(ctx, owner)
-	r.updateCheckpoint(owner.Message())
-	// BroadcastAck is the final owner-release sink. It does not inspect or retain
-	// the owner; broadcast acknowledgement is coordinated through the tracker.
-	r.broadcastAck.Accept(owner, tracked)
+	owner := r.ackTracker.Track(msg)
+	dispatch := owner.Clone()
+	r.observeModulesMessage(ctx, dispatch)
+	dispatch.Release()
+	r.updateCheckpoint(msg)
+	r.broadcastAck.Accept(owner)
 	r.metrics.ObServeInMemMetrics(r.checkpoint.TimeTick)
 
 	r.dirtyCounter++
@@ -402,7 +402,9 @@ func (r *recoveryStorageImpl) observeMessage(ctx context.Context, msg message.Im
 
 func (r *recoveryStorageImpl) observeMetaOnlyMessage(ctx context.Context, msg message.ImmutableMessage) {
 	owner := message.NewOwnedImmutableMessage(msg, nil)
-	r.observeModulesMessage(ctx, owner)
+	dispatch := owner.Clone()
+	r.observeModulesMessage(ctx, dispatch)
+	dispatch.Release()
 	owner.Release()
 	r.updateCheckpoint(msg)
 	r.metrics.ObServeInMemMetrics(r.checkpoint.TimeTick)
@@ -427,12 +429,12 @@ func (r *recoveryStorageImpl) observeDataScannerMessage(ctx context.Context, msg
 
 func (r *recoveryStorageImpl) observeModulesMessage(
 	ctx context.Context,
-	owner message.OwnedImmutableMessage,
+	retained message.RetainedImmutableMessage,
 ) {
 	if r.vchannelManager == nil {
 		panic("recovery modules are not initialized")
 	}
-	r.vchannelManager.ObserveMessage(ctx, owner)
+	r.vchannelManager.ObserveMessage(ctx, retained)
 }
 
 func consumePointFromMessage(msg message.ImmutableMessage) utility.WALConsumeCheckpoint {

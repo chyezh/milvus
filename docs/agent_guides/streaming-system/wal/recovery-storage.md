@@ -39,7 +39,8 @@ Persists WAL consumer state to the catalog (etcd) and object storage. **Core inv
    Meta-only envelopes. This reconstructs current metadata and the uncommitted
    `TxnBuffer`, but it does not claim that Insert or Transform data has been
    replayed through the barrier. Each envelope receives a temporary
-   `OwnedImmutableMessage` for the common module API, but no Tracker entry.
+   `OwnedImmutableMessage`, clones one Retained dispatch handle for the
+   PChannel manager, and creates no Tracker entry.
 4. **Data replay and QueryView recovery**: Switch modules into MetaAndData mode
    and start the DataScanner from the persisted Data checkpoint. Persisted
    QueryViews may build their QueryRuntime concurrently from the current
@@ -68,12 +69,10 @@ snapshots:
 - Every actual Segment and TransformLog data consumer retains a direct message
   handle until its object-storage work succeeds and its metadata changes are
   marked dirty.
-- Broadcast acknowledgement adds no reference. Its sink unconditionally
-  releases the Owner; it uses the Tracker entry's fixed broadcast requirement
-  to decide whether to enqueue a FIFO ACK task. That task waits for the local
-  consumer completion event before scheduler submission and completes the
-  broadcast Tracker condition only after Coordinator Ack succeeds. Failed ACKs
-  use delayed resubmission while retaining the FIFO head.
+- BroadcastAck takes the Owner after dispatch. It immediately releases an
+  ordinary message; for a broadcast it keeps the Owner in FIFO order, waits for
+  `Owner.Exclusive()`, and releases it only after Coordinator Ack succeeds.
+  Failed ACKs retain the same Owner and retry the FIFO head.
 - `AckSyncUp` disables Coordinator FastAck and waits for the RecoveryStorage
   consumer Ack; it does not require checkpoint persistence before that Ack.
 - Retry, cancellation, and close keep incomplete handles retained. Restart
@@ -85,9 +84,11 @@ See
 ## Key Packages
 
 - `internal/streamingnode/server/wal/recovery/` — `RecoveryStorage`, `RecoverySnapshot`, WAL replay orchestration, meta recovery and background persist task
-- `internal/streamingnode/server/wal/moduleapi/` — common RecoveryStorage module contracts and dirty snapshots
+- `internal/streamingnode/server/wal/moduleapi/` — recovery snapshot and task runtime value types; it has no generic recovery consumer interface
 - `internal/streamingnode/server/wal/messageack/` — ordered tracked entries,
-  ref-counted message ownership, and continuous completion tracking
+  message-reference cleanup, and continuous completion tracking
+- `pkg/streaming/util/message/` — Owned/Retained immutable message wrappers and
+  typed handle specializations
 - `internal/streamingnode/server/wal/vchannel/` — VChannel metadata, schema history, partition lifecycle, and VChannel tombstones
 - `internal/streamingnode/server/wal/vchannel/segment/` — growing segment assignment metadata, Insert/L1 persistence, segment lifecycle, and segment tombstones
 - `internal/streamingnode/server/wal/vchannel/transformlog/` — Delete TransformLog storage, recovery, chunk replay, scanners, and truncation

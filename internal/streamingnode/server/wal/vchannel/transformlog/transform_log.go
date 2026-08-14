@@ -130,10 +130,10 @@ func (t *TransformLog) SwitchIntoMetaAndData() {
 
 func (t *TransformLog) ObserveMessage(
 	ctx context.Context,
-	owner message.OwnedImmutableMessage,
+	retained message.RetainedImmutableMessage,
 ) {
-	msg := owner.Message()
-	t.observeMessage(ctx, msg, owner.Clone)
+	msg := retained.Message()
+	t.observeMessage(ctx, msg, retained.Clone)
 }
 
 func (t *TransformLog) observeMessage(

@@ -241,6 +241,9 @@ var MustAsImmutableTimeTickMessageV1 = MustAsSpecializedImmutableMessage[*TimeTi
 // MustAsOwnedImmutableTimeTickMessageV1 converts an OwnedImmutableMessage to OwnedImmutableTimeTickMessageV1, panics on error
 var MustAsOwnedImmutableTimeTickMessageV1 = MustAsSpecializedOwnedImmutableMessage[*TimeTickMessageHeader, *TimeTickMsg]
 
+// MustAsRetainedImmutableTimeTickMessageV1 converts a RetainedImmutableMessage to RetainedImmutableTimeTickMessageV1, panics on error
+var MustAsRetainedImmutableTimeTickMessageV1 = MustAsSpecializedRetainedImmutableMessage[*TimeTickMessageHeader, *TimeTickMsg]
+
 // AsBroadcastTimeTickMessageV1 converts a BasicMessage to BroadcastTimeTickMessageV1
 var AsBroadcastTimeTickMessageV1 = asSpecializedBroadcastMessage[*TimeTickMessageHeader, *TimeTickMsg]
 
@@ -287,6 +290,9 @@ var MustAsImmutableInsertMessageV1 = MustAsSpecializedImmutableMessage[*InsertMe
 
 // MustAsOwnedImmutableInsertMessageV1 converts an OwnedImmutableMessage to OwnedImmutableInsertMessageV1, panics on error
 var MustAsOwnedImmutableInsertMessageV1 = MustAsSpecializedOwnedImmutableMessage[*InsertMessageHeader, *InsertRequest]
+
+// MustAsRetainedImmutableInsertMessageV1 converts a RetainedImmutableMessage to RetainedImmutableInsertMessageV1, panics on error
+var MustAsRetainedImmutableInsertMessageV1 = MustAsSpecializedRetainedImmutableMessage[*InsertMessageHeader, *InsertRequest]
 
 // AsBroadcastInsertMessageV1 converts a BasicMessage to BroadcastInsertMessageV1
 var AsBroadcastInsertMessageV1 = asSpecializedBroadcastMessage[*InsertMessageHeader, *InsertRequest]
@@ -335,6 +341,9 @@ var MustAsImmutableDeleteMessageV1 = MustAsSpecializedImmutableMessage[*DeleteMe
 // MustAsOwnedImmutableDeleteMessageV1 converts an OwnedImmutableMessage to OwnedImmutableDeleteMessageV1, panics on error
 var MustAsOwnedImmutableDeleteMessageV1 = MustAsSpecializedOwnedImmutableMessage[*DeleteMessageHeader, *DeleteRequest]
 
+// MustAsRetainedImmutableDeleteMessageV1 converts a RetainedImmutableMessage to RetainedImmutableDeleteMessageV1, panics on error
+var MustAsRetainedImmutableDeleteMessageV1 = MustAsSpecializedRetainedImmutableMessage[*DeleteMessageHeader, *DeleteRequest]
+
 // AsBroadcastDeleteMessageV1 converts a BasicMessage to BroadcastDeleteMessageV1
 var AsBroadcastDeleteMessageV1 = asSpecializedBroadcastMessage[*DeleteMessageHeader, *DeleteRequest]
 
@@ -381,6 +390,9 @@ var MustAsImmutableCreateCollectionMessageV1 = MustAsSpecializedImmutableMessage
 
 // MustAsOwnedImmutableCreateCollectionMessageV1 converts an OwnedImmutableMessage to OwnedImmutableCreateCollectionMessageV1, panics on error
 var MustAsOwnedImmutableCreateCollectionMessageV1 = MustAsSpecializedOwnedImmutableMessage[*CreateCollectionMessageHeader, *CreateCollectionRequest]
+
+// MustAsRetainedImmutableCreateCollectionMessageV1 converts a RetainedImmutableMessage to RetainedImmutableCreateCollectionMessageV1, panics on error
+var MustAsRetainedImmutableCreateCollectionMessageV1 = MustAsSpecializedRetainedImmutableMessage[*CreateCollectionMessageHeader, *CreateCollectionRequest]
 
 // AsBroadcastCreateCollectionMessageV1 converts a BasicMessage to BroadcastCreateCollectionMessageV1
 var AsBroadcastCreateCollectionMessageV1 = asSpecializedBroadcastMessage[*CreateCollectionMessageHeader, *CreateCollectionRequest]
@@ -429,6 +441,9 @@ var MustAsImmutableDropCollectionMessageV1 = MustAsSpecializedImmutableMessage[*
 // MustAsOwnedImmutableDropCollectionMessageV1 converts an OwnedImmutableMessage to OwnedImmutableDropCollectionMessageV1, panics on error
 var MustAsOwnedImmutableDropCollectionMessageV1 = MustAsSpecializedOwnedImmutableMessage[*DropCollectionMessageHeader, *DropCollectionRequest]
 
+// MustAsRetainedImmutableDropCollectionMessageV1 converts a RetainedImmutableMessage to RetainedImmutableDropCollectionMessageV1, panics on error
+var MustAsRetainedImmutableDropCollectionMessageV1 = MustAsSpecializedRetainedImmutableMessage[*DropCollectionMessageHeader, *DropCollectionRequest]
+
 // AsBroadcastDropCollectionMessageV1 converts a BasicMessage to BroadcastDropCollectionMessageV1
 var AsBroadcastDropCollectionMessageV1 = asSpecializedBroadcastMessage[*DropCollectionMessageHeader, *DropCollectionRequest]
 
@@ -475,6 +490,9 @@ var MustAsImmutableTruncateCollectionMessageV2 = MustAsSpecializedImmutableMessa
 
 // MustAsOwnedImmutableTruncateCollectionMessageV2 converts an OwnedImmutableMessage to OwnedImmutableTruncateCollectionMessageV2, panics on error
 var MustAsOwnedImmutableTruncateCollectionMessageV2 = MustAsSpecializedOwnedImmutableMessage[*TruncateCollectionMessageHeader, *TruncateCollectionMessageBody]
+
+// MustAsRetainedImmutableTruncateCollectionMessageV2 converts a RetainedImmutableMessage to RetainedImmutableTruncateCollectionMessageV2, panics on error
+var MustAsRetainedImmutableTruncateCollectionMessageV2 = MustAsSpecializedRetainedImmutableMessage[*TruncateCollectionMessageHeader, *TruncateCollectionMessageBody]
 
 // AsBroadcastTruncateCollectionMessageV2 converts a BasicMessage to BroadcastTruncateCollectionMessageV2
 var AsBroadcastTruncateCollectionMessageV2 = asSpecializedBroadcastMessage[*TruncateCollectionMessageHeader, *TruncateCollectionMessageBody]
@@ -523,6 +541,9 @@ var MustAsImmutableCreatePartitionMessageV1 = MustAsSpecializedImmutableMessage[
 // MustAsOwnedImmutableCreatePartitionMessageV1 converts an OwnedImmutableMessage to OwnedImmutableCreatePartitionMessageV1, panics on error
 var MustAsOwnedImmutableCreatePartitionMessageV1 = MustAsSpecializedOwnedImmutableMessage[*CreatePartitionMessageHeader, *CreatePartitionRequest]
 
+// MustAsRetainedImmutableCreatePartitionMessageV1 converts a RetainedImmutableMessage to RetainedImmutableCreatePartitionMessageV1, panics on error
+var MustAsRetainedImmutableCreatePartitionMessageV1 = MustAsSpecializedRetainedImmutableMessage[*CreatePartitionMessageHeader, *CreatePartitionRequest]
+
 // AsBroadcastCreatePartitionMessageV1 converts a BasicMessage to BroadcastCreatePartitionMessageV1
 var AsBroadcastCreatePartitionMessageV1 = asSpecializedBroadcastMessage[*CreatePartitionMessageHeader, *CreatePartitionRequest]
 
@@ -569,6 +590,9 @@ var MustAsImmutableDropPartitionMessageV1 = MustAsSpecializedImmutableMessage[*D
 
 // MustAsOwnedImmutableDropPartitionMessageV1 converts an OwnedImmutableMessage to OwnedImmutableDropPartitionMessageV1, panics on error
 var MustAsOwnedImmutableDropPartitionMessageV1 = MustAsSpecializedOwnedImmutableMessage[*DropPartitionMessageHeader, *DropPartitionRequest]
+
+// MustAsRetainedImmutableDropPartitionMessageV1 converts a RetainedImmutableMessage to RetainedImmutableDropPartitionMessageV1, panics on error
+var MustAsRetainedImmutableDropPartitionMessageV1 = MustAsSpecializedRetainedImmutableMessage[*DropPartitionMessageHeader, *DropPartitionRequest]
 
 // AsBroadcastDropPartitionMessageV1 converts a BasicMessage to BroadcastDropPartitionMessageV1
 var AsBroadcastDropPartitionMessageV1 = asSpecializedBroadcastMessage[*DropPartitionMessageHeader, *DropPartitionRequest]
@@ -617,6 +641,9 @@ var MustAsImmutableImportMessageV1 = MustAsSpecializedImmutableMessage[*ImportMe
 // MustAsOwnedImmutableImportMessageV1 converts an OwnedImmutableMessage to OwnedImmutableImportMessageV1, panics on error
 var MustAsOwnedImmutableImportMessageV1 = MustAsSpecializedOwnedImmutableMessage[*ImportMessageHeader, *ImportMsg]
 
+// MustAsRetainedImmutableImportMessageV1 converts a RetainedImmutableMessage to RetainedImmutableImportMessageV1, panics on error
+var MustAsRetainedImmutableImportMessageV1 = MustAsSpecializedRetainedImmutableMessage[*ImportMessageHeader, *ImportMsg]
+
 // AsBroadcastImportMessageV1 converts a BasicMessage to BroadcastImportMessageV1
 var AsBroadcastImportMessageV1 = asSpecializedBroadcastMessage[*ImportMessageHeader, *ImportMsg]
 
@@ -663,6 +690,9 @@ var MustAsImmutableCommitImportMessageV2 = MustAsSpecializedImmutableMessage[*Co
 
 // MustAsOwnedImmutableCommitImportMessageV2 converts an OwnedImmutableMessage to OwnedImmutableCommitImportMessageV2, panics on error
 var MustAsOwnedImmutableCommitImportMessageV2 = MustAsSpecializedOwnedImmutableMessage[*CommitImportMessageHeader, *CommitImportMessageBody]
+
+// MustAsRetainedImmutableCommitImportMessageV2 converts a RetainedImmutableMessage to RetainedImmutableCommitImportMessageV2, panics on error
+var MustAsRetainedImmutableCommitImportMessageV2 = MustAsSpecializedRetainedImmutableMessage[*CommitImportMessageHeader, *CommitImportMessageBody]
 
 // AsBroadcastCommitImportMessageV2 converts a BasicMessage to BroadcastCommitImportMessageV2
 var AsBroadcastCommitImportMessageV2 = asSpecializedBroadcastMessage[*CommitImportMessageHeader, *CommitImportMessageBody]
@@ -711,6 +741,9 @@ var MustAsImmutableRollbackImportMessageV2 = MustAsSpecializedImmutableMessage[*
 // MustAsOwnedImmutableRollbackImportMessageV2 converts an OwnedImmutableMessage to OwnedImmutableRollbackImportMessageV2, panics on error
 var MustAsOwnedImmutableRollbackImportMessageV2 = MustAsSpecializedOwnedImmutableMessage[*RollbackImportMessageHeader, *RollbackImportMessageBody]
 
+// MustAsRetainedImmutableRollbackImportMessageV2 converts a RetainedImmutableMessage to RetainedImmutableRollbackImportMessageV2, panics on error
+var MustAsRetainedImmutableRollbackImportMessageV2 = MustAsSpecializedRetainedImmutableMessage[*RollbackImportMessageHeader, *RollbackImportMessageBody]
+
 // AsBroadcastRollbackImportMessageV2 converts a BasicMessage to BroadcastRollbackImportMessageV2
 var AsBroadcastRollbackImportMessageV2 = asSpecializedBroadcastMessage[*RollbackImportMessageHeader, *RollbackImportMessageBody]
 
@@ -757,6 +790,9 @@ var MustAsImmutableCreateSegmentMessageV2 = MustAsSpecializedImmutableMessage[*C
 
 // MustAsOwnedImmutableCreateSegmentMessageV2 converts an OwnedImmutableMessage to OwnedImmutableCreateSegmentMessageV2, panics on error
 var MustAsOwnedImmutableCreateSegmentMessageV2 = MustAsSpecializedOwnedImmutableMessage[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
+
+// MustAsRetainedImmutableCreateSegmentMessageV2 converts a RetainedImmutableMessage to RetainedImmutableCreateSegmentMessageV2, panics on error
+var MustAsRetainedImmutableCreateSegmentMessageV2 = MustAsSpecializedRetainedImmutableMessage[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
 
 // AsBroadcastCreateSegmentMessageV2 converts a BasicMessage to BroadcastCreateSegmentMessageV2
 var AsBroadcastCreateSegmentMessageV2 = asSpecializedBroadcastMessage[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
@@ -805,6 +841,9 @@ var MustAsImmutableFlushMessageV2 = MustAsSpecializedImmutableMessage[*FlushMess
 // MustAsOwnedImmutableFlushMessageV2 converts an OwnedImmutableMessage to OwnedImmutableFlushMessageV2, panics on error
 var MustAsOwnedImmutableFlushMessageV2 = MustAsSpecializedOwnedImmutableMessage[*FlushMessageHeader, *FlushMessageBody]
 
+// MustAsRetainedImmutableFlushMessageV2 converts a RetainedImmutableMessage to RetainedImmutableFlushMessageV2, panics on error
+var MustAsRetainedImmutableFlushMessageV2 = MustAsSpecializedRetainedImmutableMessage[*FlushMessageHeader, *FlushMessageBody]
+
 // AsBroadcastFlushMessageV2 converts a BasicMessage to BroadcastFlushMessageV2
 var AsBroadcastFlushMessageV2 = asSpecializedBroadcastMessage[*FlushMessageHeader, *FlushMessageBody]
 
@@ -851,6 +890,9 @@ var MustAsImmutableManualFlushMessageV2 = MustAsSpecializedImmutableMessage[*Man
 
 // MustAsOwnedImmutableManualFlushMessageV2 converts an OwnedImmutableMessage to OwnedImmutableManualFlushMessageV2, panics on error
 var MustAsOwnedImmutableManualFlushMessageV2 = MustAsSpecializedOwnedImmutableMessage[*ManualFlushMessageHeader, *ManualFlushMessageBody]
+
+// MustAsRetainedImmutableManualFlushMessageV2 converts a RetainedImmutableMessage to RetainedImmutableManualFlushMessageV2, panics on error
+var MustAsRetainedImmutableManualFlushMessageV2 = MustAsSpecializedRetainedImmutableMessage[*ManualFlushMessageHeader, *ManualFlushMessageBody]
 
 // AsBroadcastManualFlushMessageV2 converts a BasicMessage to BroadcastManualFlushMessageV2
 var AsBroadcastManualFlushMessageV2 = asSpecializedBroadcastMessage[*ManualFlushMessageHeader, *ManualFlushMessageBody]
@@ -899,6 +941,9 @@ var MustAsImmutableAlterReplicateConfigMessageV2 = MustAsSpecializedImmutableMes
 // MustAsOwnedImmutableAlterReplicateConfigMessageV2 converts an OwnedImmutableMessage to OwnedImmutableAlterReplicateConfigMessageV2, panics on error
 var MustAsOwnedImmutableAlterReplicateConfigMessageV2 = MustAsSpecializedOwnedImmutableMessage[*AlterReplicateConfigMessageHeader, *AlterReplicateConfigMessageBody]
 
+// MustAsRetainedImmutableAlterReplicateConfigMessageV2 converts a RetainedImmutableMessage to RetainedImmutableAlterReplicateConfigMessageV2, panics on error
+var MustAsRetainedImmutableAlterReplicateConfigMessageV2 = MustAsSpecializedRetainedImmutableMessage[*AlterReplicateConfigMessageHeader, *AlterReplicateConfigMessageBody]
+
 // AsBroadcastAlterReplicateConfigMessageV2 converts a BasicMessage to BroadcastAlterReplicateConfigMessageV2
 var AsBroadcastAlterReplicateConfigMessageV2 = asSpecializedBroadcastMessage[*AlterReplicateConfigMessageHeader, *AlterReplicateConfigMessageBody]
 
@@ -945,6 +990,9 @@ var MustAsImmutableBeginTxnMessageV2 = MustAsSpecializedImmutableMessage[*BeginT
 
 // MustAsOwnedImmutableBeginTxnMessageV2 converts an OwnedImmutableMessage to OwnedImmutableBeginTxnMessageV2, panics on error
 var MustAsOwnedImmutableBeginTxnMessageV2 = MustAsSpecializedOwnedImmutableMessage[*BeginTxnMessageHeader, *BeginTxnMessageBody]
+
+// MustAsRetainedImmutableBeginTxnMessageV2 converts a RetainedImmutableMessage to RetainedImmutableBeginTxnMessageV2, panics on error
+var MustAsRetainedImmutableBeginTxnMessageV2 = MustAsSpecializedRetainedImmutableMessage[*BeginTxnMessageHeader, *BeginTxnMessageBody]
 
 // AsBroadcastBeginTxnMessageV2 converts a BasicMessage to BroadcastBeginTxnMessageV2
 var AsBroadcastBeginTxnMessageV2 = asSpecializedBroadcastMessage[*BeginTxnMessageHeader, *BeginTxnMessageBody]
@@ -993,6 +1041,9 @@ var MustAsImmutableCommitTxnMessageV2 = MustAsSpecializedImmutableMessage[*Commi
 // MustAsOwnedImmutableCommitTxnMessageV2 converts an OwnedImmutableMessage to OwnedImmutableCommitTxnMessageV2, panics on error
 var MustAsOwnedImmutableCommitTxnMessageV2 = MustAsSpecializedOwnedImmutableMessage[*CommitTxnMessageHeader, *CommitTxnMessageBody]
 
+// MustAsRetainedImmutableCommitTxnMessageV2 converts a RetainedImmutableMessage to RetainedImmutableCommitTxnMessageV2, panics on error
+var MustAsRetainedImmutableCommitTxnMessageV2 = MustAsSpecializedRetainedImmutableMessage[*CommitTxnMessageHeader, *CommitTxnMessageBody]
+
 // AsBroadcastCommitTxnMessageV2 converts a BasicMessage to BroadcastCommitTxnMessageV2
 var AsBroadcastCommitTxnMessageV2 = asSpecializedBroadcastMessage[*CommitTxnMessageHeader, *CommitTxnMessageBody]
 
@@ -1039,6 +1090,9 @@ var MustAsImmutableRollbackTxnMessageV2 = MustAsSpecializedImmutableMessage[*Rol
 
 // MustAsOwnedImmutableRollbackTxnMessageV2 converts an OwnedImmutableMessage to OwnedImmutableRollbackTxnMessageV2, panics on error
 var MustAsOwnedImmutableRollbackTxnMessageV2 = MustAsSpecializedOwnedImmutableMessage[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
+
+// MustAsRetainedImmutableRollbackTxnMessageV2 converts a RetainedImmutableMessage to RetainedImmutableRollbackTxnMessageV2, panics on error
+var MustAsRetainedImmutableRollbackTxnMessageV2 = MustAsSpecializedRetainedImmutableMessage[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
 
 // AsBroadcastRollbackTxnMessageV2 converts a BasicMessage to BroadcastRollbackTxnMessageV2
 var AsBroadcastRollbackTxnMessageV2 = asSpecializedBroadcastMessage[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
@@ -1110,6 +1164,9 @@ var MustAsImmutableSchemaChangeMessageV2 = MustAsSpecializedImmutableMessage[*Sc
 // MustAsOwnedImmutableSchemaChangeMessageV2 converts an OwnedImmutableMessage to OwnedImmutableSchemaChangeMessageV2, panics on error
 var MustAsOwnedImmutableSchemaChangeMessageV2 = MustAsSpecializedOwnedImmutableMessage[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
 
+// MustAsRetainedImmutableSchemaChangeMessageV2 converts a RetainedImmutableMessage to RetainedImmutableSchemaChangeMessageV2, panics on error
+var MustAsRetainedImmutableSchemaChangeMessageV2 = MustAsSpecializedRetainedImmutableMessage[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
+
 // AsBroadcastSchemaChangeMessageV2 converts a BasicMessage to BroadcastSchemaChangeMessageV2
 var AsBroadcastSchemaChangeMessageV2 = asSpecializedBroadcastMessage[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
 
@@ -1156,6 +1213,9 @@ var MustAsImmutableAlterCollectionMessageV2 = MustAsSpecializedImmutableMessage[
 
 // MustAsOwnedImmutableAlterCollectionMessageV2 converts an OwnedImmutableMessage to OwnedImmutableAlterCollectionMessageV2, panics on error
 var MustAsOwnedImmutableAlterCollectionMessageV2 = MustAsSpecializedOwnedImmutableMessage[*AlterCollectionMessageHeader, *AlterCollectionMessageBody]
+
+// MustAsRetainedImmutableAlterCollectionMessageV2 converts a RetainedImmutableMessage to RetainedImmutableAlterCollectionMessageV2, panics on error
+var MustAsRetainedImmutableAlterCollectionMessageV2 = MustAsSpecializedRetainedImmutableMessage[*AlterCollectionMessageHeader, *AlterCollectionMessageBody]
 
 // AsBroadcastAlterCollectionMessageV2 converts a BasicMessage to BroadcastAlterCollectionMessageV2
 var AsBroadcastAlterCollectionMessageV2 = asSpecializedBroadcastMessage[*AlterCollectionMessageHeader, *AlterCollectionMessageBody]
@@ -1204,6 +1264,9 @@ var MustAsImmutableAlterLoadConfigMessageV2 = MustAsSpecializedImmutableMessage[
 // MustAsOwnedImmutableAlterLoadConfigMessageV2 converts an OwnedImmutableMessage to OwnedImmutableAlterLoadConfigMessageV2, panics on error
 var MustAsOwnedImmutableAlterLoadConfigMessageV2 = MustAsSpecializedOwnedImmutableMessage[*AlterLoadConfigMessageHeader, *AlterLoadConfigMessageBody]
 
+// MustAsRetainedImmutableAlterLoadConfigMessageV2 converts a RetainedImmutableMessage to RetainedImmutableAlterLoadConfigMessageV2, panics on error
+var MustAsRetainedImmutableAlterLoadConfigMessageV2 = MustAsSpecializedRetainedImmutableMessage[*AlterLoadConfigMessageHeader, *AlterLoadConfigMessageBody]
+
 // AsBroadcastAlterLoadConfigMessageV2 converts a BasicMessage to BroadcastAlterLoadConfigMessageV2
 var AsBroadcastAlterLoadConfigMessageV2 = asSpecializedBroadcastMessage[*AlterLoadConfigMessageHeader, *AlterLoadConfigMessageBody]
 
@@ -1250,6 +1313,9 @@ var MustAsImmutableDropLoadConfigMessageV2 = MustAsSpecializedImmutableMessage[*
 
 // MustAsOwnedImmutableDropLoadConfigMessageV2 converts an OwnedImmutableMessage to OwnedImmutableDropLoadConfigMessageV2, panics on error
 var MustAsOwnedImmutableDropLoadConfigMessageV2 = MustAsSpecializedOwnedImmutableMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
+
+// MustAsRetainedImmutableDropLoadConfigMessageV2 converts a RetainedImmutableMessage to RetainedImmutableDropLoadConfigMessageV2, panics on error
+var MustAsRetainedImmutableDropLoadConfigMessageV2 = MustAsSpecializedRetainedImmutableMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
 
 // AsBroadcastDropLoadConfigMessageV2 converts a BasicMessage to BroadcastDropLoadConfigMessageV2
 var AsBroadcastDropLoadConfigMessageV2 = asSpecializedBroadcastMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
@@ -1298,6 +1364,9 @@ var MustAsImmutableCreateDatabaseMessageV2 = MustAsSpecializedImmutableMessage[*
 // MustAsOwnedImmutableCreateDatabaseMessageV2 converts an OwnedImmutableMessage to OwnedImmutableCreateDatabaseMessageV2, panics on error
 var MustAsOwnedImmutableCreateDatabaseMessageV2 = MustAsSpecializedOwnedImmutableMessage[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
 
+// MustAsRetainedImmutableCreateDatabaseMessageV2 converts a RetainedImmutableMessage to RetainedImmutableCreateDatabaseMessageV2, panics on error
+var MustAsRetainedImmutableCreateDatabaseMessageV2 = MustAsSpecializedRetainedImmutableMessage[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
+
 // AsBroadcastCreateDatabaseMessageV2 converts a BasicMessage to BroadcastCreateDatabaseMessageV2
 var AsBroadcastCreateDatabaseMessageV2 = asSpecializedBroadcastMessage[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
 
@@ -1344,6 +1413,9 @@ var MustAsImmutableAlterDatabaseMessageV2 = MustAsSpecializedImmutableMessage[*A
 
 // MustAsOwnedImmutableAlterDatabaseMessageV2 converts an OwnedImmutableMessage to OwnedImmutableAlterDatabaseMessageV2, panics on error
 var MustAsOwnedImmutableAlterDatabaseMessageV2 = MustAsSpecializedOwnedImmutableMessage[*AlterDatabaseMessageHeader, *AlterDatabaseMessageBody]
+
+// MustAsRetainedImmutableAlterDatabaseMessageV2 converts a RetainedImmutableMessage to RetainedImmutableAlterDatabaseMessageV2, panics on error
+var MustAsRetainedImmutableAlterDatabaseMessageV2 = MustAsSpecializedRetainedImmutableMessage[*AlterDatabaseMessageHeader, *AlterDatabaseMessageBody]
 
 // AsBroadcastAlterDatabaseMessageV2 converts a BasicMessage to BroadcastAlterDatabaseMessageV2
 var AsBroadcastAlterDatabaseMessageV2 = asSpecializedBroadcastMessage[*AlterDatabaseMessageHeader, *AlterDatabaseMessageBody]
@@ -1392,6 +1464,9 @@ var MustAsImmutableDropDatabaseMessageV2 = MustAsSpecializedImmutableMessage[*Dr
 // MustAsOwnedImmutableDropDatabaseMessageV2 converts an OwnedImmutableMessage to OwnedImmutableDropDatabaseMessageV2, panics on error
 var MustAsOwnedImmutableDropDatabaseMessageV2 = MustAsSpecializedOwnedImmutableMessage[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
 
+// MustAsRetainedImmutableDropDatabaseMessageV2 converts a RetainedImmutableMessage to RetainedImmutableDropDatabaseMessageV2, panics on error
+var MustAsRetainedImmutableDropDatabaseMessageV2 = MustAsSpecializedRetainedImmutableMessage[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
+
 // AsBroadcastDropDatabaseMessageV2 converts a BasicMessage to BroadcastDropDatabaseMessageV2
 var AsBroadcastDropDatabaseMessageV2 = asSpecializedBroadcastMessage[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
 
@@ -1438,6 +1513,9 @@ var MustAsImmutableAlterAliasMessageV2 = MustAsSpecializedImmutableMessage[*Alte
 
 // MustAsOwnedImmutableAlterAliasMessageV2 converts an OwnedImmutableMessage to OwnedImmutableAlterAliasMessageV2, panics on error
 var MustAsOwnedImmutableAlterAliasMessageV2 = MustAsSpecializedOwnedImmutableMessage[*AlterAliasMessageHeader, *AlterAliasMessageBody]
+
+// MustAsRetainedImmutableAlterAliasMessageV2 converts a RetainedImmutableMessage to RetainedImmutableAlterAliasMessageV2, panics on error
+var MustAsRetainedImmutableAlterAliasMessageV2 = MustAsSpecializedRetainedImmutableMessage[*AlterAliasMessageHeader, *AlterAliasMessageBody]
 
 // AsBroadcastAlterAliasMessageV2 converts a BasicMessage to BroadcastAlterAliasMessageV2
 var AsBroadcastAlterAliasMessageV2 = asSpecializedBroadcastMessage[*AlterAliasMessageHeader, *AlterAliasMessageBody]
@@ -1486,6 +1564,9 @@ var MustAsImmutableDropAliasMessageV2 = MustAsSpecializedImmutableMessage[*DropA
 // MustAsOwnedImmutableDropAliasMessageV2 converts an OwnedImmutableMessage to OwnedImmutableDropAliasMessageV2, panics on error
 var MustAsOwnedImmutableDropAliasMessageV2 = MustAsSpecializedOwnedImmutableMessage[*DropAliasMessageHeader, *DropAliasMessageBody]
 
+// MustAsRetainedImmutableDropAliasMessageV2 converts a RetainedImmutableMessage to RetainedImmutableDropAliasMessageV2, panics on error
+var MustAsRetainedImmutableDropAliasMessageV2 = MustAsSpecializedRetainedImmutableMessage[*DropAliasMessageHeader, *DropAliasMessageBody]
+
 // AsBroadcastDropAliasMessageV2 converts a BasicMessage to BroadcastDropAliasMessageV2
 var AsBroadcastDropAliasMessageV2 = asSpecializedBroadcastMessage[*DropAliasMessageHeader, *DropAliasMessageBody]
 
@@ -1532,6 +1613,9 @@ var MustAsImmutableAlterUserMessageV2 = MustAsSpecializedImmutableMessage[*Alter
 
 // MustAsOwnedImmutableAlterUserMessageV2 converts an OwnedImmutableMessage to OwnedImmutableAlterUserMessageV2, panics on error
 var MustAsOwnedImmutableAlterUserMessageV2 = MustAsSpecializedOwnedImmutableMessage[*AlterUserMessageHeader, *AlterUserMessageBody]
+
+// MustAsRetainedImmutableAlterUserMessageV2 converts a RetainedImmutableMessage to RetainedImmutableAlterUserMessageV2, panics on error
+var MustAsRetainedImmutableAlterUserMessageV2 = MustAsSpecializedRetainedImmutableMessage[*AlterUserMessageHeader, *AlterUserMessageBody]
 
 // AsBroadcastAlterUserMessageV2 converts a BasicMessage to BroadcastAlterUserMessageV2
 var AsBroadcastAlterUserMessageV2 = asSpecializedBroadcastMessage[*AlterUserMessageHeader, *AlterUserMessageBody]
@@ -1580,6 +1664,9 @@ var MustAsImmutableDropUserMessageV2 = MustAsSpecializedImmutableMessage[*DropUs
 // MustAsOwnedImmutableDropUserMessageV2 converts an OwnedImmutableMessage to OwnedImmutableDropUserMessageV2, panics on error
 var MustAsOwnedImmutableDropUserMessageV2 = MustAsSpecializedOwnedImmutableMessage[*DropUserMessageHeader, *DropUserMessageBody]
 
+// MustAsRetainedImmutableDropUserMessageV2 converts a RetainedImmutableMessage to RetainedImmutableDropUserMessageV2, panics on error
+var MustAsRetainedImmutableDropUserMessageV2 = MustAsSpecializedRetainedImmutableMessage[*DropUserMessageHeader, *DropUserMessageBody]
+
 // AsBroadcastDropUserMessageV2 converts a BasicMessage to BroadcastDropUserMessageV2
 var AsBroadcastDropUserMessageV2 = asSpecializedBroadcastMessage[*DropUserMessageHeader, *DropUserMessageBody]
 
@@ -1626,6 +1713,9 @@ var MustAsImmutableAlterRoleMessageV2 = MustAsSpecializedImmutableMessage[*Alter
 
 // MustAsOwnedImmutableAlterRoleMessageV2 converts an OwnedImmutableMessage to OwnedImmutableAlterRoleMessageV2, panics on error
 var MustAsOwnedImmutableAlterRoleMessageV2 = MustAsSpecializedOwnedImmutableMessage[*AlterRoleMessageHeader, *AlterRoleMessageBody]
+
+// MustAsRetainedImmutableAlterRoleMessageV2 converts a RetainedImmutableMessage to RetainedImmutableAlterRoleMessageV2, panics on error
+var MustAsRetainedImmutableAlterRoleMessageV2 = MustAsSpecializedRetainedImmutableMessage[*AlterRoleMessageHeader, *AlterRoleMessageBody]
 
 // AsBroadcastAlterRoleMessageV2 converts a BasicMessage to BroadcastAlterRoleMessageV2
 var AsBroadcastAlterRoleMessageV2 = asSpecializedBroadcastMessage[*AlterRoleMessageHeader, *AlterRoleMessageBody]
@@ -1674,6 +1764,9 @@ var MustAsImmutableDropRoleMessageV2 = MustAsSpecializedImmutableMessage[*DropRo
 // MustAsOwnedImmutableDropRoleMessageV2 converts an OwnedImmutableMessage to OwnedImmutableDropRoleMessageV2, panics on error
 var MustAsOwnedImmutableDropRoleMessageV2 = MustAsSpecializedOwnedImmutableMessage[*DropRoleMessageHeader, *DropRoleMessageBody]
 
+// MustAsRetainedImmutableDropRoleMessageV2 converts a RetainedImmutableMessage to RetainedImmutableDropRoleMessageV2, panics on error
+var MustAsRetainedImmutableDropRoleMessageV2 = MustAsSpecializedRetainedImmutableMessage[*DropRoleMessageHeader, *DropRoleMessageBody]
+
 // AsBroadcastDropRoleMessageV2 converts a BasicMessage to BroadcastDropRoleMessageV2
 var AsBroadcastDropRoleMessageV2 = asSpecializedBroadcastMessage[*DropRoleMessageHeader, *DropRoleMessageBody]
 
@@ -1720,6 +1813,9 @@ var MustAsImmutableAlterUserRoleMessageV2 = MustAsSpecializedImmutableMessage[*A
 
 // MustAsOwnedImmutableAlterUserRoleMessageV2 converts an OwnedImmutableMessage to OwnedImmutableAlterUserRoleMessageV2, panics on error
 var MustAsOwnedImmutableAlterUserRoleMessageV2 = MustAsSpecializedOwnedImmutableMessage[*AlterUserRoleMessageHeader, *AlterUserRoleMessageBody]
+
+// MustAsRetainedImmutableAlterUserRoleMessageV2 converts a RetainedImmutableMessage to RetainedImmutableAlterUserRoleMessageV2, panics on error
+var MustAsRetainedImmutableAlterUserRoleMessageV2 = MustAsSpecializedRetainedImmutableMessage[*AlterUserRoleMessageHeader, *AlterUserRoleMessageBody]
 
 // AsBroadcastAlterUserRoleMessageV2 converts a BasicMessage to BroadcastAlterUserRoleMessageV2
 var AsBroadcastAlterUserRoleMessageV2 = asSpecializedBroadcastMessage[*AlterUserRoleMessageHeader, *AlterUserRoleMessageBody]
@@ -1768,6 +1864,9 @@ var MustAsImmutableDropUserRoleMessageV2 = MustAsSpecializedImmutableMessage[*Dr
 // MustAsOwnedImmutableDropUserRoleMessageV2 converts an OwnedImmutableMessage to OwnedImmutableDropUserRoleMessageV2, panics on error
 var MustAsOwnedImmutableDropUserRoleMessageV2 = MustAsSpecializedOwnedImmutableMessage[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
 
+// MustAsRetainedImmutableDropUserRoleMessageV2 converts a RetainedImmutableMessage to RetainedImmutableDropUserRoleMessageV2, panics on error
+var MustAsRetainedImmutableDropUserRoleMessageV2 = MustAsSpecializedRetainedImmutableMessage[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
+
 // AsBroadcastDropUserRoleMessageV2 converts a BasicMessage to BroadcastDropUserRoleMessageV2
 var AsBroadcastDropUserRoleMessageV2 = asSpecializedBroadcastMessage[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
 
@@ -1814,6 +1913,9 @@ var MustAsImmutableAlterPrivilegeMessageV2 = MustAsSpecializedImmutableMessage[*
 
 // MustAsOwnedImmutableAlterPrivilegeMessageV2 converts an OwnedImmutableMessage to OwnedImmutableAlterPrivilegeMessageV2, panics on error
 var MustAsOwnedImmutableAlterPrivilegeMessageV2 = MustAsSpecializedOwnedImmutableMessage[*AlterPrivilegeMessageHeader, *AlterPrivilegeMessageBody]
+
+// MustAsRetainedImmutableAlterPrivilegeMessageV2 converts a RetainedImmutableMessage to RetainedImmutableAlterPrivilegeMessageV2, panics on error
+var MustAsRetainedImmutableAlterPrivilegeMessageV2 = MustAsSpecializedRetainedImmutableMessage[*AlterPrivilegeMessageHeader, *AlterPrivilegeMessageBody]
 
 // AsBroadcastAlterPrivilegeMessageV2 converts a BasicMessage to BroadcastAlterPrivilegeMessageV2
 var AsBroadcastAlterPrivilegeMessageV2 = asSpecializedBroadcastMessage[*AlterPrivilegeMessageHeader, *AlterPrivilegeMessageBody]
@@ -1862,6 +1964,9 @@ var MustAsImmutableDropPrivilegeMessageV2 = MustAsSpecializedImmutableMessage[*D
 // MustAsOwnedImmutableDropPrivilegeMessageV2 converts an OwnedImmutableMessage to OwnedImmutableDropPrivilegeMessageV2, panics on error
 var MustAsOwnedImmutableDropPrivilegeMessageV2 = MustAsSpecializedOwnedImmutableMessage[*DropPrivilegeMessageHeader, *DropPrivilegeMessageBody]
 
+// MustAsRetainedImmutableDropPrivilegeMessageV2 converts a RetainedImmutableMessage to RetainedImmutableDropPrivilegeMessageV2, panics on error
+var MustAsRetainedImmutableDropPrivilegeMessageV2 = MustAsSpecializedRetainedImmutableMessage[*DropPrivilegeMessageHeader, *DropPrivilegeMessageBody]
+
 // AsBroadcastDropPrivilegeMessageV2 converts a BasicMessage to BroadcastDropPrivilegeMessageV2
 var AsBroadcastDropPrivilegeMessageV2 = asSpecializedBroadcastMessage[*DropPrivilegeMessageHeader, *DropPrivilegeMessageBody]
 
@@ -1908,6 +2013,9 @@ var MustAsImmutableAlterPrivilegeGroupMessageV2 = MustAsSpecializedImmutableMess
 
 // MustAsOwnedImmutableAlterPrivilegeGroupMessageV2 converts an OwnedImmutableMessage to OwnedImmutableAlterPrivilegeGroupMessageV2, panics on error
 var MustAsOwnedImmutableAlterPrivilegeGroupMessageV2 = MustAsSpecializedOwnedImmutableMessage[*AlterPrivilegeGroupMessageHeader, *AlterPrivilegeGroupMessageBody]
+
+// MustAsRetainedImmutableAlterPrivilegeGroupMessageV2 converts a RetainedImmutableMessage to RetainedImmutableAlterPrivilegeGroupMessageV2, panics on error
+var MustAsRetainedImmutableAlterPrivilegeGroupMessageV2 = MustAsSpecializedRetainedImmutableMessage[*AlterPrivilegeGroupMessageHeader, *AlterPrivilegeGroupMessageBody]
 
 // AsBroadcastAlterPrivilegeGroupMessageV2 converts a BasicMessage to BroadcastAlterPrivilegeGroupMessageV2
 var AsBroadcastAlterPrivilegeGroupMessageV2 = asSpecializedBroadcastMessage[*AlterPrivilegeGroupMessageHeader, *AlterPrivilegeGroupMessageBody]
@@ -1956,6 +2064,9 @@ var MustAsImmutableDropPrivilegeGroupMessageV2 = MustAsSpecializedImmutableMessa
 // MustAsOwnedImmutableDropPrivilegeGroupMessageV2 converts an OwnedImmutableMessage to OwnedImmutableDropPrivilegeGroupMessageV2, panics on error
 var MustAsOwnedImmutableDropPrivilegeGroupMessageV2 = MustAsSpecializedOwnedImmutableMessage[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
 
+// MustAsRetainedImmutableDropPrivilegeGroupMessageV2 converts a RetainedImmutableMessage to RetainedImmutableDropPrivilegeGroupMessageV2, panics on error
+var MustAsRetainedImmutableDropPrivilegeGroupMessageV2 = MustAsSpecializedRetainedImmutableMessage[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
+
 // AsBroadcastDropPrivilegeGroupMessageV2 converts a BasicMessage to BroadcastDropPrivilegeGroupMessageV2
 var AsBroadcastDropPrivilegeGroupMessageV2 = asSpecializedBroadcastMessage[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
 
@@ -2002,6 +2113,9 @@ var MustAsImmutableRestoreRBACMessageV2 = MustAsSpecializedImmutableMessage[*Res
 
 // MustAsOwnedImmutableRestoreRBACMessageV2 converts an OwnedImmutableMessage to OwnedImmutableRestoreRBACMessageV2, panics on error
 var MustAsOwnedImmutableRestoreRBACMessageV2 = MustAsSpecializedOwnedImmutableMessage[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
+
+// MustAsRetainedImmutableRestoreRBACMessageV2 converts a RetainedImmutableMessage to RetainedImmutableRestoreRBACMessageV2, panics on error
+var MustAsRetainedImmutableRestoreRBACMessageV2 = MustAsSpecializedRetainedImmutableMessage[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
 
 // AsBroadcastRestoreRBACMessageV2 converts a BasicMessage to BroadcastRestoreRBACMessageV2
 var AsBroadcastRestoreRBACMessageV2 = asSpecializedBroadcastMessage[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
@@ -2050,6 +2164,9 @@ var MustAsImmutableAlterResourceGroupMessageV2 = MustAsSpecializedImmutableMessa
 // MustAsOwnedImmutableAlterResourceGroupMessageV2 converts an OwnedImmutableMessage to OwnedImmutableAlterResourceGroupMessageV2, panics on error
 var MustAsOwnedImmutableAlterResourceGroupMessageV2 = MustAsSpecializedOwnedImmutableMessage[*AlterResourceGroupMessageHeader, *AlterResourceGroupMessageBody]
 
+// MustAsRetainedImmutableAlterResourceGroupMessageV2 converts a RetainedImmutableMessage to RetainedImmutableAlterResourceGroupMessageV2, panics on error
+var MustAsRetainedImmutableAlterResourceGroupMessageV2 = MustAsSpecializedRetainedImmutableMessage[*AlterResourceGroupMessageHeader, *AlterResourceGroupMessageBody]
+
 // AsBroadcastAlterResourceGroupMessageV2 converts a BasicMessage to BroadcastAlterResourceGroupMessageV2
 var AsBroadcastAlterResourceGroupMessageV2 = asSpecializedBroadcastMessage[*AlterResourceGroupMessageHeader, *AlterResourceGroupMessageBody]
 
@@ -2096,6 +2213,9 @@ var MustAsImmutableDropResourceGroupMessageV2 = MustAsSpecializedImmutableMessag
 
 // MustAsOwnedImmutableDropResourceGroupMessageV2 converts an OwnedImmutableMessage to OwnedImmutableDropResourceGroupMessageV2, panics on error
 var MustAsOwnedImmutableDropResourceGroupMessageV2 = MustAsSpecializedOwnedImmutableMessage[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
+
+// MustAsRetainedImmutableDropResourceGroupMessageV2 converts a RetainedImmutableMessage to RetainedImmutableDropResourceGroupMessageV2, panics on error
+var MustAsRetainedImmutableDropResourceGroupMessageV2 = MustAsSpecializedRetainedImmutableMessage[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
 
 // AsBroadcastDropResourceGroupMessageV2 converts a BasicMessage to BroadcastDropResourceGroupMessageV2
 var AsBroadcastDropResourceGroupMessageV2 = asSpecializedBroadcastMessage[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
@@ -2144,6 +2264,9 @@ var MustAsImmutableCreateIndexMessageV2 = MustAsSpecializedImmutableMessage[*Cre
 // MustAsOwnedImmutableCreateIndexMessageV2 converts an OwnedImmutableMessage to OwnedImmutableCreateIndexMessageV2, panics on error
 var MustAsOwnedImmutableCreateIndexMessageV2 = MustAsSpecializedOwnedImmutableMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
 
+// MustAsRetainedImmutableCreateIndexMessageV2 converts a RetainedImmutableMessage to RetainedImmutableCreateIndexMessageV2, panics on error
+var MustAsRetainedImmutableCreateIndexMessageV2 = MustAsSpecializedRetainedImmutableMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
+
 // AsBroadcastCreateIndexMessageV2 converts a BasicMessage to BroadcastCreateIndexMessageV2
 var AsBroadcastCreateIndexMessageV2 = asSpecializedBroadcastMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
 
@@ -2190,6 +2313,9 @@ var MustAsImmutableAlterIndexMessageV2 = MustAsSpecializedImmutableMessage[*Alte
 
 // MustAsOwnedImmutableAlterIndexMessageV2 converts an OwnedImmutableMessage to OwnedImmutableAlterIndexMessageV2, panics on error
 var MustAsOwnedImmutableAlterIndexMessageV2 = MustAsSpecializedOwnedImmutableMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
+
+// MustAsRetainedImmutableAlterIndexMessageV2 converts a RetainedImmutableMessage to RetainedImmutableAlterIndexMessageV2, panics on error
+var MustAsRetainedImmutableAlterIndexMessageV2 = MustAsSpecializedRetainedImmutableMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
 
 // AsBroadcastAlterIndexMessageV2 converts a BasicMessage to BroadcastAlterIndexMessageV2
 var AsBroadcastAlterIndexMessageV2 = asSpecializedBroadcastMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
@@ -2238,6 +2364,9 @@ var MustAsImmutableDropIndexMessageV2 = MustAsSpecializedImmutableMessage[*DropI
 // MustAsOwnedImmutableDropIndexMessageV2 converts an OwnedImmutableMessage to OwnedImmutableDropIndexMessageV2, panics on error
 var MustAsOwnedImmutableDropIndexMessageV2 = MustAsSpecializedOwnedImmutableMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
 
+// MustAsRetainedImmutableDropIndexMessageV2 converts a RetainedImmutableMessage to RetainedImmutableDropIndexMessageV2, panics on error
+var MustAsRetainedImmutableDropIndexMessageV2 = MustAsSpecializedRetainedImmutableMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
+
 // AsBroadcastDropIndexMessageV2 converts a BasicMessage to BroadcastDropIndexMessageV2
 var AsBroadcastDropIndexMessageV2 = asSpecializedBroadcastMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
 
@@ -2284,6 +2413,9 @@ var MustAsImmutableFlushAllMessageV2 = MustAsSpecializedImmutableMessage[*FlushA
 
 // MustAsOwnedImmutableFlushAllMessageV2 converts an OwnedImmutableMessage to OwnedImmutableFlushAllMessageV2, panics on error
 var MustAsOwnedImmutableFlushAllMessageV2 = MustAsSpecializedOwnedImmutableMessage[*FlushAllMessageHeader, *FlushAllMessageBody]
+
+// MustAsRetainedImmutableFlushAllMessageV2 converts a RetainedImmutableMessage to RetainedImmutableFlushAllMessageV2, panics on error
+var MustAsRetainedImmutableFlushAllMessageV2 = MustAsSpecializedRetainedImmutableMessage[*FlushAllMessageHeader, *FlushAllMessageBody]
 
 // AsBroadcastFlushAllMessageV2 converts a BasicMessage to BroadcastFlushAllMessageV2
 var AsBroadcastFlushAllMessageV2 = asSpecializedBroadcastMessage[*FlushAllMessageHeader, *FlushAllMessageBody]
@@ -2332,6 +2464,9 @@ var MustAsImmutableCreateSnapshotMessageV2 = MustAsSpecializedImmutableMessage[*
 // MustAsOwnedImmutableCreateSnapshotMessageV2 converts an OwnedImmutableMessage to OwnedImmutableCreateSnapshotMessageV2, panics on error
 var MustAsOwnedImmutableCreateSnapshotMessageV2 = MustAsSpecializedOwnedImmutableMessage[*CreateSnapshotMessageHeader, *CreateSnapshotMessageBody]
 
+// MustAsRetainedImmutableCreateSnapshotMessageV2 converts a RetainedImmutableMessage to RetainedImmutableCreateSnapshotMessageV2, panics on error
+var MustAsRetainedImmutableCreateSnapshotMessageV2 = MustAsSpecializedRetainedImmutableMessage[*CreateSnapshotMessageHeader, *CreateSnapshotMessageBody]
+
 // AsBroadcastCreateSnapshotMessageV2 converts a BasicMessage to BroadcastCreateSnapshotMessageV2
 var AsBroadcastCreateSnapshotMessageV2 = asSpecializedBroadcastMessage[*CreateSnapshotMessageHeader, *CreateSnapshotMessageBody]
 
@@ -2378,6 +2513,9 @@ var MustAsImmutableDropSnapshotMessageV2 = MustAsSpecializedImmutableMessage[*Dr
 
 // MustAsOwnedImmutableDropSnapshotMessageV2 converts an OwnedImmutableMessage to OwnedImmutableDropSnapshotMessageV2, panics on error
 var MustAsOwnedImmutableDropSnapshotMessageV2 = MustAsSpecializedOwnedImmutableMessage[*DropSnapshotMessageHeader, *DropSnapshotMessageBody]
+
+// MustAsRetainedImmutableDropSnapshotMessageV2 converts a RetainedImmutableMessage to RetainedImmutableDropSnapshotMessageV2, panics on error
+var MustAsRetainedImmutableDropSnapshotMessageV2 = MustAsSpecializedRetainedImmutableMessage[*DropSnapshotMessageHeader, *DropSnapshotMessageBody]
 
 // AsBroadcastDropSnapshotMessageV2 converts a BasicMessage to BroadcastDropSnapshotMessageV2
 var AsBroadcastDropSnapshotMessageV2 = asSpecializedBroadcastMessage[*DropSnapshotMessageHeader, *DropSnapshotMessageBody]
@@ -2426,6 +2564,9 @@ var MustAsImmutableRestoreSnapshotMessageV2 = MustAsSpecializedImmutableMessage[
 // MustAsOwnedImmutableRestoreSnapshotMessageV2 converts an OwnedImmutableMessage to OwnedImmutableRestoreSnapshotMessageV2, panics on error
 var MustAsOwnedImmutableRestoreSnapshotMessageV2 = MustAsSpecializedOwnedImmutableMessage[*RestoreSnapshotMessageHeader, *RestoreSnapshotMessageBody]
 
+// MustAsRetainedImmutableRestoreSnapshotMessageV2 converts a RetainedImmutableMessage to RetainedImmutableRestoreSnapshotMessageV2, panics on error
+var MustAsRetainedImmutableRestoreSnapshotMessageV2 = MustAsSpecializedRetainedImmutableMessage[*RestoreSnapshotMessageHeader, *RestoreSnapshotMessageBody]
+
 // AsBroadcastRestoreSnapshotMessageV2 converts a BasicMessage to BroadcastRestoreSnapshotMessageV2
 var AsBroadcastRestoreSnapshotMessageV2 = asSpecializedBroadcastMessage[*RestoreSnapshotMessageHeader, *RestoreSnapshotMessageBody]
 
@@ -2472,6 +2613,9 @@ var MustAsImmutableDropSnapshotsByCollectionMessageV2 = MustAsSpecializedImmutab
 
 // MustAsOwnedImmutableDropSnapshotsByCollectionMessageV2 converts an OwnedImmutableMessage to OwnedImmutableDropSnapshotsByCollectionMessageV2, panics on error
 var MustAsOwnedImmutableDropSnapshotsByCollectionMessageV2 = MustAsSpecializedOwnedImmutableMessage[*DropSnapshotsByCollectionMessageHeader, *DropSnapshotsByCollectionMessageBody]
+
+// MustAsRetainedImmutableDropSnapshotsByCollectionMessageV2 converts a RetainedImmutableMessage to RetainedImmutableDropSnapshotsByCollectionMessageV2, panics on error
+var MustAsRetainedImmutableDropSnapshotsByCollectionMessageV2 = MustAsSpecializedRetainedImmutableMessage[*DropSnapshotsByCollectionMessageHeader, *DropSnapshotsByCollectionMessageBody]
 
 // AsBroadcastDropSnapshotsByCollectionMessageV2 converts a BasicMessage to BroadcastDropSnapshotsByCollectionMessageV2
 var AsBroadcastDropSnapshotsByCollectionMessageV2 = asSpecializedBroadcastMessage[*DropSnapshotsByCollectionMessageHeader, *DropSnapshotsByCollectionMessageBody]
@@ -2520,6 +2664,9 @@ var MustAsImmutableAlterWALMessageV2 = MustAsSpecializedImmutableMessage[*AlterW
 // MustAsOwnedImmutableAlterWALMessageV2 converts an OwnedImmutableMessage to OwnedImmutableAlterWALMessageV2, panics on error
 var MustAsOwnedImmutableAlterWALMessageV2 = MustAsSpecializedOwnedImmutableMessage[*AlterWALMessageHeader, *AlterWALMessageBody]
 
+// MustAsRetainedImmutableAlterWALMessageV2 converts a RetainedImmutableMessage to RetainedImmutableAlterWALMessageV2, panics on error
+var MustAsRetainedImmutableAlterWALMessageV2 = MustAsSpecializedRetainedImmutableMessage[*AlterWALMessageHeader, *AlterWALMessageBody]
+
 // AsBroadcastAlterWALMessageV2 converts a BasicMessage to BroadcastAlterWALMessageV2
 var AsBroadcastAlterWALMessageV2 = asSpecializedBroadcastMessage[*AlterWALMessageHeader, *AlterWALMessageBody]
 
@@ -2566,6 +2713,9 @@ var MustAsImmutableRecoveryBarrierMessageV2 = MustAsSpecializedImmutableMessage[
 
 // MustAsOwnedImmutableRecoveryBarrierMessageV2 converts an OwnedImmutableMessage to OwnedImmutableRecoveryBarrierMessageV2, panics on error
 var MustAsOwnedImmutableRecoveryBarrierMessageV2 = MustAsSpecializedOwnedImmutableMessage[*RecoveryBarrierMessageHeader, *RecoveryBarrierMessageBody]
+
+// MustAsRetainedImmutableRecoveryBarrierMessageV2 converts a RetainedImmutableMessage to RetainedImmutableRecoveryBarrierMessageV2, panics on error
+var MustAsRetainedImmutableRecoveryBarrierMessageV2 = MustAsSpecializedRetainedImmutableMessage[*RecoveryBarrierMessageHeader, *RecoveryBarrierMessageBody]
 
 // AsBroadcastRecoveryBarrierMessageV2 converts a BasicMessage to BroadcastRecoveryBarrierMessageV2
 var AsBroadcastRecoveryBarrierMessageV2 = asSpecializedBroadcastMessage[*RecoveryBarrierMessageHeader, *RecoveryBarrierMessageBody]
@@ -2614,6 +2764,9 @@ var MustAsImmutableBatchUpdateManifestMessageV2 = MustAsSpecializedImmutableMess
 // MustAsOwnedImmutableBatchUpdateManifestMessageV2 converts an OwnedImmutableMessage to OwnedImmutableBatchUpdateManifestMessageV2, panics on error
 var MustAsOwnedImmutableBatchUpdateManifestMessageV2 = MustAsSpecializedOwnedImmutableMessage[*BatchUpdateManifestMessageHeader, *BatchUpdateManifestMessageBody]
 
+// MustAsRetainedImmutableBatchUpdateManifestMessageV2 converts a RetainedImmutableMessage to RetainedImmutableBatchUpdateManifestMessageV2, panics on error
+var MustAsRetainedImmutableBatchUpdateManifestMessageV2 = MustAsSpecializedRetainedImmutableMessage[*BatchUpdateManifestMessageHeader, *BatchUpdateManifestMessageBody]
+
 // AsBroadcastBatchUpdateManifestMessageV2 converts a BasicMessage to BroadcastBatchUpdateManifestMessageV2
 var AsBroadcastBatchUpdateManifestMessageV2 = asSpecializedBroadcastMessage[*BatchUpdateManifestMessageHeader, *BatchUpdateManifestMessageBody]
 
@@ -2660,6 +2813,9 @@ var MustAsImmutableRefreshExternalCollectionMessageV2 = MustAsSpecializedImmutab
 
 // MustAsOwnedImmutableRefreshExternalCollectionMessageV2 converts an OwnedImmutableMessage to OwnedImmutableRefreshExternalCollectionMessageV2, panics on error
 var MustAsOwnedImmutableRefreshExternalCollectionMessageV2 = MustAsSpecializedOwnedImmutableMessage[*RefreshExternalCollectionMessageHeader, *RefreshExternalCollectionMessageBody]
+
+// MustAsRetainedImmutableRefreshExternalCollectionMessageV2 converts a RetainedImmutableMessage to RetainedImmutableRefreshExternalCollectionMessageV2, panics on error
+var MustAsRetainedImmutableRefreshExternalCollectionMessageV2 = MustAsSpecializedRetainedImmutableMessage[*RefreshExternalCollectionMessageHeader, *RefreshExternalCollectionMessageBody]
 
 // AsBroadcastRefreshExternalCollectionMessageV2 converts a BasicMessage to BroadcastRefreshExternalCollectionMessageV2
 var AsBroadcastRefreshExternalCollectionMessageV2 = asSpecializedBroadcastMessage[*RefreshExternalCollectionMessageHeader, *RefreshExternalCollectionMessageBody]

@@ -17,7 +17,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/walimplstest"
 )
 
-func TestBroadcastAckReleasesOwnerAndWaitsForTrackerCompletion(t *testing.T) {
+func TestBroadcastAckHoldsOwnerUntilExclusiveAndAckSucceeds(t *testing.T) {
 	scheduler := &recordingAckTaskScheduler{}
 	module := newBroadcastAckModule(moduleapi.Runtime{Scheduler: scheduler})
 	module.retryDelay = time.Millisecond
@@ -27,20 +27,23 @@ func TestBroadcastAckReleasesOwnerAndWaitsForTrackerCompletion(t *testing.T) {
 		WithHeader(&message.CreateCollectionMessageHeader{CollectionId: 1, PartitionIds: []int64{10}}).
 		WithBody(&msgpb.CreateCollectionRequest{}))
 	tracker := messageack.NewTracker(utility.WALConsumeCheckpoint{}, nil)
-	owner, tracked := tracker.Track(msg)
+	owner := tracker.Track(msg)
 	other := owner.Clone()
 
-	module.Accept(owner, tracked)
+	module.Accept(owner)
 
 	require.Empty(t, scheduler.snapshot())
-	assert.Panics(t, func() { _ = owner.Message() })
+	assert.Same(t, msg, owner.Message())
+	assert.Zero(t, tracker.CompletedPoint().TimeTick)
 
 	other.Release()
 	task := scheduler.waitTask(t)
 	require.NoError(t, task.Execute(context.Background()))
+	assert.Panics(t, func() { _ = owner.Message() })
+	assert.Equal(t, msg.TimeTick(), tracker.CompletedPoint().TimeTick)
 }
 
-func TestBroadcastAckOnlyReleasesOwner(t *testing.T) {
+func TestBroadcastAckSubmitsExclusiveOwnerImmediately(t *testing.T) {
 	scheduler := &recordingAckTaskScheduler{}
 	module := newBroadcastAckModule(moduleapi.Runtime{Scheduler: scheduler})
 	module.retryDelay = time.Millisecond
@@ -50,14 +53,14 @@ func TestBroadcastAckOnlyReleasesOwner(t *testing.T) {
 		WithHeader(&message.CreateCollectionMessageHeader{CollectionId: 1}).
 		WithBody(&msgpb.CreateCollectionRequest{}))
 	tracker := messageack.NewTracker(utility.WALConsumeCheckpoint{}, nil)
-	owner, tracked := tracker.Track(msg)
-	releaseOnly := &releaseOnlyMessageOwner{owner: owner}
+	owner := tracker.Track(msg)
 
-	module.Accept(releaseOnly, tracked)
+	module.Accept(owner)
 
-	assert.True(t, releaseOnly.released)
+	assert.Same(t, msg, owner.Message())
 	task := scheduler.waitTask(t)
 	require.NoError(t, task.Execute(context.Background()))
+	assert.Panics(t, func() { _ = owner.Message() })
 }
 
 func TestBroadcastAckReleasesNonBroadcastOwnerImmediately(t *testing.T) {
@@ -66,9 +69,9 @@ func TestBroadcastAckReleasesNonBroadcastOwnerImmediately(t *testing.T) {
 	raw := message.CreateTestTimeTickSyncMessage(t, 1, 20, walimplstest.NewTestMessageID(10)).
 		IntoImmutableMessage(walimplstest.NewTestMessageID(11))
 	tracker := messageack.NewTracker(utility.WALConsumeCheckpoint{}, nil)
-	owner, tracked := tracker.Track(raw)
+	owner := tracker.Track(raw)
 
-	module.Accept(owner, tracked)
+	module.Accept(owner)
 
 	assert.Equal(t, raw.TimeTick(), tracker.CompletedPoint().TimeTick)
 	assert.Empty(t, scheduler.snapshot())
@@ -91,17 +94,18 @@ func TestBroadcastAckRetriesSameQueueHeadAfterFailure(t *testing.T) {
 		WithHeader(&message.CreateCollectionMessageHeader{CollectionId: 1, PartitionIds: []int64{10}}).
 		WithBody(&msgpb.CreateCollectionRequest{}))
 	tracker := messageack.NewTracker(utility.WALConsumeCheckpoint{}, nil)
-	owner, tracked := tracker.Track(msg)
-	module.Accept(owner, tracked)
+	owner := tracker.Track(msg)
+	module.Accept(owner)
 
 	first := scheduler.waitTask(t)
 	require.NoError(t, first.Execute(context.Background()))
-	assert.Panics(t, func() { _ = owner.Message() })
+	assert.Same(t, msg, owner.Message())
 
 	retry := scheduler.waitTaskAfter(t, 1)
 	require.NoError(t, retry.Execute(context.Background()))
 	assert.Equal(t, 2, attempts)
 	assert.Panics(t, func() { _ = owner.Message() })
+	assert.Equal(t, msg.TimeTick(), tracker.CompletedPoint().TimeTick)
 }
 
 func TestBroadcastAckKeepsFIFOUntilQueueHeadSucceeds(t *testing.T) {
@@ -128,22 +132,22 @@ func TestBroadcastAckKeepsFIFOUntilQueueHeadSucceeds(t *testing.T) {
 	firstTimeTick := firstMsg.TimeTick()
 	secondTimeTick := secondMsg.TimeTick()
 	tracker := messageack.NewTracker(utility.WALConsumeCheckpoint{}, nil)
-	firstOwner, firstTracked := tracker.Track(firstMsg)
-	secondOwner, secondTracked := tracker.Track(secondMsg)
+	firstOwner := tracker.Track(firstMsg)
+	secondOwner := tracker.Track(secondMsg)
 
-	module.Accept(firstOwner, firstTracked)
-	module.Accept(secondOwner, secondTracked)
+	module.Accept(firstOwner)
+	module.Accept(secondOwner)
 	firstTask := scheduler.waitTask(t)
 
 	require.NoError(t, firstTask.Execute(context.Background()))
 	assert.Empty(t, acked)
-	assert.Panics(t, func() { _ = firstOwner.Message() })
-	assert.Panics(t, func() { _ = secondOwner.Message() })
+	assert.Same(t, firstMsg, firstOwner.Message())
+	assert.Same(t, secondMsg, secondOwner.Message())
 
 	retryTask := scheduler.waitTaskAfter(t, 1)
 	require.NoError(t, retryTask.Execute(context.Background()))
 	assert.Panics(t, func() { _ = firstOwner.Message() })
-	assert.Panics(t, func() { _ = secondOwner.Message() })
+	assert.Same(t, secondMsg, secondOwner.Message())
 	secondTask := scheduler.waitTaskAfter(t, 2)
 	require.NoError(t, secondTask.Execute(context.Background()))
 	assert.Panics(t, func() { _ = secondOwner.Message() })
@@ -158,15 +162,16 @@ func TestBroadcastAckCloseCancelsPendingConsumerWait(t *testing.T) {
 		WithHeader(&message.CreateCollectionMessageHeader{CollectionId: 1}).
 		WithBody(&msgpb.CreateCollectionRequest{}))
 	tracker := messageack.NewTracker(utility.WALConsumeCheckpoint{}, nil)
-	owner, tracked := tracker.Track(msg)
+	owner := tracker.Track(msg)
 	consumer := owner.Clone()
 
-	module.Accept(owner, tracked)
+	module.Accept(owner)
 	module.Close()
 	consumer.Release()
 
 	assert.Empty(t, scheduler.snapshot())
 	assert.Zero(t, tracker.CompletedPoint().TimeTick)
+	assert.Same(t, msg, owner.Message())
 }
 
 func TestBroadcastAckCloseCancelsPendingRetry(t *testing.T) {
@@ -181,8 +186,8 @@ func TestBroadcastAckCloseCancelsPendingRetry(t *testing.T) {
 		WithHeader(&message.CreateCollectionMessageHeader{CollectionId: 1}).
 		WithBody(&msgpb.CreateCollectionRequest{}))
 	tracker := messageack.NewTracker(utility.WALConsumeCheckpoint{}, nil)
-	owner, tracked := tracker.Track(msg)
-	module.Accept(owner, tracked)
+	owner := tracker.Track(msg)
+	module.Accept(owner)
 
 	first := scheduler.waitTask(t)
 	require.NoError(t, first.Execute(context.Background()))
@@ -190,22 +195,5 @@ func TestBroadcastAckCloseCancelsPendingRetry(t *testing.T) {
 
 	assert.Len(t, scheduler.snapshot(), 1)
 	assert.Zero(t, tracker.CompletedPoint().TimeTick)
-}
-
-type releaseOnlyMessageOwner struct {
-	owner    message.OwnedImmutableMessage
-	released bool
-}
-
-func (*releaseOnlyMessageOwner) Message() message.ImmutableMessage {
-	panic("broadcast ack must not read the owner")
-}
-
-func (*releaseOnlyMessageOwner) Clone() message.RetainedImmutableMessage {
-	panic("broadcast ack must not clone the owner")
-}
-
-func (o *releaseOnlyMessageOwner) Release() {
-	o.released = true
-	o.owner.Release()
+	assert.Same(t, msg, owner.Message())
 }

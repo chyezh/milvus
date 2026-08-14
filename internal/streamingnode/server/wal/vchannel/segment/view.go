@@ -186,7 +186,7 @@ func (s *SegmentView) HasDirty() bool {
 
 func (s *SegmentView) ObserveCreateSegmentMessageV2(
 	_ context.Context,
-	owned message.OwnedImmutableCreateSegmentMessageV2,
+	owned message.RetainedImmutableCreateSegmentMessageV2,
 ) bool {
 	msg := owned.Message()
 	s.mu.Lock()
@@ -210,7 +210,7 @@ func (s *SegmentView) ObserveCreateSegmentMessageV2(
 
 func (s *SegmentView) ObserveInsertMessageV1(
 	_ context.Context,
-	owned message.OwnedImmutableInsertMessageV1,
+	owned message.RetainedImmutableInsertMessageV1,
 	assignment *messagespb.PartitionSegmentAssignment,
 ) bool {
 	msg := owned.Message()
@@ -245,7 +245,7 @@ func (s *SegmentView) ObserveInsertMessageV1(
 
 func (s *SegmentView) ObserveTxnMessage(
 	_ context.Context,
-	owned message.OwnedImmutableTxnMessage,
+	owned message.RetainedImmutableTxnMessage,
 ) bool {
 	msg := owned.Message()
 	var task segmentTask
@@ -307,7 +307,7 @@ func (s *SegmentView) observeInsertMetaLocked(timetick uint64, assignment *messa
 
 func (s *SegmentView) Flush(
 	_ context.Context,
-	owned message.OwnedImmutableMessage,
+	owned message.RetainedImmutableMessage,
 ) bool {
 	msg := owned.Message()
 	s.mu.Lock()

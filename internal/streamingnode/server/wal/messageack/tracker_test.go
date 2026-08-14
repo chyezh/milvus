@@ -18,13 +18,8 @@ func TestTrackerDerivesCheckpointFromMessage(t *testing.T) {
 		IntoImmutableMessage(walimplstest.NewTestMessageID(101))
 	tracker := NewTracker(utility.WALConsumeCheckpoint{}, nil)
 
-	tracked, trackedMessage := tracker.Track(raw)
-	tracked.Release()
-	select {
-	case <-trackedMessage.ConsumersDone():
-	default:
-		t.Fatal("tracker completion was not signaled")
-	}
+	owner := tracker.Track(raw)
+	owner.Release()
 
 	point := tracker.CompletedPoint()
 	require.NotNil(t, point.MessageID)
@@ -42,19 +37,14 @@ func TestTrackerAdvancesOnlyContinuousCompletedPrefix(t *testing.T) {
 		advanced = append(advanced, point)
 	})
 
-	first, firstTracked := tracker.Track(testMessage(t, 2, 20))
-	second, secondTracked := tracker.Track(testMessage(t, 3, 30))
+	first := tracker.Track(testMessage(t, 2, 20))
+	second := tracker.Track(testMessage(t, 3, 30))
 	firstHandle := first.Clone()
 	secondHandle := second.Clone()
 	first.Release()
 	second.Release()
 
 	secondHandle.Release()
-	select {
-	case <-secondTracked.ConsumersDone():
-	default:
-		t.Fatal("second tracker entry was not completed")
-	}
 	point := tracker.CompletedPoint()
 	require.True(t, initial.MessageID.EQ(point.MessageID))
 	assert.Equal(t, initial.TimeTick, point.TimeTick)
@@ -62,16 +52,11 @@ func TestTrackerAdvancesOnlyContinuousCompletedPrefix(t *testing.T) {
 	assert.Equal(t, 2, tracker.Pending())
 	assert.Panics(t, func() { _ = second.Message() })
 	tracker.mu.Lock()
-	assert.NotNil(t, tracker.pending[1].message)
+	assert.Nil(t, tracker.pending[1].message)
 	assert.True(t, tracker.pending[1].completed)
 	tracker.mu.Unlock()
 
 	firstHandle.Release()
-	select {
-	case <-firstTracked.ConsumersDone():
-	default:
-		t.Fatal("first tracker entry was not completed")
-	}
 	point = tracker.CompletedPoint()
 	require.True(t, walimplstest.NewTestMessageID(3).EQ(point.MessageID))
 	assert.Equal(t, uint64(30), point.TimeTick)
@@ -81,52 +66,14 @@ func TestTrackerAdvancesOnlyContinuousCompletedPrefix(t *testing.T) {
 	assert.Zero(t, tracker.Pending())
 }
 
-func TestTrackerBroadcastWaitsForCoordinatorAck(t *testing.T) {
-	initial := utility.WALConsumeCheckpoint{
-		MessageID: walimplstest.NewTestMessageID(1),
-		TimeTick:  10,
-	}
-	tracker := NewTracker(initial, nil)
+func TestTrackerTreatsBroadcastAsOrdinaryTrackedMessage(t *testing.T) {
+	tracker := NewTracker(utility.WALConsumeCheckpoint{}, nil)
 	raw := testBroadcastMessage(t, 2, 20)
-	owner, tracked := tracker.Track(raw)
-	assert.True(t, tracked.RequiresBroadcastAck())
+	owner := tracker.Track(raw)
 
 	owner.Release()
-	select {
-	case <-tracked.ConsumersDone():
-	default:
-		t.Fatal("consumer completion was not signaled")
-	}
-	assert.Equal(t, initial.TimeTick, tracker.CompletedPoint().TimeTick)
-	assert.Same(t, raw, tracked.Message())
 
-	tracked.CompleteBroadcastAck()
 	assert.Equal(t, raw.TimeTick(), tracker.CompletedPoint().TimeTick)
-}
-
-func TestTrackerBroadcastCompletionConditionsAreOrderIndependentAndIdempotent(t *testing.T) {
-	initial := utility.WALConsumeCheckpoint{
-		MessageID: walimplstest.NewTestMessageID(1),
-		TimeTick:  10,
-	}
-	advanceCount := 0
-	tracker := NewTracker(initial, func(utility.WALConsumeCheckpoint) {
-		advanceCount++
-	})
-	raw := testBroadcastMessage(t, 2, 20)
-	owner, tracked := tracker.Track(raw)
-	assert.True(t, tracked.RequiresBroadcastAck())
-
-	tracked.CompleteBroadcastAck()
-	assert.True(t, tracked.RequiresBroadcastAck())
-	tracked.CompleteBroadcastAck()
-	assert.Equal(t, initial.TimeTick, tracker.CompletedPoint().TimeTick)
-
-	owner.Release()
-	assert.Equal(t, raw.TimeTick(), tracker.CompletedPoint().TimeTick)
-	assert.Equal(t, 1, advanceCount)
-	tracked.CompleteBroadcastAck()
-	assert.Equal(t, 1, advanceCount)
 }
 
 func TestTrackerCompletedPointReturnsCopy(t *testing.T) {
@@ -148,7 +95,7 @@ func TestTrackerCompletedPointDoesNotRegressOnReplay(t *testing.T) {
 		advanceCount++
 	})
 
-	owner, _ := tracker.Track(testMessage(t, 1, 20))
+	owner := tracker.Track(testMessage(t, 1, 20))
 	owner.Release()
 
 	completed := tracker.CompletedPoint()

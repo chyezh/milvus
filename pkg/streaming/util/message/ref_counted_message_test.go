@@ -40,6 +40,33 @@ func TestOwnedImmutableMessageCloneAndFinalize(t *testing.T) {
 	first.Release()
 }
 
+func TestOwnedImmutableMessageExclusiveTracksRetainedReferences(t *testing.T) {
+	raw := CreateTestTimeTickSyncMessage(t, 1, 20, testMessageID("10")).
+		IntoImmutableMessage(testMessageID("11"))
+	owner := NewOwnedImmutableMessage(raw, nil)
+
+	select {
+	case <-owner.Exclusive():
+	default:
+		t.Fatal("owner should initially be exclusive")
+	}
+
+	retained := owner.Clone()
+	select {
+	case <-owner.Exclusive():
+		t.Fatal("owner should not be exclusive while retained reference exists")
+	default:
+	}
+
+	retained.Release()
+	select {
+	case <-owner.Exclusive():
+	default:
+		t.Fatal("owner should become exclusive after retained release")
+	}
+	owner.Release()
+}
+
 func TestOwnedImmutableMessageReleaseDoesNotInvalidateClones(t *testing.T) {
 	raw := CreateTestTimeTickSyncMessage(t, 1, 20, testMessageID("10")).
 		IntoImmutableMessage(testMessageID("11"))

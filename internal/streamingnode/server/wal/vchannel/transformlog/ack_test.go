@@ -32,7 +32,7 @@ func TestTransformLogFailedChunkWriteRetainsMessageRef(t *testing.T) {
 	owner := newRefCountedTransformMessage(newTransformLogTestDeleteMessage(t, 10))
 	probe := owner.Clone()
 
-	transformLog.ObserveMessage(context.Background(), owner)
+	observeRetainedTransformMessage(transformLog, owner)
 	owner.Release()
 	require.Len(t, scheduler.tasks, 1)
 
@@ -53,13 +53,16 @@ func TestTransformLogDoesNotCloneUnrelatedMessage(t *testing.T) {
 	transformLog.SwitchIntoMetaAndData()
 	raw := message.CreateTestTimeTickSyncMessage(t, 1, 10, walimplstest.NewTestMessageID(10)).
 		IntoImmutableMessage(walimplstest.NewTestMessageID(11))
-	base := newRefCountedTransformMessage(raw)
-	owner := &countingTransformOwner{owner: base}
+	owner := newRefCountedTransformMessage(raw)
 
-	transformLog.ObserveMessage(context.Background(), owner)
+	observeRetainedTransformMessage(transformLog, owner)
+	select {
+	case <-owner.Exclusive():
+	default:
+		t.Fatal("unrelated message should not retain an asynchronous handle")
+	}
 	owner.Release()
 
-	assert.Zero(t, owner.cloneCount)
 	assert.Panics(t, func() { _ = owner.Message() })
 }
 
@@ -77,9 +80,9 @@ func TestTransformLogBarrierRefCompletesWithoutMaterialization(t *testing.T) {
 	deleteMessage := newRefCountedTransformMessage(newTransformLogTestDeleteMessage(t, 10))
 	barrierMessage := newRefCountedTransformMessage(newTransformLogTestManualFlushMessage(t, 20))
 
-	transformLog.ObserveMessage(context.Background(), deleteMessage)
+	observeRetainedTransformMessage(transformLog, deleteMessage)
 	deleteMessage.Release()
-	transformLog.ObserveMessage(context.Background(), barrierMessage)
+	observeRetainedTransformMessage(transformLog, barrierMessage)
 	barrierMessage.Release()
 	require.Len(t, scheduler.tasks, 2)
 	assert.IsType(t, &transformFlushTask{}, scheduler.tasks[0])
@@ -107,11 +110,11 @@ func TestTransformLogMultiChunkFlushReleasesRefsByDurablePrefix(t *testing.T) {
 	secondProbe := second.Clone()
 	barrierProbe := barrier.Clone()
 
-	transformLog.ObserveMessage(context.Background(), first)
+	observeRetainedTransformMessage(transformLog, first)
 	first.Release()
-	transformLog.ObserveMessage(context.Background(), second)
+	observeRetainedTransformMessage(transformLog, second)
 	second.Release()
-	transformLog.ObserveMessage(context.Background(), barrier)
+	observeRetainedTransformMessage(transformLog, barrier)
 	barrier.Release()
 	require.GreaterOrEqual(t, len(scheduler.tasks), 3)
 
@@ -145,7 +148,7 @@ func TestTransformLogRegistersBarrierRefBeforeConcurrentFlushCommit(t *testing.T
 	})
 	transformLog.SwitchIntoMetaAndData()
 	deleteMessage := newRefCountedTransformMessage(newTransformLogTestDeleteMessage(t, 10))
-	transformLog.ObserveMessage(context.Background(), deleteMessage)
+	observeRetainedTransformMessage(transformLog, deleteMessage)
 	deleteMessage.Release()
 
 	type flushOutcome struct {
@@ -160,17 +163,7 @@ func TestTransformLogRegistersBarrierRefBeforeConcurrentFlushCommit(t *testing.T
 	<-store.writeStarted
 
 	barrierController := newRefCountedTransformMessage(newTransformLogTestManualFlushMessage(t, 20))
-	barrierMessage := &blockingMessageOwner{
-		owner:         barrierController,
-		retainStarted: make(chan struct{}),
-		releaseRetain: make(chan struct{}),
-	}
-	observeDone := make(chan struct{})
-	go func() {
-		transformLog.ObserveMessage(context.Background(), barrierMessage)
-		close(observeDone)
-	}()
-	<-barrierMessage.retainStarted
+	observeRetainedTransformMessage(transformLog, barrierController)
 
 	close(store.releaseWrite)
 	var flush flushResult
@@ -181,14 +174,12 @@ func TestTransformLogRegistersBarrierRefBeforeConcurrentFlushCommit(t *testing.T
 		releaseMessages(flush.CompletedMessages)
 	case <-time.After(100 * time.Millisecond):
 	}
-	close(barrierMessage.releaseRetain)
 	if !flush.Started {
 		outcome := <-flushDone
 		require.NoError(t, outcome.err)
 		flush = outcome.result
 		releaseMessages(flush.CompletedMessages)
 	}
-	<-observeDone
 	barrierController.Release()
 
 	assert.Panics(t, func() { _ = deleteMessage.Message() })
@@ -200,46 +191,14 @@ type failingTransformLogStore struct {
 	err error
 }
 
-type blockingMessageOwner struct {
-	owner         message.OwnedImmutableMessage
-	retainStarted chan struct{}
-	releaseRetain chan struct{}
-}
-
-func (m *blockingMessageOwner) Message() message.ImmutableMessage {
-	return m.owner.Message()
-}
-
-func (m *blockingMessageOwner) Clone() message.RetainedImmutableMessage {
-	close(m.retainStarted)
-	<-m.releaseRetain
-	return m.owner.Clone()
-}
-
-func (m *blockingMessageOwner) Release() {
-	m.owner.Release()
-}
-
 func newRefCountedTransformMessage(raw message.ImmutableMessage) message.OwnedImmutableMessage {
 	return message.NewOwnedImmutableMessage(raw, nil)
 }
 
-type countingTransformOwner struct {
-	owner      message.OwnedImmutableMessage
-	cloneCount int
-}
-
-func (o *countingTransformOwner) Message() message.ImmutableMessage {
-	return o.owner.Message()
-}
-
-func (o *countingTransformOwner) Clone() message.RetainedImmutableMessage {
-	o.cloneCount++
-	return o.owner.Clone()
-}
-
-func (o *countingTransformOwner) Release() {
-	o.owner.Release()
+func observeRetainedTransformMessage(transformLog *TransformLog, owner message.OwnedImmutableMessage) {
+	dispatch := owner.Clone()
+	transformLog.ObserveMessage(context.Background(), dispatch)
+	dispatch.Release()
 }
 
 type blockingTransformLogWriteStore struct {

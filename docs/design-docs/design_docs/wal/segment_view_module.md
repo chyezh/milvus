@@ -39,7 +39,8 @@ checkpoints, or QueryView references.
 
 ## 2. Message Ack
 
-Every affected SegmentView directly calls `Clone()` on the Owner before
+Every affected SegmentView directly calls `Clone()` on the Retained dispatch
+handle before
 submitting or exposing asynchronous work. The returned retained immutable
 message is owned by that concrete consumer or by a module-local parent operation
 that waits for its dynamic child tasks.
@@ -59,7 +60,7 @@ succeeds.
 
 If a SegmentView discovers child tasks asynchronously, it must clone one parent
 message handle before returning from observation and manage the child count
-inside the SegmentView. It cannot use the released Owner after synchronous
+inside the SegmentView. It cannot use the released dispatch handle after synchronous
 dispatch returns.
 
 ## 3. Observe Rules
@@ -216,7 +217,8 @@ unfinished Insert work.
 8. Segment retained handles are the only Segment completion input to the
    RecoveryStorage Data checkpoint.
 9. Every broadcast-triggered Segment consumer clones a message handle before
-   the dedicated BroadcastAck sink releases the Owner.
+   synchronous VChannel observation returns; BroadcastAck waits for Owner
+   exclusivity before acknowledging the message.
 10. Async Segment consumers mark metadata dirty before releasing their handle.
 11. `SealedAtDataVersion` is the segment's first DataView membership version,
     not the latest collection version observed by a retry.

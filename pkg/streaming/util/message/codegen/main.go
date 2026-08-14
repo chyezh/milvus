@@ -192,6 +192,9 @@ func (g *Generator) generateHelperFunctions(info JSONMessageReflectInfo) {
 		// MustAsOwnedImmutable function
 		f.Comment(fmt.Sprintf("// MustAsOwnedImmutable%s converts an OwnedImmutableMessage to OwnedImmutable%s, panics on error", baseName, baseName))
 		f.Var().Id("MustAsOwnedImmutable"+baseName).Op("=").Qual(messagePackage, "MustAsSpecializedOwnedImmutableMessage").Types(headerType, bodyType)
+		// MustAsRetainedImmutable function
+		f.Comment(fmt.Sprintf("// MustAsRetainedImmutable%s converts a RetainedImmutableMessage to RetainedImmutable%s, panics on error", baseName, baseName))
+		f.Var().Id("MustAsRetainedImmutable"+baseName).Op("=").Qual(messagePackage, "MustAsSpecializedRetainedImmutableMessage").Types(headerType, bodyType)
 		// AsBroadcast function
 		f.Comment(fmt.Sprintf("// AsBroadcast%s converts a BasicMessage to Broadcast%s", baseName, baseName))
 		f.Var().Id("AsBroadcast"+baseName).Op("=").Qual(messagePackage, "asSpecializedBroadcastMessage").Types(headerType, bodyType)

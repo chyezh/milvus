@@ -1,180 +1,138 @@
 # Message Workflow
 
-This document describes how RecoveryStorage consumes persisted WAL messages and
-routes the resulting work into VChannel-owned components. The lifecycle and
-checkpoint contract is defined by [WAL Message Ack Design](message_ack.md).
+This document describes how RecoveryStorage consumes WAL messages and routes
+work into VChannel-owned persistence components. Lifetime and checkpoint
+semantics are defined by [WAL Message Ack Design](message_ack.md).
 
-## 1. Common Flow
+## 1. Common Data Flow
 
-Every message from the data scanner follows this sequence while observation is
-serialized:
+Observation is serialized per PChannel:
 
 ```text
 raw message M
-  -> Tracker.Track(M) returns Owner O and TrackedMessage T
-  -> PChannelRecoveryManager dispatches O synchronously
-       -> actual Segment/TransformLog consumers call O.Clone()
-       -> QueryRuntime receives an ordinary immutable copy
-  -> RecoveryStorage updates MetaPoint from M
-  -> dedicated BroadcastAck sink accepts O and T
-       -> O.Release() unconditionally
-       -> if T.RequiresBroadcastAck(): enqueue T
-  -> final retained handle Release closes T.ConsumersDone
-  -> broadcast task performs Coordinator Ack and calls T.CompleteBroadcastAck
-  -> Tracker advances the continuous completed prefix
+  -> O = Tracker.Track(M)
+  -> D = O.Clone()
+  -> PChannelRecoveryManager.ObserveMessage(D)
+       -> VChannelRecoveryModule observes D synchronously
+       -> Segment/TransformLog clone D for actual async work
+       -> QueryRuntime receives plain ImmutableMessage
+  -> D.Release()
+  -> RecoveryStorage advances MetaPoint from M
+  -> BroadcastAck.Accept(O)
 ```
 
-The Tracker point is computed from the original message:
+For non-broadcast messages, BroadcastAck releases `O` immediately. For
+broadcast messages it retains `O` in FIFO order, waits for `O.Exclusive()`,
+performs Coordinator Ack, and releases `O` only after success. The Tracker
+finalizer then clears the entry's message and advances the continuous completed
+checkpoint prefix.
+
+The Tracker point is:
 
 ```text
 Point.MessageID = M.LastConfirmedMessageID()
 Point.TimeTick  = M.TimeTick()
 ```
 
-Recovery uses `Point.MessageID` with `DeliverPolicyStartFrom`. Completed
-messages may be replayed; an unfinished message must never be skipped.
+Recovery resumes with `DeliverPolicyStartFrom`. Replaying a completed message
+is safe and conservative; skipping an incomplete one is not.
 
-Meta-only replay creates a temporary Owner and uses the same module
-`ObserveMessage` entry, but it does not create a Tracker entry. RecoveryStorage
-releases that Owner after synchronous dispatch, rebuilds metadata and the
-transaction buffer, then advances the Meta checkpoint.
+## 2. Meta-Only Flow
 
-There is no explicit negative ACK. A module that has no work for a message
-simply does not clone the Owner. BroadcastAck still receives every data-scanner
-Owner as the final release sink, even when the Tracker says no Coordinator ACK
-is required. There is no DataBarrier or module frontier in the RecoveryStorage
-checkpoint contract.
+Bounded metadata recovery uses the same module input shape without persistence
+tracking:
 
-## 2. Ownership Table
+```text
+M -> temporary Owner O -> D = O.Clone()
+  -> PChannelRecoveryManager.ObserveMessage(D)
+  -> D.Release() -> O.Release()
+  -> update MetaPoint
+```
 
-| Holder | Creation | Release/completion condition |
+Meta-only messages do not enter Tracker or BroadcastAck. The bounded scan
+rebuilds metadata and transaction state, and the resulting DirtySnapshots are
+persisted before its checkpoint.
+
+## 3. Ownership Table
+
+| Holder | Creation | Release condition |
 |---|---|---|
-| Data Owner root | `Tracker.Track` | Dedicated BroadcastAck sink receives it and unconditionally calls `Release` |
-| Meta-only Owner root | `NewOwnedImmutableMessage` | RecoveryStorage releases it after synchronous module dispatch |
-| Segment handle | Segment sees concrete async work | Required object/lifecycle work succeeds, metadata is dirty |
-| TransformLog handle | Delete or barrier requires chunk flush | Covering chunk is durable and committed, metadata is dirty |
-| Tracker entry message | `Tracker.Track` | Both local consumers and required broadcast ACK complete, then entry leaves continuous prefix |
-| QueryRuntime copy | Live event is queued | QueryRuntime owns and releases it through its normal queue lifecycle |
+| Data Owner | `Tracker.Track` | BroadcastAck releases immediately for ordinary messages or after Coordinator Ack for broadcasts |
+| Dispatch Retained | `Owner.Clone` | RecoveryStorage releases after synchronous manager dispatch |
+| Segment Retained | Segment sees concrete async work | Object-storage/lifecycle work succeeds after metadata is marked dirty |
+| TransformLog Retained | Delete/Txn/Delete or flush barrier needs chunk work | Covering TransformLog chunk is durable and metadata is dirty |
+| Tracker entry message | `Tracker.Track` | Owner finalizer clears it at reference count zero |
+| QueryRuntime event | Plain `ImmutableMessage` | QueryRuntime's own queue lifecycle; outside RecoveryStorage Ack |
 
-BroadcastAck is not a recovery module and does not create or retain a message
-handle. It does not inspect the Owner. The Tracker entry keeps the original
-immutable message available while BroadcastAck retries and records whether a
-Coordinator ACK is required.
+An entry can remain in the ordered Tracker queue after its message pointer is
+cleared. The point is still needed to remove the continuous completed prefix.
 
-## 3. Typical Messages
+## 4. Typical Messages
 
 ### TimeTick
 
-TimeTick changes no object-storage state and no recovery metadata owned by a
-VChannel. No module clones the Owner. BroadcastAck releases the Owner, the
-Tracker entry completes immediately, and the continuous Data checkpoint can
-advance.
+No persistence consumer clones the dispatch Retained. A non-broadcast message
+therefore releases its Owner immediately and the Tracker advances.
 
 ### CreateCollection
 
-The target VChannel module updates collection metadata, partitions, schema
-history, and its dirty snapshot. It normally creates no Segment or TransformLog
-handle. BroadcastAck releases the Owner immediately. Its FIFO ACK task observes
-`ConsumersDone` (already closed once the root is released), ACKs the message,
-and completes the Tracker broadcast condition.
+The VChannel updates collection metadata and marks it dirty. A broadcast copy
+is processed independently by each target VChannel. BroadcastAck waits for
+Owner exclusivity, then performs FIFO Coordinator Ack and releases the Owner.
 
 ### Insert
 
-The VChannel routes the Insert to each affected SegmentView. Each affected view
-clones the Owner and stores its retained handle with the pending L1 data pack:
-
-```text
-Insert
-  -> append rows and retain handle
-  -> flush pack to object storage
-  -> install persisted segment metadata and mark dirty
-  -> release handle
-```
-
-RecoveryStorage releases the Owner after synchronous dispatch. The Tracker
-cannot complete until every affected SegmentView has released its handle.
+Each affected SegmentView clones the Retained dispatch handle and stores the
+clone with its pending L1 pack. The clone releases only after the shared object
+chunk is durable, metadata is installed, and the SegmentView is dirty.
 
 ### Delete
 
-TransformLog converts Delete into one vchannel transform entry and retains a
-handle if the entry depends on a future chunk flush:
+TransformLog appends one transform entry and retains the outer message until
+the covering TransformLog chunk is durable. L0 materialization is independent
+and does not delay Ack.
 
-```text
-Delete
-  -> append TransformLog entry and retain handle
-  -> write and commit containing chunk
-  -> update TransformLog metadata and mark dirty
-  -> release handle
-```
+### Flush-Style Messages
 
-Materialization into L0 output is independent and does not delay this handle.
-Delete does not require a Coordinator broadcast ACK, so the sink only releases
-the Owner for this message.
-
-### Flush And ManualFlush
-
-Flush, ManualFlush, and FlushAll update lifecycle metadata synchronously and
-may schedule Segment chunk flush/commit work. Each affected SegmentView clones
-the same message before task submission. TransformLog clones the message only
-when preceding Delete entries require a chunk flush. Handles release after the
-required object-storage work succeeds, not after materialization.
-
-For a broadcast Flush-style message, the dedicated BroadcastAck sink releases
-the Owner first. Its FIFO ACK task waits for all actual Segment and TransformLog
-handles through `ConsumersDone`, performs the Coordinator ACK, and completes
-the Tracker entry.
+Flush, ManualFlush, FlushAll, DropCollection, DropPartition,
+TruncateCollection, schema-changing AlterCollection, and AlterWAL may trigger
+several Segment flushes and a TransformLog chunk flush. Each async unit clones
+the same Retained dispatch handle. A broadcast version is acknowledged only
+after all those clones are released and Owner exclusivity is reached.
 
 ### Txn
 
-A committed transaction is one immutable WAL message. SegmentViews and
-TransformLog retain the outer Txn message as needed. Messages returned by
-`RangeOver` are borrowed children and do not receive independent references.
-The Tracker point and completion also belong to the whole Txn.
+A committed Txn is one immutable WAL message. Each affected SegmentView or
+TransformLog retains the outer Txn handle; children returned by `RangeOver`
+never receive independent ownership.
 
-### Broadcast Metadata Messages
+## 5. Checkpoint Batch
 
-CreatePartition, DropCollection, DropPartition, AlterCollection, replication
-configuration changes, RBAC changes, and other broadcast metadata messages
-usually affect only synchronous VChannel metadata. They therefore create no
-data handles. BroadcastAck still performs FIFO Coordinator ACK so that
-`AckSyncUp` and broadcast callback ordering remain correct.
-
-## 4. Persist Batch
-
-RecoveryStorage freezes a batch before consuming dirty snapshots:
+RecoveryStorage freezes the boundary before collecting dirty snapshots:
 
 ```text
-MetaPoint = latest completely observed WAL point
-DataPoint = continuous Tracker completed point bounded by MetaPoint
-```
+MetaPoint = latest observed WAL point
+DataPoint = min(MetaPoint, Tracker continuous completed point)
 
-The batch order is:
-
-```text
-freeze MetaPoint/DataPoint
+freeze points
   -> consume stable DirtySnapshots
-  -> persist every DirtySnapshot to etcd/object catalog
-  -> MarkPersisted on successful snapshots
+  -> persist snapshots
+  -> MarkPersisted
   -> persist WALCheckpoint last
 ```
 
-Every asynchronous consumer must perform metadata mutation and mark the module
-dirty before releasing its retained handle. This ensures a Data checkpoint does
-not pass data whose recovery metadata has not been captured by the batch.
+This ordering guarantees that a checkpoint covering a completed message also
+covers the metadata installed before its last Retained release. TransformLog
+completion means chunk durability, not materialization.
 
-## 5. Invariants
+## 6. Invariants
 
-1. One data-scanner message has one Tracker entry and one Owner.
-2. Owner and retained handles are independent objects; each handle is released
-   at most once.
-3. All asynchronous consumer clones are created synchronously during dispatch.
-4. BroadcastAck is outside the module lifecycle, never adds a reference, and
-   always releases the Owner.
-5. Coordinator ACK occurs only after all local retained handles are released.
-6. A broadcast Tracker entry completes only after Coordinator ACK succeeds.
-7. TransformLog completion requires chunk durability, not materialization.
-8. Checkpoint MessageID is `LastConfirmedMessageID` and resume uses
-   `DeliverPolicyStartFrom`.
-9. Ack observes completion but does not impose task execution order.
-10. QueryRuntime borrows the underlying immutable message and never participates
-    in RecoveryStorage Ack.
+1. Every data message has one Owner and one Tracker entry.
+2. Every async consumer receives an independent Retained clone before dispatch
+   returns.
+3. Tracker stores points and message references, not BroadcastAck state.
+4. Owner exclusivity is the BroadcastAck readiness condition; refcount zero is
+   Tracker finalization.
+5. Meta-only messages use a temporary Owner and do not affect DataPoint.
+6. QueryRuntime uses plain immutable messages and its own TimeTick filtering.
+7. Ack observes completion but does not define task execution order.

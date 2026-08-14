@@ -167,12 +167,12 @@ func (m *VChannelRecoveryModule) segmentViewConfig() segment.ViewConfig {
 
 func (m *VChannelRecoveryModule) ObserveMessage(
 	ctx context.Context,
-	owner message.OwnedImmutableMessage,
+	retained message.RetainedImmutableMessage,
 ) {
 	if m == nil {
 		return
 	}
-	msg := owner.Message()
+	msg := retained.Message()
 	if !m.shouldObserve(msg) {
 		return
 	}
@@ -189,34 +189,34 @@ func (m *VChannelRecoveryModule) ObserveMessage(
 	case message.MessageTypeSchemaChange:
 		m.handleSchemaChangeMessage(message.MustAsImmutableSchemaChangeMessageV2(msg))
 	case message.MessageTypeAlterCollection:
-		m.handleAlterCollectionMessage(ctx, message.MustAsOwnedImmutableAlterCollectionMessageV2(owner))
+		m.handleAlterCollectionMessage(ctx, message.MustAsRetainedImmutableAlterCollectionMessageV2(retained))
 	case message.MessageTypeDropCollection:
-		m.handleDropCollectionMessage(ctx, message.MustAsOwnedImmutableDropCollectionMessageV1(owner))
+		m.handleDropCollectionMessage(ctx, message.MustAsRetainedImmutableDropCollectionMessageV1(retained))
 	case message.MessageTypeDropPartition:
-		m.handleDropPartitionMessage(ctx, message.MustAsOwnedImmutableDropPartitionMessageV1(owner))
+		m.handleDropPartitionMessage(ctx, message.MustAsRetainedImmutableDropPartitionMessageV1(retained))
 	case message.MessageTypeTruncateCollection:
-		m.handleTruncateCollectionMessage(ctx, message.MustAsOwnedImmutableTruncateCollectionMessageV2(owner))
+		m.handleTruncateCollectionMessage(ctx, message.MustAsRetainedImmutableTruncateCollectionMessageV2(retained))
 	case message.MessageTypeAlterLoadConfig:
 		m.handleAlterLoadConfigMessage(message.MustAsImmutableAlterLoadConfigMessageV2(msg))
 	case message.MessageTypeDropLoadConfig:
 		m.handleDropLoadConfigMessage(message.MustAsImmutableDropLoadConfigMessageV2(msg))
 	case message.MessageTypeCreateSegment:
-		m.handleCreateSegmentMessage(ctx, message.MustAsOwnedImmutableCreateSegmentMessageV2(owner))
+		m.handleCreateSegmentMessage(ctx, message.MustAsRetainedImmutableCreateSegmentMessageV2(retained))
 	case message.MessageTypeInsert:
-		m.handleInsertMessage(ctx, message.MustAsOwnedImmutableInsertMessageV1(owner))
+		m.handleInsertMessage(ctx, message.MustAsRetainedImmutableInsertMessageV1(retained))
 	case message.MessageTypeTxn:
-		m.handleTxnMessage(ctx, message.MustAsOwnedImmutableTxnMessage(owner))
+		m.handleTxnMessage(ctx, message.MustAsRetainedImmutableTxnMessage(retained))
 	case message.MessageTypeFlush:
-		m.handleFlushMessage(ctx, message.MustAsOwnedImmutableFlushMessageV2(owner))
+		m.handleFlushMessage(ctx, message.MustAsRetainedImmutableFlushMessageV2(retained))
 	case message.MessageTypeManualFlush:
-		m.handleManualFlushMessage(ctx, owner)
+		m.handleManualFlushMessage(ctx, retained)
 	case message.MessageTypeFlushAll:
-		m.handleFlushAllMessage(ctx, owner)
+		m.handleFlushAllMessage(ctx, retained)
 	case message.MessageTypeAlterWAL:
-		m.handleAlterWALMessage(ctx, owner)
+		m.handleAlterWALMessage(ctx, retained)
 	}
 	if m.transformLog != nil {
-		m.transformLog.ObserveMessage(ctx, owner)
+		m.transformLog.ObserveMessage(ctx, retained)
 	}
 	if m.metaAndData && msg.TimeTick() > m.dataObservedTimeTick {
 		m.dataObservedTimeTick = msg.TimeTick()
@@ -354,48 +354,56 @@ func (m *VChannelRecoveryModule) handleSchemaChangeMessage(msg message.Immutable
 
 func (m *VChannelRecoveryModule) handleAlterCollectionMessage(
 	ctx context.Context,
-	owned message.OwnedImmutableAlterCollectionMessageV2,
+	owned message.RetainedImmutableAlterCollectionMessageV2,
 ) {
 	msg := owned.Message()
 	if m.vchannelView != nil {
 		m.vchannelView.ObserveAlterCollectionMessageV2(msg)
 	}
 	if messageutil.IsSchemaChange(msg.Header()) {
-		m.flushAllSegmentsCreatedBefore(ctx, owned.Untyped())
+		handle := owned.CloneHandle()
+		defer handle.Release()
+		m.flushAllSegmentsCreatedBefore(ctx, handle)
 	}
 }
 
 func (m *VChannelRecoveryModule) handleDropCollectionMessage(
 	ctx context.Context,
-	owned message.OwnedImmutableDropCollectionMessageV1,
+	owned message.RetainedImmutableDropCollectionMessageV1,
 ) {
 	msg := owned.Message()
 	if m.vchannelView != nil {
 		m.vchannelView.ObserveDropCollectionMessageV1(msg)
 	}
-	m.flushAllSegmentsCreatedBefore(ctx, owned.Untyped())
+	handle := owned.CloneHandle()
+	defer handle.Release()
+	m.flushAllSegmentsCreatedBefore(ctx, handle)
 }
 
 func (m *VChannelRecoveryModule) handleDropPartitionMessage(
 	ctx context.Context,
-	owned message.OwnedImmutableDropPartitionMessageV1,
+	owned message.RetainedImmutableDropPartitionMessageV1,
 ) {
 	msg := owned.Message()
 	if m.vchannelView != nil {
 		m.vchannelView.ObserveDropPartitionMessageV1(msg)
 	}
-	m.flushPartitionSegmentsCreatedBefore(ctx, owned.Untyped(), msg.Header().GetPartitionId())
+	handle := owned.CloneHandle()
+	defer handle.Release()
+	m.flushPartitionSegmentsCreatedBefore(ctx, handle, msg.Header().GetPartitionId())
 }
 
 func (m *VChannelRecoveryModule) handleTruncateCollectionMessage(
 	ctx context.Context,
-	owned message.OwnedImmutableTruncateCollectionMessageV2,
+	owned message.RetainedImmutableTruncateCollectionMessageV2,
 ) {
 	msg := owned.Message()
 	if m.vchannelView != nil {
 		m.vchannelView.ObserveTruncateCollectionMessageV2(msg)
 	}
-	m.flushAllSegmentsCreatedBefore(ctx, owned.Untyped())
+	handle := owned.CloneHandle()
+	defer handle.Release()
+	m.flushAllSegmentsCreatedBefore(ctx, handle)
 }
 
 func (m *VChannelRecoveryModule) handleAlterLoadConfigMessage(msg message.ImmutableAlterLoadConfigMessageV2) {
@@ -414,7 +422,7 @@ func (m *VChannelRecoveryModule) handleDropLoadConfigMessage(msg message.Immutab
 
 func (m *VChannelRecoveryModule) handleCreateSegmentMessage(
 	ctx context.Context,
-	msg message.OwnedImmutableCreateSegmentMessageV2,
+	msg message.RetainedImmutableCreateSegmentMessageV2,
 ) {
 	raw := msg.Message()
 	id := raw.Header().GetSegmentId()
@@ -439,7 +447,7 @@ func (m *VChannelRecoveryModule) handleCreateSegmentMessage(
 
 func (m *VChannelRecoveryModule) handleInsertMessage(
 	ctx context.Context,
-	msg message.OwnedImmutableInsertMessageV1,
+	msg message.RetainedImmutableInsertMessageV1,
 ) {
 	for _, partition := range msg.Message().Header().GetPartitions() {
 		view := m.segments[partition.GetSegmentAssignment().GetSegmentId()]
@@ -453,7 +461,7 @@ func (m *VChannelRecoveryModule) handleInsertMessage(
 
 func (m *VChannelRecoveryModule) handleTxnMessage(
 	ctx context.Context,
-	owned message.OwnedImmutableTxnMessage,
+	owned message.RetainedImmutableTxnMessage,
 ) {
 	msg := owned.Message()
 	if msg == nil {
@@ -484,39 +492,41 @@ func (m *VChannelRecoveryModule) handleTxnMessage(
 
 func (m *VChannelRecoveryModule) handleFlushMessage(
 	ctx context.Context,
-	msg message.OwnedImmutableFlushMessageV2,
+	msg message.RetainedImmutableFlushMessageV2,
 ) {
 	id := msg.Message().Header().GetSegmentId()
 	if segment := m.segments[id]; segment != nil {
-		segment.Flush(ctx, msg.Untyped())
+		handle := msg.CloneHandle()
+		defer handle.Release()
+		segment.Flush(ctx, handle)
 		m.markSegmentUpdatedLocked(id)
 	}
 }
 
 func (m *VChannelRecoveryModule) handleManualFlushMessage(
 	ctx context.Context,
-	msg message.OwnedImmutableMessage,
+	msg message.RetainedImmutableMessage,
 ) {
 	m.flushAllSegmentsCreatedBefore(ctx, msg)
 }
 
 func (m *VChannelRecoveryModule) handleFlushAllMessage(
 	ctx context.Context,
-	msg message.OwnedImmutableMessage,
+	msg message.RetainedImmutableMessage,
 ) {
 	m.flushAllSegmentsCreatedBefore(ctx, msg)
 }
 
 func (m *VChannelRecoveryModule) handleAlterWALMessage(
 	ctx context.Context,
-	msg message.OwnedImmutableMessage,
+	msg message.RetainedImmutableMessage,
 ) {
 	m.flushAllSegmentsCreatedBefore(ctx, msg)
 }
 
 func (m *VChannelRecoveryModule) flushAllSegmentsCreatedBefore(
 	ctx context.Context,
-	msg message.OwnedImmutableMessage,
+	msg message.RetainedImmutableMessage,
 ) {
 	for _, view := range m.segments {
 		if view.CreateTimeTick() >= msg.Message().TimeTick() {
@@ -529,7 +539,7 @@ func (m *VChannelRecoveryModule) flushAllSegmentsCreatedBefore(
 
 func (m *VChannelRecoveryModule) flushPartitionSegmentsCreatedBefore(
 	ctx context.Context,
-	msg message.OwnedImmutableMessage,
+	msg message.RetainedImmutableMessage,
 	partitionID int64,
 ) {
 	for _, view := range m.segments {

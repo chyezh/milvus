@@ -1,230 +1,114 @@
 # WAL Recovery Architecture
 
-This document describes how StreamingNode RecoveryStorage reconstructs one
-PChannel, persists WAL-derived state into object storage and etcd, and publishes
-restart checkpoints. Message completion is defined by
-[WAL Message Ack Design](message_ack.md).
+RecoveryStorage restores and persists the WAL-derived state needed by a
+StreamingNode PChannel. Its scope is WAL persistence into object storage and
+metadata publication into etcd; QueryView and QueryRuntime are consumers of
+the recovered state, not owners of this checkpoint protocol.
 
-## 1. Runtime Ownership
+## 1. Runtime Components
 
 ```text
 RecoveryStorage
+  +-- metadata recovery and checkpoint batch
   +-- messageack.Tracker
   +-- PChannelRecoveryManager
-  |     +-- VChannelRecoveryModule*
+  |     +-- VChannelRecoveryModule
   |           +-- VChannelView
   |           +-- SegmentView*
   |           +-- TransformLog
-  |           +-- QueryRuntime bridge
-  +-- broadcastAck sink
+  +-- BroadcastAck
 ```
 
-Only `PChannelRecoveryManager` is registered as a top-level RecoveryStorage
-module. SegmentView and TransformLog are internal VChannel components.
-BroadcastAck is a dedicated RecoveryStorage sink, not a `moduleapi.Module`.
-Snapshot names such as `ModuleNameSegment` and `ModuleNameTransformLog`
-classify catalog records; they do not imply independent runtime modules.
+There is no generic RecoveryStorage Module interface. The PChannel manager and
+BroadcastAck have separate APIs because they have different responsibilities.
+SegmentView and TransformLog are VChannel-owned components. Their historical
+snapshot names remain catalog classifications only.
 
-QueryView resource references are temporary serving state. They do not affect
-WAL message references, broadcast ACK, or RecoveryStorage checkpoints.
+## 2. Recovery Startup
 
-## 2. Persisted State
+1. Load the persisted WAL checkpoint and recovery metadata.
+2. Append the persisted RecoveryBarrier to prove writer ownership and fence an
+   old WAL writer where the backend requires it.
+3. Run the bounded Meta-only scan through the RecoveryBarrier. This rebuilds
+   VChannel metadata, schemas, segment assignments, TransformLog metadata, and
+   the uncommitted TxnBuffer without claiming that data work has been replayed.
+4. Consume and persist the resulting DirtySnapshots as required by the bounded
+   recovery flow.
+5. Switch VChannel components into MetaAndData mode.
+6. Start the DataScanner from the persisted Data checkpoint using
+   `DeliverPolicyStartFrom`.
+7. Build QueryRuntime WALViews from VChannel-owned state without waiting for the
+   DataScanner to catch up to the startup RecoveryBarrier.
 
-RecoveryStorage persists:
+RecoveryBarrier is a WAL writer-fencing and bounded metadata-scan endpoint. It
+is not a DataBarrier and it is not a QueryRuntime readiness fence.
 
-- `WALCheckpoint`, containing Meta and Data consume points;
-- VChannel collection, partition, schema, and lifecycle metadata;
-- Segment assignment, durability, sealed-version, and tombstone metadata;
-- TransformLog chunk range, durability, materialization, and truncation cursors;
-- object-storage Segment and TransformLog payloads;
-- replication and WAL migration state stored with the checkpoint.
-
-The checkpoint MessageID is a conservative `LastConfirmedMessageID` resume
-anchor. It is used with `DeliverPolicyStartFrom`, so replay may repeat work but
-must not skip unfinished work.
-
-## 3. Recovery Flow
-
-RecoveryStorage startup is:
-
-1. Load the persisted `WALCheckpoint` and recovery catalog state.
-2. Append a persisted `RecoveryBarrier` to prove write ownership and provide a
-   bounded metadata scan endpoint.
-3. Construct `PChannelRecoveryManager` and its VChannel-owned components from
-   VChannel, Segment, and TransformLog metadata.
-4. Run bounded Meta-only replay from the persisted checkpoint to the startup
-   `RecoveryBarrier`. This rebuilds synchronous metadata and `TxnBuffer` state.
-5. Switch modules into MetaAndData mode.
-6. Start the data scanner from the persisted Data checkpoint. Replayed messages
-   reconstruct Tracker entries and all required async work.
-7. Start QueryView resource recovery from the VChannel WAL view. QueryRuntime
-   preparation does not wait for DataScanner to catch the startup barrier.
-
-`RecoveryBarrier` is a writer-fencing proof and bounded Meta-only endpoint. It
-is not a data-completion barrier and is not a QueryRuntime readiness fence.
-
-## 4. Meta And Data Lanes
-
-RecoveryStorage maintains two logical consume positions:
+## 3. Data Message Flow
 
 ```text
-MetaPoint = latest completely observed WAL point
-DataPoint = latest continuous fully completed Tracker point
+DataScanner message M
+  -> Tracker.Track(M) = Owner O
+  -> O.Clone() = dispatch Retained D
+  -> PChannelRecoveryManager.ObserveMessage(D)
+       -> VChannel state updates
+       -> Segment/TransformLog clone D for actual async work
+       -> QueryRuntime observes plain ImmutableMessage
+  -> D.Release()
+  -> update Meta checkpoint
+  -> BroadcastAck.Accept(O)
 ```
 
-Meta-only replay creates one `OwnedImmutableMessage` and passes it through the
-same module entry as data replay. It does not create a Tracker entry and
-RecoveryStorage releases the Owner after synchronous dispatch. The data
-scanner creates one Owner and one Tracker entry for every message.
+The Tracker finalizer clears the message pointer for that entry only when the
+Owner graph reaches reference count zero. It then advances the continuous
+checkpoint prefix. A later completed message is allowed to release its payload
+while an earlier message remains incomplete.
 
-The DataPoint may lag MetaPoint while Segment or TransformLog work is pending or
-while a broadcast Coordinator ACK is retrying. A persist batch always bounds
-DataPoint by its frozen MetaPoint.
+BroadcastAck releases ordinary Owners immediately. For broadcast Owners it
+waits for `Exclusive()`, calls Coordinator Ack, and releases only after success.
+Thus reference count zero means local persistence consumers and broadcast Ack
+have both completed for a broadcast message.
 
-## 5. Data Observation
+## 4. Persistence And Checkpoints
 
-For one data-scanner message:
+RecoveryStorage freezes `MetaPoint` and the Tracker continuous `DataPoint`,
+consumes stable dirty snapshots, persists all snapshots, marks them persisted,
+and writes the WALCheckpoint last. Segment and TransformLog consumers mark
+metadata dirty before releasing their Retained handles.
 
-```text
-owner, tracked = Tracker.Track(raw)
-  -> PChannelRecoveryManager.ObserveMessage(owner)
-       -> route by message scope
-       -> concrete Segment/TransformLog consumers Clone(owner)
-       -> synchronous metadata mutations are marked dirty
-       -> QueryRuntime receives the underlying immutable message
-  -> update MetaPoint
-  -> BroadcastAck.Accept(owner, tracked)
-       -> release owner immediately
-       -> if tracked.RequiresBroadcastAck(): enqueue tracked
-```
+The WAL checkpoint represents the last message that has been consumed by the
+required local persistence path. Its MessageID is the message's
+`LastConfirmedMessageID`; replay from that ID is conservative and idempotent.
+`AckSyncUp` only controls whether Coordinator may FastAck; it does not add a
+checkpoint or ordering dependency inside RecoveryStorage.
 
-The Tracker entry stores the original message and WAL point. The wrapper
-finalizer closes the local `ConsumersDone` event. For a non-broadcast message,
-that event is enough to complete the entry. For a broadcast message,
-Coordinator ACK success is an additional completion condition.
+## 5. QueryRuntime Boundary
 
-Ack does not define task order. SegmentView, TransformLog, and BroadcastAck own
-their scheduler dependencies, retries, and batching.
+VChannelRecoveryModule builds a no-gap WALView and sends QueryRuntime the
+underlying immutable message for live events. QueryRuntime maintains its own
+TimeTick filtering and ordering. It does not retain RecoveryStorage handles,
+participate in DataPoint advancement, or delay BroadcastAck.
 
-## 6. Object Storage Work
+WALView capture waits for the actual VChannel conditions required by the
+snapshot, including resolving flushed segments that lack `SealedAtDataVersion`.
+It does not wait for a global DataScanner barrier. Multiple VChannels may
+advance DataVersions independently; segment selection uses each segment's own
+`SealedAtDataVersion` against the target QueryView DataVersion.
 
-SegmentView retains handles for actual data or lifecycle work:
+## 6. Correctness Invariants
 
-- ensure-growing for CreateSegment;
-- pending Insert packs;
-- whole-Txn Insert work;
-- flush and final segment commit.
-
-TransformLog retains handles for Delete/Txn(Delete) entries and barriers that
-must make preceding transform entries durable. The handle releases after chunk
-durability and in-memory metadata installation. Materialization is independent.
-
-Async consumers follow:
-
-```text
-perform idempotent/retryable work
-  -> install resulting in-memory recovery metadata
-  -> mark component dirty
-  -> Release retained handle
-```
-
-Replay is required to be data-safe, not physically exactly once. Repeated
-object writes may leave unreferenced objects and repeated lifecycle calls may
-repeat external events, but persisted metadata must reference complete durable
-data and replay must not skip unfinished work.
-
-## 7. Broadcast ACK
-
-BroadcastAck is the final Owner release sink. It adds no reference and never
-reads, clones, or retains the Owner. It releases the Owner immediately for
-every data-scanner message. When the Tracker entry's fixed
-`RequiresBroadcastAck` property is true, the message is queued in WAL order and
-the queue head waits for
-`TrackedMessage.ConsumersDone`.
-
-After local consumers finish, BroadcastAck calls Coordinator ACK with the
-Tracker-owned immutable message. Success marks the Tracker broadcast condition
-complete. Failure keeps the FIFO head pending and prevents the Data checkpoint
-from advancing past that message.
-
-`AckSyncUp` disables Coordinator FastAck. It does not require checkpoint
-persistence or TransformLog materialization before consuming-side ACK.
-
-## 8. Persist Batch
-
-RecoveryStorage serializes observation long enough to freeze a batch boundary,
-then consumes stable module snapshots:
-
-```text
-freeze MetaPoint
-freeze DataPoint = min(MetaPoint, Tracker.CompletedPoint())
-  -> consume VChannel/Segment/TransformLog DirtySnapshots
-  -> persist all DirtySnapshots
-  -> MarkPersisted for successful snapshots
-  -> persist WALCheckpoint{MetaPoint, DataPoint} last
-```
-
-If a module snapshot fails, the checkpoint is not written. If metadata succeeds
-but checkpoint persistence fails, metadata is ahead of the old checkpoint and
-replay from the old point remains safe.
-
-Component-local timeticks still exist for storage layout, cleanup,
-materialization, subscriptions, and execution order. They are not generic
-RecoveryStorage checkpoint barriers.
-
-## 9. Cleanup
-
-Segment and VChannel tombstones are persisted before physical deletion.
-Cleanup uses the last persisted Meta and Data physical timeticks, not the
-current in-memory checkpoint. TransformLog object deletion follows persisted
-truncation metadata. Message Ack does not replace these component-specific
-retention rules.
-
-The Tracker retains each original message until its entry is fully complete and
-leaves the continuous prefix. This is the ownership required by future
-message-level checkpoint compaction or Defrag; Defrag itself is outside the
-current implementation.
-
-## 10. Close And Crash Recovery
-
-There is no failed completion state. A task releases a handle only after its
-success condition. Coordinator ACK failure leaves the broadcast condition
-incomplete. Close does not synthesize releases or ACK completion.
-
-Graceful close waits for scheduled tasks and persists dirty snapshots when
-possible. A process crash discards in-memory Owners, retained handles, and
-Tracker entries. Restart replays from the persisted Data checkpoint and
-reconstructs them. Idempotent Coordinator ACK may be repeated.
-
-## 11. Module API
-
-```go
-type Module interface {
-    ObserveMessage(ctx context.Context, owner message.OwnedImmutableMessage)
-    SwitchIntoMetaAndData() ModuleSnapshot
-    ConsumeDirtySnapshots() []DirtySnapshot
-}
-```
-
-Both replay lanes call `ObserveMessage`. The only difference is ownership
-provenance: Meta-only uses a temporary non-Tracker Owner released by
-RecoveryStorage after synchronous dispatch; Data replay uses the Tracker Owner,
-whose final top-level release is routed through the dedicated BroadcastAck sink.
-
-## 12. Invariants
-
-1. Meta-only replay never creates a Tracker entry or claims data completion.
-2. Every data-scanner message has one Tracker entry and one Owner.
-3. Actual asynchronous data work owns retained handles; observation alone does
-   not create a handle.
-4. BroadcastAck is outside the module lifecycle, adds no reference, reads no
-   Owner state, and releases the Owner immediately.
-5. Broadcast Tracker entries require both local consumer completion and
-   Coordinator ACK success.
-6. DataPoint never exceeds the frozen MetaPoint or the continuous completed
-   Tracker frontier.
-7. DirtySnapshots are persisted before the checkpoint that covers them.
-8. TransformLog message completion does not wait for materialization.
-9. QueryRuntime borrows live immutable messages and never participates in
-   Message Ack.
-10. Recovery uses `LastConfirmedMessageID + DeliverPolicyStartFrom`.
+1. WAL replay is the source of truth; an unfinished message is never skipped.
+2. Tracker entries are ordered by observed WAL messages and their points are
+   monotonic.
+3. Per-entry message pointers are cleared at finalization, independent of
+   ordered-prefix removal.
+4. Async persistence units own explicit Retained handles and release only after
+   their success condition.
+5. Segment flush completion is object/lifecycle durability, not QueryRuntime
+   readiness or L0 materialization.
+6. TransformLog completion is chunk durability, not materialization.
+7. DirtySnapshots precede the WALCheckpoint in every persist batch.
+8. BroadcastAck waits for Owner exclusivity but not checkpoint persistence.
+9. Meta-only processing uses a temporary Owner and does not create DataPoint
+   entries.
+10. QueryRuntime's ordinary Go message reachability is independent of message
+    persistence tracking.

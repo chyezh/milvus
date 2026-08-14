@@ -24,7 +24,6 @@ import (
 )
 
 type retainingRecoveryModule struct {
-	owner   message.OwnedImmutableMessage
 	message message.ImmutableMessage
 	handle  message.RetainedImmutableMessage
 }
@@ -51,11 +50,10 @@ func installRetainingManager(t *testing.T, storage *recoveryStorageImpl, retaine
 	mock := mockey.Mock((*vchannel.PChannelRecoveryManager).ObserveMessage).To(func(
 		_ *vchannel.PChannelRecoveryManager,
 		_ context.Context,
-		owner message.OwnedImmutableMessage,
+		retainedMessage message.RetainedImmutableMessage,
 	) {
-		retained.owner = owner
-		retained.message = owner.Message()
-		retained.handle = owner.Clone()
+		retained.message = retainedMessage.Message()
+		retained.handle = retainedMessage.Clone()
 	}).Build()
 	t.Cleanup(func() { mock.UnPatch() })
 }
@@ -85,7 +83,6 @@ func TestDataScannerReleasesOwnerAfterAllModulesObserve(t *testing.T) {
 
 	require.NotNil(t, module.message)
 	require.NotNil(t, module.handle)
-	assert.Panics(t, func() { module.owner.Message() })
 	assert.Equal(t, msg.TimeTick(), module.handle.Message().TimeTick())
 	point := storage.ackTracker.CompletedPoint()
 	assert.Equal(t, uint64(10), point.TimeTick)

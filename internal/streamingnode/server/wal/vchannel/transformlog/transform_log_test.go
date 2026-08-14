@@ -58,12 +58,12 @@ func TestObserveMessageOwnsAppendFlushAndMaterializeScheduling(t *testing.T) {
 
 	deleteOwner := newRefCountedTransformMessage(newTransformLogTestDeleteMessage(t, 10))
 	deleteProbe := deleteOwner.Clone()
-	transformLog.ObserveMessage(context.Background(), deleteOwner)
+	observeRetainedTransformMessage(transformLog, deleteOwner)
 	assert.Empty(t, scheduler.tasks)
 
 	flushOwner := newRefCountedTransformMessage(newTransformLogTestManualFlushMessage(t, 20))
 	flushProbe := flushOwner.Clone()
-	transformLog.ObserveMessage(context.Background(), flushOwner)
+	observeRetainedTransformMessage(transformLog, flushOwner)
 	require.Len(t, scheduler.tasks, 2)
 	assert.IsType(t, &transformFlushTask{}, scheduler.tasks[0])
 	assert.IsType(t, &transformMaterializeTask{}, scheduler.tasks[1])
@@ -85,7 +85,7 @@ func TestEmptyBarrierDoesNotCreateDirtySnapshot(t *testing.T) {
 
 	owner := newRefCountedTransformMessage(newTransformLogTestManualFlushMessage(t, 20))
 	probe := owner.Clone()
-	transformLog.ObserveMessage(context.Background(), owner)
+	observeRetainedTransformMessage(transformLog, owner)
 	owner.Release()
 	assert.NotPanics(t, func() { _ = probe.Message() })
 	probe.Release()
