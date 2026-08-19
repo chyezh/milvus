@@ -25,7 +25,7 @@ type QueryViewSegmentReadinessManager struct {
 
 	mu       sync.Mutex
 	views    map[qviews.QueryViewKey]*transformViewRef
-	segments map[int64]*transformSegmentState
+	segments map[segmentRefKey]*transformSegmentState
 }
 
 const transformCatchupWorkerCount = 4
@@ -46,7 +46,7 @@ func NewQueryViewSegmentReadinessManagerWithScheduler(scheduler nodescheduler.Sc
 		collections:  collectionManager,
 		catchupTasks: make(chan TransformSegment, 1024),
 		views:        make(map[qviews.QueryViewKey]*transformViewRef),
-		segments:     make(map[int64]*transformSegmentState),
+		segments:     make(map[segmentRefKey]*transformSegmentState),
 	}
 	for i := 0; i < transformCatchupWorkerCount; i++ {
 		go m.catchupWorker()
@@ -182,7 +182,7 @@ func (m *QueryViewSegmentReadinessManager) continueAcquire(req AcquireSegments, 
 			m.onPhysicalLoaded(loaded)
 		},
 		OnSegmentUnrecoverable: func(segmentID int64, err error) {
-			m.failSegment(segmentID, err)
+			m.failSegment(newSegmentRefKey(segmentID, req.Key.WALReplicaID), err)
 		},
 		OnUnrecoverable: func() {
 			m.failView(req.Key)
@@ -214,14 +214,15 @@ func (m *QueryViewSegmentReadinessManager) recordPendingAcquire(req AcquireSegme
 	}
 	m.views[req.Key] = ref
 	for segmentID, partitionID := range segmentPartitions {
-		state := m.segments[segmentID]
+		segmentKey := newSegmentRefKey(segmentID, req.Key.WALReplicaID)
+		state := m.segments[segmentKey]
 		if state == nil {
 			state = &transformSegmentState{
 				state:   transformSegmentWaiting,
 				refs:    make(map[qviews.QueryViewKey]struct{}),
 				waiters: make(map[qviews.QueryViewKey]transformSegmentWaiter),
 			}
-			m.segments[segmentID] = state
+			m.segments[segmentKey] = state
 		}
 		state.refs[req.Key] = struct{}{}
 		state.waiters[req.Key] = transformSegmentWaiter{
@@ -257,14 +258,15 @@ func (m *QueryViewSegmentReadinessManager) activateAcquire(req AcquireSegments, 
 	ref.collectionGuard = collectionGuard
 	ref.onUnrecoverable = req.OnUnrecoverable
 	for segmentID := range ref.segments {
-		state := m.segments[segmentID]
+		segmentKey := newSegmentRefKey(segmentID, req.Key.WALReplicaID)
+		state := m.segments[segmentKey]
 		if state == nil {
 			state = &transformSegmentState{
 				state:   transformSegmentWaiting,
 				refs:    make(map[qviews.QueryViewKey]struct{}),
 				waiters: make(map[qviews.QueryViewKey]transformSegmentWaiter),
 			}
-			m.segments[segmentID] = state
+			m.segments[segmentKey] = state
 			state.refs[req.Key] = struct{}{}
 		}
 		waiter := transformSegmentWaiter{
@@ -325,7 +327,7 @@ func (m *QueryViewSegmentReadinessManager) markPhysicalLoaded(segment TransformS
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	state := m.segments[segment.ID()]
+	state := m.segments[segmentRefKeyFromSegment(segment)]
 	if state == nil || len(state.refs) == 0 {
 		return false, false
 	}
@@ -340,11 +342,11 @@ func (m *QueryViewSegmentReadinessManager) markPhysicalLoaded(segment TransformS
 func (m *QueryViewSegmentReadinessManager) registerAndCatchup(segment TransformSegment) {
 	reg, err := m.buffer.RegisterSegment(context.Background(), segment)
 	if err != nil {
-		m.failSegment(segment.ID(), err)
+		m.failSegment(segmentRefKeyFromSegment(segment), err)
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	if !m.storeRegistration(segment.ID(), segment, reg, cancel) {
+	if !m.storeRegistration(segment, reg, cancel) {
 		cancel()
 		reg.Unregister()
 		return
@@ -352,19 +354,19 @@ func (m *QueryViewSegmentReadinessManager) registerAndCatchup(segment TransformS
 	if err := reg.WaitCatchup(ctx); err != nil {
 		cancel()
 		reg.Unregister()
-		m.failSegment(segment.ID(), err)
+		m.failSegment(segmentRefKeyFromSegment(segment), err)
 		return
 	}
 	cancel()
-	for _, waiter := range m.markSegmentReady(segment.ID()) {
+	for _, waiter := range m.markSegmentReady(segmentRefKeyFromSegment(segment)) {
 		waiter.reportReady()
 	}
 }
 
-func (m *QueryViewSegmentReadinessManager) storeRegistration(segmentID int64, segment TransformSegment, reg TransformRegistration, cancel context.CancelFunc) bool {
+func (m *QueryViewSegmentReadinessManager) storeRegistration(segment TransformSegment, reg TransformRegistration, cancel context.CancelFunc) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	state := m.segments[segmentID]
+	state := m.segments[segmentRefKeyFromSegment(segment)]
 	if state == nil || state.segment != segment || len(state.refs) == 0 {
 		return false
 	}
@@ -374,10 +376,10 @@ func (m *QueryViewSegmentReadinessManager) storeRegistration(segmentID int64, se
 	return true
 }
 
-func (m *QueryViewSegmentReadinessManager) markSegmentReady(segmentID int64) []transformSegmentWaiter {
+func (m *QueryViewSegmentReadinessManager) markSegmentReady(segmentKey segmentRefKey) []transformSegmentWaiter {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	state := m.segments[segmentID]
+	state := m.segments[segmentKey]
 	if state == nil || state.state != transformSegmentCatchingUp {
 		return nil
 	}
@@ -393,9 +395,9 @@ func (m *QueryViewSegmentReadinessManager) markSegmentReady(segmentID int64) []t
 	return waiters
 }
 
-func (m *QueryViewSegmentReadinessManager) failSegment(segmentID int64, err error) {
+func (m *QueryViewSegmentReadinessManager) failSegment(segmentKey segmentRefKey, err error) {
 	m.mu.Lock()
-	state := m.segments[segmentID]
+	state := m.segments[segmentKey]
 	if state == nil {
 		m.mu.Unlock()
 		return
@@ -407,7 +409,7 @@ func (m *QueryViewSegmentReadinessManager) failSegment(segmentID int64, err erro
 	for _, waiter := range state.waiters {
 		waiters = append(waiters, waiter)
 	}
-	delete(m.segments, segmentID)
+	delete(m.segments, segmentKey)
 	m.mu.Unlock()
 
 	if cancel != nil {
@@ -420,7 +422,7 @@ func (m *QueryViewSegmentReadinessManager) failSegment(segmentID int64, err erro
 		_ = segment.Release(context.Background())
 	}
 	if resetter, ok := m.physical.(PhysicalSegmentResetter); ok {
-		resetter.ResetSegment(segmentID)
+		resetter.ResetSegment(segmentKey.segmentID, segmentKey.walReplicaID)
 	}
 	if err == nil {
 		err = errors.New("segment became unrecoverable")
@@ -428,7 +430,7 @@ func (m *QueryViewSegmentReadinessManager) failSegment(segmentID int64, err erro
 	for _, waiter := range waiters {
 		qvobserve.Observe(context.TODO(), qvobserve.QueryNodeSegmentFailureEvent{
 			View:      waiter.key,
-			SegmentID: segmentID,
+			SegmentID: segmentKey.segmentID,
 			Err:       err,
 		})
 		m.notifyUnrecoverable(waiter.key, waiter.onUnrecoverable)
@@ -445,7 +447,8 @@ func (m *QueryViewSegmentReadinessManager) failView(key qviews.QueryViewKey) {
 	ref.unrecoverable = true
 	cb := ref.onUnrecoverable
 	for segmentID := range ref.segments {
-		if state := m.segments[segmentID]; state != nil {
+		segmentKey := newSegmentRefKey(segmentID, key.WALReplicaID)
+		if state := m.segments[segmentKey]; state != nil {
 			delete(state.waiters, key)
 		}
 	}
@@ -465,7 +468,8 @@ func (m *QueryViewSegmentReadinessManager) notifyUnrecoverable(key qviews.QueryV
 	}
 	ref.unrecoverable = true
 	for segmentID := range ref.segments {
-		if state := m.segments[segmentID]; state != nil {
+		segmentKey := newSegmentRefKey(segmentID, key.WALReplicaID)
+		if state := m.segments[segmentKey]; state != nil {
 			delete(state.waiters, key)
 		}
 	}
@@ -554,7 +558,8 @@ func (m *QueryViewSegmentReadinessManager) detachViewLocked(key qviews.QueryView
 		guards: transformViewGuards{transform: ref.transformGuard, collection: ref.collectionGuard},
 	}
 	for segmentID := range ref.segments {
-		state := m.segments[segmentID]
+		segmentKey := newSegmentRefKey(segmentID, key.WALReplicaID)
+		state := m.segments[segmentKey]
 		if state == nil {
 			continue
 		}
@@ -574,10 +579,10 @@ func (m *QueryViewSegmentReadinessManager) detachViewLocked(key qviews.QueryView
 					continue
 				}
 				detached.segments = append(detached.segments, state.segment)
-				delete(m.segments, segmentID)
+				delete(m.segments, segmentKey)
 				continue
 			}
-			delete(m.segments, segmentID)
+			delete(m.segments, segmentKey)
 		}
 	}
 	return detached

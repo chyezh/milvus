@@ -11,8 +11,111 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/walmanager"
+	"github.com/milvus-io/milvus/internal/util/streamingutil/service/contextutil"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 )
+
+func TestCreateSubscribeServerUsesWALReplicaID(t *testing.T) {
+	ctx := contextutil.WithCreateTransformStream(context.Background(), &streamingpb.CreateTransformStreamRequest{
+		Pchannel: &streamingpb.PChannelInfo{
+			Name:       "pchannel",
+			Term:       1,
+			AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+		},
+		WalReplicaId: 2,
+	})
+	md, ok := metadata.FromOutgoingContext(ctx)
+	require.True(t, ok)
+
+	logStream := newFakeTransformLogStream()
+	walManager := &fakeCreateSubscribeWALManager{logStream: logStream}
+	stream := newFakeSubscribeTransformServer(metadata.NewIncomingContext(context.Background(), md))
+
+	server, err := CreateSubscribeServer(walManager, stream)
+	require.NoError(t, err)
+	require.Same(t, logStream, server.logStream)
+	require.Equal(t, types.PChannelInfo{Name: "pchannel", Term: 1, AccessMode: types.AccessModeRO}, walManager.channel)
+	require.Equal(t, int64(2), walManager.walReplicaID)
+}
+
+func TestSubscribeServerMultiplexesSubscriptionsOnSingleTransformStream(t *testing.T) {
+	ctx := contextutil.WithCreateTransformStream(context.Background(), &streamingpb.CreateTransformStreamRequest{
+		Pchannel: &streamingpb.PChannelInfo{
+			Name:       "pchannel",
+			Term:       1,
+			AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+		},
+		WalReplicaId: 2,
+	})
+	md, ok := metadata.FromOutgoingContext(ctx)
+	require.True(t, ok)
+
+	logStream := newFakeTransformLogStream()
+	walManager := &fakeCreateSubscribeWALManager{logStream: logStream}
+	stream := newFakeSubscribeTransformServer(metadata.NewIncomingContext(context.Background(), md))
+	server, err := CreateSubscribeServer(walManager, stream)
+	require.NoError(t, err)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.Execute()
+	}()
+
+	stream.recv(&streamingpb.TransformRequest{
+		Request: &streamingpb.TransformRequest_Create{
+			Create: &streamingpb.CreateTransformSubscriptionRequest{
+				SubscriptionId:     10,
+				Vchannel:           "pchannel_100v0",
+				StartAfterTimeTick: 100,
+			},
+		},
+	})
+	createResp := stream.sent(t)
+	require.Equal(t, int64(10), createResp.GetCreate().GetSubscriptionId())
+
+	stream.recv(&streamingpb.TransformRequest{
+		Request: &streamingpb.TransformRequest_Create{
+			Create: &streamingpb.CreateTransformSubscriptionRequest{
+				SubscriptionId:     11,
+				Vchannel:           "pchannel_101v0",
+				StartAfterTimeTick: 200,
+			},
+		},
+	})
+	createResp = stream.sent(t)
+	require.Equal(t, int64(11), createResp.GetCreate().GetSubscriptionId())
+
+	require.Equal(t, 1, walManager.acquireCount)
+	require.Equal(t, "pchannel", walManager.acquirePChannel)
+	require.Equal(t, int64(2), walManager.acquireWALReplicaID)
+	require.Equal(t, "pchannel_100v0", logStream.subscription(10).VChannel())
+	require.Equal(t, "pchannel_101v0", logStream.subscription(11).VChannel())
+
+	stream.recv(&streamingpb.TransformRequest{
+		Request: &streamingpb.TransformRequest_CloseStream{
+			CloseStream: &streamingpb.CloseTransformStreamRequest{},
+		},
+	})
+	require.NotNil(t, stream.sent(t).GetCloseStream())
+	require.NoError(t, <-errCh)
+}
+
+func TestSubscribeServerEncodesUnavailableTransformLogAsChannelNotExist(t *testing.T) {
+	stream := newFakeSubscribeTransformServer(context.Background())
+	server := &SubscribeServer{stream: stream}
+
+	err := server.sendSubscriptionError(10, "pchannel_100v0", wal.ErrTransformLogVChannelUnavailable)
+
+	require.NoError(t, err)
+	resp := stream.sent(t)
+	subErr := resp.GetSubscriptionError()
+	require.NotNil(t, subErr)
+	require.Equal(t, int64(10), subErr.GetSubscriptionId())
+	require.Equal(t, "pchannel_100v0", subErr.GetVchannel())
+	require.Equal(t, streamingpb.StreamingCode_STREAMING_CODE_CHANNEL_NOT_EXIST, subErr.GetError().GetCode())
+}
 
 func TestSubscribeServerCloseSubscriptionAck(t *testing.T) {
 	stream := newFakeSubscribeTransformServer(context.Background())
@@ -90,11 +193,90 @@ func TestSubscribeServerClosesLogStreamOnCreateSendError(t *testing.T) {
 	require.True(t, logStream.subscription(10).closed)
 }
 
+func TestSubscribeServerExitsWhenLogStreamCloses(t *testing.T) {
+	stream := newFakeSubscribeTransformServer(context.Background())
+	logStream := newFakeTransformLogStream()
+	server := &SubscribeServer{
+		logStream: logStream,
+		stream:    stream,
+		subs:      make(map[int64]wal.TransformLogSubscription),
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.Execute()
+	}()
+
+	stream.recv(&streamingpb.TransformRequest{
+		Request: &streamingpb.TransformRequest_Create{
+			Create: &streamingpb.CreateTransformSubscriptionRequest{
+				SubscriptionId:     10,
+				Vchannel:           "v1",
+				StartAfterTimeTick: 100,
+			},
+		},
+	})
+	createResp := stream.sent(t)
+	require.Equal(t, int64(10), createResp.GetCreate().GetSubscriptionId())
+
+	logStream.finish(nil)
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("subscribe server did not exit after log stream closed")
+	}
+	require.True(t, logStream.closed)
+	require.True(t, logStream.subscription(10).closed)
+}
+
+type fakeCreateSubscribeWALManager struct {
+	walmanager.Manager
+
+	channel      types.PChannelInfo
+	walReplicaID int64
+	logStream    wal.TransformLogStream
+
+	acquireCount        int
+	acquirePChannel     string
+	acquireWALReplicaID int64
+}
+
+func (m *fakeCreateSubscribeWALManager) GetAvailableWALReplica(channel types.PChannelInfo, walReplicaID int64) (wal.WAL, error) {
+	m.channel = channel
+	m.walReplicaID = walReplicaID
+	return fakeCreateSubscribeWAL{manager: m}, nil
+}
+
+type fakeCreateSubscribeWAL struct {
+	wal.WAL
+
+	manager *fakeCreateSubscribeWALManager
+}
+
+func (w fakeCreateSubscribeWAL) TransformLog() wal.TransformLogAccesser {
+	return fakeTransformLogAccesser{manager: w.manager}
+}
+
+type fakeTransformLogAccesser struct {
+	manager *fakeCreateSubscribeWALManager
+}
+
+func (a fakeTransformLogAccesser) AcquireStream(_ context.Context, pchannel string, walReplicaID int64) (wal.TransformLogStream, error) {
+	a.manager.acquireCount++
+	a.manager.acquirePChannel = pchannel
+	a.manager.acquireWALReplicaID = walReplicaID
+	return a.manager.logStream, nil
+}
+
 type fakeTransformLogStream struct {
-	mu     sync.Mutex
-	subs   map[int64]*fakeTransformLogSubscription
-	done   chan struct{}
-	closed bool
+	mu        sync.Mutex
+	subs      map[int64]*fakeTransformLogSubscription
+	done      chan struct{}
+	err       error
+	closed    bool
+	closeOnce sync.Once
 }
 
 func newFakeTransformLogStream() *fakeTransformLogStream {
@@ -120,14 +302,26 @@ func (s *fakeTransformLogStream) Done() <-chan struct{} {
 }
 
 func (s *fakeTransformLogStream) Error() error {
-	return nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.err
 }
 
 func (s *fakeTransformLogStream) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.closed = true
-	return nil
+	s.mu.Unlock()
+	s.finish(nil)
+	return s.Error()
+}
+
+func (s *fakeTransformLogStream) finish(err error) {
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		s.err = err
+		s.mu.Unlock()
+		close(s.done)
+	})
 }
 
 func (s *fakeTransformLogStream) subscription(id int64) *fakeTransformLogSubscription {

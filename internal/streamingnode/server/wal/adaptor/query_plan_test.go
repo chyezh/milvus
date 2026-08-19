@@ -6,18 +6,26 @@ import (
 	"context"
 	"testing"
 
+	"github.com/bytedance/mockey"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/metastore"
+	"github.com/milvus-io/milvus/internal/mocks/util/mock_segcore"
+	queryplanprovider "github.com/milvus-io/milvus/internal/streamingnode/server/queryplan/provider"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/shard"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/timetick/mvcc"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/queryresource"
 	"github.com/milvus-io/milvus/internal/util/function"
 	"github.com/milvus-io/milvus/internal/views/qviews"
+	"github.com/milvus-io/milvus/internal/views/viewerror"
+	"github.com/milvus-io/milvus/internal/views/viewquery"
 	"github.com/milvus-io/milvus/internal/views/worknode/handler"
 	"github.com/milvus-io/milvus/pkg/v3/mocks/streaming/util/mock_message"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
@@ -80,7 +88,7 @@ func newQueryPlanTestMeta(state viewpb.QueryViewState) *viewpb.QueryViewMeta {
 func newQueryPlanTestView(state viewpb.QueryViewState) qviews.QueryViewAtWorkNode {
 	return qviews.NewFullQueryViewAtStreamingNode(
 		newQueryPlanTestMeta(state),
-		&viewpb.QueryViewOfStreamingNode{},
+		&viewpb.QueryViewOfStreamingNode{WalReplicaId: 2},
 		[]*viewpb.QueryViewOfQueryNode{
 			{
 				NodeId: 1,
@@ -98,14 +106,16 @@ func newQueryPlanTestView(state viewpb.QueryViewState) qviews.QueryViewAtWorkNod
 	)
 }
 
+func queryPlanTestSchema() *schemapb.CollectionSchema {
+	return mock_segcore.GenTestCollectionSchema("query_plan_test", schemapb.DataType_Int64, false)
+}
+
 func newQueryPlanTestWALAdaptor(t *testing.T) *walAdaptorImpl {
 	t.Helper()
 
 	resource.InitForTest(t)
 	functionRunnerKey := shard.WALFunctionRunnerKey(queryPlanTestVChannel)
-	require.NoError(t, function.GetManager().Alloc(10, functionRunnerKey, &schemapb.CollectionSchema{
-		Fields: []*schemapb.FieldSchema{{FieldID: 0}},
-	}))
+	require.NoError(t, function.GetManager().Alloc(10, functionRunnerKey, queryPlanTestSchema()))
 	t.Cleanup(func() { function.GetManager().Release(10, functionRunnerKey) })
 
 	resMgr := &queryPlanTestResourceManager{}
@@ -136,6 +146,20 @@ func newQueryPlanTestWALAdaptor(t *testing.T) *walAdaptorImpl {
 	}
 }
 
+func newQueryPlanTestROWALAdaptor(t *testing.T) *roWALAdaptorImpl {
+	t.Helper()
+
+	rw := newQueryPlanTestWALAdaptor(t)
+	functionRunnerKey := shard.WALReplicaFunctionRunnerKey(queryPlanTestVChannel, 2)
+	require.NoError(t, function.GetManager().Alloc(10, functionRunnerKey, queryPlanTestSchema()))
+	t.Cleanup(func() { function.GetManager().Release(10, functionRunnerKey) })
+	return &roWALAdaptorImpl{
+		lifetime:         typeutil.NewLifetime(),
+		roWALImpls:       rw.roWALImpls,
+		queryViewHandler: rw.queryViewHandler,
+	}
+}
+
 func TestWALAdaptorGetQueryPlanBuildsPlanFromLatestUpView(t *testing.T) {
 	walAdaptor := newQueryPlanTestWALAdaptor(t)
 	searchReq := &internalpb.SearchRequest{CollectionID: 10}
@@ -161,7 +185,109 @@ func TestWALAdaptorGetQueryPlanBuildsPlanFromLatestUpView(t *testing.T) {
 	assert.Equal(t, []int64{20}, plan.GetLegacySearchRequest().GetPartitionIDs())
 	require.Len(t, plan.GetWorkNodes(), 2)
 	assert.Equal(t, "by-dev-rootcoord-dml_0", plan.GetWorkNodes()[0].GetStreamingNode().GetPchannel())
+	assert.Equal(t, int64(2), plan.GetWorkNodes()[0].GetStreamingNode().GetWalReplicaId())
 	assert.Equal(t, int64(2), plan.GetWorkNodes()[1].GetQueryNode().GetNodeId())
+}
+
+func TestROWALAdaptorGetQueryPlanSupportsExplicitMVCC(t *testing.T) {
+	roWAL := newQueryPlanTestROWALAdaptor(t)
+	require.Implements(t, (*queryplanprovider.QueryPlanProvider)(nil), roWAL)
+	require.Implements(t, (*viewquery.TaskProvider)(nil), roWAL)
+
+	req := &viewpb.GetQueryPlanRequest{
+		CollectionId: 10,
+		ShardId:      &viewpb.ShardID{ReplicaId: 1, Vchannel: queryPlanTestVChannel},
+		Mvcc: &viewpb.GetQueryPlanRequest_QueryPlanMvcc{QueryPlanMvcc: &viewpb.QueryPlanMVCC{
+			GrowingTimetick:      123,
+			TransformingTimetick: 122,
+		}},
+		Request: &viewpb.GetQueryPlanRequest_LegacySearchRequest{
+			LegacySearchRequest: &internalpb.SearchRequest{CollectionID: 10},
+		},
+	}
+
+	plan, err := roWAL.GetQueryPlan(context.Background(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, uint64(123), plan.GetMvcc().GetGrowingTimetick())
+	assert.Equal(t, uint64(122), plan.GetMvcc().GetTransformingTimetick())
+	require.Len(t, plan.GetWorkNodes(), 3)
+	assert.Equal(t, int64(2), plan.GetWorkNodes()[0].GetStreamingNode().GetWalReplicaId())
+}
+
+func TestWALAdaptorGetQueryPlanLooksUpRuntimeWithWALReplicaID(t *testing.T) {
+	walAdaptor := newQueryPlanTestWALAdaptor(t)
+	walAdaptor.viewResourceManager = &vchannel.PChannelRecoveryManager{}
+	var captured qviews.QueryViewKey
+	mock := mockey.Mock((*vchannel.PChannelRecoveryManager).GetQueryRuntime).
+		To(func(_ *vchannel.PChannelRecoveryManager, qvKey qviews.QueryViewKey) (*queryresource.QueryRuntime, bool) {
+			captured = qvKey
+			return nil, false
+		}).Build()
+	defer mock.UnPatch()
+
+	_, err := walAdaptor.GetQueryPlan(context.Background(), &viewpb.GetQueryPlanRequest{
+		CollectionId: 10,
+		ShardId:      &viewpb.ShardID{ReplicaId: 1, Vchannel: queryPlanTestVChannel},
+		Mvcc: &viewpb.GetQueryPlanRequest_QueryPlanMvcc{QueryPlanMvcc: &viewpb.QueryPlanMVCC{
+			GrowingTimetick:      123,
+			TransformingTimetick: 122,
+		}},
+		Request: &viewpb.GetQueryPlanRequest_LegacySearchRequest{
+			LegacySearchRequest: &internalpb.SearchRequest{CollectionID: 10},
+		},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), captured.WALReplicaID)
+}
+
+func TestROWALAdaptorGetQueryPlanLooksUpRuntimeWithWALReplicaID(t *testing.T) {
+	roWAL := newQueryPlanTestROWALAdaptor(t)
+	roWAL.viewResourceManager = &vchannel.PChannelRecoveryManager{}
+	var captured qviews.QueryViewKey
+	mock := mockey.Mock((*vchannel.PChannelRecoveryManager).GetQueryRuntime).
+		To(func(_ *vchannel.PChannelRecoveryManager, qvKey qviews.QueryViewKey) (*queryresource.QueryRuntime, bool) {
+			captured = qvKey
+			return nil, false
+		}).Build()
+	defer mock.UnPatch()
+
+	_, err := roWAL.GetQueryPlan(context.Background(), &viewpb.GetQueryPlanRequest{
+		CollectionId: 10,
+		ShardId:      &viewpb.ShardID{ReplicaId: 1, Vchannel: queryPlanTestVChannel},
+		Mvcc: &viewpb.GetQueryPlanRequest_QueryPlanMvcc{QueryPlanMvcc: &viewpb.QueryPlanMVCC{
+			GrowingTimetick:      123,
+			TransformingTimetick: 122,
+		}},
+		Request: &viewpb.GetQueryPlanRequest_LegacySearchRequest{
+			LegacySearchRequest: &internalpb.SearchRequest{CollectionID: 10},
+		},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), captured.WALReplicaID)
+}
+
+func TestROWALAdaptorRejectsPrimaryOnlyMVCC(t *testing.T) {
+	roWAL := newQueryPlanTestROWALAdaptor(t)
+
+	_, err := roWAL.GetMVCCTimestamp(context.Background(), &viewpb.GetMVCCTimestampRequest{
+		Vchannel: queryPlanTestVChannel,
+	})
+	require.Error(t, err)
+	assert.Equal(t, viewpb.ViewCode_VIEW_CODE_NOT_PRIMARY, viewerror.AsViewError(err).Code)
+
+	_, err = roWAL.GetQueryPlan(context.Background(), &viewpb.GetQueryPlanRequest{
+		CollectionId: 10,
+		ShardId:      &viewpb.ShardID{ReplicaId: 1, Vchannel: queryPlanTestVChannel},
+		Mvcc:         &viewpb.GetQueryPlanRequest_ConsistencyLevel{ConsistencyLevel: commonpb.ConsistencyLevel_Strong},
+		Request: &viewpb.GetQueryPlanRequest_LegacySearchRequest{
+			LegacySearchRequest: &internalpb.SearchRequest{CollectionID: 10},
+		},
+	})
+	require.Error(t, err)
+	assert.Equal(t, viewpb.ViewCode_VIEW_CODE_NOT_PRIMARY, viewerror.AsViewError(err).Code)
 }
 
 func TestWALAdaptorGetMVCCTimestampReturnsQueryPlanMVCC(t *testing.T) {
@@ -183,7 +309,7 @@ func TestWALAdaptorGetMVCCTimestampReturnsQueryPlanMVCC(t *testing.T) {
 func TestBuildQueryPlanWorkNodesPrunesByPartitionAndIgnoreGrowing(t *testing.T) {
 	view := &viewpb.QueryViewOfShard{
 		Meta:          &viewpb.QueryViewMeta{Vchannel: queryPlanTestVChannel},
-		StreamingNode: &viewpb.QueryViewOfStreamingNode{},
+		StreamingNode: &viewpb.QueryViewOfStreamingNode{WalReplicaId: 3},
 		QueryNode: []*viewpb.QueryViewOfQueryNode{
 			{
 				NodeId: 1,
@@ -248,7 +374,7 @@ func TestBuildQueryPlanWorkNodesPrunesStreamingNodeWhenVisibleGrowingRuntimeIsEm
 func TestBuildQueryPlanWorkNodesKeepsStreamingNodeWhenRuntimeMayHaveGrowingSegments(t *testing.T) {
 	view := &viewpb.QueryViewOfShard{
 		Meta:          &viewpb.QueryViewMeta{Vchannel: queryPlanTestVChannel},
-		StreamingNode: &viewpb.QueryViewOfStreamingNode{},
+		StreamingNode: &viewpb.QueryViewOfStreamingNode{WalReplicaId: 3},
 	}
 	probe := &queryPlanTestRuntimeProbe{mayHaveVisibleGrowingSegments: true}
 
@@ -259,12 +385,13 @@ func TestBuildQueryPlanWorkNodesKeepsStreamingNodeWhenRuntimeMayHaveGrowingSegme
 
 	require.Len(t, nodes, 1)
 	assert.NotNil(t, nodes[0].GetStreamingNode())
+	assert.Equal(t, int64(3), nodes[0].GetStreamingNode().GetWalReplicaId())
 }
 
 func TestBuildQueryPlanWorkNodesIncludesStreamingAndNonEmptyQueryNodes(t *testing.T) {
 	view := &viewpb.QueryViewOfShard{
 		Meta:          &viewpb.QueryViewMeta{Vchannel: queryPlanTestVChannel},
-		StreamingNode: &viewpb.QueryViewOfStreamingNode{},
+		StreamingNode: &viewpb.QueryViewOfStreamingNode{WalReplicaId: 3},
 		QueryNode: []*viewpb.QueryViewOfQueryNode{
 			{
 				NodeId: 1,
@@ -285,6 +412,7 @@ func TestBuildQueryPlanWorkNodesIncludesStreamingAndNonEmptyQueryNodes(t *testin
 
 	assert.Len(t, nodes, 2)
 	assert.NotNil(t, nodes[0].GetStreamingNode())
+	assert.Equal(t, int64(3), nodes[0].GetStreamingNode().GetWalReplicaId())
 	assert.Equal(t, int64(2), nodes[1].GetQueryNode().GetNodeId())
 }
 

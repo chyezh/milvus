@@ -33,7 +33,8 @@ func CreateProducer(
 	handler streamingpb.StreamingNodeHandlerServiceClient,
 ) (Producer, error) {
 	ctx = contextutil.WithCreateProducer(ctx, &streamingpb.CreateProducerRequest{
-		Pchannel: types.NewProtoFromPChannelInfo(opts.Assignment.Channel),
+		Pchannel:     types.NewProtoFromPChannelInfo(opts.Assignment.Channel),
+		WalReplicaId: opts.Assignment.WALReplicaID,
 	})
 	streamClient, err := handler.Produce(ctx)
 	if err != nil {

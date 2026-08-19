@@ -365,12 +365,17 @@ func (c *catalog) ListQueryViews(ctx context.Context, pChannelName string) ([]*v
 			return nil, errors.Wrapf(err, "unmarshal query view %s failed", keys[idx])
 		}
 		key := typeutil.After(keys[idx], prefix)
-		expectedFullKey, err := buildQueryViewKey(pChannelName, view.GetMeta())
+		expectedFullKey, err := buildQueryViewKey(pChannelName, view)
 		if err != nil {
 			return nil, err
 		}
 		expectedKey := typeutil.After(expectedFullKey, prefix)
-		if key != expectedKey {
+		legacyFullKey, err := buildLegacyQueryViewKey(pChannelName, view.GetMeta())
+		if err != nil {
+			return nil, err
+		}
+		legacyKey := typeutil.After(legacyFullKey, prefix)
+		if key != expectedKey && key != legacyKey {
 			return nil, merr.WrapErrDataIntegrityMsg(
 				"mismatched query view recovery meta, key %s, vchannel %s",
 				keys[idx],
@@ -392,7 +397,11 @@ func (c *catalog) SaveQueryViews(ctx context.Context, pChannelName string, views
 	removes := make([]string, 0)
 	for _, view := range views {
 		meta := view.GetMeta()
-		key, err := buildQueryViewKey(pChannelName, meta)
+		key, err := buildQueryViewKey(pChannelName, view)
+		if err != nil {
+			return err
+		}
+		legacyKey, err := buildLegacyQueryViewKey(pChannelName, meta)
 		if err != nil {
 			return err
 		}
@@ -401,12 +410,15 @@ func (c *catalog) SaveQueryViews(ctx context.Context, pChannelName string, views
 			if err != nil {
 				return errors.Wrapf(err, "marshal query view %s at pchannel %s failed", meta.GetVchannel(), pChannelName)
 			}
+			removes = removeString(removes, legacyKey)
 			removes = removeString(removes, key)
 			kvs[key] = string(data)
 			continue
 		}
 		delete(kvs, key)
 		removes = append(removes, key)
+		delete(kvs, legacyKey)
+		removes = append(removes, legacyKey)
 	}
 
 	return c.metaKV.MultiSaveAndRemove(ctx, kvs, removes)
@@ -538,8 +550,30 @@ func parseCompactVChannelKey(key string, prefix string, pchannelName string) (st
 	return funcutil.GetVirtualChannel(pchannelName, collectionID, int(vchannelIndex)), nil
 }
 
-// buildQueryViewKey returns the key for a specific StreamingNode query view recovery meta.
-func buildQueryViewKey(pChannelName string, meta *viewpb.QueryViewMeta) (string, error) {
+// buildQueryViewKey returns the per-WAL-replica key for a specific StreamingNode
+// query view recovery meta.
+func buildQueryViewKey(pChannelName string, view *viewpb.QueryViewOfShard) (string, error) {
+	meta := view.GetMeta()
+	if meta == nil {
+		return "", merr.WrapErrServiceInternalMsg("query view meta is nil")
+	}
+	walReplicaID := view.GetStreamingNode().GetWalReplicaId()
+	suffix, err := buildQueryViewKeySuffix(pChannelName, meta)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s%d/%s", buildQueryViewPrefix(pChannelName), walReplicaID, suffix), nil
+}
+
+func buildLegacyQueryViewKey(pChannelName string, meta *viewpb.QueryViewMeta) (string, error) {
+	suffix, err := buildQueryViewKeySuffix(pChannelName, meta)
+	if err != nil {
+		return "", err
+	}
+	return buildQueryViewPrefix(pChannelName) + suffix, nil
+}
+
+func buildQueryViewKeySuffix(pChannelName string, meta *viewpb.QueryViewMeta) (string, error) {
 	if meta == nil {
 		return "", merr.WrapErrServiceInternalMsg("query view meta is nil")
 	}
@@ -568,8 +602,7 @@ func buildQueryViewKey(pChannelName string, meta *viewpb.QueryViewMeta) (string,
 		)
 	}
 	dataVersion := version.GetDataVersion()
-	return fmt.Sprintf("%s%d/%d/%d/%d/%d/%d",
-		buildQueryViewPrefix(pChannelName),
+	return fmt.Sprintf("%d/%d/%d/%d/%d/%d",
 		meta.GetCollectionId(),
 		meta.GetReplicaId(),
 		vchannelIndex,

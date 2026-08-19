@@ -12,11 +12,11 @@ import (
 // ShardID is used as the routing key to locate the owning StreamingNode.
 type QueryPlanClient interface {
 	// GetQueryPlan generates a shard-level query plan from the StreamingNode owning the given shard.
-	GetQueryPlan(ctx context.Context, shardID qviews.ShardID, req *viewpb.GetQueryPlanRequest) (*viewpb.GetQueryPlanResponse, error)
+	GetQueryPlan(ctx context.Context, shardID qviews.ShardID, walReplicaID int64, req *viewpb.GetQueryPlanRequest) (*viewpb.GetQueryPlanResponse, error)
 
 	// GetMVCCTimestamp returns the MVCC frontiers from the primary replica's WAL.
 	// Used for cross-replica strong consistency.
-	GetMVCCTimestamp(ctx context.Context, shardID qviews.ShardID, req *viewpb.GetMVCCTimestampRequest) (*viewpb.GetMVCCTimestampResponse, error)
+	GetMVCCTimestamp(ctx context.Context, shardID qviews.ShardID, walReplicaID int64, req *viewpb.GetMVCCTimestampRequest) (*viewpb.GetMVCCTimestampResponse, error)
 }
 
 // ViewQueryServiceClient provides Phase 2 operations against work nodes (StreamingNode or QueryNode).

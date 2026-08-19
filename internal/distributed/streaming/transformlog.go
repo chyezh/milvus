@@ -16,11 +16,13 @@ type transformLogStreamManager struct {
 	w *walAccesserImpl
 }
 
-func (m transformLogStreamManager) AcquireStream(ctx context.Context, pchannel string) (wal.TransformLogStream, error) {
+func (m transformLogStreamManager) AcquireStream(ctx context.Context, pchannel string, walReplicaID int64) (wal.TransformLogStream, error) {
 	if !m.w.lifetime.Add(typeutil.LifetimeStateWorking) {
 		return nil, ErrWALAccesserClosed
 	}
 	defer m.w.lifetime.Done()
 
-	return resumabletransformlog.NewResumableStream(ctx, pchannel, m.w.handlerClient.AcquireTransformLogStream), nil
+	return resumabletransformlog.NewResumableStream(ctx, pchannel, func(ctx context.Context, pchannel string) (wal.TransformLogStream, error) {
+		return m.w.handlerClient.AcquireTransformLogStream(ctx, pchannel, walReplicaID)
+	}), nil
 }

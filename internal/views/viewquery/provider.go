@@ -13,6 +13,7 @@ type TaskProvider interface {
 	AcquireSearchSegmentTasks(
 		ctx context.Context,
 		shardID qviews.ShardID,
+		walReplicaID int64,
 		version qviews.QueryViewVersion,
 		mvcc *viewpb.QueryPlanMVCC,
 		req *internalpb.SearchRequest,
@@ -21,6 +22,7 @@ type TaskProvider interface {
 	AcquireQuerySegmentTasks(
 		ctx context.Context,
 		shardID qviews.ShardID,
+		walReplicaID int64,
 		version qviews.QueryViewVersion,
 		mvcc *viewpb.QueryPlanMVCC,
 		req *internalpb.RetrieveRequest,

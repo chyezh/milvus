@@ -57,8 +57,9 @@ func TestSNHandler_AcquireSearchSegmentTasksWaitsRuntimeAndReleasesViewRef(t *te
 
 	rc := &reportCollector{}
 	view := newPreparingSNView(1)
+	key := view.QueryViewKey()
 	h.ApplyViews([]handler.ApplyView{{View: view, OnReport: rc.onReport}})
-	acquired, ok := mgr.getAcquired(view.QueryViewKey())
+	acquired, ok := mgr.getAcquired(key)
 	require.True(t, ok)
 	acquired.OnReady()
 	h.ApplyViews([]handler.ApplyView{{View: newSNViewWithState(1, viewpb.QueryViewState_QueryViewStateUp), OnReport: rc.onReport}})
@@ -66,7 +67,8 @@ func TestSNHandler_AcquireSearchSegmentTasksWaitsRuntimeAndReleasesViewRef(t *te
 	tasks, err := h.AcquireSearchSegmentTasks(
 		context.Background(),
 		view.ShardID(),
-		view.QueryViewKey().QueryViewVersion,
+		key.WALReplicaID,
+		key.QueryViewVersion,
 		&viewpb.QueryPlanMVCC{GrowingTimetick: 11, TransformingTimetick: 10},
 		&internalpb.SearchRequest{CollectionID: testCollectionID, PartitionIDs: []int64{10}},
 	)
@@ -98,8 +100,9 @@ func TestSNHandler_AcquireQuerySegmentTasksWaitsRuntimeAndReleasesViewRef(t *tes
 
 	rc := &reportCollector{}
 	view := newPreparingSNView(1)
+	key := view.QueryViewKey()
 	h.ApplyViews([]handler.ApplyView{{View: view, OnReport: rc.onReport}})
-	acquired, ok := mgr.getAcquired(view.QueryViewKey())
+	acquired, ok := mgr.getAcquired(key)
 	require.True(t, ok)
 	acquired.OnReady()
 	h.ApplyViews([]handler.ApplyView{{View: newSNViewWithState(1, viewpb.QueryViewState_QueryViewStateUp), OnReport: rc.onReport}})
@@ -107,7 +110,8 @@ func TestSNHandler_AcquireQuerySegmentTasksWaitsRuntimeAndReleasesViewRef(t *tes
 	tasks, err := h.AcquireQuerySegmentTasks(
 		context.Background(),
 		view.ShardID(),
-		view.QueryViewKey().QueryViewVersion,
+		key.WALReplicaID,
+		key.QueryViewVersion,
 		&viewpb.QueryPlanMVCC{GrowingTimetick: 11, TransformingTimetick: 10},
 		&internalpb.RetrieveRequest{CollectionID: testCollectionID, PartitionIDs: []int64{20}},
 	)
@@ -132,8 +136,9 @@ func TestSNHandler_AcquireSearchSegmentTasksReleasesViewRefOnRuntimeError(t *tes
 
 	rc := &reportCollector{}
 	view := newPreparingSNView(1)
+	key := view.QueryViewKey()
 	h.ApplyViews([]handler.ApplyView{{View: view, OnReport: rc.onReport}})
-	acquired, ok := mgr.getAcquired(view.QueryViewKey())
+	acquired, ok := mgr.getAcquired(key)
 	require.True(t, ok)
 	acquired.OnReady()
 	h.ApplyViews([]handler.ApplyView{{View: newSNViewWithState(1, viewpb.QueryViewState_QueryViewStateUp), OnReport: rc.onReport}})
@@ -141,7 +146,8 @@ func TestSNHandler_AcquireSearchSegmentTasksReleasesViewRefOnRuntimeError(t *tes
 	_, err := h.AcquireSearchSegmentTasks(
 		context.Background(),
 		view.ShardID(),
-		view.QueryViewKey().QueryViewVersion,
+		key.WALReplicaID,
+		key.QueryViewVersion,
 		&viewpb.QueryPlanMVCC{GrowingTimetick: 11, TransformingTimetick: 10},
 		&internalpb.SearchRequest{CollectionID: testCollectionID},
 	)

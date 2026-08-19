@@ -62,6 +62,7 @@ func TestQNHandler_AcquireQuerySegmentTasksReleasesViewRefAfterHandles(t *testin
 	tasks, err := h.AcquireQuerySegmentTasks(
 		context.Background(),
 		view.ShardID(),
+		key.WALReplicaID,
 		key.QueryViewVersion,
 		&viewpb.QueryPlanMVCC{TransformingTimetick: 10},
 		&internalpb.RetrieveRequest{CollectionID: testCollectionID, PartitionIDs: []int64{10}},
@@ -105,6 +106,7 @@ func TestQNHandler_AcquireSearchSegmentTasksReleasesViewRefAfterHandles(t *testi
 	tasks, err := h.AcquireSearchSegmentTasks(
 		context.Background(),
 		view.ShardID(),
+		key.WALReplicaID,
 		key.QueryViewVersion,
 		&viewpb.QueryPlanMVCC{TransformingTimetick: 10},
 		&internalpb.SearchRequest{CollectionID: testCollectionID, PartitionIDs: []int64{20}},
@@ -141,6 +143,7 @@ func TestQNHandler_AcquireQuerySegmentTasksReleasesViewRefOnHandleError(t *testi
 	_, err := h.AcquireQuerySegmentTasks(
 		context.Background(),
 		view.ShardID(),
+		key.WALReplicaID,
 		key.QueryViewVersion,
 		&viewpb.QueryPlanMVCC{TransformingTimetick: 10},
 		&internalpb.RetrieveRequest{CollectionID: testCollectionID},
@@ -167,6 +170,7 @@ func TestQNHandler_AcquireSearchSegmentTasksReleasesViewRefOnOptimizerError(t *t
 	_, err := h.AcquireSearchSegmentTasks(
 		context.Background(),
 		view.ShardID(),
+		key.WALReplicaID,
 		key.QueryViewVersion,
 		&viewpb.QueryPlanMVCC{TransformingTimetick: 10},
 		&internalpb.SearchRequest{CollectionID: testCollectionID},
@@ -194,6 +198,7 @@ func TestQNHandler_AcquireQuerySegmentTasksReleasesViewRefOnTransformWaitError(t
 	_, err := h.AcquireQuerySegmentTasks(
 		context.Background(),
 		view.ShardID(),
+		key.WALReplicaID,
 		key.QueryViewVersion,
 		&viewpb.QueryPlanMVCC{TransformingTimetick: 10},
 		&internalpb.RetrieveRequest{CollectionID: testCollectionID},

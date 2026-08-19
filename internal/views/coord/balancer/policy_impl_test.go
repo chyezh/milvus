@@ -9,7 +9,9 @@ import (
 	"github.com/milvus-io/milvus/internal/views/coord/coordview"
 	"github.com/milvus-io/milvus/internal/views/coord/loadmgr"
 	"github.com/milvus-io/milvus/internal/views/qviews"
+	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 )
 
 func policyTestConfig() *BalanceConfig {
@@ -100,6 +102,309 @@ func TestDefaultBalancePolicy_MandatoryInitialLoadAllocatesLargestRowCountFirst(
 	assignments := assignmentsFromBuilder(plan.Prepares[shardID])
 	assert.Equal(t, int64(1), assignments[102], "segment with more rows claims the first empty node")
 	assert.Equal(t, int64(2), assignments[101], "segment with fewer rows fills the less loaded node")
+}
+
+func TestDefaultBalancePolicy_BindsPreparingViewToMatchingWALReplica(t *testing.T) {
+	const collectionID, replicaID int64 = 1, 10
+	shardID := qviews.ShardID{ReplicaID: replicaID, VChannel: "by-dev-rootcoord-dml_0_1v0"}
+	cfg := cfgFor(collectionID, replicaID, []int64{1}, nil)
+	snap := baseSnap(cfg, shardID)
+	snap.Config = policyTestConfig()
+	snap.WALReplicaSnapshot = NewWALReplicaSnapshot([]types.WALReplicaInfo{
+		{
+			ChannelID:     types.ChannelID{Name: "by-dev-rootcoord-dml_0", WALReplicaID: 3},
+			AccessMode:    types.AccessModeRO,
+			ResourceGroup: "rg-other",
+			State:         streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+		},
+		{
+			ChannelID:     types.ChannelID{Name: "by-dev-rootcoord-dml_0", WALReplicaID: 2},
+			AccessMode:    types.AccessModeRO,
+			ResourceGroup: "rg1",
+			State:         streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+		},
+	})
+	setTestDataSnapshot(snap, collectionID, qviews.DataVersion{StreamingVersion: 1}, newMapSegmentSnapshot(map[int64]*SegmentInfo{
+		101: {SegmentID: 101, PartitionID: 1, RowNum: 100_000},
+	}), shardDataView(shardID.VChannel, 1, 101))
+	snap.Nodes = map[int64]*BalanceNode{
+		1: {NodeID: 1, Alive: true, ResourceGroup: "rg1"},
+	}
+
+	plan := NewDefaultBalancePolicy().Plan(snap, []qviews.ShardID{shardID})
+
+	require.Contains(t, plan.Prepares, shardID)
+	view := plan.Prepares[shardID].Build()
+	assert.Equal(t, int64(2), view.GetStreamingNode().GetWalReplicaId())
+}
+
+func TestDefaultBalancePolicy_TreatsEmptyWALReplicaResourceGroupAsDefault(t *testing.T) {
+	const collectionID, replicaID int64 = 1, 10
+	shardID := qviews.ShardID{ReplicaID: replicaID, VChannel: "by-dev-rootcoord-dml_0_1v0"}
+	cfg := cfgFor(collectionID, replicaID, []int64{1}, nil)
+	cfg.Replicas[0].ResourceGroup = "__default_resource_group"
+	snap := baseSnap(cfg, shardID)
+	snap.Config = policyTestConfig()
+	snap.WALReplicaSnapshot = NewWALReplicaSnapshot([]types.WALReplicaInfo{
+		{
+			ChannelID:     types.ChannelID{Name: "by-dev-rootcoord-dml_0", WALReplicaID: 0},
+			AccessMode:    types.AccessModeRW,
+			ResourceGroup: "",
+			State:         streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+		},
+	})
+	setTestDataSnapshot(snap, collectionID, qviews.DataVersion{StreamingVersion: 1}, newMapSegmentSnapshot(map[int64]*SegmentInfo{
+		101: {SegmentID: 101, PartitionID: 1, RowNum: 100_000},
+	}), shardDataView(shardID.VChannel, 1, 101))
+	snap.Nodes = map[int64]*BalanceNode{
+		1: {NodeID: 1, Alive: true, ResourceGroup: "__default_resource_group"},
+	}
+
+	plan := NewDefaultBalancePolicy().Plan(snap, []qviews.ShardID{shardID})
+
+	require.Contains(t, plan.Prepares, shardID)
+	assert.Empty(t, plan.WALReplicaDemands)
+	view := plan.Prepares[shardID].Build()
+	assert.Equal(t, int64(0), view.GetStreamingNode().GetWalReplicaId())
+}
+
+func TestDefaultBalancePolicy_OnlyOneReplicaBindsReadWriteWALPerShard(t *testing.T) {
+	const collectionID int64 = 1
+	shardPrimary := qviews.ShardID{ReplicaID: 10, VChannel: "by-dev-rootcoord-dml_0_1v0"}
+	shardSecondary := qviews.ShardID{ReplicaID: 11, VChannel: shardPrimary.VChannel}
+	cfg := cfgFor(collectionID, shardPrimary.ReplicaID, []int64{1}, nil)
+	cfg.Replicas = append(cfg.Replicas, &loadmgr.ReplicaAssignment{
+		ReplicaID:     shardSecondary.ReplicaID,
+		ResourceGroup: "rg1",
+	})
+	snap := baseSnap(cfg, shardPrimary)
+	snap.Config = policyTestConfig()
+	snap.WALReplicaSnapshot = NewWALReplicaSnapshot([]types.WALReplicaInfo{
+		{
+			ChannelID:     types.ChannelID{Name: "by-dev-rootcoord-dml_0", WALReplicaID: 0},
+			AccessMode:    types.AccessModeRW,
+			ResourceGroup: "rg1",
+			State:         streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+		},
+	})
+	setTestDataSnapshot(snap, collectionID, qviews.DataVersion{StreamingVersion: 1}, newMapSegmentSnapshot(map[int64]*SegmentInfo{
+		101: {SegmentID: 101, PartitionID: 1, RowNum: 100_000},
+	}), shardDataView(shardPrimary.VChannel, 1, 101))
+	snap.Nodes = map[int64]*BalanceNode{
+		1: {NodeID: 1, Alive: true, ResourceGroup: "rg1"},
+	}
+
+	plan := NewDefaultBalancePolicy().Plan(snap, []qviews.ShardID{shardPrimary, shardSecondary})
+
+	require.Contains(t, plan.Prepares, shardPrimary)
+	assert.Equal(t, int64(0), plan.Prepares[shardPrimary].Build().GetStreamingNode().GetWalReplicaId())
+	assert.NotContains(t, plan.Prepares, shardSecondary)
+	assert.Equal(t, []WALReplicaDemand{
+		{PChannel: "by-dev-rootcoord-dml_0", ResourceGroup: "rg1"},
+	}, plan.WALReplicaDemands)
+}
+
+func TestDefaultBalancePolicy_ReusesExistingReadOnlyWALReplicaForPrimaryRGPreparation(t *testing.T) {
+	const collectionID int64 = 1
+	shardPrimary := qviews.ShardID{ReplicaID: 10, VChannel: "by-dev-rootcoord-dml_0_1v0"}
+	shardTarget := qviews.ShardID{ReplicaID: 11, VChannel: shardPrimary.VChannel}
+	cfg := cfgFor(collectionID, shardPrimary.ReplicaID, []int64{1}, nil)
+	cfg.Replicas = append(cfg.Replicas, &loadmgr.ReplicaAssignment{
+		ReplicaID:     shardTarget.ReplicaID,
+		ResourceGroup: "rg-primary",
+	})
+	snap := baseSnap(cfg, shardPrimary)
+	snap.Config = policyTestConfig()
+	snap.WALReplicaSnapshot = NewWALReplicaSnapshot([]types.WALReplicaInfo{
+		{
+			ChannelID:     types.ChannelID{Name: "by-dev-rootcoord-dml_0", WALReplicaID: 0},
+			AccessMode:    types.AccessModeRW,
+			ResourceGroup: "rg-old",
+			State:         streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+		},
+		{
+			ChannelID:     types.ChannelID{Name: "by-dev-rootcoord-dml_0", WALReplicaID: 1},
+			AccessMode:    types.AccessModeRO,
+			ResourceGroup: "rg-primary",
+			State:         streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+		},
+	})
+	snap.ShardStatsMap()[shardPrimary] = testShardStats(
+		&qviews.QueryViewVersion{DataVersion: qviews.DataVersion{StreamingVersion: 1}, QueryVersion: 1},
+		0,
+		placement(101, 1, 1, coordview.SegmentStateUp),
+	)
+	setTestDataSnapshot(snap, collectionID, qviews.DataVersion{StreamingVersion: 1}, newMapSegmentSnapshot(map[int64]*SegmentInfo{
+		101: {SegmentID: 101, PartitionID: 1, RowNum: 100_000},
+	}), shardDataView(shardPrimary.VChannel, 1, 101))
+	snap.Nodes = map[int64]*BalanceNode{
+		1: {NodeID: 1, Alive: true, ResourceGroup: "rg-old", UpRowCount: 100_000},
+		2: {NodeID: 2, Alive: true, ResourceGroup: "rg-primary"},
+	}
+
+	plan := NewDefaultBalancePolicy().Plan(snap, []qviews.ShardID{shardTarget})
+
+	require.Contains(t, plan.Prepares, shardTarget)
+	assert.Empty(t, plan.WALReplicaDemands)
+	assert.Equal(t, int64(1), plan.Prepares[shardTarget].Build().GetStreamingNode().GetWalReplicaId())
+}
+
+func TestDefaultBalancePolicy_ReprepareKeepsExistingReadWriteWALBinding(t *testing.T) {
+	const collectionID, replicaID int64 = 1, 10
+	shardID := qviews.ShardID{ReplicaID: replicaID, VChannel: "by-dev-rootcoord-dml_0_1v0"}
+	cfg := cfgFor(collectionID, replicaID, []int64{1}, nil)
+	snap := baseSnap(cfg, shardID)
+	snap.Config = policyTestConfig()
+	snap.WALReplicaSnapshot = NewWALReplicaSnapshot([]types.WALReplicaInfo{
+		{
+			ChannelID:     types.ChannelID{Name: "by-dev-rootcoord-dml_0", WALReplicaID: 0},
+			AccessMode:    types.AccessModeRW,
+			ResourceGroup: "rg1",
+			State:         streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+		},
+	})
+	snap.ShardViewSnapshot = coordview.NewShardViewSnapshot(1, map[qviews.ShardID]*coordview.ShardStats{
+		shardID: {
+			UpVersion:              ver(1, 0, 1),
+			UpLoadInfoVersion:      1,
+			UpWALReplicaID:         0,
+			WALReplicaDependencies: map[int64]struct{}{0: {}},
+			Segments: map[int64]*coordview.SegmentStats{
+				101: {
+					SegmentID:   101,
+					PartitionID: 1,
+					Nodes:       map[int64]coordview.SegmentState{1: coordview.SegmentStateUp},
+				},
+			},
+		},
+	})
+	setTestDataSnapshot(snap, collectionID, qviews.DataVersion{StreamingVersion: 2}, newMapSegmentSnapshot(map[int64]*SegmentInfo{
+		101: {SegmentID: 101, PartitionID: 1, RowNum: 100_000},
+	}), shardDataView(shardID.VChannel, 1, 101))
+	snap.Nodes = map[int64]*BalanceNode{
+		1: {NodeID: 1, Alive: true, ResourceGroup: "rg1"},
+	}
+
+	plan := NewDefaultBalancePolicy().Plan(snap, []qviews.ShardID{shardID})
+
+	require.Contains(t, plan.Prepares, shardID)
+	assert.Empty(t, plan.WALReplicaDemands)
+	assert.Equal(t, int64(0), plan.Prepares[shardID].Build().GetStreamingNode().GetWalReplicaId())
+}
+
+func TestDefaultBalancePolicy_ReleasesUnusedReadOnlyWALReplica(t *testing.T) {
+	const collectionID, replicaID int64 = 1, 10
+	shardID := qviews.ShardID{ReplicaID: replicaID, VChannel: "by-dev-rootcoord-dml_0_1v0"}
+	cfg := cfgFor(collectionID, replicaID, []int64{1}, nil)
+	snap := baseSnap(cfg, shardID)
+	snap.Config = policyTestConfig()
+	snap.WALReplicaSnapshot = NewWALReplicaSnapshot([]types.WALReplicaInfo{
+		{
+			ChannelID:     types.ChannelID{Name: "by-dev-rootcoord-dml_0", WALReplicaID: 0},
+			AccessMode:    types.AccessModeRW,
+			ResourceGroup: "rg1",
+			State:         streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+		},
+		{
+			ChannelID:     types.ChannelID{Name: "by-dev-rootcoord-dml_0", WALReplicaID: 2},
+			AccessMode:    types.AccessModeRO,
+			ResourceGroup: "rg1",
+			State:         streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+		},
+		{
+			ChannelID:     types.ChannelID{Name: "by-dev-rootcoord-dml_0", WALReplicaID: 3},
+			AccessMode:    types.AccessModeRO,
+			ResourceGroup: "rg1",
+			State:         streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+		},
+	})
+	snap.ShardViewSnapshot = coordview.NewShardViewSnapshot(1, map[qviews.ShardID]*coordview.ShardStats{
+		shardID: {
+			UpVersion:              ver(1, 0, 1),
+			UpLoadInfoVersion:      1,
+			UpWALReplicaID:         2,
+			WALReplicaDependencies: map[int64]struct{}{2: {}},
+			Segments: map[int64]*coordview.SegmentStats{
+				101: {
+					SegmentID:   101,
+					PartitionID: 1,
+					Nodes:       map[int64]coordview.SegmentState{1: coordview.SegmentStateUp},
+				},
+			},
+		},
+	})
+	setTestDataSnapshot(snap, collectionID, qviews.DataVersion{StreamingVersion: 1}, newMapSegmentSnapshot(map[int64]*SegmentInfo{
+		101: {SegmentID: 101, PartitionID: 1, RowNum: 100_000},
+	}), shardDataView(shardID.VChannel, 1, 101))
+	snap.Nodes = map[int64]*BalanceNode{
+		1: {NodeID: 1, Alive: true, ResourceGroup: "rg1"},
+	}
+
+	plan := NewDefaultBalancePolicy().Plan(snap, []qviews.ShardID{shardID})
+
+	require.Empty(t, plan.Prepares)
+	assert.Empty(t, plan.WALReplicaDemands)
+	assert.Equal(t, []WALReplicaRelease{
+		{PChannel: "by-dev-rootcoord-dml_0", WALReplicaID: 3},
+	}, plan.WALReplicaReleases)
+}
+
+func TestDefaultBalancePolicy_DoesNotReleaseReadOnlyWALReplicaWithPendingSyncDependency(t *testing.T) {
+	const collectionID, replicaID int64 = 1, 10
+	shardID := qviews.ShardID{ReplicaID: replicaID, VChannel: "by-dev-rootcoord-dml_0_1v0"}
+	cfg := cfgFor(collectionID, replicaID, []int64{1}, nil)
+	snap := baseSnap(cfg, shardID)
+	snap.Config = policyTestConfig()
+	snap.WALReplicaSnapshot = NewWALReplicaSnapshot([]types.WALReplicaInfo{
+		{
+			ChannelID:     types.ChannelID{Name: "by-dev-rootcoord-dml_0", WALReplicaID: 2},
+			AccessMode:    types.AccessModeRO,
+			ResourceGroup: "rg1",
+			State:         streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+		},
+	})
+	snap.PendingWALReplicaDependencies = map[types.ChannelID]struct{}{
+		{Name: "by-dev-rootcoord-dml_0", WALReplicaID: 2}: {},
+	}
+	setTestDataSnapshot(snap, collectionID, qviews.DataVersion{StreamingVersion: 1}, newMapSegmentSnapshot(map[int64]*SegmentInfo{
+		101: {SegmentID: 101, PartitionID: 1, RowNum: 100_000},
+	}), shardDataView(shardID.VChannel, 1, 101))
+	snap.Nodes = map[int64]*BalanceNode{
+		1: {NodeID: 1, Alive: true, ResourceGroup: "rg1"},
+	}
+
+	plan := NewDefaultBalancePolicy().Plan(snap, []qviews.ShardID{shardID})
+
+	assert.Empty(t, plan.WALReplicaReleases)
+}
+
+func TestDefaultBalancePolicy_WaitsWhenNoMatchingWALReplicaExists(t *testing.T) {
+	const collectionID, replicaID int64 = 1, 10
+	shardID := qviews.ShardID{ReplicaID: replicaID, VChannel: "by-dev-rootcoord-dml_0_1v0"}
+	cfg := cfgFor(collectionID, replicaID, []int64{1}, nil)
+	snap := baseSnap(cfg, shardID)
+	snap.Config = policyTestConfig()
+	snap.WALReplicaSnapshot = NewWALReplicaSnapshot([]types.WALReplicaInfo{
+		{
+			ChannelID:     types.ChannelID{Name: "by-dev-rootcoord-dml_0", WALReplicaID: 2},
+			AccessMode:    types.AccessModeRO,
+			ResourceGroup: "rg-other",
+			State:         streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+		},
+	})
+	setTestDataSnapshot(snap, collectionID, qviews.DataVersion{StreamingVersion: 1}, newMapSegmentSnapshot(map[int64]*SegmentInfo{
+		101: {SegmentID: 101, PartitionID: 1, RowNum: 100_000},
+	}), shardDataView(shardID.VChannel, 1, 101))
+	snap.Nodes = map[int64]*BalanceNode{
+		1: {NodeID: 1, Alive: true, ResourceGroup: "rg1"},
+	}
+
+	plan := NewDefaultBalancePolicy().Plan(snap, []qviews.ShardID{shardID})
+
+	assert.NotContains(t, plan.Prepares, shardID)
+	assert.Equal(t, []WALReplicaDemand{
+		{PChannel: "by-dev-rootcoord-dml_0", ResourceGroup: "rg1"},
+	}, plan.WALReplicaDemands)
 }
 
 func TestDefaultBalancePolicy_SmallShardStaysWithinOneNodeFanout(t *testing.T) {

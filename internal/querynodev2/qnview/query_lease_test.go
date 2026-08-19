@@ -26,13 +26,37 @@ func TestQNHandler_AcquireReadyViewReturnsExactVersion(t *testing.T) {
 	req, _ := mgr.getAcquired(key)
 	req.OnReady(map[int64][]int64{10: {1000, 1001}, 20: {2000}})
 
-	lease, err := h.AcquireReadyView(context.Background(), view.ShardID(), key.QueryViewVersion)
+	lease, err := h.AcquireReadyView(context.Background(), view.ShardID(), key.WALReplicaID, key.QueryViewVersion)
 	require.NoError(t, err)
 	defer lease.Release()
 	assert.True(t, key.QueryViewVersion.EQ(lease.Version))
 	assert.True(t, proto.Equal(view.IntoProto().GetMeta(), lease.Meta))
 	require.Len(t, view.IntoProto().GetQueryNode(), 1)
 	assert.True(t, proto.Equal(view.IntoProto().GetQueryNode()[0], lease.View))
+}
+
+func TestQNHandler_AcquireReadyViewUsesWALReplicaID(t *testing.T) {
+	mgr := newMockSegmentManager()
+	h := NewQNQueryViewHandler(mgr)
+
+	viewOnReplica2 := newPreparingQNViewWithWALReplica(1, 1, 2)
+	viewOnReplica3 := newPreparingQNViewWithWALReplica(1, 1, 3)
+	h.ApplyViews([]handler.ApplyView{
+		{View: viewOnReplica2},
+		{View: viewOnReplica3},
+	})
+	keyOnReplica2 := viewOnReplica2.QueryViewKey()
+	reqOnReplica2, _ := mgr.getAcquired(keyOnReplica2)
+	reqOnReplica2.OnReady(map[int64][]int64{10: {1000, 1001}, 20: {2000}})
+	keyOnReplica3 := viewOnReplica3.QueryViewKey()
+	reqOnReplica3, _ := mgr.getAcquired(keyOnReplica3)
+	reqOnReplica3.OnReady(map[int64][]int64{10: {1000, 1001}, 20: {2000}})
+
+	lease, err := h.AcquireReadyView(context.Background(), viewOnReplica3.ShardID(), 3, keyOnReplica3.QueryViewVersion)
+	require.NoError(t, err)
+	defer lease.Release()
+	assert.Equal(t, int64(3), lease.View.GetWalReplicaId())
+	assert.True(t, proto.Equal(viewOnReplica3.IntoProto().GetQueryNode()[0], lease.View))
 }
 
 func TestQNHandler_QueryViewLeaseDefersSegmentRelease(t *testing.T) {
@@ -48,7 +72,7 @@ func TestQNHandler_QueryViewLeaseDefersSegmentRelease(t *testing.T) {
 	req, _ := mgr.getAcquired(key)
 	req.OnReady(map[int64][]int64{10: {1000, 1001}, 20: {2000}})
 
-	lease, err := h.AcquireReadyView(context.Background(), view.ShardID(), key.QueryViewVersion)
+	lease, err := h.AcquireReadyView(context.Background(), view.ShardID(), key.WALReplicaID, key.QueryViewVersion)
 	require.NoError(t, err)
 
 	h.ApplyViews([]handler.ApplyView{

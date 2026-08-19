@@ -11,7 +11,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
-func (h *SNQueryViewHandler) AcquireUpView(ctx context.Context, shardID qviews.ShardID, version qviews.QueryViewVersion) (*QueryViewLease, error) {
+func (h *SNQueryViewHandler) AcquireUpView(ctx context.Context, shardID qviews.ShardID, walReplicaID int64, version qviews.QueryViewVersion) (*QueryViewLease, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -23,10 +23,10 @@ func (h *SNQueryViewHandler) AcquireUpView(ctx context.Context, shardID qviews.S
 	if shard == nil {
 		return nil, viewerror.NewViewNotFound("query view %s is not found", shardID.String())
 	}
-	return shard.acquireUpView(ctx, version)
+	return shard.acquireUpView(ctx, qviews.QueryViewKey{ShardID: shardID, WALReplicaID: walReplicaID, QueryViewVersion: version})
 }
 
-func (s *snShardView) acquireUpView(ctx context.Context, version qviews.QueryViewVersion) (*QueryViewLease, error) {
+func (s *snShardView) acquireUpView(ctx context.Context, key qviews.QueryViewKey) (*QueryViewLease, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -35,20 +35,20 @@ func (s *snShardView) acquireUpView(ctx context.Context, version qviews.QueryVie
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	entry, exists := s.views[version]
+	entry, exists := s.views[key]
 	if !exists {
-		return nil, viewerror.NewViewNotFound("query view %s is not found", version.String())
+		return nil, viewerror.NewViewNotFound("query view %s is not found", key.String())
 	}
 	if entry.sm.State() != qviews.QueryViewStateUp {
-		return nil, viewerror.NewViewInvalidated("query view %s is not up, current state is %s", version.String(), entry.sm.State().String())
+		return nil, viewerror.NewViewInvalidated("query view %s is not up, current state is %s", key.String(), entry.sm.State().String())
 	}
 	entry.queryRefs++
 	view := proto.Clone(entry.View.IntoProto()).(*viewpb.QueryViewOfShard)
 	var once sync.Once
 	return &QueryViewLease{
-		Version: version,
+		Version: key.QueryViewVersion,
 		Meta:    proto.Clone(view.GetMeta()).(*viewpb.QueryViewMeta),
 		View:    view,
-		Release: func() { once.Do(func() { s.releaseQueryViewLease(version) }) },
+		Release: func() { once.Do(func() { s.releaseQueryViewLease(key) }) },
 	}, nil
 }

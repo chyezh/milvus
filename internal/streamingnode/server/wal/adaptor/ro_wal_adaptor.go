@@ -5,9 +5,14 @@ import (
 	"time"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/adaptor/rate"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/shard"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/metricsutil"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel"
+	"github.com/milvus-io/milvus/internal/util/function"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
@@ -32,6 +37,17 @@ type roWALAdaptorImpl struct {
 	scanners        *typeutil.ConcurrentMap[int64, wal.Scanner]
 	cleanup         func()
 	scanMetrics     *metricsutil.ScanMetrics
+
+	queryViewHandler    *snview.SNQueryViewHandler
+	viewResourceManager *vchannel.PChannelRecoveryManager
+	projectionCancel    context.CancelFunc
+	projectionDone      <-chan struct{}
+	functionRunners     []readOnlyFunctionRunnerLifecycle
+}
+
+type readOnlyFunctionRunnerLifecycle struct {
+	collectionID int64
+	key          string
 }
 
 func (w *roWALAdaptorImpl) WALName() message.WALName {
@@ -51,11 +67,14 @@ func (w *roWALAdaptorImpl) Metrics() types.WALMetrics {
 }
 
 func (w *roWALAdaptorImpl) GetLatestMVCCTimestamp(ctx context.Context, vchannel string) (uint64, error) {
-	panic("we cannot acquire lastest mvcc timestamp from a read only wal")
+	return 0, w.notPrimaryError()
 }
 
 func (w *roWALAdaptorImpl) TransformLog() wal.TransformLogAccesser {
-	return wal.NewTransformLogErrorAccesser(status.NewOnShutdownError("read only wal does not serve transform log"))
+	if w.viewResourceManager != nil {
+		return w.viewResourceManager
+	}
+	return wal.NewTransformLogErrorAccesser(status.NewOnShutdownError("read only wal query resources are unavailable"))
 }
 
 func (w *roWALAdaptorImpl) GetReplicateCheckpoint() (*wal.ReplicateCheckpoint, error) {
@@ -148,12 +167,27 @@ func (w *roWALAdaptorImpl) Close() {
 
 	w.Logger().Info(context.TODO(), "wal begin to close scanners...")
 
+	if w.projectionCancel != nil {
+		w.projectionCancel()
+	}
+	if w.projectionDone != nil {
+		<-w.projectionDone
+	}
+
 	// close all wal instances.
 	w.scanners.Range(func(id int64, s wal.Scanner) bool {
 		s.Close()
 		mlog.Info(context.TODO(), "close scanner by wal adaptor", mlog.Int64("id", id), mlog.Any("channel", w.Channel()))
 		return true
 	})
+
+	if w.queryViewHandler != nil {
+		w.queryViewHandler.CloseForHandoff()
+	}
+	if w.viewResourceManager != nil {
+		w.viewResourceManager.Close()
+	}
+	w.releaseFunctionRunners()
 
 	w.Logger().Info(context.TODO(), "scanner close done, close inner wal...")
 	w.roWALImpls.Close()
@@ -169,6 +203,34 @@ func (w *roWALAdaptorImpl) Close() {
 	w.WALRateLimitComponent.Close()
 }
 
+func (w *roWALAdaptorImpl) registerReadOnlyFunctionRunner(collectionID int64, vchannel string, walReplicaID int64, schema *schemapb.CollectionSchema) {
+	if schema == nil {
+		return
+	}
+	key := shard.WALReplicaFunctionRunnerKey(vchannel, walReplicaID)
+	if err := function.GetManager().Alloc(collectionID, key, schema); err != nil {
+		w.Logger().Warn(context.TODO(), "failed to allocate read-only wal function runners",
+			mlog.Int64("collectionID", collectionID),
+			mlog.String("vchannel", vchannel),
+			mlog.Int64("walReplicaID", walReplicaID),
+			mlog.String("key", key),
+			mlog.Int32("schemaVersion", schema.GetVersion()),
+			mlog.Err(err))
+		return
+	}
+	w.functionRunners = append(w.functionRunners, readOnlyFunctionRunnerLifecycle{
+		collectionID: collectionID,
+		key:          key,
+	})
+}
+
+func (w *roWALAdaptorImpl) releaseFunctionRunners() {
+	for _, lifecycle := range w.functionRunners {
+		function.GetManager().Release(lifecycle.collectionID, lifecycle.key)
+	}
+	w.functionRunners = nil
+}
+
 // forceCancelAfterGracefulTimeout forces to cancel the context after the graceful timeout.
 func (w *roWALAdaptorImpl) forceCancelAfterGracefulTimeout() {
 	if w.availableCtx.Err() != nil {
@@ -178,4 +240,45 @@ func (w *roWALAdaptorImpl) forceCancelAfterGracefulTimeout() {
 		// perform a force cancel to avoid resource leak.
 		w.availableCancel()
 	})
+}
+
+func (w *roWALAdaptorImpl) startReadOnlyProjectionScanner(startMessageID message.MessageID) {
+	if startMessageID == nil || w.viewResourceManager == nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(w.availableCtx) // #nosec G118 -- cancel is owned by roWALAdaptorImpl.Close.
+	done := make(chan struct{})
+	w.projectionCancel = cancel
+	w.projectionDone = done
+
+	scanner := newRecoveryScannerAdaptor(
+		w.roWALImpls,
+		startMessageID,
+		w.scanMetrics.NewScannerMetrics(),
+		false,
+	)
+	go w.runReadOnlyProjectionScanner(ctx, scanner, done)
+}
+
+func (w *roWALAdaptorImpl) runReadOnlyProjectionScanner(ctx context.Context, scanner wal.Scanner, done chan<- struct{}) {
+	defer close(done)
+	defer scanner.Close()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg, ok := <-scanner.Chan():
+			if !ok {
+				if err := scanner.Error(); err != nil && ctx.Err() == nil {
+					w.Logger().Warn(context.TODO(), "read-only wal projection scanner stopped with error", mlog.Err(err))
+				}
+				return
+			}
+			owner := message.NewOwnedImmutableMessage(msg, nil)
+			dispatch := owner.Clone()
+			w.viewResourceManager.ObserveMessage(ctx, dispatch)
+			dispatch.Release()
+			owner.Release()
+		}
+	}
 }

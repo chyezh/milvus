@@ -14,11 +14,12 @@ import (
 func NewWatcher(r resolver.Resolver) Watcher {
 	ctx, cancel := context.WithCancel(context.Background())
 	w := &watcherImpl{
-		ctx:         ctx,
-		cancel:      cancel,
-		r:           r,
-		cond:        *syncutil.NewContextCond(&sync.Mutex{}),
-		assignments: make(map[string]types.PChannelInfoAssigned),
+		ctx:                   ctx,
+		cancel:                cancel,
+		r:                     r,
+		cond:                  *syncutil.NewContextCond(&sync.Mutex{}),
+		assignments:           make(map[string]types.PChannelInfoAssigned),
+		walReplicaAssignments: make(map[types.ChannelID]types.PChannelInfoAssigned),
 	}
 	go w.execute()
 	return w
@@ -26,11 +27,12 @@ func NewWatcher(r resolver.Resolver) Watcher {
 
 // watcherImpl is the implementation of the assignment watcher.
 type watcherImpl struct {
-	ctx         context.Context
-	cancel      context.CancelFunc
-	r           resolver.Resolver
-	cond        syncutil.ContextCond
-	assignments map[string]types.PChannelInfoAssigned // map pchannel to node.
+	ctx                   context.Context
+	cancel                context.CancelFunc
+	r                     resolver.Resolver
+	cond                  syncutil.ContextCond
+	assignments           map[string]types.PChannelInfoAssigned // map pchannel to node.
+	walReplicaAssignments map[types.ChannelID]types.PChannelInfoAssigned
 }
 
 // execute starts the watcher.
@@ -53,16 +55,48 @@ func (w *watcherImpl) execute() {
 // updateAssignment updates the assignment.
 func (w *watcherImpl) updateAssignment(state discoverer.VersionedState) {
 	newAssignments := make(map[string]types.PChannelInfoAssigned)
+	legacyWALReplicaAssignments := make(map[types.ChannelID]types.PChannelInfoAssigned)
+	explicitWALReplicaAssignments := make(map[types.ChannelID]types.PChannelInfoAssigned)
 	for _, assignments := range state.ChannelAssignmentInfo() {
 		for _, pChannelInfo := range assignments.Channels {
-			newAssignments[pChannelInfo.Name] = types.PChannelInfoAssigned{
+			assignment := types.PChannelInfoAssigned{
 				Channel: pChannelInfo,
 				Node:    assignments.NodeInfo,
 			}
+			newAssignments[pChannelInfo.Name] = assignment
+			legacyWALReplicaAssignments[pChannelInfo.ChannelID()] = assignment
 		}
+		for _, pChannelInfo := range assignments.SecondaryChannels {
+			legacyWALReplicaAssignments[pChannelInfo.ChannelID()] = types.PChannelInfoAssigned{
+				Channel:      pChannelInfo,
+				WALReplicaID: pChannelInfo.ChannelID().WALReplicaID,
+				Node:         assignments.NodeInfo,
+			}
+		}
+		for channelID, replica := range assignments.WALReplicas {
+			assignment := types.PChannelInfoAssigned{
+				Channel: types.PChannelInfo{
+					Name:       replica.ChannelID.Name,
+					Term:       replica.PChannelWriteTerm,
+					AccessMode: replica.AccessMode,
+				},
+				WALReplicaID:    replica.ChannelID.WALReplicaID,
+				AssignmentEpoch: replica.AssignmentEpoch,
+				Node:            assignments.NodeInfo,
+			}
+			explicitWALReplicaAssignments[channelID] = assignment
+			if replica.AccessMode == types.AccessModeRW {
+				newAssignments[replica.ChannelID.Name] = assignment
+			}
+		}
+	}
+	newWALReplicaAssignments := legacyWALReplicaAssignments
+	for channelID, assignment := range explicitWALReplicaAssignments {
+		newWALReplicaAssignments[channelID] = assignment
 	}
 	w.cond.LockAndBroadcast()
 	w.assignments = newAssignments
+	w.walReplicaAssignments = newWALReplicaAssignments
 	w.cond.L.Unlock()
 }
 
@@ -72,6 +106,17 @@ func (w *watcherImpl) Get(ctx context.Context, channel string) *types.PChannelIn
 	defer w.cond.L.Unlock()
 
 	if info, ok := w.assignments[channel]; ok {
+		return &info
+	}
+	return nil
+}
+
+// GetWALReplica gets the current WAL replica assignment.
+func (w *watcherImpl) GetWALReplica(ctx context.Context, channelID types.ChannelID) *types.PChannelInfoAssigned {
+	w.cond.L.Lock()
+	defer w.cond.L.Unlock()
+
+	if info, ok := w.walReplicaAssignments[channelID]; ok {
 		return &info
 	}
 	return nil
@@ -89,6 +134,24 @@ func (w *watcherImpl) Watch(ctx context.Context, channel string, previous *types
 	for {
 		if info, ok := w.assignments[channel]; ok {
 			if info.Channel.Term > term {
+				break
+			}
+		}
+		if err := w.cond.Wait(ctx); err != nil {
+			return err
+		}
+	}
+	w.cond.L.Unlock()
+	return nil
+}
+
+// WatchWALReplica watches the WAL replica assignment.
+func (w *watcherImpl) WatchWALReplica(ctx context.Context, channelID types.ChannelID, previous *types.PChannelInfoAssigned) error {
+	w.cond.L.Lock()
+
+	for {
+		if info, ok := w.walReplicaAssignments[channelID]; ok {
+			if previous == nil || info != *previous {
 				break
 			}
 		}

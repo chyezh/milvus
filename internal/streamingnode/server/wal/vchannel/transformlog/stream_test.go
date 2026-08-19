@@ -21,7 +21,7 @@ func TestTransformLogStreamManagerCatchupThenDispatch(t *testing.T) {
 	manager := NewStreamManager("pchannel")
 	manager.Register("v1", transformLog)
 
-	stream, err := manager.AcquireStream(ctx, "pchannel")
+	stream, err := manager.AcquireStream(ctx, "pchannel", 0)
 	require.NoError(t, err)
 	defer stream.Close()
 
@@ -68,7 +68,7 @@ func TestTransformLogStreamManagerBoundedReplayEmitsSyncUpAndCloses(t *testing.T
 	manager := NewStreamManager("pchannel")
 	manager.Register("v1", transformLog)
 
-	stream, err := manager.AcquireStream(ctx, "pchannel")
+	stream, err := manager.AcquireStream(ctx, "pchannel", 0)
 	require.NoError(t, err)
 	defer stream.Close()
 
@@ -118,7 +118,7 @@ func TestTransformLogStreamManagerCatchupDrainsDeletesAppendedAfterSubscribe(t *
 	manager := NewStreamManager("pchannel")
 	manager.Register("v1", transformLog)
 
-	stream, err := manager.AcquireStream(ctx, "pchannel")
+	stream, err := manager.AcquireStream(ctx, "pchannel", 0)
 	require.NoError(t, err)
 	defer stream.Close()
 
@@ -153,7 +153,7 @@ func TestTransformLogStreamManagerRemovesRegisteredLog(t *testing.T) {
 	manager.Register("v1", transformLog)
 	manager.Remove("v1")
 
-	stream, err := manager.AcquireStream(ctx, "pchannel")
+	stream, err := manager.AcquireStream(ctx, "pchannel", 0)
 	require.NoError(t, err)
 	defer stream.Close()
 
@@ -162,6 +162,33 @@ func TestTransformLogStreamManagerRemovesRegisteredLog(t *testing.T) {
 		StartAfterTimeTick: 0,
 		Handler:            newRecordingStreamHandler(),
 	})
+	require.Error(t, err)
+}
+
+func TestTransformLogStreamManagerCloseClosesActiveStreams(t *testing.T) {
+	ctx := context.Background()
+	transformLog := New(Config{VChannel: "v1"})
+	manager := NewStreamManager("pchannel")
+	manager.Register("v1", transformLog)
+
+	stream, err := manager.AcquireStream(ctx, "pchannel", 0)
+	require.NoError(t, err)
+	_, err = stream.Subscribe(ctx, wal.TransformLogSubscriptionOption{
+		VChannel:           "v1",
+		StartAfterTimeTick: 0,
+		Handler:            newRecordingStreamHandler(),
+	})
+	require.NoError(t, err)
+
+	manager.Close()
+	select {
+	case <-stream.Done():
+	case <-time.After(time.Second):
+		t.Fatal("stream was not closed by manager close")
+	}
+	require.NoError(t, stream.Error())
+
+	_, err = manager.AcquireStream(ctx, "pchannel", 0)
 	require.Error(t, err)
 }
 

@@ -27,7 +27,7 @@ type releaseManualFlushPreparer struct {
 
 // PrepareReleaseManualFlush appends a normal ManualFlush and prepares a
 // channel-level release handoff.
-func (p *releaseManualFlushPreparer) PrepareReleaseManualFlush(ctx context.Context, pchannel types.PChannelInfo, collectionID int64, vchannel string, releaseSegmentIDs []int64) (bool, error) {
+func (p *releaseManualFlushPreparer) PrepareReleaseManualFlush(ctx context.Context, pchannel types.PChannelInfo, walReplicaID int64, collectionID int64, vchannel string, releaseSegmentIDs []int64) (bool, error) {
 	if p.writeBufferManager == nil {
 		return false, status.NewInner("write buffer manager is not initialized")
 	}
@@ -77,7 +77,7 @@ func (p *releaseManualFlushPreparer) PrepareReleaseManualFlush(ctx context.Conte
 		}
 	}
 
-	wal, err := p.walManager.GetAvailableWAL(pchannel)
+	wal, err := p.walManager.GetAvailableWALReplica(pchannel, walReplicaID)
 	if err != nil {
 		return false, err
 	}

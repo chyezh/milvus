@@ -67,17 +67,21 @@ func TestStats_UpOnly(t *testing.T) {
 
 	// Drive v1 to Up.
 	ver1 := testVersion(1, 1, 1)
-	require.NoError(t, mgr.AddPreparing(context.Background(), testBuilder(1, 1, 2)))
+	builder := testBuilder(1, 1, 2)
+	builder.SetWALReplicaID(3)
+	require.NoError(t, mgr.AddPreparing(context.Background(), builder))
 	simulateNodeResponse(t, s, testQN1, ver1, qviews.QueryViewStateReady)
 	simulateNodeResponse(t, s, qviews.NewQueryNode(2), ver1, qviews.QueryViewStateReady)
-	simulateNodeResponse(t, s, testSN, ver1, qviews.QueryViewStateReady)
-	simulateNodeResponse(t, s, testSN, ver1, qviews.QueryViewStateUp)
+	testSNReplica3 := qviews.NewStreamingNodeFromVChannelAndWALReplica(testVChannel, 3)
+	simulateNodeResponse(t, s, testSNReplica3, ver1, qviews.QueryViewStateReady)
+	simulateNodeResponse(t, s, testSNReplica3, ver1, qviews.QueryViewStateUp)
 
 	stats := mgr.Stats()
 	require.NotNil(t, stats.UpVersion)
 	assert.Equal(t, ver1, *stats.UpVersion)
 	assert.Nil(t, stats.PreparingVersion)
 	assert.Equal(t, mgr.upView.View().GetMeta().GetLoadInfoVersion(), stats.UpLoadInfoVersion)
+	assert.Equal(t, int64(3), stats.UpWALReplicaID)
 
 	require.Len(t, stats.Segments, 2)
 	assert.Nil(t, stats.PreparingVersion, "no in-flight view")
@@ -98,10 +102,13 @@ func TestStats_UpAndPreparing(t *testing.T) {
 
 	// Drive v1 to Up.
 	ver1 := testVersion(1, 1, 1)
-	require.NoError(t, mgr.AddPreparing(context.Background(), testBuilder(1, 1, 1)))
+	builder := testBuilder(1, 1, 1)
+	builder.SetWALReplicaID(4)
+	require.NoError(t, mgr.AddPreparing(context.Background(), builder))
 	simulateNodeResponse(t, s, testQN1, ver1, qviews.QueryViewStateReady)
-	simulateNodeResponse(t, s, testSN, ver1, qviews.QueryViewStateReady)
-	simulateNodeResponse(t, s, testSN, ver1, qviews.QueryViewStateUp)
+	testSNReplica4 := qviews.NewStreamingNodeFromVChannelAndWALReplica(testVChannel, 4)
+	simulateNodeResponse(t, s, testSNReplica4, ver1, qviews.QueryViewStateReady)
+	simulateNodeResponse(t, s, testSNReplica4, ver1, qviews.QueryViewStateUp)
 
 	// Add v2 (Preparing) with a different QN.
 	b2 := testBuilder(2, 1, 1)
@@ -116,6 +123,7 @@ func TestStats_UpAndPreparing(t *testing.T) {
 	// Up view still at version 1.
 	require.NotNil(t, stats.UpVersion)
 	assert.Equal(t, ver1, *stats.UpVersion)
+	assert.Equal(t, int64(4), stats.UpWALReplicaID)
 	require.NotNil(t, stats.PreparingVersion)
 	assert.Equal(t, testVersion(2, 1, 1), *stats.PreparingVersion)
 
@@ -158,6 +166,63 @@ func TestStats_ReadyViewStillAppearsAsPending(t *testing.T) {
 	require.NotNil(t, segment)
 	assert.Equal(t, map[int64]SegmentState{1: SegmentStateReady}, segment.Nodes)
 	assert.NotNil(t, stats.PreparingVersion)
+}
+
+func TestStats_WALReplicaDependenciesTrackPreparingReadyAndUpViews(t *testing.T) {
+	s := newMockSyncer()
+	mgr := newTestManager(t, newMockCatalog(), s)
+
+	ver := testVersion(1, 1, 1)
+	builder := testBuilder(1, 1, 1)
+	builder.SetWALReplicaID(3)
+	require.NoError(t, mgr.AddPreparing(context.Background(), builder))
+
+	stats := mgr.Stats()
+	assert.True(t, stats.DependsOnWALReplica(3))
+	assert.False(t, stats.DependsOnWALReplica(4))
+
+	testSNReplica3 := qviews.NewStreamingNodeFromVChannelAndWALReplica(testVChannel, 3)
+	simulateNodeResponse(t, s, testQN1, ver, qviews.QueryViewStateReady, 1001)
+	simulateNodeResponse(t, s, testSNReplica3, ver, qviews.QueryViewStateReady)
+	stats = mgr.Stats()
+	assert.True(t, stats.DependsOnWALReplica(3))
+
+	simulateNodeResponse(t, s, testSNReplica3, ver, qviews.QueryViewStateUp)
+	stats = mgr.Stats()
+	assert.True(t, stats.DependsOnWALReplica(3))
+
+	require.NoError(t, mgr.RequestRelease(context.Background()))
+	stats = mgr.Stats()
+	assert.True(t, stats.DependsOnWALReplica(3))
+
+	simulateNodeResponse(t, s, testSNReplica3, ver, qviews.QueryViewStateDown)
+	stats = mgr.Stats()
+	assert.True(t, stats.DependsOnWALReplica(3))
+
+	simulateNodeResponse(t, s, testSNReplica3, ver, qviews.QueryViewStateDropped)
+	stats = mgr.Stats()
+	assert.True(t, stats.DependsOnWALReplica(3))
+
+	simulateNodeResponse(t, s, testQN1, ver, qviews.QueryViewStateDropped)
+	stats = mgr.Stats()
+	assert.False(t, stats.DependsOnWALReplica(3))
+}
+
+func TestStats_WALReplicaDependencySurvivesUnrecoverableView(t *testing.T) {
+	s := newMockSyncer()
+	mgr := newTestManager(t, newMockCatalog(), s)
+
+	ver := testVersion(1, 1, 1)
+	builder := testBuilder(1, 1, 1)
+	builder.SetWALReplicaID(3)
+	require.NoError(t, mgr.AddPreparing(context.Background(), builder))
+
+	onQueryNodeLost := s.findOnQueryNodeLost(testQN1, ver)
+	require.NotNil(t, onQueryNodeLost)
+	onQueryNodeLost(testQN1)
+
+	stats := mgr.Stats()
+	assert.True(t, stats.DependsOnWALReplica(3))
 }
 
 func TestStats_PartialReadySegments(t *testing.T) {

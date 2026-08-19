@@ -31,6 +31,7 @@ func (s *Server) SearchOnView(ctx context.Context, req *viewpb.SearchOnViewReque
 	tasks, err := s.provider.AcquireSearchSegmentTasks(
 		ctx,
 		qviews.FromProtoShardID(req.GetShardId()),
+		req.GetWalReplicaId(),
 		qviews.FromProtoQueryViewVersion(req.GetVersion()),
 		req.GetMvcc(),
 		req.GetLegacyReq(),
@@ -57,6 +58,7 @@ func (s *Server) QueryOnView(ctx context.Context, req *viewpb.QueryOnViewRequest
 	tasks, err := s.provider.AcquireQuerySegmentTasks(
 		ctx,
 		qviews.FromProtoShardID(req.GetShardId()),
+		req.GetWalReplicaId(),
 		qviews.FromProtoQueryViewVersion(req.GetVersion()),
 		req.GetMvcc(),
 		req.GetLegacyReq(),

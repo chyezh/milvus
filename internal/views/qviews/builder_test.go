@@ -36,6 +36,7 @@ func TestQueryViewAtCoordBuilder(t *testing.T) {
 	result := NewQueryViewAtCoordBuilder(1, dataView, "v1").
 		SetQueryVersion(3).
 		SetLoadInfoVersion(loadInfoVersion).
+		SetWALReplicaID(2).
 		SetAssignments(assignments).
 		Build()
 
@@ -57,6 +58,8 @@ func TestQueryViewAtCoordBuilder(t *testing.T) {
 	assert.Len(t, result.QueryNode, 2)
 	assert.Equal(t, int64(1001), result.QueryNode[0].NodeId)
 	assert.Equal(t, int64(1002), result.QueryNode[1].NodeId)
+	assert.Equal(t, int64(2), result.QueryNode[0].WalReplicaId)
+	assert.Equal(t, int64(2), result.QueryNode[1].WalReplicaId)
 
 	// Verify node 1001: partition 1 → [100, 101], partition 2 → [201].
 	node1001 := result.QueryNode[0]
@@ -76,6 +79,7 @@ func TestQueryViewAtCoordBuilder(t *testing.T) {
 
 	// Verify streaming node is present.
 	assert.NotNil(t, result.StreamingNode)
+	assert.Equal(t, int64(2), result.StreamingNode.WalReplicaId)
 
 	// Verify SegmentIDs on the per-node view.
 	qv1001 := NewQueryViewAtWorkNodeFromProto(&viewpb.QueryViewOfShard{
@@ -99,6 +103,7 @@ func TestQueryViewAtCoordBuilder_Empty(t *testing.T) {
 	assert.Equal(t, viewpb.QueryViewState_QueryViewStatePreparing, result.Meta.State)
 	assert.Len(t, result.QueryNode, 0)
 	assert.NotNil(t, result.StreamingNode)
+	assert.Equal(t, int64(0), result.StreamingNode.WalReplicaId)
 }
 
 func TestQueryViewAtCoordBuilder_MissingVChannelPanics(t *testing.T) {

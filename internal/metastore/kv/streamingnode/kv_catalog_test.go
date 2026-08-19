@@ -272,7 +272,7 @@ func TestCatalogListRecoveryMetaWithRootPath(t *testing.T) {
 	view := makeQueryViewForCatalogTest("p1_1v0", viewpb.QueryViewState_QueryViewStateUp)
 	viewValue, err := marshalQueryViewForPersistence(view)
 	require.NoError(t, err)
-	queryViewKey, err := buildQueryViewKey("p1", view.GetMeta())
+	queryViewKey, err := buildQueryViewKey("p1", view)
 	require.NoError(t, err)
 	require.NoError(t, kv.Save(ctx, queryViewKey, string(viewValue)))
 
@@ -886,7 +886,7 @@ func TestCatalogQueryViews(t *testing.T) {
 	catalog := NewCataLog(kv)
 	ctx := context.Background()
 	view := makeQueryViewForCatalogTest("p1_1v0", viewpb.QueryViewState_QueryViewStateUp)
-	key := "streamingnode-meta/wal/p1/qv/1/10/0/20/0/30"
+	key := "streamingnode-meta/wal/p1/qv/0/1/10/0/20/0/30"
 
 	require.NoError(t, catalog.SaveQueryViews(ctx, "p1", []*viewpb.QueryViewOfShard{view}))
 	require.Contains(t, storage, key)
@@ -918,7 +918,7 @@ func TestCatalogQueryViews(t *testing.T) {
 	nextView := proto.Clone(view).(*viewpb.QueryViewOfShard)
 	nextView.Meta.Version.DataVersion.StreamingVersion = 21
 	nextView.Meta.Version.QueryVersion = 1
-	nextKey := "streamingnode-meta/wal/p1/qv/1/10/0/21/0/1"
+	nextKey := "streamingnode-meta/wal/p1/qv/0/1/10/0/21/0/1"
 	require.NoError(t, catalog.SaveQueryViews(ctx, "p1", []*viewpb.QueryViewOfShard{view, nextView}))
 	require.Contains(t, storage, key)
 	require.Contains(t, storage, nextKey)
@@ -931,12 +931,12 @@ func TestCatalogQueryViews(t *testing.T) {
 func TestBuildQueryViewKeyRejectsMismatchedIdentity(t *testing.T) {
 	view := makeQueryViewForCatalogTest("p1_1v0", viewpb.QueryViewState_QueryViewStateUp)
 
-	_, err := buildQueryViewKey("p2", view.GetMeta())
+	_, err := buildQueryViewKey("p2", view)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "pchannel")
 
 	view.Meta.CollectionId = 2
-	_, err = buildQueryViewKey("p1", view.GetMeta())
+	_, err = buildQueryViewKey("p1", view)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "collection")
 }
@@ -948,7 +948,7 @@ func TestCatalogListQueryViewsRejectsCompactKeyValueMismatch(t *testing.T) {
 
 	kv := mocks.NewMetaKv(t)
 	kv.EXPECT().LoadWithPrefix(mock.Anything, buildQueryViewPrefix("p1")).Return(
-		[]string{"streamingnode-meta/wal/p1/qv/1/10/1/20/0/30"},
+		[]string{"streamingnode-meta/wal/p1/qv/0/1/10/1/20/0/30"},
 		[]string{string(value)},
 		nil,
 	)
@@ -957,6 +957,62 @@ func TestCatalogListQueryViewsRejectsCompactKeyValueMismatch(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, views)
 	assert.ErrorContains(t, err, "mismatched query view")
+}
+
+func TestCatalogQueryViewsAreScopedByWALReplica(t *testing.T) {
+	kv := mocks.NewMetaKv(t)
+	storage := make(map[string]string)
+	kv.EXPECT().LoadWithPrefix(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, prefix string) ([]string, []string, error) {
+			keys := make([]string, 0)
+			values := make([]string, 0)
+			for key, value := range storage {
+				if strings.HasPrefix(key, prefix) {
+					keys = append(keys, key)
+					values = append(values, value)
+				}
+			}
+			return keys, values, nil
+		}).Maybe()
+	kv.EXPECT().MultiSaveAndRemove(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, saves map[string]string, removals []string, _ ...predicates.Predicate) error {
+			for key, value := range saves {
+				storage[key] = value
+			}
+			for _, key := range removals {
+				delete(storage, key)
+			}
+			return nil
+		}).Maybe()
+
+	catalog := NewCataLog(kv)
+	ctx := context.Background()
+	viewOnPrimary := makeQueryViewForCatalogTest("p1_1v0", viewpb.QueryViewState_QueryViewStateUp)
+	viewOnPrimary.StreamingNode.WalReplicaId = 0
+	viewOnSecondary := proto.Clone(viewOnPrimary).(*viewpb.QueryViewOfShard)
+	viewOnSecondary.StreamingNode.WalReplicaId = 3
+
+	require.NoError(t, catalog.SaveQueryViews(ctx, "p1", []*viewpb.QueryViewOfShard{viewOnPrimary, viewOnSecondary}))
+
+	require.Contains(t, storage, "streamingnode-meta/wal/p1/qv/0/1/10/0/20/0/30")
+	require.Contains(t, storage, "streamingnode-meta/wal/p1/qv/3/1/10/0/20/0/30")
+	views, err := catalog.ListQueryViews(ctx, "p1")
+	require.NoError(t, err)
+	require.Len(t, views, 2)
+	require.ElementsMatch(t, []int64{0, 3}, []int64{
+		views[0].GetStreamingNode().GetWalReplicaId(),
+		views[1].GetStreamingNode().GetWalReplicaId(),
+	})
+
+	legacyValue, err := marshalQueryViewForPersistence(viewOnSecondary)
+	require.NoError(t, err)
+	storage = map[string]string{
+		"streamingnode-meta/wal/p1/qv/1/10/0/20/0/30": string(legacyValue),
+	}
+	views, err = catalog.ListQueryViews(ctx, "p1")
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	require.Equal(t, int64(3), views[0].GetStreamingNode().GetWalReplicaId())
 }
 
 func makeQueryViewForCatalogTest(vchannel string, state viewpb.QueryViewState) *viewpb.QueryViewOfShard {

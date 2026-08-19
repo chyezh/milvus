@@ -27,6 +27,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
 func (suite *ServiceSuite) TestDDLCallbacksLoadCollectionInfo() {
@@ -231,7 +232,9 @@ func (suite *ServiceSuite) TestDDLCallbacksLoadPartition() {
 		}
 		resp, err := suite.server.LoadPartitions(ctx, req)
 		suite.Require().NoError(merr.CheckRPCCall(resp, err))
-		suite.EqualValues(1, suite.meta.GetReplicaNumber(ctx, collection))
+		cfg := suite.server.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()[collection]
+		suite.Require().NotNil(cfg)
+		suite.Len(cfg.Replicas, 1)
 		suite.targetMgr.UpdateCollectionCurrentTarget(ctx, collection)
 		suite.assertQViewsLoadConfigured(collection, 1, suite.partitions[collection], false)
 	}
@@ -347,7 +350,9 @@ func (suite *ServiceSuite) TestLoadPartitionWithLoadFields() {
 			}
 			resp, err := suite.server.LoadPartitions(ctx, req)
 			suite.Require().NoError(merr.CheckRPCCall(resp, err))
-			suite.EqualValues(1, suite.meta.GetReplicaNumber(ctx, collection))
+			cfg := suite.server.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()[collection]
+			suite.Require().NotNil(cfg)
+			suite.Len(cfg.Replicas, 1)
 			suite.targetMgr.UpdateCollectionCurrentTarget(ctx, collection)
 			suite.assertQViewsLoadConfigured(collection, 1, suite.partitions[collection], false)
 		}
@@ -593,10 +598,9 @@ func (suite *ServiceSuite) TestDDLCallbacksReleasePartition() {
 		<-ch
 		suite.Require().NoError(merr.CheckRPCCall(resp, err))
 
-		suite.True(suite.meta.Exist(ctx, collection))
-		partitions := suite.meta.GetPartitionsByCollection(ctx, collection)
-		suite.Len(partitions, 1)
-		suite.Equal(suite.partitions[collection][0], partitions[0].GetPartitionID())
+		cfg := suite.server.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()[collection]
+		suite.Require().NotNil(cfg)
+		suite.ElementsMatch([]int64{suite.partitions[collection][0]}, cfg.PartitionIDs)
 		suite.assertPartitionReleased(collection, suite.partitions[collection][1:]...)
 	}
 }
@@ -732,6 +736,17 @@ func (suite *ServiceSuite) assertCollectionReleased(collection int64) {
 
 func (suite *ServiceSuite) assertPartitionReleased(collection int64, partitionIDs ...int64) {
 	ctx := context.Background()
+	if suite.server.qviewsRuntime != nil && suite.server.qviewsRuntime.loadConfigStore != nil {
+		cfg := suite.server.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()[collection]
+		if cfg == nil {
+			return
+		}
+		loadedPartitions := typeutil.NewUniqueSet(cfg.PartitionIDs...)
+		for _, partition := range partitionIDs {
+			suite.False(loadedPartitions.Contain(partition))
+		}
+		return
+	}
 	for _, partition := range partitionIDs {
 		suite.Nil(suite.meta.GetPartition(ctx, partition))
 		segments := suite.segments[collection][partition]
@@ -788,10 +803,10 @@ func (suite *ServiceSuite) TestDDLCallbacksLoadCollectionForceOverrideUserSpecif
 		resp, err := suite.server.LoadCollection(ctx, req)
 		suite.Require().NoError(merr.CheckRPCCall(resp, err))
 
-		loadedCollection := suite.meta.GetCollection(ctx, collection)
-		suite.Require().NotNil(loadedCollection)
-		suite.False(loadedCollection.GetUserSpecifiedReplicaMode())
-		suite.EqualValues(1, suite.meta.GetReplicaNumber(ctx, collection))
+		cfg := suite.server.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()[collection]
+		suite.Require().NotNil(cfg)
+		suite.False(cfg.UserSpecifiedReplicaMode)
+		suite.Len(cfg.Replicas, 1)
 	}
 }
 
@@ -814,9 +829,9 @@ func (suite *ServiceSuite) TestLoadPartitionWithUserSpecifiedReplicaMode() {
 		suite.Require().NoError(merr.CheckRPCCall(resp, err))
 
 		// Verify UserSpecifiedReplicaMode is set correctly
-		loadedCollection := suite.meta.GetCollection(ctx, collection)
-		suite.NotNil(loadedCollection)
-		suite.True(loadedCollection.GetUserSpecifiedReplicaMode())
+		cfg := suite.server.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()[collection]
+		suite.Require().NotNil(cfg)
+		suite.True(cfg.UserSpecifiedReplicaMode)
 
 		suite.targetMgr.UpdateCollectionCurrentTarget(ctx, collection)
 		suite.assertQViewsLoadConfigured(collection, 1, suite.partitions[collection], false)
@@ -842,9 +857,9 @@ func (suite *ServiceSuite) TestLoadPartitionUpdateUserSpecifiedReplicaMode() {
 	suite.Require().NoError(merr.CheckRPCCall(resp, err))
 
 	// Verify UserSpecifiedReplicaMode is false
-	loadedCollection := suite.meta.GetCollection(ctx, collection)
-	suite.NotNil(loadedCollection)
-	suite.False(loadedCollection.GetUserSpecifiedReplicaMode())
+	cfg := suite.server.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()[collection]
+	suite.Require().NotNil(cfg)
+	suite.False(cfg.UserSpecifiedReplicaMode)
 
 	// Load another partition with userSpecifiedReplicaMode = true
 	req2 := &querypb.LoadPartitionsRequest{
@@ -856,9 +871,9 @@ func (suite *ServiceSuite) TestLoadPartitionUpdateUserSpecifiedReplicaMode() {
 	suite.Require().NoError(merr.CheckRPCCall(resp, err))
 
 	// Verify UserSpecifiedReplicaMode is updated to true
-	updatedCollection := suite.meta.GetCollection(ctx, collection)
-	suite.NotNil(updatedCollection)
-	suite.True(updatedCollection.GetUserSpecifiedReplicaMode())
+	cfg = suite.server.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()[collection]
+	suite.Require().NotNil(cfg)
+	suite.True(cfg.UserSpecifiedReplicaMode)
 }
 
 func (suite *ServiceSuite) TestSyncNewCreatedPartition() {
@@ -876,54 +891,33 @@ func (suite *ServiceSuite) TestSyncNewCreatedPartition() {
 		CollectionID: collectionID,
 		PartitionID:  newPartition,
 	}
-	syncJob := job.NewSyncNewCreatedPartitionJob(
-		ctx,
-		req,
-		suite.meta,
-		suite.broker,
-		suite.targetObserver,
-		suite.targetMgr,
-	)
-	suite.jobScheduler.Add(syncJob)
-	err := syncJob.Wait()
-	suite.NoError(err)
-	partition := suite.meta.GetPartition(ctx, newPartition)
-	suite.NotNil(partition)
-	suite.Equal(querypb.LoadStatus_Loaded, partition.GetStatus())
+	resp, err := suite.server.SyncNewCreatedPartition(ctx, req)
+	suite.Require().NoError(merr.CheckRPCCall(resp, err))
+	cfg := suite.server.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()[collectionID]
+	suite.Require().NotNil(cfg)
+	suite.Contains(cfg.PartitionIDs, newPartition)
 
 	// test collection not loaded
 	req = &querypb.SyncNewCreatedPartitionRequest{
 		CollectionID: int64(888),
 		PartitionID:  newPartition,
 	}
-	syncJob = job.NewSyncNewCreatedPartitionJob(
-		ctx,
-		req,
-		suite.meta,
-		suite.broker,
-		suite.targetObserver,
-		suite.targetMgr,
-	)
-	suite.jobScheduler.Add(syncJob)
-	err = syncJob.Wait()
-	suite.NoError(err)
+	resp, err = suite.server.SyncNewCreatedPartition(ctx, req)
+	suite.Require().NoError(merr.CheckRPCCall(resp, err))
+	suite.Nil(suite.server.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()[int64(888)])
 
 	// test collection loaded, but its loadType is loadPartition
+	cfg = suite.server.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()[suite.collections[1]]
+	suite.Require().NotNil(cfg)
+	partitionsBefore := append([]int64{}, cfg.PartitionIDs...)
 	req = &querypb.SyncNewCreatedPartitionRequest{
 		CollectionID: suite.collections[1],
 		PartitionID:  newPartition,
 	}
-	syncJob = job.NewSyncNewCreatedPartitionJob(
-		ctx,
-		req,
-		suite.meta,
-		suite.broker,
-		suite.targetObserver,
-		suite.targetMgr,
-	)
-	suite.jobScheduler.Add(syncJob)
-	err = syncJob.Wait()
-	suite.NoError(err)
+	resp, err = suite.server.SyncNewCreatedPartition(ctx, req)
+	suite.Require().NoError(merr.CheckRPCCall(resp, err))
+	cfg = suite.server.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()[suite.collections[1]]
+	suite.ElementsMatch(partitionsBefore, cfg.PartitionIDs)
 }
 
 func (suite *ServiceSuite) assertCollectionLoaded(collection int64) {

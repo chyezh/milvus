@@ -17,42 +17,65 @@ var (
 	_ expectedWALState = (*unavailableExpectedWALState)(nil)
 
 	initialExpectedWALState expectedWALState = &unavailableExpectedWALState{
-		term: types.InitialTerm,
+		term:            types.InitialTerm,
+		assignmentEpoch: 0,
 	}
 	initialCurrentWALState currentWALState = &unavailableCurrentWALState{
-		term: types.InitialTerm,
-		err:  nil,
+		term:            types.InitialTerm,
+		assignmentEpoch: 0,
+		err:             nil,
 	}
 )
 
 // newAvailableCurrentState creates a new available current state.
-func newAvailableCurrentState(l wal.WAL) currentWALState {
+func newAvailableCurrentState(l wal.WAL, assignmentEpoch int64) currentWALState {
 	return availableCurrentWALState{
-		l: l,
+		l:               l,
+		assignmentEpoch: assignmentEpoch,
 	}
 }
 
 // newUnavailableCurrentState creates a new unavailable current state.
-func newUnavailableCurrentState(term int64, err error) currentWALState {
+func newUnavailableCurrentState(term int64, assignmentEpoch int64, err error) currentWALState {
 	return unavailableCurrentWALState{
-		term: term,
-		err:  err,
+		term:            term,
+		assignmentEpoch: assignmentEpoch,
+		err:             err,
 	}
 }
 
 // newAvailableExpectedState creates a new available expected state.
-func newAvailableExpectedState(ctx context.Context, channel types.PChannelInfo) expectedWALState {
+func newAvailableExpectedState(ctx context.Context, channel types.PChannelInfo, walReplicaID int64, assignmentEpoch int64) expectedWALState {
 	return availableExpectedWALState{
-		ctx:     ctx,
-		channel: channel,
+		ctx:             ctx,
+		channel:         channel,
+		walReplicaID:    walReplicaID,
+		assignmentEpoch: assignmentEpoch,
 	}
 }
 
 // newUnavailableExpectedState creates a new unavailable expected state.
-func newUnavailableExpectedState(term int64) expectedWALState {
+func newUnavailableExpectedState(term int64, assignmentEpoch int64) expectedWALState {
 	return unavailableExpectedWALState{
-		term: term,
+		term:            term,
+		assignmentEpoch: assignmentEpoch,
 	}
+}
+
+func isSameExpectedWALState(left expectedWALState, right expectedWALState) bool {
+	if left.Term() != right.Term() ||
+		left.AssignmentEpoch() != right.AssignmentEpoch() ||
+		left.Available() != right.Available() {
+		return false
+	}
+	if !left.Available() {
+		return true
+	}
+	leftChannel := left.GetPChannelInfo()
+	rightChannel := right.GetPChannelInfo()
+	return leftChannel.Name == rightChannel.Name &&
+		leftChannel.AccessMode == rightChannel.AccessMode &&
+		left.WALReplicaID() == right.WALReplicaID()
 }
 
 // walState describe the state of a wal.
@@ -62,6 +85,9 @@ type walState interface {
 
 	// Available returns whether the wal is available.
 	Available() bool
+
+	// AssignmentEpoch returns the replica-scoped control-plane epoch.
+	AssignmentEpoch() int64
 }
 
 // currentWALState is the current (exactly status) state of a wal.
@@ -86,11 +112,15 @@ type expectedWALState interface {
 
 	// Context returns the context of the expected wal state.
 	Context() context.Context
+
+	// WALReplicaID returns the wal replica id of the expected wal state.
+	WALReplicaID() int64
 }
 
 // availableCurrentWALState is a available wal state of current wal.
 type availableCurrentWALState struct {
-	l wal.WAL
+	l               wal.WAL
+	assignmentEpoch int64
 }
 
 func (s availableCurrentWALState) Term() int64 {
@@ -99,6 +129,10 @@ func (s availableCurrentWALState) Term() int64 {
 
 func (s availableCurrentWALState) Available() bool {
 	return true
+}
+
+func (s availableCurrentWALState) AssignmentEpoch() int64 {
+	return s.assignmentEpoch
 }
 
 func (s availableCurrentWALState) GetWAL() wal.WAL {
@@ -111,8 +145,9 @@ func (s availableCurrentWALState) GetLastError() error {
 
 // unavailableCurrentWALState is a unavailable state of current wal.
 type unavailableCurrentWALState struct {
-	term int64
-	err  error
+	term            int64
+	assignmentEpoch int64
+	err             error
 }
 
 func (s unavailableCurrentWALState) Term() int64 {
@@ -121,6 +156,10 @@ func (s unavailableCurrentWALState) Term() int64 {
 
 func (s unavailableCurrentWALState) Available() bool {
 	return false
+}
+
+func (s unavailableCurrentWALState) AssignmentEpoch() int64 {
+	return s.assignmentEpoch
 }
 
 func (s unavailableCurrentWALState) GetWAL() wal.WAL {
@@ -132,8 +171,10 @@ func (s unavailableCurrentWALState) GetLastError() error {
 }
 
 type availableExpectedWALState struct {
-	ctx     context.Context
-	channel types.PChannelInfo
+	ctx             context.Context
+	channel         types.PChannelInfo
+	walReplicaID    int64
+	assignmentEpoch int64
 }
 
 func (s availableExpectedWALState) Term() int64 {
@@ -144,6 +185,10 @@ func (s availableExpectedWALState) Available() bool {
 	return true
 }
 
+func (s availableExpectedWALState) AssignmentEpoch() int64 {
+	return s.assignmentEpoch
+}
+
 func (s availableExpectedWALState) Context() context.Context {
 	return s.ctx
 }
@@ -152,8 +197,13 @@ func (s availableExpectedWALState) GetPChannelInfo() types.PChannelInfo {
 	return s.channel
 }
 
+func (s availableExpectedWALState) WALReplicaID() int64 {
+	return s.walReplicaID
+}
+
 type unavailableExpectedWALState struct {
-	term int64
+	term            int64
+	assignmentEpoch int64
 }
 
 func (s unavailableExpectedWALState) Term() int64 {
@@ -164,12 +214,20 @@ func (s unavailableExpectedWALState) Available() bool {
 	return false
 }
 
+func (s unavailableExpectedWALState) AssignmentEpoch() int64 {
+	return s.assignmentEpoch
+}
+
 func (s unavailableExpectedWALState) GetPChannelInfo() types.PChannelInfo {
 	return types.PChannelInfo{}
 }
 
 func (s unavailableExpectedWALState) Context() context.Context {
 	return context.Background()
+}
+
+func (s unavailableExpectedWALState) WALReplicaID() int64 {
+	return 0
 }
 
 // newWALStateWithCond creates new walStateWithCond.
@@ -211,7 +269,9 @@ func (w *walStateWithCond[T]) SetStateAndNotify(s T) bool {
 // WatchChanged waits until the state is changed.
 func (w *walStateWithCond[T]) WatchChanged(ctx context.Context, s walState) error {
 	w.cond.L.Lock()
-	for w.state.Term() == s.Term() && w.state.Available() == s.Available() {
+	for w.state.Term() == s.Term() &&
+		w.state.AssignmentEpoch() == s.AssignmentEpoch() &&
+		w.state.Available() == s.Available() {
 		if err := w.cond.Wait(ctx); err != nil {
 			return err
 		}
@@ -223,16 +283,16 @@ func (w *walStateWithCond[T]) WatchChanged(ctx context.Context, s walState) erro
 // isStateBefore returns whether s1 is before s2.
 func isStateBefore(s1, s2 walState) bool {
 	// w1 is before w2 if term of w1 is less than w2.
-	// or w1 is available and w2 is not available in same term.
-	// because wal should always be available before unavailable in same term.
-	// (1, true) -> (1, false) is allowed.
-	// (1, true) -> (2, false) is allowed.
-	// (1, false) -> (2, true) is allowed.
-	// (1, false) -> (1, true) is not allowed.
-	return s1.Term() < s2.Term() || (s1.Term() == s2.Term() && s1.Available() && !s2.Available())
+	// or assignment epoch of w1 is less than w2 in same term,
+	// or w1 is available and w2 is not available in same term and same epoch.
+	// WAL write ownership still advances by PChannel term. AssignmentEpoch is
+	// needed for read-only WAL replicas whose reassignment does not advance term.
+	return s1.Term() < s2.Term() ||
+		(s1.Term() == s2.Term() && s1.AssignmentEpoch() < s2.AssignmentEpoch()) ||
+		(s1.Term() == s2.Term() && s1.AssignmentEpoch() == s2.AssignmentEpoch() && s1.Available() && !s2.Available())
 }
 
 // toStateString returns the string representation of wal state.
 func toStateString(s walState) string {
-	return fmt.Sprintf("(%d,%t)", s.Term(), s.Available())
+	return fmt.Sprintf("(%d,%d,%t)", s.Term(), s.AssignmentEpoch(), s.Available())
 }

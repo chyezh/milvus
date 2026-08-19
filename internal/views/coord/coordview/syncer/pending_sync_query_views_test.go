@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/milvus-io/milvus/internal/views/qviews"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 )
 
 func TestPending_UpsertAndDrainUnsent(t *testing.T) {
@@ -220,6 +222,29 @@ func TestPending_DrainSkipsStreamingNode(t *testing.T) {
 	assert.Nil(t, p.DrainUnsent(), "unsent should be cleared after drain")
 }
 
+func TestPending_CompleteStreamingNodeTeardownIfUnavailable(t *testing.T) {
+	p := newPendingSyncQueryViews()
+
+	var downReported atomic.Bool
+	down := newTestSNViewWithStateAndWALReplica(1, viewpb.QueryViewState_QueryViewStateDown, 3, func(resp qviews.QueryViewAtWorkNode) bool {
+		downReported.Store(resp.State() == qviews.QueryViewStateDropped)
+		return true
+	})
+	preparing := newTestSNViewWithStateAndWALReplica(2, viewpb.QueryViewState_QueryViewStatePreparing, 3, func(qviews.QueryViewAtWorkNode) bool {
+		t.Fatal("preparing view should not be completed as dropped")
+		return true
+	})
+	p.Upsert(down)
+	p.Upsert(preparing)
+
+	p.CompleteStreamingNodeTeardownIfUnavailable(qviews.NewStreamingNodeFromVChannelAndWALReplica(testVChannel, 3))
+
+	assert.True(t, downReported.Load())
+	protos := p.CollectProtos()
+	require.Len(t, protos, 1)
+	assert.Equal(t, preparing.View.QueryViewKey(), qviews.NewQueryViewAtWorkNodeFromProto(protos[0]).QueryViewKey())
+}
+
 func TestPending_CollectProtos(t *testing.T) {
 	p := newPendingSyncQueryViews()
 
@@ -234,6 +259,21 @@ func TestPending_CollectProtos(t *testing.T) {
 	// CollectProtos should be idempotent.
 	protos2 := p.CollectProtos()
 	assert.Len(t, protos2, 3)
+}
+
+func TestPending_HasWALReplicaDependency(t *testing.T) {
+	p := newPendingSyncQueryViews()
+
+	sv := newTestSNViewWithWALReplica(1, 3, func(qviews.QueryViewAtWorkNode) bool { return true })
+	p.Upsert(sv)
+
+	pchannel := qviews.NewStreamingNodeFromVChannel(testVChannel).PChannel
+	assert.True(t, p.HasWALReplicaDependency(types.ChannelID{Name: pchannel, WALReplicaID: 3}))
+	assert.False(t, p.HasWALReplicaDependency(types.ChannelID{Name: pchannel, WALReplicaID: 4}))
+	assert.False(t, p.HasWALReplicaDependency(types.ChannelID{Name: "other", WALReplicaID: 3}))
+
+	p.MatchResponse(sv.View.IntoProto())
+	assert.False(t, p.HasWALReplicaDependency(types.ChannelID{Name: pchannel, WALReplicaID: 3}))
 }
 
 func TestPending_ReadySignal(t *testing.T) {

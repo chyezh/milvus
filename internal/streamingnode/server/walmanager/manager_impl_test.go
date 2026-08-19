@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/milvus-io/milvus/internal/mocks"
 	"github.com/milvus-io/milvus/internal/mocks/streamingnode/server/mock_wal"
@@ -138,6 +139,95 @@ func TestManager(t *testing.T) {
 	l, err = m.GetAvailableWAL(types.PChannelInfo{Name: channelName, Term: 2})
 	assertShutdownError(t, err)
 	assert.Nil(t, l)
+}
+
+func TestManagerAllowsMultipleWALReplicasForSamePChannel(t *testing.T) {
+	mixcoord := mocks.NewMockMixCoordClient(t)
+	fMixcoord := syncutil.NewFuture[internaltypes.MixCoordClient]()
+	fMixcoord.Set(testMixCoordClient{MockMixCoordClient: mixcoord})
+	resource.InitForTest(
+		t,
+		resource.OptMixCoordClient(fMixcoord),
+	)
+
+	opener := mock_wal.NewMockOpener(t)
+	opener.EXPECT().Open(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, oo *wal.OpenOption) (wal.WAL, error) {
+			l := mock_wal.NewMockWAL(t)
+			l.EXPECT().Metrics().Return(types.RWWALMetrics{}).Maybe()
+			l.EXPECT().Channel().Return(oo.Channel).Maybe()
+			l.EXPECT().IsAvailable().Return(true).Maybe()
+			l.EXPECT().Close().Return().Maybe()
+			return l, nil
+		})
+	opener.EXPECT().Close().Return()
+
+	m := newManager(opener)
+	channel := types.PChannelInfo{Name: "shared", Term: 1, AccessMode: types.AccessModeRW}
+	roChannel := types.PChannelInfo{Name: "shared", Term: 1, AccessMode: types.AccessModeRO}
+
+	assert.NoError(t, m.Open(context.Background(), channel))
+	assert.NoError(t, m.OpenWALReplica(context.Background(), roChannel, 2, 1))
+
+	metrics, err := m.Metrics()
+	assert.NoError(t, err)
+	assert.Contains(t, metrics.WALMetrics, types.ChannelID{Name: "shared"})
+	assert.Contains(t, metrics.WALMetrics, types.ChannelID{Name: "shared", WALReplicaID: 2})
+
+	wal0, err := m.GetAvailableWAL(channel)
+	assert.NoError(t, err)
+	assert.NotNil(t, wal0)
+	wal2, err := m.GetAvailableWALReplica(roChannel, 2)
+	assert.NoError(t, err)
+	assert.NotNil(t, wal2)
+
+	assert.NoError(t, m.RemoveWALReplica(context.Background(), roChannel, 2, 1))
+	wal2, err = m.GetAvailableWALReplica(roChannel, 2)
+	assertErrorChannelNotExist(t, err)
+	assert.Nil(t, wal2)
+
+	wal0, err = m.GetAvailableWAL(channel)
+	assert.NoError(t, err)
+	assert.NotNil(t, wal0)
+	m.Close()
+}
+
+func TestManagerAllowsReadOnlyWALReplicaAcrossPChannelTermAdvance(t *testing.T) {
+	mixcoord := mocks.NewMockMixCoordClient(t)
+	fMixcoord := syncutil.NewFuture[internaltypes.MixCoordClient]()
+	fMixcoord.Set(testMixCoordClient{MockMixCoordClient: mixcoord})
+	resource.InitForTest(
+		t,
+		resource.OptMixCoordClient(fMixcoord),
+	)
+
+	opener := mock_wal.NewMockOpener(t)
+	opener.EXPECT().Open(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, oo *wal.OpenOption) (wal.WAL, error) {
+			l := mock_wal.NewMockWAL(t)
+			l.EXPECT().Metrics().Return(types.RWWALMetrics{}).Maybe()
+			l.EXPECT().Channel().Return(oo.Channel).Maybe()
+			l.EXPECT().IsAvailable().Return(true).Maybe()
+			l.EXPECT().Close().Return().Maybe()
+			return l, nil
+		})
+	opener.EXPECT().Close().Return()
+
+	m := newManager(opener)
+	defer m.Close()
+
+	roChannel := types.PChannelInfo{Name: "shared", Term: 10, AccessMode: types.AccessModeRO}
+	require.NoError(t, m.OpenWALReplica(context.Background(), roChannel, 2, 1))
+
+	advancedTermRO := types.PChannelInfo{Name: "shared", Term: 11, AccessMode: types.AccessModeRO}
+	roWAL, err := m.GetAvailableWALReplica(advancedTermRO, 2)
+	require.NoError(t, err)
+	require.NotNil(t, roWAL)
+
+	advancedTermRW := types.PChannelInfo{Name: "shared", Term: 11, AccessMode: types.AccessModeRW}
+	rwWAL, err := m.GetAvailableWALReplica(advancedTermRW, 2)
+	assertErrorTermExpired(t, err)
+	require.Nil(t, rwWAL)
 }
 
 func assertShutdownError(t *testing.T, err error) {

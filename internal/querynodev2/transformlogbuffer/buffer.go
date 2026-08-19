@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/cockroachdb/errors"
 
 	"github.com/milvus-io/milvus/internal/querynodev2/qnview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	streamingstatus "github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
@@ -18,19 +20,19 @@ import (
 type Buffer struct {
 	streams wal.TransformLogStreamManager
 
-	mu                sync.Mutex
-	streamsByPChannel map[string]*streamState
-	channels          map[string]*vchannelBuffer
+	mu           sync.Mutex
+	streamsByKey map[streamIdentity]*streamState
+	channels     map[bufferIdentity]*vchannelBuffer
 
 	drainTasks chan *registration
 }
 
 func New(streams wal.TransformLogStreamManager) *Buffer {
 	b := &Buffer{
-		streams:           streams,
-		streamsByPChannel: make(map[string]*streamState),
-		channels:          make(map[string]*vchannelBuffer),
-		drainTasks:        make(chan *registration, 1024),
+		streams:      streams,
+		streamsByKey: make(map[streamIdentity]*streamState),
+		channels:     make(map[bufferIdentity]*vchannelBuffer),
+		drainTasks:   make(chan *registration, 1024),
 	}
 	for i := 0; i < 4; i++ {
 		go b.drainWorker()
@@ -49,24 +51,27 @@ func (b *Buffer) Acquire(ctx context.Context, view *qviews.QueryViewAtQueryNode)
 		return nil, wal.ErrTransformLogInvalidReadOption
 	}
 	pchannel := funcutil.ToPhysicalChannel(vchannel)
+	walReplicaID := view.WALReplicaID()
+	streamKey := streamIdentity{pchannel: pchannel, walReplicaID: walReplicaID}
+	bufferKey := bufferIdentity{vchannel: vchannel, walReplicaID: walReplicaID}
 
 	b.mu.Lock()
-	buf := b.channels[vchannel]
+	buf := b.channels[bufferKey]
 	if buf == nil {
-		stream, err := b.getOrCreateStreamLocked(ctx, pchannel)
+		stream, err := b.getOrCreateStreamLocked(ctx, streamKey)
 		if err != nil {
 			b.mu.Unlock()
 			return nil, err
 		}
-		buf = newVChannelBuffer(b, pchannel, vchannel, startFrom)
-		b.channels[vchannel] = buf
+		buf = newVChannelBuffer(b, pchannel, walReplicaID, vchannel, startFrom)
+		b.channels[bufferKey] = buf
 		stream.refs[vchannel] = buf
 	}
 	if err := buf.acquireLocked(startFrom); err != nil {
 		b.mu.Unlock()
 		return nil, err
 	}
-	stream := b.streamsByPChannel[pchannel]
+	stream := b.streamsByKey[streamKey]
 	b.mu.Unlock()
 	if stream != nil {
 		if err := buf.ensureSubscribed(ctx, stream.stream); err != nil {
@@ -82,12 +87,29 @@ func (b *Buffer) RegisterSegment(ctx context.Context, segment qnview.TransformSe
 		return nil, wal.ErrTransformLogInvalidReadOption
 	}
 	b.mu.Lock()
-	buf := b.channels[segment.VChannel()]
+	buf := b.segmentBufferLocked(segment)
 	b.mu.Unlock()
 	if buf == nil {
 		return nil, fmt.Errorf("transform log buffer for vchannel %q is not acquired", segment.VChannel())
 	}
 	return buf.registerSegment(ctx, segment)
+}
+
+func (b *Buffer) segmentBufferLocked(segment qnview.TransformSegment) *vchannelBuffer {
+	if s, ok := segment.(interface{ WALReplicaID() int64 }); ok {
+		return b.channels[bufferIdentity{vchannel: segment.VChannel(), walReplicaID: s.WALReplicaID()}]
+	}
+	var found *vchannelBuffer
+	for key, buf := range b.channels {
+		if key.vchannel != segment.VChannel() {
+			continue
+		}
+		if found != nil {
+			return nil
+		}
+		found = buf
+	}
+	return found
 }
 
 func (b *Buffer) scheduleDrain(ctx context.Context, reg *registration) error {
@@ -109,12 +131,12 @@ func (b *Buffer) drainWorker() {
 	}
 }
 
-func (b *Buffer) getOrCreateStreamLocked(ctx context.Context, pchannel string) (*streamState, error) {
-	if state := b.streamsByPChannel[pchannel]; state != nil {
+func (b *Buffer) getOrCreateStreamLocked(ctx context.Context, key streamIdentity) (*streamState, error) {
+	if state := b.streamsByKey[key]; state != nil {
 		select {
 		case <-state.stream.Done():
 			if len(state.refs) == 0 {
-				delete(b.streamsByPChannel, pchannel)
+				delete(b.streamsByKey, key)
 				_ = state.stream.Close()
 			} else {
 				return state, nil
@@ -126,30 +148,122 @@ func (b *Buffer) getOrCreateStreamLocked(ctx context.Context, pchannel string) (
 	if b.streams == nil {
 		return nil, wal.ErrTransformLogInvalidReadOption
 	}
-	stream, err := b.streams.AcquireStream(ctx, pchannel)
+	stream, err := b.acquireStream(ctx, key)
 	if err != nil {
 		return nil, err
 	}
 	mlog.Debug(ctx, "querynode transform log buffer acquired pchannel stream",
-		mlog.FieldPChannel(pchannel),
+		mlog.FieldPChannel(key.pchannel),
+		mlog.Int64("walReplicaID", key.walReplicaID),
 	)
 	state := &streamState{
-		pchannel: pchannel,
-		stream:   stream,
-		refs:     make(map[string]*vchannelBuffer),
+		key:    key,
+		stream: stream,
+		refs:   make(map[string]*vchannelBuffer),
 	}
-	b.streamsByPChannel[pchannel] = state
+	b.streamsByKey[key] = state
+	go b.watchStream(state)
 	return state, nil
 }
 
-func (b *Buffer) removeLocked(vchannel string, buf *vchannelBuffer) wal.TransformLogStream {
-	if b.channels[vchannel] == buf {
-		delete(b.channels, vchannel)
+func (b *Buffer) watchStream(state *streamState) {
+	<-state.stream.Done()
+	b.recoverStream(state)
+}
+
+func (b *Buffer) recoverStream(old *streamState) {
+	for {
+		refs, ok := b.streamRefs(old)
+		if !ok || len(refs) == 0 {
+			return
+		}
+		stream, err := b.acquireStream(context.Background(), old.key)
+		if err != nil {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		next := &streamState{
+			key:    old.key,
+			stream: stream,
+			refs:   make(map[string]*vchannelBuffer, len(refs)),
+		}
+		for _, ref := range refs {
+			next.refs[ref.vchannel] = ref
+		}
+
+		b.mu.Lock()
+		if b.streamsByKey[old.key] != old {
+			b.mu.Unlock()
+			_ = stream.Close()
+			return
+		}
+		b.streamsByKey[old.key] = next
+		b.mu.Unlock()
+
+		if b.resubscribeRefs(next.stream, refs) {
+			go b.watchStream(next)
+			return
+		}
+		old = next
+		_ = stream.Close()
+		time.Sleep(100 * time.Millisecond)
 	}
-	if state := b.streamsByPChannel[buf.pchannel]; state != nil {
+}
+
+func (b *Buffer) acquireStream(ctx context.Context, key streamIdentity) (wal.TransformLogStream, error) {
+	stream, err := b.streams.AcquireStream(ctx, key.pchannel, key.walReplicaID)
+	if err != nil {
+		return nil, err
+	}
+	select {
+	case <-stream.Done():
+		_ = stream.Close()
+		return nil, streamingstatus.NewOnShutdownError("transform log stream is closed")
+	default:
+		return stream, nil
+	}
+}
+
+func (b *Buffer) streamRefs(state *streamState) ([]*vchannelBuffer, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.streamsByKey[state.key] != state {
+		return nil, false
+	}
+	if len(state.refs) == 0 {
+		delete(b.streamsByKey, state.key)
+		return nil, true
+	}
+	refs := make([]*vchannelBuffer, 0, len(state.refs))
+	for _, ref := range state.refs {
+		refs = append(refs, ref)
+	}
+	return refs, true
+}
+
+func (b *Buffer) resubscribeRefs(stream wal.TransformLogStream, refs []*vchannelBuffer) bool {
+	for _, ref := range refs {
+		if err := ref.resubscribe(context.Background(), stream); err != nil {
+			if isUnrecoverableSubscribeError(err) {
+				ref.fail(err)
+				continue
+			}
+			return false
+		}
+	}
+	return true
+}
+
+func (b *Buffer) removeLocked(vchannel string, buf *vchannelBuffer) wal.TransformLogStream {
+	bufferKey := bufferIdentity{vchannel: vchannel, walReplicaID: buf.walReplicaID}
+	if b.channels[bufferKey] == buf {
+		delete(b.channels, bufferKey)
+	}
+	key := streamIdentity{pchannel: buf.pchannel, walReplicaID: buf.walReplicaID}
+	if state := b.streamsByKey[key]; state != nil {
 		delete(state.refs, vchannel)
 		if len(state.refs) == 0 {
-			delete(b.streamsByPChannel, buf.pchannel)
+			delete(b.streamsByKey, key)
 			return state.stream
 		}
 	}
@@ -157,9 +271,19 @@ func (b *Buffer) removeLocked(vchannel string, buf *vchannelBuffer) wal.Transfor
 }
 
 type streamState struct {
-	pchannel string
-	stream   wal.TransformLogStream
-	refs     map[string]*vchannelBuffer
+	key    streamIdentity
+	stream wal.TransformLogStream
+	refs   map[string]*vchannelBuffer
+}
+
+type streamIdentity struct {
+	pchannel     string
+	walReplicaID int64
+}
+
+type bufferIdentity struct {
+	vchannel     string
+	walReplicaID int64
 }
 
 type bufEventHandler struct {
@@ -217,10 +341,11 @@ func (g *guard) WaitTransformVisible(ctx context.Context, timetick uint64) error
 }
 
 type vchannelBuffer struct {
-	owner    *Buffer
-	pchannel string
-	vchannel string
-	sub      wal.TransformLogSubscription
+	owner        *Buffer
+	pchannel     string
+	walReplicaID int64
+	vchannel     string
+	sub          wal.TransformLogSubscription
 
 	subscribeAttempt *subscribeAttempt
 
@@ -236,10 +361,11 @@ type vchannelBuffer struct {
 	err              error
 }
 
-func newVChannelBuffer(owner *Buffer, pchannel string, vchannel string, startFrom uint64) *vchannelBuffer {
+func newVChannelBuffer(owner *Buffer, pchannel string, walReplicaID int64, vchannel string, startFrom uint64) *vchannelBuffer {
 	return &vchannelBuffer{
 		owner:            owner,
 		pchannel:         pchannel,
+		walReplicaID:     walReplicaID,
 		vchannel:         vchannel,
 		retentionStart:   startFrom,
 		visibleTimeTick:  startFrom,
@@ -326,6 +452,20 @@ func (b *vchannelBuffer) subscribe(ctx context.Context, stream wal.TransformLogS
 		mlog.Int64("subscriptionID", sub.ID()),
 	)
 	return nil
+}
+
+func (b *vchannelBuffer) resubscribe(ctx context.Context, stream wal.TransformLogStream) error {
+	b.mu.Lock()
+	if b.err != nil {
+		err := b.err
+		b.mu.Unlock()
+		return err
+	}
+	b.sub = nil
+	b.subscribeAttempt = nil
+	startAfter := b.visibleTimeTick
+	b.mu.Unlock()
+	return b.subscribe(ctx, stream, &subscribeAttempt{done: make(chan struct{})}, startAfter)
 }
 
 func (b *vchannelBuffer) completeSubscribeLocked(attempt *subscribeAttempt, err error) {

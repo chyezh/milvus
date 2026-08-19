@@ -2,6 +2,7 @@ package coordview
 
 import (
 	"context"
+	"sort"
 	"sync"
 
 	"golang.org/x/exp/maps"
@@ -10,6 +11,8 @@ import (
 	"github.com/milvus-io/milvus/internal/views/coord/coordview/syncer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	streamingtypes "github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
+	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/metautil"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
@@ -257,6 +260,66 @@ func (r *ShardViewRegistry) ShardIDs() []qviews.ShardID {
 	return shardIDs
 }
 
+func (r *ShardViewRegistry) HasWALReplicaDependency(replicaID streamingtypes.ChannelID) bool {
+	if r.Snapshot().HasWALReplicaDependency(replicaID) {
+		return true
+	}
+	return r.flushScheduler.HasWALReplicaDependency(replicaID)
+}
+
+// OnQueryNodeLost applies a QueryNode loss event to all shard managers and
+// returns the shards whose active views referenced the lost QueryNode.
+func (r *ShardViewRegistry) OnQueryNodeLost(node qviews.QueryNode) []qviews.ShardID {
+	r.mu.RLock()
+	shards := make(map[qviews.ShardID]*ShardViewManager, len(r.shards))
+	for shardID, mgr := range r.shards {
+		shards[shardID] = mgr
+	}
+	r.mu.RUnlock()
+
+	affected := make([]qviews.ShardID, 0)
+	for shardID, mgr := range shards {
+		if mgr != nil && mgr.OnQueryNodeLost(node) {
+			affected = append(affected, shardID)
+		}
+	}
+	sort.Slice(affected, func(i, j int) bool {
+		if affected[i].ReplicaID != affected[j].ReplicaID {
+			return affected[i].ReplicaID < affected[j].ReplicaID
+		}
+		return affected[i].VChannel < affected[j].VChannel
+	})
+	return affected
+}
+
+func (r *ShardViewRegistry) QueryNodes() []qviews.QueryNode {
+	r.mu.RLock()
+	shards := make([]*ShardViewManager, 0, len(r.shards))
+	for _, mgr := range r.shards {
+		shards = append(shards, mgr)
+	}
+	r.mu.RUnlock()
+
+	nodes := make(map[int64]qviews.QueryNode)
+	for _, mgr := range shards {
+		if mgr == nil {
+			continue
+		}
+		for _, node := range mgr.QueryNodes() {
+			nodes[node.ID] = node
+		}
+	}
+
+	result := make([]qviews.QueryNode, 0, len(nodes))
+	for _, node := range nodes {
+		result = append(result, node)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].ID < result[j].ID
+	})
+	return result
+}
+
 // RegisterStatsObserver registers an observer for future per-shard stats
 // updates. The current snapshot is not replayed; callers that need recovery
 // state should read Snapshot explicitly.
@@ -297,6 +360,21 @@ func (s *ShardViewSnapshot) StatsMap() map[qviews.ShardID]*ShardStats {
 		return nil
 	}
 	return s.stats
+}
+
+func (s *ShardViewSnapshot) HasWALReplicaDependency(replicaID streamingtypes.ChannelID) bool {
+	if s == nil {
+		return false
+	}
+	for shardID, stats := range s.stats {
+		if funcutil.ToPhysicalChannel(shardID.VChannel) != replicaID.Name {
+			continue
+		}
+		if stats.DependsOnWALReplica(replicaID.WALReplicaID) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *ShardViewRegistry) onShardStatsChanged(shardID qviews.ShardID, stats *ShardStats) {
@@ -385,5 +463,8 @@ func (r *ShardViewRegistry) removeNodeShardsLocked(shardID qviews.ShardID, stats
 }
 
 func emptyShardStats() *ShardStats {
-	return &ShardStats{Segments: make(map[int64]*SegmentStats)}
+	return &ShardStats{
+		WALReplicaDependencies: make(map[int64]struct{}),
+		Segments:               make(map[int64]*SegmentStats),
+	}
 }

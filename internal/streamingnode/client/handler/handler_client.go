@@ -108,7 +108,7 @@ type HandlerClient interface {
 	CreateConsumer(ctx context.Context, opts *ConsumerOptions) (Consumer, error)
 
 	// AcquireTransformLogStream creates a pchannel-level transform log event stream.
-	AcquireTransformLogStream(ctx context.Context, pchannel string) (wal.TransformLogStream, error)
+	AcquireTransformLogStream(ctx context.Context, pchannel string, walReplicaID ...int64) (wal.TransformLogStream, error)
 
 	// QueryViewClient returns the QueryView domain client.
 	QueryViewClient() QueryViewClient

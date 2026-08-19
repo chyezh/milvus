@@ -76,6 +76,10 @@ type shardAssignmentBalancer interface {
 	TriggerShardAssignmentUpdate()
 }
 
+type walReplicaDependencyBalancer interface {
+	SetWALReplicaDependencyProvider(balancer.WALReplicaDependencyProvider)
+}
+
 // GetBalancer returns the balancer of the streaming node manager.
 func (s *StreamingNodeManager) GetBalancer() balancer.Balancer {
 	b, err := balance.GetWithContext(context.Background())
@@ -157,6 +161,43 @@ func (s *StreamingNodeManager) TriggerShardAssignmentUpdate(ctx context.Context)
 	}
 	shardBalancer.TriggerShardAssignmentUpdate()
 	return nil
+}
+
+func (s *StreamingNodeManager) RegisterWALReplicaDependencyProvider(ctx context.Context, provider balancer.WALReplicaDependencyProvider) error {
+	b, err := balance.GetWithContext(ctx)
+	if err != nil {
+		return err
+	}
+	walReplicaBalancer, ok := b.(walReplicaDependencyBalancer)
+	if !ok {
+		return merr.WrapErrServiceInternalMsg("streaming balancer does not support WAL replica dependency provider")
+	}
+	walReplicaBalancer.SetWALReplicaDependencyProvider(provider)
+	return nil
+}
+
+func (s *StreamingNodeManager) EnsureReadOnlyWALReplica(ctx context.Context, pchannel string, resourceGroup string) error {
+	b, err := balance.GetWithContext(ctx)
+	if err != nil {
+		return err
+	}
+	return b.EnsureReadOnlyWALReplica(ctx, pchannel, resourceGroup)
+}
+
+func (s *StreamingNodeManager) ReleaseReadOnlyWALReplica(ctx context.Context, pchannel string, walReplicaID int64) error {
+	b, err := balance.GetWithContext(ctx)
+	if err != nil {
+		return err
+	}
+	return b.ReleaseReadOnlyWALReplica(ctx, pchannel, walReplicaID)
+}
+
+func (s *StreamingNodeManager) SwitchWALPrimaryReplica(ctx context.Context, pchannel string, targetReplicaID int64) error {
+	b, err := balance.GetWithContext(ctx)
+	if err != nil {
+		return err
+	}
+	return b.SwitchWALPrimaryReplica(ctx, pchannel, targetReplicaID)
 }
 
 // GetWALLocated returns the server id of the node that the wal of the vChannel is located.

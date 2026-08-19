@@ -29,11 +29,12 @@ type snapshotSource interface {
 // decisions are delegated to BalancePolicy; this type only builds snapshots,
 // drains dirty work, and applies the resulting BalancePlan.
 type DefaultBalancer struct {
-	snapshotBuilder snapshotSource
-	viewRegistry    *coordview.ShardViewRegistry
-	policy          BalancePolicy
-	queue           *triggerQueue
-	tickerInterval  time.Duration
+	snapshotBuilder          snapshotSource
+	viewRegistry             *coordview.ShardViewRegistry
+	policy                   BalancePolicy
+	walReplicaDemandExecutor WALReplicaDemandExecutor
+	queue                    *triggerQueue
+	tickerInterval           time.Duration
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -68,6 +69,10 @@ func NewDefaultBalancer(
 		balancer.registerNodeChangedNotifier(builder.nodeProvider)
 	}
 	return balancer
+}
+
+func (b *DefaultBalancer) SetWALReplicaDemandExecutor(executor WALReplicaDemandExecutor) {
+	b.walReplicaDemandExecutor = executor
 }
 
 func (b *DefaultBalancer) registerNodeChangedNotifier(provider NodeProvider) {
@@ -157,9 +162,27 @@ func (b *DefaultBalancer) apply(ctx context.Context, plan *BalancePlan) error {
 	if plan == nil {
 		return nil
 	}
+	var errs []error
+	demandApplied := false
+	if b.walReplicaDemandExecutor != nil {
+		for _, demand := range plan.WALReplicaDemands {
+			if err := b.walReplicaDemandExecutor.EnsureReadOnlyWALReplica(ctx, demand); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			demandApplied = true
+		}
+		for _, release := range plan.WALReplicaReleases {
+			if err := b.walReplicaDemandExecutor.ReleaseReadOnlyWALReplica(ctx, release); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	if demandApplied {
+		b.Trigger()
+	}
 	batch := b.viewRegistry.Begin()
 	defer batch.Commit()
-	var errs []error
 	for _, shardID := range plan.Releases {
 		mgr := b.viewRegistry.Get(shardID)
 		if mgr == nil {

@@ -14,6 +14,7 @@ const (
 	queryViewPChannelNameMetadataKey       = "milvus-query-view-pchannel"
 	queryViewPChannelTermMetadataKey       = "milvus-query-view-pchannel-term"
 	queryViewPChannelAccessModeMetadataKey = "milvus-query-view-pchannel-access-mode"
+	queryViewWALReplicaIDMetadataKey       = "milvus-query-view-wal-replica-id"
 )
 
 func EncodeQueryViewPChannelToOutgoingContext(ctx context.Context, pchannel types.PChannelInfo) context.Context {
@@ -25,6 +26,13 @@ func EncodeQueryViewPChannelToOutgoingContext(ctx context.Context, pchannel type
 	)
 }
 
+func EncodeQueryViewWALReplicaToOutgoingContext(ctx context.Context, pchannel types.PChannelInfo, walReplicaID int64) context.Context {
+	return metadata.AppendToOutgoingContext(
+		EncodeQueryViewPChannelToOutgoingContext(ctx, pchannel),
+		queryViewWALReplicaIDMetadataKey, strconv.FormatInt(walReplicaID, 10),
+	)
+}
+
 func DecodeQueryViewPChannelFromIncomingContext(ctx context.Context) (types.PChannelInfo, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
@@ -33,12 +41,28 @@ func DecodeQueryViewPChannelFromIncomingContext(ctx context.Context) (types.PCha
 	return decodeQueryViewPChannelMetadata(md)
 }
 
+func DecodeQueryViewWALReplicaIDFromIncomingContext(ctx context.Context) (int64, error) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return 0, status.NewInvalidArgument("query view pchannel metadata is missing")
+	}
+	return decodeQueryViewWALReplicaIDMetadata(md)
+}
+
 func DecodeQueryViewPChannelFromOutgoingContext(ctx context.Context) (types.PChannelInfo, error) {
 	md, ok := metadata.FromOutgoingContext(ctx)
 	if !ok {
 		return types.PChannelInfo{}, status.NewInvalidArgument("query view pchannel metadata is missing")
 	}
 	return decodeQueryViewPChannelMetadata(md)
+}
+
+func DecodeQueryViewWALReplicaIDFromOutgoingContext(ctx context.Context) (int64, error) {
+	md, ok := metadata.FromOutgoingContext(ctx)
+	if !ok {
+		return 0, status.NewInvalidArgument("query view pchannel metadata is missing")
+	}
+	return decodeQueryViewWALReplicaIDMetadata(md)
 }
 
 func decodeQueryViewPChannelMetadata(md metadata.MD) (types.PChannelInfo, error) {
@@ -63,6 +87,18 @@ func decodeQueryViewPChannelMetadata(md metadata.MD) (types.PChannelInfo, error)
 	default:
 		return types.PChannelInfo{}, status.NewInvalidArgument("query view pchannel access mode is invalid: %s", accessModeValue)
 	}
+}
+
+func decodeQueryViewWALReplicaIDMetadata(md metadata.MD) (int64, error) {
+	replicaIDValue := firstQueryViewMetadataValue(md, queryViewWALReplicaIDMetadataKey)
+	if replicaIDValue == "" {
+		return 0, nil
+	}
+	replicaID, err := strconv.ParseInt(replicaIDValue, 10, 64)
+	if err != nil || replicaID < 0 {
+		return 0, status.NewInvalidArgument("query view wal replica id is invalid: %s", replicaIDValue)
+	}
+	return replicaID, nil
 }
 
 func firstQueryViewMetadataValue(md metadata.MD, key string) string {

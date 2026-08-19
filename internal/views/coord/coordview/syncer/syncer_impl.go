@@ -8,6 +8,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 )
 
 var (
@@ -57,6 +58,22 @@ func (s *reliableSyncer) SyncViews(ctx context.Context, group SyncGroup) error {
 		}
 	}
 	return nil
+}
+
+func (s *reliableSyncer) HasWALReplicaDependency(replicaID types.ChannelID) bool {
+	s.mu.Lock()
+	syncers := make([]*resumableSyncer, 0, len(s.resumableSyncers))
+	for _, rs := range s.resumableSyncers {
+		syncers = append(syncers, rs)
+	}
+	s.mu.Unlock()
+
+	for _, rs := range syncers {
+		if rs.HasWALReplicaDependency(replicaID) {
+			return true
+		}
+	}
+	return false
 }
 
 func notifyQueryNodeLostViews(views []SyncView) {

@@ -35,7 +35,7 @@ type managerServiceImpl struct {
 // After assign returns, the wal instance is ready to use.
 func (ms *managerServiceImpl) Assign(ctx context.Context, req *streamingpb.StreamingNodeManagerAssignRequest) (*streamingpb.StreamingNodeManagerAssignResponse, error) {
 	pchannelInfo := types.NewPChannelInfoFromProto(req.GetPchannel())
-	if err := ms.walManager.Open(ctx, pchannelInfo); err != nil {
+	if err := ms.walManager.OpenWALReplica(ctx, pchannelInfo, req.GetWalReplicaId(), req.GetAssignmentEpoch()); err != nil {
 		return nil, err
 	}
 	return &streamingpb.StreamingNodeManagerAssignResponse{}, nil
@@ -45,7 +45,7 @@ func (ms *managerServiceImpl) Assign(ctx context.Context, req *streamingpb.Strea
 // After remove returns, the wal instance is removed and all underlying read write operation should be rejected.
 func (ms *managerServiceImpl) Remove(ctx context.Context, req *streamingpb.StreamingNodeManagerRemoveRequest) (*streamingpb.StreamingNodeManagerRemoveResponse, error) {
 	pchannelInfo := types.NewPChannelInfoFromProto(req.GetPchannel())
-	if err := ms.walManager.Remove(ctx, pchannelInfo); err != nil {
+	if err := ms.walManager.RemoveWALReplica(ctx, pchannelInfo, req.GetWalReplicaId(), req.GetAssignmentEpoch()); err != nil {
 		return nil, err
 	}
 	return &streamingpb.StreamingNodeManagerRemoveResponse{}, nil

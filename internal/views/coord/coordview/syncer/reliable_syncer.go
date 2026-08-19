@@ -5,6 +5,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 )
 
 // SyncView pairs a query view with its response callback and QueryNode-loss handler.
@@ -93,6 +94,10 @@ type ReliableSyncer interface {
 	// Non-blocking: returns after enqueuing. Returns error only if the
 	// ReliableSyncer is closed or ctx is canceled.
 	SyncViews(ctx context.Context, group SyncGroup) error
+
+	// HasWALReplicaDependency reports whether any outstanding StreamingNode
+	// sync still depends on the given WAL replica.
+	HasWALReplicaDependency(replicaID types.ChannelID) bool
 
 	// Close gracefully closes all ResumableSyncers and releases resources.
 	// Must only be called during Coordinator shutdown. After Close, the

@@ -39,8 +39,9 @@ const (
 //  3. Already has a Preparing view        → None (avoid stacking)
 //  4. Current DataVersion < DataView DV   → Must (data changed)
 //  5. Current view references an unavailable node → Must (node lost)
-//  6. LoadInfoVersion differs            → Must
-//  7. Otherwise                           → MayOptimize
+//  6. Current view references an unavailable WAL replica → Must
+//  7. LoadInfoVersion differs            → Must
+//  8. Otherwise                           → MayOptimize
 func classifyShard(snap *BalancerSnapshot, shardID qviews.ShardID) actionKind {
 	desired := snap.ConfigForShard(shardID)
 	stats := snap.ShardStatsMap()[shardID]
@@ -81,12 +82,17 @@ func classifyShard(snap *BalancerSnapshot, shardID qviews.ShardID) actionKind {
 		return actionMust
 	}
 
-	// 6. LoadInfo differs between desired and current?
+	// 6. Up view WAL replica is no longer serviceable?
+	if hasUnavailableUpWALReplica(snap, desired, shardID, stats) {
+		return actionMust
+	}
+
+	// 7. LoadInfo differs between desired and current?
 	if loadInfoDiffer(snap, desired, stats) {
 		return actionMust
 	}
 
-	// 7. Steady-state — candidate for balance optimization.
+	// 8. Steady-state — candidate for balance optimization.
 	return actionMayOptimize
 }
 
@@ -124,6 +130,21 @@ func hasUnavailableNode(stats *coordview.ShardStats, nodes map[int64]*BalanceNod
 		}
 	}
 	return false
+}
+
+func hasUnavailableUpWALReplica(snap *BalancerSnapshot, desired *loadmgr.LoadConfig, shardID qviews.ShardID, stats *coordview.ShardStats) bool {
+	if snap == nil || snap.WALReplicaSnapshot == nil || stats == nil || stats.UpVersion == nil {
+		return false
+	}
+	replica := findReplica(desired, shardID.ReplicaID)
+	if replica == nil {
+		return false
+	}
+	pchannel, ok := pchannelForVChannel(shardID.VChannel)
+	if !ok {
+		return false
+	}
+	return !snap.WALReplicaSnapshot.IsServiceableInResourceGroup(pchannel, stats.UpWALReplicaID, replica.ResourceGroup)
 }
 
 func loadInfoDiffer(snap *BalancerSnapshot, desired *loadmgr.LoadConfig, stats *coordview.ShardStats) bool {

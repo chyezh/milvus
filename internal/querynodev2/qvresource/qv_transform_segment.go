@@ -15,15 +15,16 @@ import (
 )
 
 type queryViewTransformSegment struct {
-	segment     qvLoadedSegment
-	releaser    qvSegmentManager
-	vchannel    string
-	startAfter  uint64
-	mu          sync.Mutex
-	applied     uint64
-	waiters     map[uint64][]chan struct{}
-	releaseOnce sync.Once
-	releaseErr  error
+	segment      qvLoadedSegment
+	releaser     qvSegmentManager
+	vchannel     string
+	startAfter   uint64
+	walReplicaID int64
+	mu           sync.Mutex
+	applied      uint64
+	waiters      map[uint64][]chan struct{}
+	releaseOnce  sync.Once
+	releaseErr   error
 }
 
 func newQueryViewTransformSegment(segment qvLoadedSegment, releaser qvSegmentManager, vchannel string, startAfter uint64) *queryViewTransformSegment {
@@ -43,6 +44,14 @@ func (s *queryViewTransformSegment) ID() int64 {
 
 func (s *queryViewTransformSegment) VChannel() string {
 	return s.vchannel
+}
+
+func (s *queryViewTransformSegment) SetWALReplicaID(walReplicaID int64) {
+	s.walReplicaID = walReplicaID
+}
+
+func (s *queryViewTransformSegment) WALReplicaID() int64 {
+	return s.walReplicaID
 }
 
 func (s *queryViewTransformSegment) PartitionID() int64 {

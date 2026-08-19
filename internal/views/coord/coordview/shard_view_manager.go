@@ -195,7 +195,9 @@ func (m *ShardViewManager) setOnEmpty(callback func(qviews.ShardID, *ShardViewMa
 //
 // The returned snapshot includes placements from the Up view, any in-flight
 // Preparing/Ready view, and Unrecoverable views that still need to be accounted
-// as live placement until cleanup reaches Dropping.
+// as live placement until cleanup reaches Dropping. WAL replica dependencies
+// are tracked for every non-Dropped active view so the bound WAL replica cannot
+// be removed while the QueryView still needs sync or teardown.
 //
 // The returned maps/slices are freshly allocated; callers may retain and
 // inspect them without holding the manager's lock.
@@ -207,10 +209,15 @@ func (m *ShardViewManager) Stats() *ShardStats {
 
 func (m *ShardViewManager) statsLocked() *ShardStats {
 	stats := &ShardStats{
-		Segments: make(map[int64]*SegmentStats),
+		WALReplicaDependencies: make(map[int64]struct{}),
+		Segments:               make(map[int64]*SegmentStats),
 	}
 
 	for _, sm := range m.views {
+		if viewStateBlocksWALReplicaRemoval(sm.State()) {
+			stats.WALReplicaDependencies[sm.View().GetStreamingNode().GetWalReplicaId()] = struct{}{}
+		}
+
 		baseState, ok := segmentStateFromViewState(sm.State())
 		if !ok {
 			continue
@@ -222,6 +229,7 @@ func (m *ShardViewManager) statsLocked() *ShardStats {
 			if stats.UpVersion == nil || version.GT(*stats.UpVersion) {
 				stats.UpVersion = &version
 				stats.UpLoadInfoVersion = sm.View().GetMeta().GetLoadInfoVersion()
+				stats.UpWALReplicaID = sm.View().GetStreamingNode().GetWalReplicaId()
 			}
 		case qviews.QueryViewStatePreparing, qviews.QueryViewStateReady:
 			if stats.PreparingVersion == nil || version.GT(*stats.PreparingVersion) {
@@ -233,6 +241,20 @@ func (m *ShardViewManager) statsLocked() *ShardStats {
 	}
 
 	return stats
+}
+
+func viewStateBlocksWALReplicaRemoval(state qviews.QueryViewState) bool {
+	switch state {
+	case qviews.QueryViewStatePreparing,
+		qviews.QueryViewStateReady,
+		qviews.QueryViewStateUp,
+		qviews.QueryViewStateDown,
+		qviews.QueryViewStateUnrecoverable,
+		qviews.QueryViewStateDropping:
+		return true
+	default:
+		return false
+	}
 }
 
 func segmentStateFromViewState(state qviews.QueryViewState) (SegmentState, bool) {
@@ -424,6 +446,43 @@ func (m *ShardViewManager) RequestRelease(ctx context.Context) error {
 	m.mu.Unlock()
 	m.submitDirtyEvent(event)
 	return nil
+}
+
+// OnQueryNodeLost applies a QueryNode loss event to every active view in this shard.
+// Returns true when at least one view referenced the lost QueryNode.
+func (m *ShardViewManager) OnQueryNodeLost(node qviews.QueryNode) bool {
+	m.mu.Lock()
+	versions := m.queryNodeViewVersionsLocked(node)
+	affected := m.applyQueryNodeLostLocked(node, versions)
+	event := m.consumeDirtyEventLocked()
+	if affected {
+		m.publishStatsLocked()
+	}
+	m.mu.Unlock()
+
+	m.submitDirtyEvent(event)
+	return affected
+}
+
+func (m *ShardViewManager) QueryNodes() []qviews.QueryNode {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	nodes := make(map[int64]qviews.QueryNode)
+	for _, sm := range m.views {
+		for _, qn := range sm.View().GetQueryNode() {
+			nodes[qn.GetNodeId()] = qviews.NewQueryNode(qn.GetNodeId())
+		}
+	}
+
+	result := make([]qviews.QueryNode, 0, len(nodes))
+	for _, node := range nodes {
+		result = append(result, node)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].ID < result[j].ID
+	})
+	return result
 }
 
 // processStateMachine consumes pending I/O from a state machine and handles
@@ -635,11 +694,38 @@ func syncResponseCompletesTarget(target, reported qviews.QueryViewState) bool {
 func (m *ShardViewManager) makeOnQueryNodeLost(version qviews.QueryViewVersion) func(qviews.QueryNode) {
 	return func(node qviews.QueryNode) {
 		m.mu.Lock()
+		affected := m.applyQueryNodeLostLocked(node, []qviews.QueryViewVersion{version})
+		event := m.consumeDirtyEventLocked()
+		if affected {
+			m.publishStatsLocked()
+		}
+		m.mu.Unlock()
+		m.submitDirtyEvent(event)
+	}
+}
 
+func (m *ShardViewManager) queryNodeViewVersionsLocked(node qviews.QueryNode) []qviews.QueryViewVersion {
+	versions := make([]qviews.QueryViewVersion, 0, len(m.views))
+	for version, sm := range m.views {
+		if sm.HasQueryNode(node) {
+			versions = append(versions, version)
+		}
+	}
+	sort.Slice(versions, func(i, j int) bool {
+		return versions[j].GT(versions[i])
+	})
+	return versions
+}
+
+func (m *ShardViewManager) applyQueryNodeLostLocked(node qviews.QueryNode, versions []qviews.QueryViewVersion) bool {
+	affected := false
+	for _, version := range versions {
 		sm, ok := m.views[version]
 		if !ok {
-			m.mu.Unlock()
-			return // view already removed
+			continue
+		}
+		if !sm.HasQueryNode(node) {
+			continue
 		}
 
 		key := m.keyForStateMachine(sm)
@@ -658,11 +744,9 @@ func (m *ShardViewManager) makeOnQueryNodeLost(version qviews.QueryViewVersion) 
 			Node: node,
 		})
 		m.processStateMachine(sm)
-		event := m.consumeDirtyEventLocked()
-		m.publishStatsLocked()
-		m.mu.Unlock()
-		m.submitDirtyEvent(event)
+		affected = true
 	}
+	return affected
 }
 
 func (m *ShardViewManager) submitDirtyEvent(event dirtyViewEvent) {
@@ -674,6 +758,7 @@ func (m *ShardViewManager) submitDirtyEvent(event dirtyViewEvent) {
 func (m *ShardViewManager) keyForStateMachine(sm *CoordQueryViewStateMachine) qviews.QueryViewKey {
 	return qviews.QueryViewKey{
 		ShardID:          m.shardID,
+		WALReplicaID:     sm.View().GetStreamingNode().GetWalReplicaId(),
 		QueryViewVersion: sm.Version(),
 	}
 }

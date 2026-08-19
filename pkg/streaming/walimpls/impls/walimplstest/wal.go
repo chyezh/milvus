@@ -57,7 +57,10 @@ func (w *walImpls) Append(ctx context.Context, msg message.MutableMessage) (mess
 	if fenced.Contain(w.Channel().Name) {
 		return nil, errors.Mark(errors.New("err"), walimpls.ErrFenced)
 	}
-	if enableFenceError.Load() && msg.MessageType() != message.MessageTypeTimeTick && rand.Int31n(30) == 0 {
+	if enableFenceError.Load() &&
+		msg.MessageType() != message.MessageTypeTimeTick &&
+		msg.MessageType() != message.MessageTypeRecoveryBarrier &&
+		rand.Int31n(30) == 0 {
 		return nil, errors.New("random error")
 	}
 	return w.datas.Append(ctx, msg)

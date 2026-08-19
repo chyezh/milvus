@@ -190,8 +190,8 @@ func TestViewScopedPhysicalSegmentManager_PendsResourceFailureWhileOtherSegmentL
 
 	taskBySegment[1000].OnUnrecoverable(merr.WrapErrSegmentRequestResourceFailed("Memory"))
 	taskBySegment[1001].OnUnrecoverable(merr.WrapErrSegmentRequestResourceFailed("Memory"))
-	require.Contains(t, mgr.pendingLoadSegments, int64(1000))
-	require.Contains(t, mgr.pendingLoadSegments, int64(1001))
+	require.Contains(t, mgr.pendingLoadSegments, newSegmentRefKey(1000, view.GetWalReplicaId()))
+	require.Contains(t, mgr.pendingLoadSegments, newSegmentRefKey(1001, view.GetWalReplicaId()))
 	select {
 	case got := <-failedCh:
 		t.Fatalf("resource failure should pend while another segment is loading, got failed segment %d", got)
@@ -550,7 +550,7 @@ func TestViewScopedPhysicalSegmentManager_CoalescesRevisionRevertDuringInFlightU
 	inFlightRevision := SegmentLoadInfoRevision{Revision: 11}
 
 	mgr.views[key] = &viewRef{segments: map[int64]int64{1000: 10}}
-	mgr.segments[1000] = &physicalSegmentState{
+	mgr.segments[newSegmentRefKey(1000, 0)] = &physicalSegmentState{
 		segment:      &fakeTransformSegment{id: 1000, partitionID: 10},
 		refs:         map[qviews.QueryViewKey]struct{}{key: {}},
 		requests:     map[qviews.QueryViewKey]segmentLoadRequest{key: {meta: meta, collection: runtime}},
@@ -596,9 +596,10 @@ func TestViewScopedPhysicalSegmentManager_KeepsNewerSnapshotPendingWhileUpdateTa
 	view := &viewpb.QueryViewOfQueryNode{NodeId: 1, Partitions: []*viewpb.QueryViewOfPartition{{PartitionId: 10, SegmentIds: []int64{1000}}}}
 	key := qviews.NewQueryViewAtQueryNode(meta, view).QueryViewKey()
 	runtime := &fakeCollectionRuntimeGuard{collectionID: testCollectionID}
+	segmentKey := newSegmentRefKey(1000, view.GetWalReplicaId())
 	mgr.views[key] = &viewRef{segments: map[int64]int64{1000: 10}}
-	mgr.segments[1000] = &physicalSegmentState{
-		segment:      &fakeTransformSegment{id: 1000, partitionID: 10},
+	mgr.segments[segmentKey] = &physicalSegmentState{
+		segment:      &fakeTransformSegment{id: 1000, partitionID: 10, walReplicaID: view.GetWalReplicaId()},
 		refs:         map[qviews.QueryViewKey]struct{}{key: {}},
 		requests:     map[qviews.QueryViewKey]segmentLoadRequest{key: {meta: meta, collection: runtime}},
 		revision:     SegmentLoadInfoRevision{Revision: 1},
@@ -639,9 +640,10 @@ func TestViewScopedPhysicalSegmentManager_ReleaseStopsRetryingSegmentUpdate(t *t
 	}
 	key := qviews.NewQueryViewAtQueryNode(meta, view).QueryViewKey()
 	runtime := &fakeCollectionRuntimeGuard{collectionID: testCollectionID}
+	segmentKey := newSegmentRefKey(1000, view.GetWalReplicaId())
 	mgr.views[key] = &viewRef{segments: map[int64]int64{1000: 10}}
-	mgr.segments[1000] = &physicalSegmentState{
-		segment:      &fakeTransformSegment{id: 1000, partitionID: 10},
+	mgr.segments[segmentKey] = &physicalSegmentState{
+		segment:      &fakeTransformSegment{id: 1000, partitionID: 10, walReplicaID: view.GetWalReplicaId()},
 		refs:         map[qviews.QueryViewKey]struct{}{key: {}},
 		requests:     map[qviews.QueryViewKey]segmentLoadRequest{key: {meta: meta, collection: runtime}},
 		revision:     SegmentLoadInfoRevision{Revision: 1},
@@ -849,6 +851,42 @@ func TestViewScopedPhysicalSegmentManager_SharedInFlightLoadSurvivesSubmitterRel
 		t.Fatal("shared live view did not receive loaded callback")
 	}
 	assert.False(t, segment.released)
+}
+
+func TestViewScopedPhysicalSegmentManager_DoesNotShareInFlightLoadAcrossWALReplicas(t *testing.T) {
+	viewReplica2 := &viewpb.QueryViewOfQueryNode{
+		NodeId:       1,
+		WalReplicaId: 2,
+		Partitions:   []*viewpb.QueryViewOfPartition{{PartitionId: 10, SegmentIds: []int64{1000}}},
+	}
+	meta1 := buildHandlerTestMeta(1)
+	keyReplica2 := qviews.NewQueryViewAtQueryNode(meta1, viewReplica2).QueryViewKey()
+	viewReplica3 := &viewpb.QueryViewOfQueryNode{
+		NodeId:       1,
+		WalReplicaId: 3,
+		Partitions:   []*viewpb.QueryViewOfPartition{{PartitionId: 10, SegmentIds: []int64{1000}}},
+	}
+	meta2 := buildHandlerTestMeta(2)
+	keyReplica3 := qviews.NewQueryViewAtQueryNode(meta2, viewReplica3).QueryViewKey()
+
+	scheduler := &fakeNodeScheduler{}
+	mgr := newTestViewScopedPhysicalSegmentManager(t, scheduler)
+
+	mgr.Acquire(AcquirePhysicalSegments{
+		Key: keyReplica2, Meta: meta1, View: viewReplica2,
+		OnLoaded:        func([]TransformSegment) { t.Fatal("unexpected loaded for first view") },
+		OnUnrecoverable: func() { t.Fatal("unexpected unrecoverable for first view") },
+	})
+	mgr.Acquire(AcquirePhysicalSegments{
+		Key: keyReplica3, Meta: meta2, View: viewReplica3,
+		OnLoaded:        func([]TransformSegment) { t.Fatal("unexpected loaded for second view") },
+		OnUnrecoverable: func() { t.Fatal("unexpected unrecoverable for second view") },
+	})
+
+	require.Eventually(t, func() bool {
+		return len(scheduler.tasks) == 2
+	}, time.Second, 10*time.Millisecond, "same segment ID on different WAL replicas must not share one in-flight load")
+	assert.ElementsMatch(t, []int64{2, 3}, []int64{scheduler.tasks[0].WALReplicaID, scheduler.tasks[1].WALReplicaID})
 }
 
 func TestViewScopedPhysicalSegmentManager_CancelsOnlyLastRefTasksOnMixedRelease(t *testing.T) {

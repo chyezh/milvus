@@ -103,6 +103,55 @@ func (_c *MockWatcher_Get_Call) RunAndReturn(run func(context.Context, string) *
 	return _c
 }
 
+// GetWALReplica provides a mock function with given fields: ctx, channelID
+func (_m *MockWatcher) GetWALReplica(ctx context.Context, channelID types.ChannelID) *types.PChannelInfoAssigned {
+	ret := _m.Called(ctx, channelID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetWALReplica")
+	}
+
+	var r0 *types.PChannelInfoAssigned
+	if rf, ok := ret.Get(0).(func(context.Context, types.ChannelID) *types.PChannelInfoAssigned); ok {
+		r0 = rf(ctx, channelID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*types.PChannelInfoAssigned)
+		}
+	}
+
+	return r0
+}
+
+// MockWatcher_GetWALReplica_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetWALReplica'
+type MockWatcher_GetWALReplica_Call struct {
+	*mock.Call
+}
+
+// GetWALReplica is a helper method to define mock.On call
+//   - ctx context.Context
+//   - channelID types.ChannelID
+func (_e *MockWatcher_Expecter) GetWALReplica(ctx interface{}, channelID interface{}) *MockWatcher_GetWALReplica_Call {
+	return &MockWatcher_GetWALReplica_Call{Call: _e.mock.On("GetWALReplica", ctx, channelID)}
+}
+
+func (_c *MockWatcher_GetWALReplica_Call) Run(run func(ctx context.Context, channelID types.ChannelID)) *MockWatcher_GetWALReplica_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(types.ChannelID))
+	})
+	return _c
+}
+
+func (_c *MockWatcher_GetWALReplica_Call) Return(_a0 *types.PChannelInfoAssigned) *MockWatcher_GetWALReplica_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MockWatcher_GetWALReplica_Call) RunAndReturn(run func(context.Context, types.ChannelID) *types.PChannelInfoAssigned) *MockWatcher_GetWALReplica_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Watch provides a mock function with given fields: ctx, channel, previous
 func (_m *MockWatcher) Watch(ctx context.Context, channel string, previous *types.PChannelInfoAssigned) error {
 	ret := _m.Called(ctx, channel, previous)
@@ -147,6 +196,54 @@ func (_c *MockWatcher_Watch_Call) Return(_a0 error) *MockWatcher_Watch_Call {
 }
 
 func (_c *MockWatcher_Watch_Call) RunAndReturn(run func(context.Context, string, *types.PChannelInfoAssigned) error) *MockWatcher_Watch_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// WatchWALReplica provides a mock function with given fields: ctx, channelID, previous
+func (_m *MockWatcher) WatchWALReplica(ctx context.Context, channelID types.ChannelID, previous *types.PChannelInfoAssigned) error {
+	ret := _m.Called(ctx, channelID, previous)
+
+	if len(ret) == 0 {
+		panic("no return value specified for WatchWALReplica")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, types.ChannelID, *types.PChannelInfoAssigned) error); ok {
+		r0 = rf(ctx, channelID, previous)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// MockWatcher_WatchWALReplica_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'WatchWALReplica'
+type MockWatcher_WatchWALReplica_Call struct {
+	*mock.Call
+}
+
+// WatchWALReplica is a helper method to define mock.On call
+//   - ctx context.Context
+//   - channelID types.ChannelID
+//   - previous *types.PChannelInfoAssigned
+func (_e *MockWatcher_Expecter) WatchWALReplica(ctx interface{}, channelID interface{}, previous interface{}) *MockWatcher_WatchWALReplica_Call {
+	return &MockWatcher_WatchWALReplica_Call{Call: _e.mock.On("WatchWALReplica", ctx, channelID, previous)}
+}
+
+func (_c *MockWatcher_WatchWALReplica_Call) Run(run func(ctx context.Context, channelID types.ChannelID, previous *types.PChannelInfoAssigned)) *MockWatcher_WatchWALReplica_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(types.ChannelID), args[2].(*types.PChannelInfoAssigned))
+	})
+	return _c
+}
+
+func (_c *MockWatcher_WatchWALReplica_Call) Return(_a0 error) *MockWatcher_WatchWALReplica_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MockWatcher_WatchWALReplica_Call) RunAndReturn(run func(context.Context, types.ChannelID, *types.PChannelInfoAssigned) error) *MockWatcher_WatchWALReplica_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -53,6 +53,51 @@ func (s *Server) broadcastAlterLoadConfigCollectionV2ForTransferReplica(ctx cont
 		return err
 	}
 
+	if s.qviewsRuntime != nil && s.qviewsRuntime.loadConfigStore != nil {
+		currentLoadConfig := s.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()[req.GetCollectionID()]
+		if currentLoadConfig == nil {
+			return merr.WrapErrCollectionNotLoaded(coll.CollectionName)
+		}
+		if int(req.NumReplica) > len(currentLoadConfig.Replicas) {
+			return merr.WrapErrParameterInvalid(int(req.NumReplica), len(currentLoadConfig.Replicas), "the number of replicas to transfer is greater than the number of replicas in the collection")
+		}
+
+		replicaNumbers := qviewsReplicaNumber(currentLoadConfig)
+		replicaNumberInSourceRG := replicaNumbers[req.GetSourceResourceGroup()]
+		if replicaNumberInSourceRG < int(req.NumReplica) {
+			return merr.WrapErrParameterInvalid("NumReplica not greater than the number of replica in source resource group",
+				fmt.Sprintf("only found [%d] replicas of collection [%s] in source resource group [%s], but %d require",
+					replicaNumberInSourceRG,
+					coll.CollectionName,
+					req.GetSourceResourceGroup(),
+					req.GetNumReplica()))
+		}
+		replicaNumbers[req.GetSourceResourceGroup()] -= int(req.NumReplica)
+		replicaNumbers[req.GetTargetResourceGroup()] += int(req.NumReplica)
+
+		msg, err := s.generateAlterLoadConfigMessageForLoadCollection(ctx, coll, currentLoadConfig, qviewsExpectedLoadConfig{
+			PartitionIDs:             currentLoadConfig.PartitionIDs,
+			LoadType:                 currentLoadConfig.LoadType,
+			ReplicaNumber:            replicaNumbers,
+			FieldIndexID:             qviewsLoadFieldIndexID(currentLoadConfig),
+			LoadFields:               qviewsLoadFieldIDs(currentLoadConfig),
+			Priority:                 commonpb.LoadPriority_LOW,
+			UserSpecifiedReplicaMode: currentLoadConfig.UserSpecifiedReplicaMode,
+		})
+		if err != nil {
+			return err
+		}
+		if msg == nil {
+			mlog.Info(ctx, "transfer replica ignored, load config is unchanged",
+				mlog.Int64("collectionID", req.GetCollectionID()),
+				mlog.String("sourceResourceGroup", req.GetSourceResourceGroup()),
+				mlog.String("targetResourceGroup", req.GetTargetResourceGroup()))
+			return nil
+		}
+		_, err = broadcaster.Broadcast(ctx, msg)
+		return err
+	}
+
 	currentLoadConfig := s.getCurrentLoadConfig(ctx, req.GetCollectionID())
 	if currentLoadConfig.Collection == nil {
 		return merr.WrapErrCollectionNotLoaded(coll.CollectionName)

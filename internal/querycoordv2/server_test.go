@@ -149,8 +149,12 @@ func (suite *ServerSuite) SetupTest() {
 
 	suite.loadAll()
 	for _, collection := range suite.collections {
-		suite.True(suite.server.meta.Exist(suite.ctx, collection))
-		suite.updateCollectionStatus(collection, querypb.LoadStatus_Loaded)
+		if suite.server.qviewsRuntime != nil {
+			suite.assertQViewsLoadConfigExists(collection)
+		} else {
+			suite.True(suite.server.meta.Exist(suite.ctx, collection))
+			suite.updateCollectionStatus(collection, querypb.LoadStatus_Loaded)
+		}
 	}
 }
 
@@ -180,7 +184,11 @@ func (suite *ServerSuite) TestRecover() {
 	suite.NoError(err)
 
 	for _, collection := range suite.collections {
-		suite.True(suite.server.meta.Exist(suite.ctx, collection))
+		if suite.server.qviewsRuntime != nil {
+			suite.assertQViewsLoadConfigExists(collection)
+		} else {
+			suite.True(suite.server.meta.Exist(suite.ctx, collection))
+		}
 	}
 
 	suite.True(suite.server.nodeMgr.IsStoppingNode(suite.nodes[0].ID))
@@ -188,7 +196,7 @@ func (suite *ServerSuite) TestRecover() {
 
 func (suite *ServerSuite) TestNodeUp() {
 	node1 := mocks.NewMockQueryNode(suite.T(), suite.server.etcdCli, 100)
-	node1.EXPECT().GetDataDistribution(mock.Anything, mock.Anything).Return(&querypb.GetDataDistributionResponse{Status: merr.Success()}, nil)
+	node1.EXPECT().GetDataDistribution(mock.Anything, mock.Anything).Return(&querypb.GetDataDistributionResponse{Status: merr.Success()}, nil).Maybe()
 	err := node1.Start()
 	suite.NoError(err)
 	defer node1.Stop()
@@ -197,6 +205,10 @@ func (suite *ServerSuite) TestNodeUp() {
 		node := suite.server.nodeMgr.Get(node1.ID)
 		if node == nil {
 			return false
+		}
+		if suite.server.qviewsRuntime != nil {
+			nodesInRG, _ := suite.server.meta.GetNodes(suite.ctx, meta.DefaultResourceGroupName)
+			return typeutil.NewUniqueSet(nodesInRG...).Contain(node1.ID)
 		}
 		for _, collection := range suite.collections {
 			replica := suite.server.meta.GetByCollectionAndNode(suite.ctx, collection, node1.ID)
@@ -228,6 +240,10 @@ func (suite *ServerSuite) TestNodeDown() {
 		if node != nil {
 			return false
 		}
+		if suite.server.qviewsRuntime != nil {
+			nodesInRG, _ := suite.server.meta.GetNodes(suite.ctx, meta.DefaultResourceGroupName)
+			return !typeutil.NewUniqueSet(nodesInRG...).Contain(downNode.ID)
+		}
 		for _, collection := range suite.collections {
 			replica := suite.server.meta.GetByCollectionAndNode(suite.ctx, collection, downNode.ID)
 			if replica != nil {
@@ -236,6 +252,14 @@ func (suite *ServerSuite) TestNodeDown() {
 		}
 		return true
 	}, 5*time.Second, time.Second)
+}
+
+func (suite *ServerSuite) assertQViewsLoadConfigExists(collectionID int64) {
+	suite.Require().NotNil(suite.server.qviewsRuntime)
+	suite.Require().NotNil(suite.server.qviewsRuntime.loadConfigStore)
+	cfg := suite.server.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()[collectionID]
+	suite.Require().NotNil(cfg)
+	suite.Equal(collectionID, cfg.CollectionID)
 }
 
 // func (suite *ServerSuite) TestDisableActiveStandby() {

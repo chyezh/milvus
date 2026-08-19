@@ -67,6 +67,7 @@ type SNQueryViewHandler struct {
 	catalog        metastore.StreamingNodeCataLog
 	resMgr         StreamingNodeResourceManager
 	localOptimizer optimizer.LocalOptimizer
+	recoveryDone   <-chan struct{}
 }
 
 type QueryViewLease struct {
@@ -84,35 +85,44 @@ func recoverSNQueryViewHandler(
 	resMgr StreamingNodeResourceManager,
 	views []*viewpb.QueryViewOfShard,
 ) *SNQueryViewHandler {
+	recoveryDone := make(chan struct{})
 	h := &SNQueryViewHandler{
 		pchannel:       pchannel,
 		shards:         make(map[qviews.ShardID]*snShardView),
 		catalog:        catalog,
 		resMgr:         resMgr,
 		localOptimizer: optimizer.NewNoopLocalOptimizer(),
+		recoveryDone:   recoveryDone,
 	}
 
-	grouped := make(map[qviews.ShardID]map[qviews.QueryViewVersion]*snQueryViewStateMachine)
+	grouped := make(map[qviews.ShardID]map[qviews.QueryViewKey]*snQueryViewStateMachine)
 
 	for _, view := range views {
+		qv := qviews.NewQueryViewAtWorkNodeFromProto(view)
+		key := qv.QueryViewKey()
 		meta := view.Meta
 		snView := view.StreamingNode
-		shardID := qviews.NewShardIDFromQVMeta(meta)
-		version := qviews.FromProtoQueryViewVersion(meta.Version)
+		shardID := key.ShardID
 
 		shardViews, ok := grouped[shardID]
 		if !ok {
-			shardViews = make(map[qviews.QueryViewVersion]*snQueryViewStateMachine)
+			shardViews = make(map[qviews.QueryViewKey]*snQueryViewStateMachine)
 			grouped[shardID] = shardViews
 		}
-		shardViews[version] = recoverSNQueryViewStateMachine(meta, snView, view.GetQueryNode())
+		shardViews[key] = recoverSNQueryViewStateMachine(meta, snView, view.GetQueryNode())
 	}
 
+	var recoveryWG sync.WaitGroup
+	recoveryWG.Add(len(views))
 	for shardID, shardViews := range grouped {
-		shard := recoverSnShardView(pchannel, shardID, shardViews, catalog, resMgr)
+		shard := recoverSnShardView(pchannel, shardID, shardViews, catalog, resMgr, recoveryWG.Done)
 		shard.onEmpty = h.makeOnEmpty(shardID)
 		h.shards[shardID] = shard
 	}
+	go func() {
+		recoveryWG.Wait()
+		close(recoveryDone)
+	}()
 
 	return h
 }
@@ -178,6 +188,18 @@ func (h *SNQueryViewHandler) CloseForHandoff() {
 	}
 }
 
+func (h *SNQueryViewHandler) WaitRecoveredViews(ctx context.Context) error {
+	if h == nil || h.recoveryDone == nil {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-h.recoveryDone:
+		return nil
+	}
+}
+
 func (h *SNQueryViewHandler) AcquireLatestUpView(ctx context.Context, shardID qviews.ShardID) (*QueryViewLease, error) {
 	select {
 	case <-ctx.Done():
@@ -204,7 +226,7 @@ func (h *SNQueryViewHandler) getOrCreateShard(shardID qviews.ShardID) *snShardVi
 		shard = &snShardView{
 			pchannel: h.pchannel,
 			shardID:  shardID,
-			views:    make(map[qviews.QueryViewVersion]*snViewEntry),
+			views:    make(map[qviews.QueryViewKey]*snViewEntry),
 			catalog:  h.catalog,
 			resMgr:   h.resMgr,
 			onEmpty:  h.makeOnEmpty(shardID),

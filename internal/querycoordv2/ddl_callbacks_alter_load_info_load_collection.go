@@ -74,6 +74,7 @@ func (s *Server) broadcastAlterLoadConfigCollectionV2ForLoadCollection(ctx conte
 	}
 	msg, err := s.generateAlterLoadConfigMessageForLoadCollection(ctx, coll, currentLoadConfig, qviewsExpectedLoadConfig{
 		PartitionIDs:             partitionIDs,
+		LoadType:                 querypb.LoadType_LoadCollection,
 		ReplicaNumber:            expectedReplicasNumber,
 		FieldIndexID:             req.GetFieldIndexID(),
 		LoadFields:               req.GetLoadFields(),
@@ -132,6 +133,7 @@ func getClusterLevelLoadConfigForForceOverride() (int32, []string, bool) {
 
 type qviewsExpectedLoadConfig struct {
 	PartitionIDs             []int64
+	LoadType                 querypb.LoadType
 	ReplicaNumber            map[string]int
 	FieldIndexID             map[int64]int64
 	LoadFields               []int64
@@ -152,6 +154,7 @@ func (s *Server) generateAlterLoadConfigMessageForLoadCollection(
 	header := &messagespb.AlterLoadConfigMessageHeader{
 		DbId:                     coll.GetDbId(),
 		CollectionId:             coll.GetCollectionID(),
+		LoadType:                 int32(expected.LoadType),
 		PartitionIds:             sortedInt64s(expected.PartitionIDs),
 		LoadFields:               generateQViewsLoadFields(expected.LoadFields, expected.FieldIndexID),
 		Replicas:                 replicas,
@@ -231,6 +234,7 @@ func loadConfigIntoAlterLoadConfigHeader(cfg *loadmgr.LoadConfig) *messagespb.Al
 	return &messagespb.AlterLoadConfigMessageHeader{
 		DbId:                     cfg.DbID,
 		CollectionId:             cfg.CollectionID,
+		LoadType:                 int32(cfg.LoadType),
 		PartitionIds:             sortedInt64s(cfg.PartitionIDs),
 		LoadFields:               cloneAndSortLoadFields(cfg.LoadFields),
 		Replicas:                 replicas,
@@ -274,6 +278,27 @@ func cloneAndSortLoadFields(fields []*messagespb.LoadFieldConfig) []*messagespb.
 		return out[i].GetFieldId() < out[j].GetFieldId()
 	})
 	return out
+}
+
+func qviewsLoadFieldIndexID(cfg *loadmgr.LoadConfig) map[int64]int64 {
+	fieldIndexID := make(map[int64]int64, len(cfg.LoadFields))
+	for _, field := range cfg.LoadFields {
+		if field.GetIndexId() != 0 {
+			fieldIndexID[field.GetFieldId()] = field.GetIndexId()
+		}
+	}
+	return fieldIndexID
+}
+
+func qviewsReplicaNumber(cfg *loadmgr.LoadConfig) map[string]int {
+	replicaNumber := make(map[string]int)
+	if cfg == nil {
+		return replicaNumber
+	}
+	for _, replica := range cfg.Replicas {
+		replicaNumber[replica.ResourceGroup]++
+	}
+	return replicaNumber
 }
 
 func sortedInt64s(values []int64) []int64 {

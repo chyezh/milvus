@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
@@ -246,12 +247,12 @@ func TestPChannelRecoveryManagerProvidesTransformLogStream(t *testing.T) {
 	ctx := context.Background()
 	manager := newTestManager(t, "p1", "v1")
 
-	stream, err := manager.AcquireStream(ctx, "p1")
+	stream, err := manager.AcquireStream(ctx, "p1", 0)
 	require.NoError(t, err)
 	require.NotNil(t, stream)
 	assert.NoError(t, stream.Close())
 
-	_, err = manager.AcquireStream(ctx, "other")
+	_, err = manager.AcquireStream(ctx, "other", 0)
 	assert.Error(t, err)
 }
 
@@ -268,7 +269,7 @@ func TestPChannelRecoveryManagerRemovesClosedVChannelTransformLog(t *testing.T) 
 	manager := newTestManager(t, "p1", "v1")
 	manager.SwitchIntoMetaAndData()
 
-	stream, err := manager.AcquireStream(ctx, "p1")
+	stream, err := manager.AcquireStream(ctx, "p1", 0)
 	require.NoError(t, err)
 	defer stream.Close()
 
@@ -429,6 +430,29 @@ func TestPChannelRecoveryManagerAcquireWaitsForRecoveredSegmentFinalCommit(t *te
 	require.NotNil(t, manager.Module("v1").segments[10].AssignmentMeta().GetSealedAtDataVersion())
 }
 
+func TestPChannelRecoveryManagerReadOnlyProjectionTimeTickAdvancesTransformLogStream(t *testing.T) {
+	ctx := context.Background()
+	manager := newTestManager(t, "p1", "v1")
+	manager.SwitchIntoReadOnlyProjection()
+
+	observeTestMessage(ctx, t, manager, newTestTimeTickMessage(t, 20))
+
+	stream, err := manager.AcquireStream(ctx, "p1", 1)
+	require.NoError(t, err)
+	defer stream.Close()
+	handler := newRecordingTransformLogHandler()
+	_, err = stream.Subscribe(ctx, wal.TransformLogSubscriptionOption{
+		VChannel:           "v1",
+		StartAfterTimeTick: 1,
+		Handler:            handler,
+	})
+	require.NoError(t, err)
+
+	event := recvTransformLogEvent(t, handler.events)
+	require.NotNil(t, event.SyncUp)
+	assert.Equal(t, uint64(20), event.SyncUp.TimeTick)
+}
+
 func newTestManager(t *testing.T, pchannel string, vchannels ...string) *PChannelRecoveryManager {
 	t.Helper()
 	scheduler := nodescheduler.New(1)
@@ -577,6 +601,23 @@ func newTestDropCollectionMessage(t *testing.T, vchannel string, timetick uint64
 		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick + 1)))
 }
 
+func newTestTimeTickMessage(t *testing.T, timetick uint64) message.ImmutableMessage {
+	t.Helper()
+	mutableMsg := message.NewTimeTickMessageBuilderV1().
+		WithHeader(&message.TimeTickMessageHeader{}).
+		WithBody(&msgpb.TimeTickMsg{
+			Base: &commonpb.MsgBase{
+				MsgType:   commonpb.MsgType_TimeTick,
+				Timestamp: timetick,
+			},
+		}).
+		WithAllVChannel().
+		MustBuildMutable()
+	return mutableMsg.WithTimeTick(timetick).
+		WithLastConfirmed(walimplstest.NewTestMessageID(int64(timetick))).
+		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick + 1)))
+}
+
 type noopTransformLogHandler struct{}
 
 func newNoopTransformLogHandler() wal.TransformLogEventHandler {
@@ -588,6 +629,34 @@ func (noopTransformLogHandler) Handle(wal.TransformLogStreamEvent) error {
 }
 
 func (noopTransformLogHandler) Close() {}
+
+type recordingTransformLogHandler struct {
+	events chan wal.TransformLogStreamEvent
+}
+
+func newRecordingTransformLogHandler() *recordingTransformLogHandler {
+	return &recordingTransformLogHandler{
+		events: make(chan wal.TransformLogStreamEvent, 16),
+	}
+}
+
+func (h *recordingTransformLogHandler) Handle(event wal.TransformLogStreamEvent) error {
+	h.events <- event
+	return nil
+}
+
+func (h *recordingTransformLogHandler) Close() {}
+
+func recvTransformLogEvent(t *testing.T, events <-chan wal.TransformLogStreamEvent) wal.TransformLogStreamEvent {
+	t.Helper()
+	select {
+	case event := <-events:
+		return event
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for transform log event")
+	}
+	return wal.TransformLogStreamEvent{}
+}
 
 func dirtySnapshotVChannels(snapshots []moduleapi.DirtySnapshot) []string {
 	vchannels := make([]string, 0)

@@ -14,6 +14,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 )
 
 // reliableTestSetup creates a ReliableSyncer backed by a mockViewSyncClient.
@@ -83,6 +84,25 @@ func TestReliable_NormalFlow(t *testing.T) {
 
 	// Wait for callback.
 	assert.True(t, waitForCond(respCalled.Load, time.Second))
+}
+
+func TestReliable_HasWALReplicaDependency(t *testing.T) {
+	node := qviews.NewStreamingNodeFromVChannelAndWALReplica(testVChannel, 3)
+	setup := newReliableTestSetup(t, node)
+	defer setup.syncer.Close()
+
+	sv := newTestSNViewWithWALReplica(1, 3, func(qviews.QueryViewAtWorkNode) bool { return true })
+	require.NoError(t, setup.syncer.SyncViews(context.Background(), newTestSyncGroup(sv)))
+
+	pchannel := qviews.NewStreamingNodeFromVChannel(testVChannel).PChannel
+	assert.True(t, setup.syncer.HasWALReplicaDependency(types.ChannelID{Name: pchannel, WALReplicaID: 3}))
+	assert.False(t, setup.syncer.HasWALReplicaDependency(types.ChannelID{Name: pchannel, WALReplicaID: 4}))
+
+	stream := setup.waitStream(t)
+	stream.injectResponse(sv.View.IntoProto())
+	assert.True(t, waitForCond(func() bool {
+		return !setup.syncer.HasWALReplicaDependency(types.ChannelID{Name: pchannel, WALReplicaID: 3})
+	}, time.Second))
 }
 
 func TestReliable_NodeNotFound_NotifiesQueryNodeLostAsynchronously(t *testing.T) {

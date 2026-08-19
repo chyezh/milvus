@@ -33,12 +33,12 @@ func CreateSubscribeServer(
 	if err != nil {
 		return nil, status.NewInvalidArgument("create transform stream request is required")
 	}
-	w, err := walManager.GetAvailableWAL(types.NewPChannelInfoFromProto(createReq.GetPchannel()))
+	w, err := walManager.GetAvailableWALReplica(types.NewPChannelInfoFromProto(createReq.GetPchannel()), createReq.GetWalReplicaId())
 	if err != nil {
 		return nil, err
 	}
 	streamManager := w.TransformLog()
-	logStream, err := streamManager.AcquireStream(stream.Context(), createReq.GetPchannel().GetName())
+	logStream, err := streamManager.AcquireStream(stream.Context(), createReq.GetPchannel().GetName(), createReq.GetWalReplicaId())
 	if err != nil {
 		return nil, err
 	}
@@ -53,40 +53,64 @@ func CreateSubscribeServer(
 
 func (s *SubscribeServer) Execute() error {
 	defer s.closeAll()
+	recvCh := make(chan transformRecvResult, 1)
+	go s.recvLoop(recvCh)
+	for {
+		select {
+		case result := <-recvCh:
+			if errors.Is(result.err, io.EOF) {
+				return nil
+			}
+			if result.err != nil {
+				return result.err
+			}
+			switch req := result.req.GetRequest().(type) {
+			case *streamingpb.TransformRequest_Create:
+				if err := s.createSubscription(req.Create); err != nil {
+					return err
+				}
+			case *streamingpb.TransformRequest_CloseSubscription:
+				subscriptionID := req.CloseSubscription.GetSubscriptionId()
+				vchannel := s.closeSubscription(subscriptionID)
+				if err := s.send(&streamingpb.TransformResponse{
+					Response: &streamingpb.TransformResponse_CloseSubscription{
+						CloseSubscription: &streamingpb.CloseTransformSubscriptionResponse{
+							SubscriptionId: subscriptionID,
+							Vchannel:       vchannel,
+						},
+					},
+				}); err != nil {
+					return err
+				}
+			case *streamingpb.TransformRequest_CloseStream:
+				return s.send(&streamingpb.TransformResponse{
+					Response: &streamingpb.TransformResponse_CloseStream{
+						CloseStream: &streamingpb.CloseTransformStreamResponse{},
+					},
+				})
+			default:
+				return status.NewInvalidRequestSeq("unknown transform request")
+			}
+		case <-s.logStream.Done():
+			return s.logStream.Error()
+		}
+	}
+}
+
+type transformRecvResult struct {
+	req *streamingpb.TransformRequest
+	err error
+}
+
+func (s *SubscribeServer) recvLoop(recvCh chan<- transformRecvResult) {
 	for {
 		req, err := s.stream.Recv()
-		if errors.Is(err, io.EOF) {
-			return nil
+		select {
+		case recvCh <- transformRecvResult{req: req, err: err}:
+		case <-s.logStream.Done():
 		}
 		if err != nil {
-			return err
-		}
-		switch req := req.GetRequest().(type) {
-		case *streamingpb.TransformRequest_Create:
-			if err := s.createSubscription(req.Create); err != nil {
-				return err
-			}
-		case *streamingpb.TransformRequest_CloseSubscription:
-			subscriptionID := req.CloseSubscription.GetSubscriptionId()
-			vchannel := s.closeSubscription(subscriptionID)
-			if err := s.send(&streamingpb.TransformResponse{
-				Response: &streamingpb.TransformResponse_CloseSubscription{
-					CloseSubscription: &streamingpb.CloseTransformSubscriptionResponse{
-						SubscriptionId: subscriptionID,
-						Vchannel:       vchannel,
-					},
-				},
-			}); err != nil {
-				return err
-			}
-		case *streamingpb.TransformRequest_CloseStream:
-			return s.send(&streamingpb.TransformResponse{
-				Response: &streamingpb.TransformResponse_CloseStream{
-					CloseStream: &streamingpb.CloseTransformStreamResponse{},
-				},
-			})
-		default:
-			return status.NewInvalidRequestSeq("unknown transform request")
+			return
 		}
 	}
 }
@@ -182,10 +206,17 @@ func (s *SubscribeServer) sendSubscriptionError(subscriptionID int64, vchannel s
 			SubscriptionError: &streamingpb.TransformSubscriptionError{
 				SubscriptionId: subscriptionID,
 				Vchannel:       vchannel,
-				Error:          status.AsStreamingError(err).AsPBError(),
+				Error:          transformLogSubscriptionError(vchannel, err).AsPBError(),
 			},
 		},
 	})
+}
+
+func transformLogSubscriptionError(vchannel string, err error) *status.StreamingError {
+	if errors.Is(err, wal.ErrTransformLogVChannelUnavailable) {
+		return status.NewChannelNotExist(vchannel)
+	}
+	return status.AsStreamingError(err)
 }
 
 func (s *SubscribeServer) sendSubscriptionEvent(event wal.TransformLogStreamEvent) error {

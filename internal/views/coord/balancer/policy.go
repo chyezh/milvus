@@ -29,7 +29,25 @@ type BalancePlan struct {
 	// The value is the builder the Balancer passes to AddPreparing.
 	Prepares map[qviews.ShardID]*qviews.QueryViewAtCoordBuilder
 
+	// WALReplicaDemands lists read-only WAL replicas that must exist before
+	// the corresponding QueryViews can be prepared in their resource group.
+	WALReplicaDemands []WALReplicaDemand
+
+	// WALReplicaReleases lists read-only WAL replicas that no current or
+	// planned QueryView depends on and can be released by StreamingCoord.
+	WALReplicaReleases []WALReplicaRelease
+
 	// Releases lists shards whose existing views should be released
 	// (desired state absent but current views still exist).
 	Releases []qviews.ShardID
+}
+
+type WALReplicaDemand struct {
+	PChannel      string
+	ResourceGroup string
+}
+
+type WALReplicaRelease struct {
+	PChannel     string
+	WALReplicaID int64
 }

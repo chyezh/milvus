@@ -23,45 +23,45 @@ func TestStatePair(t *testing.T) {
 
 	statePair.SetExpectedState(newAvailableExpectedState(context.Background(), types.PChannelInfo{
 		Term: 1,
-	}))
-	assert.Equal(t, "(1,true)", toStateString(statePair.GetExpectedState()))
+	}, 0, 0))
+	assert.Equal(t, "(1,0,true)", toStateString(statePair.GetExpectedState()))
 
-	statePair.SetExpectedState(newUnavailableExpectedState(1))
-	assert.Equal(t, "(1,false)", toStateString(statePair.GetExpectedState()))
+	statePair.SetExpectedState(newUnavailableExpectedState(1, 0))
+	assert.Equal(t, "(1,0,false)", toStateString(statePair.GetExpectedState()))
 
 	l := mock_wal.NewMockWAL(t)
 	l.EXPECT().Channel().Return(types.PChannelInfo{
 		Term: 1,
 	}).Maybe()
-	statePair.SetCurrentState(newAvailableCurrentState(l))
-	assert.Equal(t, "(1,true)", toStateString(statePair.GetCurrentState()))
+	statePair.SetCurrentState(newAvailableCurrentState(l, 0))
+	assert.Equal(t, "(1,0,true)", toStateString(statePair.GetCurrentState()))
 
-	statePair.SetCurrentState(newUnavailableCurrentState(1, nil))
-	assert.Equal(t, "(1,false)", toStateString(statePair.GetCurrentState()))
+	statePair.SetCurrentState(newUnavailableCurrentState(1, 0, nil))
+	assert.Equal(t, "(1,0,false)", toStateString(statePair.GetCurrentState()))
 
 	assert.NoError(t, statePair.WaitExpectedStateChanged(context.Background(), newAvailableExpectedState(context.Background(), types.PChannelInfo{
 		Term: 1,
-	})))
+	}, 0, 0)))
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
-	assert.ErrorIs(t, statePair.WaitExpectedStateChanged(ctx, newUnavailableExpectedState(1)), context.DeadlineExceeded)
+	assert.ErrorIs(t, statePair.WaitExpectedStateChanged(ctx, newUnavailableExpectedState(1, 0)), context.DeadlineExceeded)
 
-	assert.NoError(t, statePair.WaitCurrentStateReachExpected(context.Background(), newUnavailableExpectedState(1)))
+	assert.NoError(t, statePair.WaitCurrentStateReachExpected(context.Background(), newUnavailableExpectedState(1, 0)))
 	ctx, cancel = context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
-	assert.ErrorIs(t, statePair.WaitCurrentStateReachExpected(ctx, newUnavailableExpectedState(2)), context.DeadlineExceeded)
+	assert.ErrorIs(t, statePair.WaitCurrentStateReachExpected(ctx, newUnavailableExpectedState(2, 0)), context.DeadlineExceeded)
 
 	ch := make(chan struct{})
 	go func() {
 		defer close(ch)
 
-		err := statePair.WaitCurrentStateReachExpected(context.Background(), newUnavailableExpectedState(3))
+		err := statePair.WaitCurrentStateReachExpected(context.Background(), newUnavailableExpectedState(3, 0))
 		assertErrorTermExpired(t, err)
 	}()
 
-	statePair.SetCurrentState(newUnavailableCurrentState(2, nil))
+	statePair.SetCurrentState(newUnavailableCurrentState(2, 0, nil))
 	time.Sleep(100 * time.Millisecond)
-	statePair.SetCurrentState(newUnavailableCurrentState(4, nil))
+	statePair.SetCurrentState(newUnavailableCurrentState(4, 0, nil))
 
 	select {
 	case <-ch:

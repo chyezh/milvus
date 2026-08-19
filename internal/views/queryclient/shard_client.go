@@ -3,7 +3,9 @@ package queryclient
 import (
 	"context"
 
+	"github.com/cockroachdb/errors"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 
 	commonpb "github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
@@ -78,12 +80,13 @@ func (s *shardViewQueryClient) Search(ctx context.Context, req *ShardSearchReque
 				},
 			}
 		},
-		dispatchNode: func(ctx context.Context, node qviews.WorkNode, plan *viewpb.QueryPlan, shardID qviews.ShardID) error {
+		dispatchNode: func(ctx context.Context, node qviews.WorkNode, plan *viewpb.QueryPlan, shardID qviews.ShardID, walReplicaID int64) error {
 			resp, err := s.queryServiceClient.SearchOnView(ctx, node, &viewpb.SearchOnViewRequest{
-				LegacyReq: legacySearchRequestForNode(plan, node),
-				ShardId:   shardID.IntoProto(),
-				Version:   plan.Version,
-				Mvcc:      plan.GetMvcc(),
+				LegacyReq:    legacySearchRequestForNode(plan, node),
+				ShardId:      shardID.IntoProto(),
+				Version:      plan.Version,
+				Mvcc:         plan.GetMvcc(),
+				WalReplicaId: walReplicaID,
 			})
 			if err != nil {
 				return err
@@ -110,12 +113,13 @@ func (s *shardViewQueryClient) Query(ctx context.Context, req *ShardQueryRequest
 				},
 			}
 		},
-		dispatchNode: func(ctx context.Context, node qviews.WorkNode, plan *viewpb.QueryPlan, shardID qviews.ShardID) error {
+		dispatchNode: func(ctx context.Context, node qviews.WorkNode, plan *viewpb.QueryPlan, shardID qviews.ShardID, walReplicaID int64) error {
 			resp, err := s.queryServiceClient.QueryOnView(ctx, node, &viewpb.QueryOnViewRequest{
-				LegacyReq: legacyRetrieveRequestForNode(plan, node),
-				ShardId:   shardID.IntoProto(),
-				Version:   plan.Version,
-				Mvcc:      plan.GetMvcc(),
+				LegacyReq:    legacyRetrieveRequestForNode(plan, node),
+				ShardId:      shardID.IntoProto(),
+				Version:      plan.Version,
+				Mvcc:         plan.GetMvcc(),
+				WalReplicaId: walReplicaID,
 			})
 			if err != nil {
 				return err
@@ -142,7 +146,7 @@ type shardExecParams struct {
 	// dispatchNode executes a Phase 2 RPC on a single work node.
 	// Called concurrently for each work node in the plan, with per-node retry
 	// for non-ViewError transient failures.
-	dispatchNode func(ctx context.Context, node qviews.WorkNode, plan *viewpb.QueryPlan, shardID qviews.ShardID) error
+	dispatchNode func(ctx context.Context, node qviews.WorkNode, plan *viewpb.QueryPlan, shardID qviews.ShardID, walReplicaID int64) error
 	// resetShard resets the reducer state for the given shard on retry.
 	resetShard func(shardID qviews.ShardID)
 }
@@ -173,8 +177,9 @@ func (s *shardViewQueryClient) executeShard(
 			return nil, err
 		}
 
-		// Select target replica via picker.
-		pickResult, err := s.replicaPicker.Pick(ctx, ReplicaPickInfo{ShardReplicas: shardReplicas})
+		// Select target replica. Strong and Session use the RW WAL replica directly;
+		// RO replicas may legitimately lag the current primary transform frontier.
+		pickResult, err := s.pickReplica(ctx, shardReplicas, params.consistencyLevel)
 		if err != nil {
 			return nil, err
 		}
@@ -187,47 +192,74 @@ func (s *shardViewQueryClient) executeShard(
 			if pickResult.Done != nil {
 				pickResult.Done(ReplicaDoneInfo{Err: err})
 			}
-			if ve := viewerror.AsViewError(err); ve != nil && ve.IsRetryable() {
+			if isRetryableShardQueryError(err) {
 				lastErr = err
+				if err := s.waitForShardTopologyRetry(ctx, collectionID, vchannel, shardReplicas, err); err != nil {
+					return nil, err
+				}
 				continue
 			}
 			return nil, err
 		}
 
 		shardID := qviews.FromProtoShardID(plan.ShardId)
+		walReplicaID := walReplicaIDForShard(shardReplicas, shardID)
 		workNodes := workNodesFromPlan(plan)
 
 		// Phase 2: Fan out to all work nodes concurrently.
-		err = s.fanOutToWorkNodes(ctx, workNodes, plan, shardID, params.dispatchNode)
+		err = s.fanOutToWorkNodes(ctx, workNodes, plan, shardID, walReplicaID, params.dispatchNode)
 		if pickResult.Done != nil {
 			pickResult.Done(ReplicaDoneInfo{Err: err})
 		}
 		if err != nil {
-			if ve := viewerror.AsViewError(err); ve != nil && ve.IsRetryable() {
+			if isRetryableShardQueryError(err) {
 				lastErr = err
 				params.resetShard(shardID)
+				if err := s.waitForShardTopologyRetry(ctx, collectionID, vchannel, shardReplicas, err); err != nil {
+					return nil, err
+				}
 				continue
 			}
 			return nil, err
 		}
 
 		return &ShardPlan{
-			ShardID:   shardID,
-			Version:   plan.Version,
-			Mvcc:      plan.GetMvcc(),
-			WorkNodes: workNodes,
+			ShardID:      shardID,
+			WALReplicaID: walReplicaID,
+			Version:      plan.Version,
+			Mvcc:         plan.GetMvcc(),
+			WorkNodes:    workNodes,
 		}, nil
 	}
 	return nil, lastErr
 }
 
+func (s *shardViewQueryClient) pickReplica(
+	ctx context.Context,
+	shardReplicas *resolver.ShardReplicas,
+	consistencyLevel commonpb.ConsistencyLevel,
+) (ReplicaPickResult, error) {
+	if requiresPrimaryWALReplica(consistencyLevel) {
+		if shardReplicas.PrimaryShardID == (qviews.ShardID{}) {
+			return ReplicaPickResult{}, merr.WrapErrServiceUnavailable("primary WAL replica is not serviceable")
+		}
+		return ReplicaPickResult{ShardID: shardReplicas.PrimaryShardID}, nil
+	}
+	return s.replicaPicker.Pick(ctx, ReplicaPickInfo{ShardReplicas: shardReplicas})
+}
+
+func requiresPrimaryWALReplica(consistencyLevel commonpb.ConsistencyLevel) bool {
+	return consistencyLevel == commonpb.ConsistencyLevel_Strong ||
+		consistencyLevel == commonpb.ConsistencyLevel_Session
+}
+
 // executeGetQueryPlan handles consistency-level routing and dispatches Phase 1.
 //
-// Routing logic per consistency level:
-//   - Strong on primary: GetQueryPlan(consistency_level=Strong)
-//   - Strong cross-replica: GetMVCCTimestamp from primary → GetQueryPlan(query_plan_mvcc=mvcc)
-//   - Session: same routing as Strong; SN sees consistency_level=Strong for primary planning
-//   - Bounded/Eventually: GetQueryPlan(consistency_level=...) — SN generates MVCC from WAL
+// Routing logic:
+//   - Primary target: GetQueryPlan(consistency_level=...)
+//   - Non-primary target: GetMVCCTimestamp from primary → GetQueryPlan(query_plan_mvcc=mvcc)
+//   - Session uses Strong when the primary target generates MVCC because SN does
+//     not distinguish Session from Strong.
 func (s *shardViewQueryClient) executeGetQueryPlan(
 	ctx context.Context,
 	targetShardID qviews.ShardID,
@@ -235,35 +267,80 @@ func (s *shardViewQueryClient) executeGetQueryPlan(
 	planReq *viewpb.GetQueryPlanRequest,
 	params *shardExecParams,
 ) (*viewpb.QueryPlan, error) {
-	switch params.consistencyLevel {
-	case commonpb.ConsistencyLevel_Strong, commonpb.ConsistencyLevel_Session:
-		if targetShardID != shardReplicas.PrimaryShardID {
-			mvccResp, err := s.queryPlanClient.GetMVCCTimestamp(ctx, shardReplicas.PrimaryShardID,
-				&viewpb.GetMVCCTimestampRequest{
-					Vchannel: targetShardID.VChannel,
-				})
-			if err != nil {
-				return nil, err
-			}
-			planReq.Mvcc = &viewpb.GetQueryPlanRequest_QueryPlanMvcc{
-				QueryPlanMvcc: mvccResp.GetMvcc(),
-			}
-		} else {
-			planReq.Mvcc = &viewpb.GetQueryPlanRequest_ConsistencyLevel{
-				ConsistencyLevel: commonpb.ConsistencyLevel_Strong,
-			}
+	if targetShardID != shardReplicas.PrimaryShardID {
+		if shardReplicas.PrimaryShardID == (qviews.ShardID{}) {
+			return nil, merr.WrapErrServiceUnavailable("primary WAL replica is not serviceable")
 		}
-	default:
+		primaryWALReplicaID := walReplicaIDForShard(shardReplicas, shardReplicas.PrimaryShardID)
+		mvccResp, err := s.queryPlanClient.GetMVCCTimestamp(ctx, shardReplicas.PrimaryShardID, primaryWALReplicaID,
+			&viewpb.GetMVCCTimestampRequest{
+				Vchannel: targetShardID.VChannel,
+			})
+		if err != nil {
+			return nil, err
+		}
+		planReq.Mvcc = &viewpb.GetQueryPlanRequest_QueryPlanMvcc{
+			QueryPlanMvcc: mvccResp.GetMvcc(),
+		}
+	} else {
+		consistencyLevel := params.consistencyLevel
+		if consistencyLevel == commonpb.ConsistencyLevel_Session {
+			consistencyLevel = commonpb.ConsistencyLevel_Strong
+		}
 		planReq.Mvcc = &viewpb.GetQueryPlanRequest_ConsistencyLevel{
-			ConsistencyLevel: params.consistencyLevel,
+			ConsistencyLevel: consistencyLevel,
 		}
 	}
 
-	resp, err := s.queryPlanClient.GetQueryPlan(ctx, targetShardID, planReq)
+	targetWALReplicaID := walReplicaIDForShard(shardReplicas, targetShardID)
+	resp, err := s.queryPlanClient.GetQueryPlan(ctx, targetShardID, targetWALReplicaID, planReq)
 	if err != nil {
 		return nil, err
 	}
 	return resp.Plan, nil
+}
+
+func walReplicaIDForShard(replicas *resolver.ShardReplicas, shardID qviews.ShardID) int64 {
+	if replicas == nil || replicas.WALReplicaIDs == nil {
+		return 0
+	}
+	return replicas.WALReplicaIDs[shardID]
+}
+
+func (s *shardViewQueryClient) waitForShardTopologyRetry(
+	ctx context.Context,
+	collectionID int64,
+	vchannel string,
+	previous *resolver.ShardReplicas,
+	err error,
+) error {
+	if !shouldWaitForShardTopologyChange(err) {
+		return nil
+	}
+	watcher, ok := s.shardResolver.(resolver.ShardChangeWatcher)
+	if !ok {
+		return nil
+	}
+	return watcher.WaitForShardChange(ctx, collectionID, vchannel, previous)
+}
+
+func shouldWaitForShardTopologyChange(err error) bool {
+	ve := viewerror.AsViewError(err)
+	return ve != nil && ve.IsRetryable()
+}
+
+func isRetryableShardQueryError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if ve := viewerror.AsViewError(err); ve != nil && ve.IsRetryable() {
+		return true
+	}
+	var clientStatus *viewerror.ViewClientStatus
+	if !errors.As(err, &clientStatus) {
+		return false
+	}
+	return clientStatus.Code() == codes.Unavailable && clientStatus.TryIntoViewError() == nil
 }
 
 // fanOutToWorkNodes dispatches Phase 2 to all work nodes concurrently.
@@ -278,13 +355,14 @@ func (s *shardViewQueryClient) fanOutToWorkNodes(
 	workNodes []qviews.WorkNode,
 	plan *viewpb.QueryPlan,
 	shardID qviews.ShardID,
-	dispatchNode func(ctx context.Context, node qviews.WorkNode, plan *viewpb.QueryPlan, shardID qviews.ShardID) error,
+	walReplicaID int64,
+	dispatchNode func(ctx context.Context, node qviews.WorkNode, plan *viewpb.QueryPlan, shardID qviews.ShardID, walReplicaID int64) error,
 ) error {
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, node := range workNodes {
 		node := node
 		g.Go(func() error {
-			return dispatchNode(gCtx, node, plan, shardID)
+			return dispatchNode(gCtx, node, plan, shardID, walReplicaID)
 		})
 	}
 	return g.Wait()
@@ -330,7 +408,10 @@ func workNodesFromPlan(plan *viewpb.QueryPlan) []qviews.WorkNode {
 		case *viewpb.QueryPlanWorkNode_QueryNode:
 			nodes = append(nodes, qviews.NewQueryNode(v.QueryNode.NodeId))
 		case *viewpb.QueryPlanWorkNode_StreamingNode:
-			nodes = append(nodes, qviews.StreamingNode{PChannel: v.StreamingNode.Pchannel})
+			nodes = append(nodes, qviews.StreamingNode{
+				PChannel:     v.StreamingNode.Pchannel,
+				WALReplicaID: v.StreamingNode.WalReplicaId,
+			})
 		}
 	}
 	return nodes

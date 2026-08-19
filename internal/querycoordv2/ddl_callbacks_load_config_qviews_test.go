@@ -26,6 +26,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/rgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	metastoremocks "github.com/milvus-io/milvus/internal/metastore/mocks"
@@ -35,6 +36,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/broadcast"
 	"github.com/milvus-io/milvus/internal/views/coord/balancer"
 	"github.com/milvus-io/milvus/internal/views/coord/loadmgr"
+	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
@@ -93,6 +95,87 @@ func TestLoadPartitionsBroadcastsLoadConfigToControlChannel(t *testing.T) {
 	assert.False(t, captured.BroadcastHeader().AckSyncUp)
 }
 
+func TestLoadPartitionsUsesQViewsCurrentLoadConfig(t *testing.T) {
+	ctx := context.Background()
+	server, catalog, broker := newLoadConfigQViewsServer(t)
+	collectionID := int64(100)
+	vchannels := []string{"v0", "v1"}
+	catalog.EXPECT().SaveCollection(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	catalog.EXPECT().SaveReplica(mock.Anything, mock.Anything).Return(nil).Once()
+	require.NoError(t, server.qviewsRuntime.loadConfigStore.Put(ctx, &loadmgr.LoadConfig{
+		DbID:         1,
+		CollectionID: collectionID,
+		LoadType:     querypb.LoadType_LoadPartition,
+		PartitionIDs: []int64{10},
+		Replicas: []*loadmgr.ReplicaAssignment{
+			{ReplicaID: 777, ResourceGroup: meta.DefaultResourceGroupName, Priority: commonpb.LoadPriority_HIGH},
+		},
+	}))
+
+	broker.EXPECT().DescribeCollection(mock.Anything, collectionID).
+		Return(testDescribeCollection(collectionID, vchannels), nil).Twice()
+
+	var captured message.BroadcastMutableMessage
+	registerCaptureBroadcast(t, func(msg message.BroadcastMutableMessage) {
+		captured = msg
+	})
+
+	require.NoError(t, server.broadcastAlterLoadConfigCollectionV2ForLoadPartitions(ctx, &querypb.LoadPartitionsRequest{
+		CollectionID:   collectionID,
+		PartitionIDs:   []int64{20},
+		ReplicaNumber:  1,
+		ResourceGroups: []string{meta.DefaultResourceGroupName},
+		Schema:         testDescribeCollection(collectionID, vchannels).GetSchema(),
+		FieldIndexID:   map[int64]int64{100: 200},
+		LoadFields:     []int64{100},
+	}))
+	require.NotNil(t, captured)
+	header := message.MustAsBroadcastAlterLoadConfigMessageV2(captured).Header()
+	assert.Equal(t, querypb.LoadType_LoadPartition, querypb.LoadType(header.GetLoadType()))
+	assert.ElementsMatch(t, []int64{10, 20}, header.GetPartitionIds())
+	require.Len(t, header.GetReplicas(), 1)
+	assert.Equal(t, int64(777), header.GetReplicas()[0].GetReplicaId())
+	assert.Equal(t, meta.DefaultResourceGroupName, header.GetReplicas()[0].GetResourceGroupName())
+}
+
+func TestSyncNewCreatedPartitionUsesQViewsLoadConfig(t *testing.T) {
+	ctx := context.Background()
+	server, catalog, _ := newLoadConfigQViewsServer(t)
+	server.UpdateStateCode(commonpb.StateCode_Healthy)
+	collectionID := int64(100)
+
+	catalog.EXPECT().SaveCollection(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	catalog.EXPECT().SaveReplica(mock.Anything, mock.Anything).Return(nil).Once()
+	require.NoError(t, server.qviewsRuntime.loadConfigStore.Put(ctx, &loadmgr.LoadConfig{
+		DbID:         1,
+		CollectionID: collectionID,
+		LoadType:     querypb.LoadType_LoadCollection,
+		PartitionIDs: []int64{10},
+		Replicas: []*loadmgr.ReplicaAssignment{
+			{ReplicaID: 777, ResourceGroup: meta.DefaultResourceGroupName, Priority: commonpb.LoadPriority_HIGH},
+		},
+	}))
+
+	catalog.EXPECT().SaveCollection(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(_ context.Context, collection *querypb.CollectionLoadInfo, partitions ...*querypb.PartitionLoadInfo) {
+			assert.Equal(t, querypb.LoadType_LoadCollection, collection.GetLoadType())
+			require.Len(t, partitions, 2)
+		}).
+		Return(nil).Once()
+	catalog.EXPECT().SaveReplica(mock.Anything, mock.Anything).Return(nil).Once()
+
+	status, err := server.SyncNewCreatedPartition(ctx, &querypb.SyncNewCreatedPartitionRequest{
+		CollectionID: collectionID,
+		PartitionID:  20,
+	})
+	require.NoError(t, merr.CheckRPCCall(status, err))
+
+	cfg := server.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()[collectionID]
+	require.NotNil(t, cfg)
+	assert.ElementsMatch(t, []int64{10, 20}, cfg.PartitionIDs)
+	assert.False(t, server.meta.Exist(ctx, collectionID))
+}
+
 func TestReleaseCollectionUsesQViewsLoadConfigAsLoadedSource(t *testing.T) {
 	ctx := context.Background()
 	server, catalog, broker := newLoadConfigQViewsServer(t)
@@ -125,26 +208,111 @@ func TestReleaseCollectionUsesQViewsLoadConfigAsLoadedSource(t *testing.T) {
 	assert.False(t, captured.BroadcastHeader().AckSyncUp)
 }
 
+func TestReleasePartitionsUsesQViewsLoadConfig(t *testing.T) {
+	ctx := context.Background()
+	server, catalog, broker := newLoadConfigQViewsServer(t)
+	collectionID := int64(100)
+	vchannels := []string{"v0", "v1"}
+	catalog.EXPECT().SaveCollection(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	catalog.EXPECT().SaveReplica(mock.Anything, mock.Anything).Return(nil).Once()
+	require.NoError(t, server.qviewsRuntime.loadConfigStore.Put(ctx, &loadmgr.LoadConfig{
+		DbID:         1,
+		CollectionID: collectionID,
+		LoadType:     querypb.LoadType_LoadCollection,
+		PartitionIDs: []int64{10, 20},
+		Replicas: []*loadmgr.ReplicaAssignment{
+			{ReplicaID: 777, ResourceGroup: meta.DefaultResourceGroupName, Priority: commonpb.LoadPriority_HIGH},
+		},
+	}))
+	require.False(t, server.meta.Exist(ctx, collectionID))
+
+	broker.EXPECT().DescribeCollection(mock.Anything, collectionID).
+		Return(testDescribeCollection(collectionID, vchannels), nil).Twice()
+	var captured message.BroadcastMutableMessage
+	registerCaptureBroadcast(t, func(msg message.BroadcastMutableMessage) {
+		captured = msg
+	})
+
+	collectionReleased, err := server.broadcastAlterLoadConfigCollectionV2ForReleasePartitions(ctx, &querypb.ReleasePartitionsRequest{
+		CollectionID: collectionID,
+		PartitionIDs: []int64{10},
+	})
+	require.NoError(t, err)
+	require.False(t, collectionReleased)
+	require.NotNil(t, captured)
+	header := message.MustAsBroadcastAlterLoadConfigMessageV2(captured).Header()
+	assert.Equal(t, querypb.LoadType_LoadCollection, querypb.LoadType(header.GetLoadType()))
+	assert.ElementsMatch(t, []int64{20}, header.GetPartitionIds())
+	require.Len(t, header.GetReplicas(), 1)
+	assert.Equal(t, int64(777), header.GetReplicas()[0].GetReplicaId())
+	assert.Equal(t, meta.DefaultResourceGroupName, header.GetReplicas()[0].GetResourceGroupName())
+}
+
+func TestTransferReplicaUsesQViewsLoadConfig(t *testing.T) {
+	ctx := context.Background()
+	server, catalog, broker := newLoadConfigQViewsServer(t)
+	collectionID := int64(100)
+	vchannels := []string{"v0", "v1"}
+	catalog.EXPECT().SaveCollection(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	catalog.EXPECT().SaveReplica(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	require.NoError(t, server.qviewsRuntime.loadConfigStore.Put(ctx, &loadmgr.LoadConfig{
+		DbID:         1,
+		CollectionID: collectionID,
+		LoadType:     querypb.LoadType_LoadPartition,
+		PartitionIDs: []int64{10},
+		Replicas: []*loadmgr.ReplicaAssignment{
+			{ReplicaID: 777, ResourceGroup: meta.DefaultResourceGroupName, Priority: commonpb.LoadPriority_HIGH},
+			{ReplicaID: 778, ResourceGroup: "rg1", Priority: commonpb.LoadPriority_HIGH},
+		},
+	}))
+	require.False(t, server.meta.Exist(ctx, collectionID))
+	catalog.EXPECT().SaveResourceGroup(mock.Anything, mock.Anything).Return(nil).Twice()
+	_, err := server.meta.AddResourceGroup(ctx, "rg1", &rgpb.ResourceGroupConfig{
+		Requests: &rgpb.ResourceGroupLimit{NodeNum: 1},
+		Limits:   &rgpb.ResourceGroupLimit{NodeNum: 1},
+	})
+	require.NoError(t, err)
+	_, err = server.meta.AddResourceGroup(ctx, "rg2", &rgpb.ResourceGroupConfig{
+		Requests: &rgpb.ResourceGroupLimit{NodeNum: 1},
+		Limits:   &rgpb.ResourceGroupLimit{NodeNum: 1},
+	})
+	require.NoError(t, err)
+
+	broker.EXPECT().DescribeCollection(mock.Anything, collectionID).
+		Return(testDescribeCollection(collectionID, vchannels), nil).Twice()
+	var captured message.BroadcastMutableMessage
+	registerCaptureBroadcast(t, func(msg message.BroadcastMutableMessage) {
+		captured = msg
+	})
+
+	require.NoError(t, server.broadcastAlterLoadConfigCollectionV2ForTransferReplica(ctx, &querypb.TransferReplicaRequest{
+		CollectionID:        collectionID,
+		SourceResourceGroup: meta.DefaultResourceGroupName,
+		TargetResourceGroup: "rg2",
+		NumReplica:          1,
+	}))
+	require.NotNil(t, captured)
+	header := message.MustAsBroadcastAlterLoadConfigMessageV2(captured).Header()
+	assert.Equal(t, querypb.LoadType_LoadPartition, querypb.LoadType(header.GetLoadType()))
+	assert.ElementsMatch(t, []int64{10}, header.GetPartitionIds())
+	assert.ElementsMatch(t, []string{"rg1", "rg2"}, []string{
+		header.GetReplicas()[0].GetResourceGroupName(),
+		header.GetReplicas()[1].GetResourceGroupName(),
+	})
+}
+
 func TestReleasePartitionsDropLoadConfigBroadcastsToControlChannel(t *testing.T) {
 	ctx := context.Background()
 	server, catalog, broker := newLoadConfigQViewsServer(t)
 	collectionID := int64(100)
 	vchannels := []string{"v0", "v1"}
 	catalog.EXPECT().SaveCollection(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
-	require.NoError(t, server.meta.PutCollection(ctx, &meta.Collection{
-		CollectionLoadInfo: &querypb.CollectionLoadInfo{
-			CollectionID: collectionID,
-			Status:       querypb.LoadStatus_Loaded,
-			LoadType:     querypb.LoadType_LoadPartition,
-			LoadFields:   []int64{100},
-			FieldIndexID: map[int64]int64{100: 200},
-		},
-	}, &meta.Partition{
-		PartitionLoadInfo: &querypb.PartitionLoadInfo{
-			CollectionID: collectionID,
-			PartitionID:  10,
-			Status:       querypb.LoadStatus_Loaded,
-		},
+	require.NoError(t, server.qviewsRuntime.loadConfigStore.Put(ctx, &loadmgr.LoadConfig{
+		DbID:         1,
+		CollectionID: collectionID,
+		LoadType:     querypb.LoadType_LoadPartition,
+		PartitionIDs: []int64{10},
+		LoadFields:   []*messagespb.LoadFieldConfig{{FieldId: 100, IndexId: 200}},
 	}))
 
 	broker.EXPECT().DescribeCollection(mock.Anything, collectionID).

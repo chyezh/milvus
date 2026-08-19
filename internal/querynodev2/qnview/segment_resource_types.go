@@ -102,7 +102,7 @@ type PhysicalSegmentManager interface {
 }
 
 type PhysicalSegmentResetter interface {
-	ResetSegment(segmentID int64)
+	ResetSegment(segmentID int64, walReplicaID int64)
 }
 
 // AcquirePhysicalSegments is the physical manager request wrapped by
@@ -215,6 +215,7 @@ type SegmentLoadTask struct {
 
 	Context                     context.Context
 	SegmentID                   int64
+	WALReplicaID                int64
 	Collection                  CollectionRuntime
 	TransformStartAfterTimeTick uint64
 	Snapshot                    SegmentLoadInfoSnapshot

@@ -14,11 +14,34 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	"github.com/milvus-io/milvus/internal/util/streamingutil/service/contextutil"
 	streamingstatus "github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v3/mocks/proto/mock_streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 )
+
+func TestCreateEventStreamSendsWALReplicaID(t *testing.T) {
+	ctx := context.Background()
+	assignment := testAssignment()
+	assignment.WALReplicaID = 2
+	fakeStream := newFakeSubscribeTransformClient(ctx)
+	handlerClient := mock_streamingpb.NewMockStreamingNodeHandlerServiceClient(t)
+	handlerClient.EXPECT().SubscribeTransform(mock.MatchedBy(func(ctx context.Context) bool {
+		md, ok := metadata.FromOutgoingContext(ctx)
+		require.True(t, ok)
+		createReq, err := contextutil.GetCreateTransformStream(metadata.NewIncomingContext(context.Background(), md))
+		require.NoError(t, err)
+		require.Equal(t, assignment.Channel.Name, createReq.GetPchannel().GetName())
+		require.Equal(t, assignment.Channel.Term, createReq.GetPchannel().GetTerm())
+		require.Equal(t, int64(2), createReq.GetWalReplicaId())
+		return true
+	}), mock.Anything).Return(fakeStream, nil).Once()
+
+	stream, err := CreateEventStream(ctx, &EventStreamOptions{Assignment: assignment}, handlerClient)
+	require.NoError(t, err)
+	stream.Close()
+}
 
 func TestEventStreamPublishesSubscriptionEventsOnSharedOutput(t *testing.T) {
 	ctx := context.Background()

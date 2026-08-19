@@ -23,6 +23,7 @@ func (w *walAdaptorImpl) QueryViewHandler() worknodehandler.QueryViewHandler {
 func (w *walAdaptorImpl) AcquireSearchSegmentTasks(
 	ctx context.Context,
 	shardID qviews.ShardID,
+	walReplicaID int64,
 	version qviews.QueryViewVersion,
 	mvcc *viewpb.QueryPlanMVCC,
 	req *internalpb.SearchRequest,
@@ -31,12 +32,13 @@ func (w *walAdaptorImpl) AcquireSearchSegmentTasks(
 	if err != nil {
 		return nil, err
 	}
-	return h.AcquireSearchSegmentTasks(ctx, shardID, version, mvcc, req)
+	return h.AcquireSearchSegmentTasks(ctx, shardID, walReplicaID, version, mvcc, req)
 }
 
 func (w *walAdaptorImpl) AcquireQuerySegmentTasks(
 	ctx context.Context,
 	shardID qviews.ShardID,
+	walReplicaID int64,
 	version qviews.QueryViewVersion,
 	mvcc *viewpb.QueryPlanMVCC,
 	req *internalpb.RetrieveRequest,
@@ -45,7 +47,7 @@ func (w *walAdaptorImpl) AcquireQuerySegmentTasks(
 	if err != nil {
 		return nil, err
 	}
-	return h.AcquireQuerySegmentTasks(ctx, shardID, version, mvcc, req)
+	return h.AcquireQuerySegmentTasks(ctx, shardID, walReplicaID, version, mvcc, req)
 }
 
 func (w *walAdaptorImpl) queryViewTaskHandler(shardID qviews.ShardID) (*snview.SNQueryViewHandler, error) {

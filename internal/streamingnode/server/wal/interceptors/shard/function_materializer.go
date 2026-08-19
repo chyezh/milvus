@@ -2,6 +2,7 @@ package shard
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/shard/shards"
@@ -13,6 +14,11 @@ import (
 // WALFunctionRunnerKey returns the function-runner lifecycle key for a WAL vchannel.
 func WALFunctionRunnerKey(vchannel string) string {
 	return "WAL-" + vchannel
+}
+
+// WALReplicaFunctionRunnerKey returns the read-only WAL replica function-runner lifecycle key.
+func WALReplicaFunctionRunnerKey(vchannel string, walReplicaID int64) string {
+	return fmt.Sprintf("WAL-%s#%d", vchannel, walReplicaID)
 }
 
 func (impl *shardInterceptor) allocFunctionRunners(collectionID int64, vchannel string, schema *schemapb.CollectionSchema) {

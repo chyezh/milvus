@@ -56,7 +56,7 @@ func TestCreateProduceServer(t *testing.T) {
 	ctx := metadata.NewIncomingContext(context.Background(), meta)
 	grpcProduceServer.ExpectedCalls = nil
 	grpcProduceServer.EXPECT().Context().Return(ctx)
-	manager.EXPECT().GetAvailableWAL(types.PChannelInfo{Name: "test", Term: 1}).Return(nil, errors.New("wal not exist"))
+	manager.EXPECT().GetAvailableWALReplica(types.PChannelInfo{Name: "test", Term: 1}, int64(0)).Return(nil, errors.New("wal not exist"))
 	assertCreateProduceServerFail(t, manager, grpcProduceServer)
 
 	// Return error if create scanner failed.
@@ -66,7 +66,7 @@ func TestCreateProduceServer(t *testing.T) {
 	l.EXPECT().WALName().Return(message.WALNameTest)
 	l.EXPECT().Register(mock.Anything).Return()
 	l.EXPECT().Unregister(mock.Anything).Return().Maybe()
-	manager.EXPECT().GetAvailableWAL(types.PChannelInfo{Name: "test", Term: 1}).Return(l, nil)
+	manager.EXPECT().GetAvailableWALReplica(types.PChannelInfo{Name: "test", Term: 1}, int64(0)).Return(l, nil)
 	grpcProduceServer.EXPECT().Send(mock.Anything).Return(errors.New("send created failed"))
 	assertCreateProduceServerFail(t, manager, grpcProduceServer)
 
@@ -78,6 +78,40 @@ func TestCreateProduceServer(t *testing.T) {
 		Name: "test",
 		Term: 1,
 	})
+	server, err := CreateProduceServer(manager, grpcProduceServer)
+	assert.NoError(t, err)
+	assert.NotNil(t, server)
+}
+
+func TestCreateProduceServerUsesWALReplicaID(t *testing.T) {
+	resource.InitForTest(t)
+	manager := mock_walmanager.NewMockManager(t)
+	grpcProduceServer := mock_streamingpb.NewMockStreamingNodeHandlerService_ProduceServer(t)
+
+	meta, _ := metadata.FromOutgoingContext(contextutil.WithCreateProducer(context.Background(), &streamingpb.CreateProducerRequest{
+		Pchannel: &streamingpb.PChannelInfo{
+			Name:       "test",
+			Term:       3,
+			AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+		},
+		WalReplicaId: 2,
+	}))
+	ctx := metadata.NewIncomingContext(context.Background(), meta)
+	grpcProduceServer.EXPECT().Context().Return(ctx)
+	grpcProduceServer.EXPECT().Send(mock.Anything).Return(nil)
+
+	l := mock_wal.NewMockWAL(t)
+	l.EXPECT().WALName().Return(message.WALNameTest)
+	l.EXPECT().Channel().Return(types.PChannelInfo{
+		Name:       "test",
+		Term:       3,
+		AccessMode: types.AccessModeRW,
+	})
+	l.EXPECT().Register(mock.Anything).Return()
+	manager.EXPECT().
+		GetAvailableWALReplica(types.PChannelInfo{Name: "test", Term: 3, AccessMode: types.AccessModeRW}, int64(2)).
+		Return(l, nil)
+
 	server, err := CreateProduceServer(manager, grpcProduceServer)
 	assert.NoError(t, err)
 	assert.NotNil(t, server)

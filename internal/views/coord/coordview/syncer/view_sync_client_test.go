@@ -37,9 +37,10 @@ func TestDefaultViewSyncClientRoutesQueryNodeAndStreamingNode(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, int64(1), queryNodeID)
 
-	_, err = client.OpenSyncStream(context.Background(), qviews.StreamingNode{PChannel: "p0"})
+	_, err = client.OpenSyncStream(context.Background(), qviews.StreamingNode{PChannel: "p0", WALReplicaID: 2})
 	require.NoError(t, err)
 	assert.Equal(t, "p0", streamingClient.pchannel)
+	assert.Equal(t, int64(2), streamingClient.walReplicaID)
 }
 
 func TestDefaultViewSyncClientForwardsNodeChangedNotifier(t *testing.T) {
@@ -98,12 +99,14 @@ func (c *fakeQueryNodeViewSyncClient) notifyNodeChanged() {
 }
 
 type fakeStreamingNodeViewSyncClient struct {
-	viewClient *capturingViewSyncServiceClient
-	pchannel   string
+	viewClient   *capturingViewSyncServiceClient
+	pchannel     string
+	walReplicaID int64
 }
 
-func (c *fakeStreamingNodeViewSyncClient) SyncQueryView(ctx context.Context, pchannel string) (viewpb.ViewSyncService_SyncQueryViewClient, error) {
+func (c *fakeStreamingNodeViewSyncClient) SyncQueryView(ctx context.Context, pchannel string, walReplicaID int64) (viewpb.ViewSyncService_SyncQueryViewClient, error) {
 	c.pchannel = pchannel
+	c.walReplicaID = walReplicaID
 	return c.viewClient.SyncQueryView(ctx)
 }
 

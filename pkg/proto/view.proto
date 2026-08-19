@@ -119,8 +119,10 @@ message QueryViewMeta {
 }
 
 // QueryViewOfStreamingNode represents the streaming node's portion of a query view.
-// Currently empty; streaming node is implicitly determined by the shard's vchannel binding.
 message QueryViewOfStreamingNode {
+    // WAL replica binding used by the streaming node side of this QueryView.
+    // Existing views without this field bind to replica 0.
+    int64 wal_replica_id = 1;
 }
 
 // QueryViewOfQueryNode represents a query node's segment assignments within a query view.
@@ -128,6 +130,9 @@ message QueryViewOfQueryNode {
     int64 node_id = 1;
     // Partitions and their segments assigned to this query node.
     repeated QueryViewOfPartition partitions = 2;
+    // WAL replica binding used by the TransformLog stream for this QueryView.
+    // Existing views without this field bind to replica 0.
+    int64 wal_replica_id = 3;
 }
 
 // QueryViewVersion is the composite version of a query view.
@@ -273,6 +278,7 @@ message QueryWorkNode {
 // StreamingWorkNode identifies a streaming node by its bound physical channel.
 message StreamingWorkNode {
     string pchannel = 1;
+    int64 wal_replica_id = 2;
 }
 
 // QueryPlanWorkNode identifies a target work node for Phase 2 dispatch.
@@ -388,6 +394,7 @@ message SearchOnViewRequest {
     ShardID shard_id = 2;
     QueryViewVersion version = 3;
     QueryPlanMVCC mvcc = 4;
+    int64 wal_replica_id = 5;
 }
 
 message SearchOnViewResponse {
@@ -401,6 +408,7 @@ message QueryOnViewRequest {
     ShardID shard_id = 2;
     QueryViewVersion version = 3;
     QueryPlanMVCC mvcc = 4;
+    int64 wal_replica_id = 5;
 }
 
 message QueryOnViewResponse {
@@ -414,6 +422,7 @@ message RequeryOnViewRequest {
     ShardID shard_id = 2;
     QueryViewVersion version = 3;
     QueryPlanMVCC mvcc = 4;
+    int64 wal_replica_id = 5;
 }
 
 message RequeryOnViewResponse {

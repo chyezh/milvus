@@ -10,6 +10,7 @@ import (
 	"github.com/milvus-io/milvus/internal/views/coord/loadmgr"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 )
 
 // SnapshotBuilder assembles a BalancerSnapshot from the various sources:
@@ -20,11 +21,12 @@ import (
 // each reconcile cycle. It owns a row-count ledger that is rebuilt by full
 // reconciles and incrementally refreshed from ShardStats changes in between.
 type SnapshotBuilder struct {
-	configStore      *loadmgr.LoadConfigStore
-	viewRegistry     *coordview.ShardViewRegistry
-	nodeProvider     NodeProvider
-	dataViewProvider DataViewProvider
-	config           *BalanceConfig
+	configStore        *loadmgr.LoadConfigStore
+	viewRegistry       *coordview.ShardViewRegistry
+	nodeProvider       NodeProvider
+	dataViewProvider   DataViewProvider
+	walReplicaProvider WALReplicaProvider
+	config             *BalanceConfig
 
 	// rowCountLedger is owned by the reconcile loop. Reconcile calls must be serialized.
 	rowCountLedger rowCountLedger
@@ -96,6 +98,10 @@ func NewSnapshotBuilder(
 	return builder
 }
 
+func (b *SnapshotBuilder) SetWALReplicaProvider(provider WALReplicaProvider) {
+	b.walReplicaProvider = provider
+}
+
 // ObserveShardStats marks one shard contribution dirty. It intentionally does
 // not perform metadata I/O or trigger reconciliation; the next scoped or
 // periodic reconcile consumes the mark.
@@ -137,6 +143,10 @@ func (b *SnapshotBuilder) build(ctx context.Context, pending triggerBatch) (*Bal
 		DataViewSnapshot:      dataViewSnapshot,
 		ShardRowStatsSnapshot: b.rowCountLedger.shardRowStatsSnapshot(targetShards),
 	}
+	if b.walReplicaProvider != nil {
+		snap.WALReplicaSnapshot = b.walReplicaProvider.WALReplicaSnapshot(ctx)
+	}
+	snap.PendingWALReplicaDependencies = b.pendingWALReplicaDependencies(snap.WALReplicaSnapshot)
 
 	// 5. Attach cluster-wide row counts to the current node snapshot.
 	nodeSnapshot := b.nodeProvider.Snapshot()
@@ -279,6 +289,24 @@ func (l *rowCountLedger) storeNodeRowStats(nodeID int64, stats NodeRowStats) {
 		return
 	}
 	l.nodeRowCount[nodeID] = stats
+}
+
+func (b *SnapshotBuilder) pendingWALReplicaDependencies(snapshot *WALReplicaSnapshot) map[types.ChannelID]struct{} {
+	if b == nil || b.viewRegistry == nil || snapshot == nil {
+		return nil
+	}
+	dependencies := make(map[types.ChannelID]struct{})
+	for _, replicas := range snapshot.replicasByPChannel {
+		for _, replica := range replicas {
+			if b.viewRegistry.HasWALReplicaDependency(replica.ChannelID) {
+				dependencies[replica.ChannelID] = struct{}{}
+			}
+		}
+	}
+	if len(dependencies) == 0 {
+		return nil
+	}
+	return dependencies
 }
 
 // buildBalanceNodes converts NodeInfos into BalanceNodes with zero aggregate

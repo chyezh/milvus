@@ -135,6 +135,23 @@ func consumePendingSyncForTest(sm *CoordQueryViewStateMachine) []qviews.QueryVie
 	return sync
 }
 
+func TestStateMachineSyncsQueryNodesWithWALReplicaBinding(t *testing.T) {
+	view := buildTestView(2)
+	view.StreamingNode.WalReplicaId = 4
+
+	sm := NewCoordQueryViewStateMachine(view)
+	sync := consumePendingSyncForTest(sm)
+
+	var qnSyncs int
+	for _, target := range sync {
+		if qn, ok := target.(*qviews.QueryViewAtQueryNode); ok {
+			qnSyncs++
+			assert.Equal(t, int64(4), qn.WALReplicaID())
+		}
+	}
+	assert.Equal(t, 2, qnSyncs)
+}
+
 // ===========================================================================
 // 1. NORMAL STATE TRANSITIONS (Happy Path)
 // ===========================================================================
@@ -299,6 +316,29 @@ func TestQueryNodeLost_DroppingCountsAsDropped(t *testing.T) {
 	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
 	assertPendingPersistState(t, sm, qviews.QueryViewStateDropped)
 	assertNoPendingSync(t, sm)
+}
+
+func TestQueryNodeLost_UpTransitionsToUnrecoverable(t *testing.T) {
+	view := buildTestView(1)
+	sm := NewCoordQueryViewStateMachine(view)
+	drainPending(sm)
+
+	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
+	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
+	drainPending(sm)
+	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUp))
+	assert.Equal(t, qviews.QueryViewStateUp, sm.State())
+	drainPending(sm)
+
+	sm.OnQueryNodeLost(qviews.NewQueryNode(1))
+
+	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
+	assertPendingPersistState(t, sm, qviews.QueryViewStateUnrecoverable)
+	sync := consumePendingSyncForTest(sm)
+	require.Len(t, sync, 1)
+	assert.Equal(t, testVChannel, sync[0].ShardID().VChannel)
+	assert.Equal(t, qviews.NewStreamingNodeFromVChannel(testVChannel), sync[0].WorkNode())
+	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sync[0].State())
 }
 
 // ===========================================================================

@@ -15,6 +15,7 @@ import (
 	"github.com/milvus-io/milvus/internal/views/viewerror"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 func TestServerSearchOnViewDelegatesAndReleasesTasks(t *testing.T) {
@@ -26,10 +27,11 @@ func TestServerSearchOnViewDelegatesAndReleasesTasks(t *testing.T) {
 	}
 	server := NewServer(provider, scheduler)
 	req := &viewpb.SearchOnViewRequest{
-		LegacyReq: &internalpb.SearchRequest{CollectionID: 10},
-		ShardId:   testShardID().IntoProto(),
-		Version:   testVersion().IntoProto(),
-		Mvcc:      &viewpb.QueryPlanMVCC{GrowingTimetick: 101, TransformingTimetick: 99},
+		LegacyReq:    &internalpb.SearchRequest{CollectionID: 10},
+		ShardId:      testShardID().IntoProto(),
+		Version:      testVersion().IntoProto(),
+		Mvcc:         &viewpb.QueryPlanMVCC{GrowingTimetick: 101, TransformingTimetick: 99},
+		WalReplicaId: 7,
 	}
 
 	resp, err := server.SearchOnView(context.Background(), req)
@@ -37,6 +39,7 @@ func TestServerSearchOnViewDelegatesAndReleasesTasks(t *testing.T) {
 	require.NoError(t, err)
 	assert.Same(t, scheduler.searchResult, resp.GetLegacyResults())
 	assert.Equal(t, testShardID(), provider.searchShardID)
+	assert.Equal(t, int64(7), provider.searchWALReplicaID)
 	assert.Equal(t, testVersion(), provider.searchVersion)
 	assert.Same(t, req.GetMvcc(), provider.searchMVCC)
 	assert.Same(t, req.GetLegacyReq(), provider.searchReq)
@@ -71,6 +74,20 @@ func TestServerSearchOnViewReleasesTasksOnSchedulerError(t *testing.T) {
 	assert.Equal(t, 1, tasks.releaseCount)
 }
 
+func TestServerSearchOnViewMapsServiceUnavailableToOnShutdown(t *testing.T) {
+	tasks := &fakeSearchSegmentTasks{tasks: []SearchSegmentTask{struct{}{}}}
+	provider := &fakeTaskProvider{searchTasks: tasks}
+	scheduler := &fakeScheduler{searchErr: merr.WrapErrServiceUnavailable("growing runtime is closed")}
+	server := NewServer(provider, scheduler)
+
+	_, err := server.SearchOnView(context.Background(), validSearchRequest())
+
+	require.Error(t, err)
+	assert.Equal(t, codes.Unavailable, status.Code(err))
+	assert.True(t, viewerror.AsViewError(viewerror.ConvertViewError("SearchOnView", err)).IsOnShutdown())
+	assert.Equal(t, 1, tasks.releaseCount)
+}
+
 func TestServerQueryOnViewDelegatesAndReleasesTasks(t *testing.T) {
 	provider := &fakeTaskProvider{
 		queryTasks: &fakeQuerySegmentTasks{tasks: []QuerySegmentTask{struct{}{}}},
@@ -80,10 +97,11 @@ func TestServerQueryOnViewDelegatesAndReleasesTasks(t *testing.T) {
 	}
 	server := NewServer(provider, scheduler)
 	req := &viewpb.QueryOnViewRequest{
-		LegacyReq: &internalpb.RetrieveRequest{CollectionID: 11},
-		ShardId:   testShardID().IntoProto(),
-		Version:   testVersion().IntoProto(),
-		Mvcc:      &viewpb.QueryPlanMVCC{GrowingTimetick: 101, TransformingTimetick: 99},
+		LegacyReq:    &internalpb.RetrieveRequest{CollectionID: 11},
+		ShardId:      testShardID().IntoProto(),
+		Version:      testVersion().IntoProto(),
+		Mvcc:         &viewpb.QueryPlanMVCC{GrowingTimetick: 101, TransformingTimetick: 99},
+		WalReplicaId: 8,
 	}
 
 	resp, err := server.QueryOnView(context.Background(), req)
@@ -91,6 +109,7 @@ func TestServerQueryOnViewDelegatesAndReleasesTasks(t *testing.T) {
 	require.NoError(t, err)
 	assert.Same(t, scheduler.queryResult, resp.GetLegacyResults())
 	assert.Equal(t, testShardID(), provider.queryShardID)
+	assert.Equal(t, int64(8), provider.queryWALReplicaID)
 	assert.Equal(t, testVersion(), provider.queryVersion)
 	assert.Same(t, req.GetMvcc(), provider.queryMVCC)
 	assert.Same(t, req.GetLegacyReq(), provider.queryReq)
@@ -184,29 +203,33 @@ func testVersion() qviews.QueryViewVersion {
 }
 
 type fakeTaskProvider struct {
-	searchTasks   *fakeSearchSegmentTasks
-	searchErr     error
-	searchShardID qviews.ShardID
-	searchVersion qviews.QueryViewVersion
-	searchMVCC    *viewpb.QueryPlanMVCC
-	searchReq     *internalpb.SearchRequest
+	searchTasks        *fakeSearchSegmentTasks
+	searchErr          error
+	searchShardID      qviews.ShardID
+	searchWALReplicaID int64
+	searchVersion      qviews.QueryViewVersion
+	searchMVCC         *viewpb.QueryPlanMVCC
+	searchReq          *internalpb.SearchRequest
 
-	queryTasks   *fakeQuerySegmentTasks
-	queryErr     error
-	queryShardID qviews.ShardID
-	queryVersion qviews.QueryViewVersion
-	queryMVCC    *viewpb.QueryPlanMVCC
-	queryReq     *internalpb.RetrieveRequest
+	queryTasks        *fakeQuerySegmentTasks
+	queryErr          error
+	queryShardID      qviews.ShardID
+	queryWALReplicaID int64
+	queryVersion      qviews.QueryViewVersion
+	queryMVCC         *viewpb.QueryPlanMVCC
+	queryReq          *internalpb.RetrieveRequest
 }
 
 func (p *fakeTaskProvider) AcquireSearchSegmentTasks(
 	_ context.Context,
 	shardID qviews.ShardID,
+	walReplicaID int64,
 	version qviews.QueryViewVersion,
 	mvcc *viewpb.QueryPlanMVCC,
 	req *internalpb.SearchRequest,
 ) (SearchSegmentTasks, error) {
 	p.searchShardID = shardID
+	p.searchWALReplicaID = walReplicaID
 	p.searchVersion = version
 	p.searchMVCC = mvcc
 	p.searchReq = req
@@ -219,11 +242,13 @@ func (p *fakeTaskProvider) AcquireSearchSegmentTasks(
 func (p *fakeTaskProvider) AcquireQuerySegmentTasks(
 	_ context.Context,
 	shardID qviews.ShardID,
+	walReplicaID int64,
 	version qviews.QueryViewVersion,
 	mvcc *viewpb.QueryPlanMVCC,
 	req *internalpb.RetrieveRequest,
 ) (QuerySegmentTasks, error) {
 	p.queryShardID = shardID
+	p.queryWALReplicaID = walReplicaID
 	p.queryVersion = version
 	p.queryMVCC = mvcc
 	p.queryReq = req

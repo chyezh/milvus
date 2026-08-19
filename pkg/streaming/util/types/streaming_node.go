@@ -54,7 +54,22 @@ type StreamingNodeAssignment struct {
 	NodeInfo          StreamingNodeInfo
 	Channels          map[string]PChannelInfo
 	SecondaryChannels map[string]PChannelInfo
+	WALReplicas       map[ChannelID]WALReplicaInfo
 	ShardAssignment   ShardAssignmentInfo
+}
+
+type WALReplicaInfo struct {
+	ChannelID         ChannelID
+	AccessMode        AccessMode
+	ResourceGroup     string
+	PChannelWriteTerm int64
+	AssignmentEpoch   int64
+	State             streamingpb.PChannelMetaState
+}
+
+type WALReplicaInfoAssigned struct {
+	Replica WALReplicaInfo
+	Node    StreamingNodeInfo
 }
 
 type ShardAssignmentInfo struct {
@@ -70,6 +85,38 @@ type ShardAssignmentEntry struct {
 	CollectionID int64
 	ShardIndex   int32
 	ReplicaID    int64
+	WALReplicaID int64
+}
+
+// NewWALReplicaInfoFromProto creates a WALReplicaInfo from proto.
+func NewWALReplicaInfoFromProto(proto *streamingpb.WALReplicaInfo) WALReplicaInfo {
+	if proto == nil {
+		return WALReplicaInfo{}
+	}
+	return WALReplicaInfo{
+		ChannelID: ChannelID{
+			Name:         proto.GetPchannel(),
+			WALReplicaID: proto.GetWalReplicaId(),
+		},
+		AccessMode:        AccessMode(proto.GetAccessMode()),
+		ResourceGroup:     proto.GetResourceGroup(),
+		PChannelWriteTerm: proto.GetPchannelWriteTerm(),
+		AssignmentEpoch:   proto.GetAssignmentEpoch(),
+		State:             proto.GetState(),
+	}
+}
+
+// NewProtoFromWALReplicaInfo creates a proto from WALReplicaInfo.
+func NewProtoFromWALReplicaInfo(info WALReplicaInfo) *streamingpb.WALReplicaInfo {
+	return &streamingpb.WALReplicaInfo{
+		Pchannel:          info.ChannelID.Name,
+		WalReplicaId:      info.ChannelID.WALReplicaID,
+		AccessMode:        streamingpb.PChannelAccessMode(info.AccessMode),
+		ResourceGroup:     info.ResourceGroup,
+		PchannelWriteTerm: info.PChannelWriteTerm,
+		AssignmentEpoch:   info.AssignmentEpoch,
+		State:             info.State,
+	}
 }
 
 // NewShardAssignmentInfoFromProto creates a ShardAssignmentInfo from proto.
@@ -85,6 +132,7 @@ func NewShardAssignmentInfoFromProto(proto *streamingpb.ShardAssignmentInfo) Sha
 				CollectionID: entry.GetCollectionId(),
 				ShardIndex:   entry.GetShardIndex(),
 				ReplicaID:    entry.GetReplicaId(),
+				WALReplicaID: entry.GetWalReplicaId(),
 			})
 		}
 		pchannelAssignments = append(pchannelAssignments, PChannelShardAssignment{
@@ -105,6 +153,7 @@ func NewProtoFromShardAssignmentInfo(info ShardAssignmentInfo) *streamingpb.Shar
 				CollectionId: entry.CollectionID,
 				ShardIndex:   entry.ShardIndex,
 				ReplicaId:    entry.ReplicaID,
+				WalReplicaId: entry.WALReplicaID,
 			})
 		}
 		pchannelAssignments = append(pchannelAssignments, &streamingpb.PChannelShardAssignment{

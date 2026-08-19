@@ -19,6 +19,7 @@ package querycoordv2
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/cockroachdb/errors"
@@ -34,7 +35,10 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
 	"github.com/milvus-io/milvus/internal/util/componentutil"
+	qvbalancer "github.com/milvus-io/milvus/internal/views/coord/balancer"
+	"github.com/milvus-io/milvus/internal/views/coord/coordview"
 	"github.com/milvus-io/milvus/internal/views/coord/loadmgr"
+	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/metrics"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
@@ -432,6 +436,37 @@ func (s *Server) GetPartitionStates(ctx context.Context, req *querypb.GetPartiti
 	}
 
 	states := make([]*querypb.PartitionStates, 0, len(req.GetPartitionIDs()))
+	if s.qviewsRuntime != nil && s.qviewsRuntime.loadConfigStore != nil {
+		cfg := s.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()[req.GetCollectionID()]
+		if cfg == nil {
+			mlog.Warn(ctx, msg)
+			return notLoadResp, nil
+		}
+		partitions := req.GetPartitionIDs()
+		if len(partitions) == 0 {
+			partitions = cfg.PartitionIDs
+		}
+		loadedPartitions := typeutil.NewUniqueSet(cfg.PartitionIDs...)
+		state := querypb.PartitionState_PartialInMemory
+		if s.qviewsLoadPercentage(cfg) >= 100 {
+			state = querypb.PartitionState_InMemory
+		}
+		for _, partition := range partitions {
+			if !loadedPartitions.Contain(partition) {
+				mlog.Warn(ctx, msg, mlog.Int64("partition", partition))
+				return notLoadResp, nil
+			}
+			states = append(states, &querypb.PartitionStates{
+				PartitionID: partition,
+				State:       state,
+			})
+		}
+		return &querypb.GetPartitionStatesResponse{
+			Status:                merr.Success(),
+			PartitionDescriptions: states,
+		}, nil
+	}
+
 	switch s.meta.GetLoadType(ctx, req.GetCollectionID()) {
 	case querypb.LoadType_LoadCollection:
 		collection := s.meta.GetCollection(ctx, req.GetCollectionID())
@@ -491,6 +526,29 @@ func (s *Server) GetLoadSegmentInfo(ctx context.Context, req *querypb.GetSegment
 	}
 
 	infos := make([]*querypb.SegmentInfo, 0, len(req.GetSegmentIDs()))
+	if s.qviewsRuntime != nil && s.qviewsRuntime.loadConfigStore != nil {
+		cfg := s.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()[req.GetCollectionID()]
+		if cfg == nil {
+			return &querypb.GetSegmentInfoResponse{
+				Status: merr.Success(),
+				Infos:  infos,
+			}, nil
+		}
+		infos, missingSegmentID := s.getQViewsSegmentInfo(cfg, req.GetSegmentIDs())
+		if missingSegmentID != 0 {
+			err := merr.WrapErrSegmentNotLoaded(missingSegmentID)
+			msg := fmt.Sprintf("segment %v not found in any node", missingSegmentID)
+			mlog.Warn(ctx, msg, mlog.Int64("segment", missingSegmentID))
+			return &querypb.GetSegmentInfoResponse{
+				Status: merr.Status(merr.Wrapf(err, "%s", msg)),
+			}, nil
+		}
+		return &querypb.GetSegmentInfoResponse{
+			Status: merr.Success(),
+			Infos:  infos,
+		}, nil
+	}
+
 	if len(req.GetSegmentIDs()) == 0 {
 		infos = s.getCollectionSegmentInfo(ctx, req.GetCollectionID())
 	} else {
@@ -516,6 +574,75 @@ func (s *Server) GetLoadSegmentInfo(ctx context.Context, req *querypb.GetSegment
 	}, nil
 }
 
+func (s *Server) getQViewsSegmentInfo(cfg *loadmgr.LoadConfig, segmentIDs []int64) ([]*querypb.SegmentInfo, int64) {
+	replicaIDs := typeutil.NewUniqueSet()
+	for _, replica := range cfg.Replicas {
+		replicaIDs.Insert(replica.ReplicaID)
+	}
+	loadedPartitions := typeutil.NewUniqueSet(cfg.PartitionIDs...)
+	requestedSegments := typeutil.NewUniqueSet(segmentIDs...)
+
+	infoBySegment := make(map[int64]*querypb.SegmentInfo)
+	for shardID, stats := range s.qviewsRuntime.shardViewRegistry.Snapshot().StatsMap() {
+		if !replicaIDs.Contain(shardID.ReplicaID) || stats == nil || stats.UpVersion == nil {
+			continue
+		}
+		for segmentID, segment := range stats.Segments {
+			if len(requestedSegments) > 0 && !requestedSegments.Contain(segmentID) {
+				continue
+			}
+			if !loadedPartitions.Contain(segment.PartitionID) {
+				continue
+			}
+			info := infoBySegment[segmentID]
+			if info == nil {
+				info = &querypb.SegmentInfo{
+					NodeID:       paramtable.GetNodeID(),
+					SegmentID:    segmentID,
+					CollectionID: cfg.CollectionID,
+					PartitionID:  segment.PartitionID,
+					DmChannel:    shardID.VChannel,
+					NodeIds:      make([]int64, 0),
+					SegmentState: commonpb.SegmentState_Sealed,
+					IndexInfos:   make([]*querypb.FieldIndexInfo, 0),
+				}
+				infoBySegment[segmentID] = info
+			}
+			nodeIDs := typeutil.NewUniqueSet(info.NodeIds...)
+			for nodeID, state := range segment.Nodes {
+				if state == coordview.SegmentStateUp {
+					nodeIDs.Insert(nodeID)
+				}
+			}
+			info.NodeIds = nodeIDs.Collect()
+			sort.Slice(info.NodeIds, func(i, j int) bool { return info.NodeIds[i] < info.NodeIds[j] })
+		}
+	}
+
+	if len(segmentIDs) > 0 {
+		infos := make([]*querypb.SegmentInfo, 0, len(segmentIDs))
+		for _, segmentID := range segmentIDs {
+			info := infoBySegment[segmentID]
+			if info == nil {
+				return nil, segmentID
+			}
+			infos = append(infos, info)
+		}
+		return infos, 0
+	}
+
+	segmentIDs = make([]int64, 0, len(infoBySegment))
+	for segmentID := range infoBySegment {
+		segmentIDs = append(segmentIDs, segmentID)
+	}
+	sort.Slice(segmentIDs, func(i, j int) bool { return segmentIDs[i] < segmentIDs[j] })
+	infos := make([]*querypb.SegmentInfo, 0, len(segmentIDs))
+	for _, segmentID := range segmentIDs {
+		infos = append(infos, infoBySegment[segmentID])
+	}
+	return infos, 0
+}
+
 func (s *Server) SyncNewCreatedPartition(ctx context.Context, req *querypb.SyncNewCreatedPartitionRequest) (*commonpb.Status, error) {
 	mlog.Info(context.TODO(), "received sync new created partition request")
 
@@ -523,6 +650,14 @@ func (s *Server) SyncNewCreatedPartition(ctx context.Context, req *querypb.SyncN
 	if err := merr.CheckHealthy(s.State()); err != nil {
 		mlog.Warn(ctx, failedMsg, mlog.Err(err))
 		return merr.Status(err), nil
+	}
+
+	if s.qviewsRuntime != nil && s.qviewsRuntime.loadManager != nil {
+		if _, err := s.qviewsRuntime.loadManager.SyncNewCreatedPartition(ctx, req.GetCollectionID(), req.GetPartitionID()); err != nil {
+			mlog.Warn(ctx, failedMsg, mlog.Err(err))
+			return merr.Status(err), nil
+		}
+		return merr.Success(), nil
 	}
 
 	syncJob := job.NewSyncNewCreatedPartitionJob(ctx, req, s.meta, s.broker, s.targetObserver, s.targetMgr)
@@ -559,6 +694,17 @@ func (s *Server) SyncNewCreatedPartition(ctx context.Context, req *querypb.SyncN
 // Note that a collection's loading progress always stays at 100% after a successful load and will not get updated
 // during refreshCollection.
 func (s *Server) refreshCollection(ctx context.Context, collectionID int64) error {
+	if s.qviewsRuntime != nil && s.qviewsRuntime.loadConfigStore != nil {
+		cfg := s.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()[collectionID]
+		if cfg == nil {
+			return merr.WrapErrCollectionNotLoaded(collectionID)
+		}
+		if s.qviewsRuntime.balancer != nil {
+			s.qviewsRuntime.balancer.Trigger(qvbalancer.TriggerScope{DirtyCollections: []int64{collectionID}})
+		}
+		return nil
+	}
+
 	collection := s.meta.GetCollection(ctx, collectionID)
 	if collection == nil {
 		return merr.WrapErrCollectionNotLoaded(collectionID)
@@ -680,6 +826,11 @@ func (s *Server) LoadBalance(ctx context.Context, req *querypb.LoadBalanceReques
 		msg := "failed to load balance"
 		mlog.Warn(ctx, msg, mlog.Err(err))
 		return merr.Status(merr.Wrapf(err, "%s", msg)), nil
+	}
+	if s.qviewsRuntime != nil && s.qviewsRuntime.loadConfigStore != nil {
+		err := merr.WrapErrParameterInvalid("query view balancer", "legacy manual sealed segment load balance")
+		mlog.Warn(ctx, "manual sealed segment load balance is not supported with query views", mlog.Err(err))
+		return merr.Status(err), nil
 	}
 
 	// Verify request
@@ -836,6 +987,17 @@ func (s *Server) GetReplicas(ctx context.Context, req *milvuspb.GetReplicasReque
 		Replicas: make([]*milvuspb.ReplicaInfo, 0),
 	}
 
+	if s.qviewsRuntime != nil && s.qviewsRuntime.loadConfigStore != nil {
+		cfg := s.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()[req.GetCollectionID()]
+		if cfg == nil {
+			return resp, nil
+		}
+		for _, replica := range cfg.Replicas {
+			resp.Replicas = append(resp.Replicas, s.fillQViewsReplicaInfo(cfg, replica, req.GetWithShardNodes()))
+		}
+		return resp, nil
+	}
+
 	replicas := s.meta.GetByCollection(ctx, req.GetCollectionID())
 	if len(replicas) == 0 {
 		return resp, nil
@@ -847,6 +1009,70 @@ func (s *Server) GetReplicas(ctx context.Context, req *milvuspb.GetReplicasReque
 	return resp, nil
 }
 
+func (s *Server) fillQViewsReplicaInfo(cfg *loadmgr.LoadConfig, replica *loadmgr.ReplicaAssignment, withShardNodes bool) *milvuspb.ReplicaInfo {
+	info := &milvuspb.ReplicaInfo{
+		ReplicaID:         replica.ReplicaID,
+		CollectionID:      cfg.CollectionID,
+		ResourceGroupName: replica.ResourceGroup,
+	}
+	if s.qviewsRuntime == nil || s.qviewsRuntime.shardViewRegistry == nil {
+		return info
+	}
+
+	nodeIDs := typeutil.NewUniqueSet()
+	shardReplicas := make([]*milvuspb.ShardReplica, 0)
+	for shardID, stats := range s.qviewsRuntime.shardViewRegistry.Snapshot().StatsMap() {
+		if shardID.ReplicaID != replica.ReplicaID || stats == nil || stats.UpVersion == nil {
+			continue
+		}
+		shardNodeIDs := qviewsUpShardNodeIDs(stats)
+		nodeIDs.Insert(shardNodeIDs...)
+		if withShardNodes {
+			shardReplicas = append(shardReplicas, s.qviewsShardReplicaInfo(shardID, shardNodeIDs))
+		}
+	}
+	info.NodeIds = nodeIDs.Collect()
+	sort.Slice(info.NodeIds, func(i, j int) bool { return info.NodeIds[i] < info.NodeIds[j] })
+	if withShardNodes {
+		sort.Slice(shardReplicas, func(i, j int) bool {
+			return shardReplicas[i].GetDmChannelName() < shardReplicas[j].GetDmChannelName()
+		})
+		info.ShardReplicas = shardReplicas
+	}
+	return info
+}
+
+func qviewsUpShardNodeIDs(stats *coordview.ShardStats) []int64 {
+	nodeIDs := typeutil.NewUniqueSet()
+	for _, segment := range stats.Segments {
+		for nodeID, state := range segment.Nodes {
+			if state == coordview.SegmentStateUp {
+				nodeIDs.Insert(nodeID)
+			}
+		}
+	}
+	out := nodeIDs.Collect()
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+func (s *Server) qviewsShardReplicaInfo(shardID qviews.ShardID, nodeIDs []int64) *milvuspb.ShardReplica {
+	shard := &milvuspb.ShardReplica{
+		DmChannelName: shardID.VChannel,
+		NodeIds:       append([]int64{}, nodeIDs...),
+	}
+	if len(nodeIDs) == 0 {
+		return shard
+	}
+	shard.LeaderID = nodeIDs[0]
+	if s.nodeMgr != nil {
+		if leader := s.nodeMgr.Get(shard.LeaderID); leader != nil {
+			shard.LeaderAddr = leader.Addr()
+		}
+	}
+	return shard
+}
+
 func (s *Server) GetShardLeaders(ctx context.Context, req *querypb.GetShardLeadersRequest) (*querypb.GetShardLeadersResponse, error) {
 	mlog.RatedInfo(context.TODO(), rate.Limit(10), "get shard leaders request received")
 	if err := merr.CheckHealthy(s.State()); err != nil {
@@ -854,6 +1080,20 @@ func (s *Server) GetShardLeaders(ctx context.Context, req *querypb.GetShardLeade
 		mlog.Warn(ctx, msg, mlog.Err(err))
 		return &querypb.GetShardLeadersResponse{
 			Status: merr.Status(merr.Wrapf(err, "%s", msg)),
+		}, nil
+	}
+
+	if s.qviewsRuntime != nil && s.qviewsRuntime.loadConfigStore != nil {
+		cfg := s.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()[req.GetCollectionID()]
+		if cfg == nil {
+			return &querypb.GetShardLeadersResponse{
+				Status: merr.Status(merr.WrapErrCollectionNotLoaded(req.GetCollectionID())),
+			}, nil
+		}
+		leaders, err := s.getQViewsShardLeaders(cfg, req.GetWithUnserviceableShards())
+		return &querypb.GetShardLeadersResponse{
+			Status: merr.Status(err),
+			Shards: leaders,
 		}, nil
 	}
 
@@ -871,6 +1111,76 @@ func (s *Server) GetShardLeaders(ctx context.Context, req *querypb.GetShardLeade
 		Status: merr.Status(err),
 		Shards: leaders,
 	}, nil
+}
+
+func (s *Server) getQViewsShardLeaders(cfg *loadmgr.LoadConfig, withUnserviceableShards bool) ([]*querypb.ShardLeadersList, error) {
+	replicaIDs := typeutil.NewUniqueSet()
+	for _, replica := range cfg.Replicas {
+		replicaIDs.Insert(replica.ReplicaID)
+	}
+	leadersByChannel := make(map[string]*querypb.ShardLeadersList)
+	for shardID, stats := range s.qviewsRuntime.shardViewRegistry.Snapshot().StatsMap() {
+		if !replicaIDs.Contain(shardID.ReplicaID) || stats == nil || stats.UpVersion == nil {
+			continue
+		}
+		nodeIDs := qviewsUpShardNodeIDs(stats)
+		if len(nodeIDs) == 0 && !withUnserviceableShards {
+			continue
+		}
+		leader := leadersByChannel[shardID.VChannel]
+		if leader == nil {
+			leader = &querypb.ShardLeadersList{ChannelName: shardID.VChannel}
+			leadersByChannel[shardID.VChannel] = leader
+		}
+		for _, nodeID := range nodeIDs {
+			leader.NodeIds = append(leader.NodeIds, nodeID)
+			leader.Serviceable = append(leader.Serviceable, true)
+			addr := ""
+			if s.nodeMgr != nil {
+				if node := s.nodeMgr.Get(nodeID); node != nil {
+					addr = node.Addr()
+				}
+			}
+			leader.NodeAddrs = append(leader.NodeAddrs, addr)
+		}
+	}
+	if len(leadersByChannel) == 0 && !withUnserviceableShards {
+		return nil, merr.WrapErrChannelNotAvailable("")
+	}
+
+	channels := make([]string, 0, len(leadersByChannel))
+	for channel := range leadersByChannel {
+		channels = append(channels, channel)
+	}
+	sort.Slice(channels, func(i, j int) bool { return channels[i] < channels[j] })
+	leaders := make([]*querypb.ShardLeadersList, 0, len(channels))
+	for _, channel := range channels {
+		leader := leadersByChannel[channel]
+		sortQViewsShardLeaderNodes(leader)
+		leaders = append(leaders, leader)
+	}
+	return leaders, nil
+}
+
+func sortQViewsShardLeaderNodes(leader *querypb.ShardLeadersList) {
+	order := make([]int, 0, len(leader.NodeIds))
+	for i := range leader.NodeIds {
+		order = append(order, i)
+	}
+	sort.Slice(order, func(i, j int) bool {
+		return leader.NodeIds[order[i]] < leader.NodeIds[order[j]]
+	})
+	nodeIDs := make([]int64, 0, len(order))
+	nodeAddrs := make([]string, 0, len(order))
+	serviceable := make([]bool, 0, len(order))
+	for _, index := range order {
+		nodeIDs = append(nodeIDs, leader.NodeIds[index])
+		nodeAddrs = append(nodeAddrs, leader.NodeAddrs[index])
+		serviceable = append(serviceable, leader.Serviceable[index])
+	}
+	leader.NodeIds = nodeIDs
+	leader.NodeAddrs = nodeAddrs
+	leader.Serviceable = serviceable
 }
 
 func (s *Server) CheckHealth(ctx context.Context, req *milvuspb.CheckHealthRequest) (*milvuspb.CheckHealthResponse, error) {
@@ -1306,6 +1616,20 @@ func (s *Server) ManualUpdateCurrentTarget(ctx context.Context, collectionID int
 	if err := merr.CheckHealthy(s.State()); err != nil {
 		mlog.Warn(context.TODO(), "failed to manual update current target", mlog.Err(err))
 		return err
+	}
+
+	if s.qviewsRuntime != nil && s.qviewsRuntime.loadConfigStore != nil {
+		if s.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()[collectionID] == nil {
+			mlog.Info(context.TODO(), "collection not loaded, skip ManualUpdateCurrentTarget")
+			return nil
+		}
+		err := job.WaitCurrentTargetUpdated(ctx, s.targetObserver, collectionID)
+		if err != nil {
+			mlog.Warn(context.TODO(), "failed to wait current target updated", mlog.Err(err))
+			return err
+		}
+		mlog.Info(context.TODO(), "manual update current target done")
+		return nil
 	}
 
 	// Check if collection is loaded

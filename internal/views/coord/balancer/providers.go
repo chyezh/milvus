@@ -83,3 +83,17 @@ func NewDataViewSnapshot(
 ) *DataViewSnapshot {
 	return balancerapi.NewDataViewSnapshot(version, collections, segments)
 }
+
+// WALReplicaProvider supplies the serviceable WAL replica topology discovered
+// from StreamingCoord. It is optional during rolling upgrade and tests; when
+// absent, the balancer keeps using the legacy default WAL replica 0.
+type WALReplicaProvider interface {
+	WALReplicaSnapshot(ctx context.Context) *WALReplicaSnapshot
+}
+
+// WALReplicaDemandExecutor materializes read-only WAL replica demand emitted by
+// the QueryView balance policy.
+type WALReplicaDemandExecutor interface {
+	EnsureReadOnlyWALReplica(ctx context.Context, demand WALReplicaDemand) error
+	ReleaseReadOnlyWALReplica(ctx context.Context, release WALReplicaRelease) error
+}

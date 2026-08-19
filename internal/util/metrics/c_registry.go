@@ -40,7 +40,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
-	"github.com/prometheus/common/model"
 	"golang.org/x/exp/maps"
 	"google.golang.org/protobuf/proto"
 
@@ -175,7 +174,7 @@ func (r *CRegistry) Gather() (res []*dto.MetricFamily, err error) {
 }
 
 func parseTextMetrics(metricsStr string) (map[string]*dto.MetricFamily, error) {
-	parser := expfmt.NewTextParser(model.LegacyValidation)
+	var parser expfmt.TextParser
 	return parser.TextToMetricFamilies(strings.NewReader(metricsStr))
 }
 

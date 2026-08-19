@@ -22,14 +22,20 @@ import (
 const testVChannel = "by-dev-rootcoord-dml_0_100v0"
 
 type fakeWALManager struct {
-	pchannel string
-	channel  types.PChannelInfo
-	wal      wal.WAL
-	err      error
+	pchannel     string
+	channel      types.PChannelInfo
+	walReplicaID int64
+	wal          wal.WAL
+	err          error
 }
 
 func (m *fakeWALManager) GetAvailableWAL(channel types.PChannelInfo) (wal.WAL, error) {
+	return m.GetAvailableWALReplica(channel, 0)
+}
+
+func (m *fakeWALManager) GetAvailableWALReplica(channel types.PChannelInfo, walReplicaID int64) (wal.WAL, error) {
 	m.channel = channel
+	m.walReplicaID = walReplicaID
 	return m.wal, m.err
 }
 
@@ -69,7 +75,7 @@ func TestServerGetQueryPlanDelegatesToLocalWALProvider(t *testing.T) {
 	manager := &fakeWALManager{wal: &fakeProviderWAL{plan: &viewpb.QueryPlan{Mvcc: &viewpb.QueryPlanMVCC{GrowingTimetick: 100, TransformingTimetick: 99}}}}
 	server := NewServer(manager)
 
-	resp, err := server.GetQueryPlan(newIncomingPChannelContext("by-dev-rootcoord-dml_0"), &viewpb.GetQueryPlanRequest{
+	resp, err := server.GetQueryPlan(newIncomingPChannelContext("by-dev-rootcoord-dml_0", 2), &viewpb.GetQueryPlanRequest{
 		ShardId: &viewpb.ShardID{ReplicaId: 1, Vchannel: testVChannel},
 	})
 
@@ -77,6 +83,7 @@ func TestServerGetQueryPlanDelegatesToLocalWALProvider(t *testing.T) {
 	assert.Equal(t, uint64(100), resp.GetPlan().GetMvcc().GetGrowingTimetick())
 	assert.Equal(t, uint64(99), resp.GetPlan().GetMvcc().GetTransformingTimetick())
 	assert.Equal(t, types.PChannelInfo{Name: "by-dev-rootcoord-dml_0", Term: 7, AccessMode: types.AccessModeRW}, manager.channel)
+	assert.Equal(t, int64(2), manager.walReplicaID)
 }
 
 func TestServerGetQueryPlanDelegatesToWrappedLocalWALProvider(t *testing.T) {
@@ -137,12 +144,16 @@ func TestToRPCErrorPreservesContextError(t *testing.T) {
 	assert.ErrorIs(t, toRPCError(context.DeadlineExceeded), context.DeadlineExceeded)
 }
 
-func newIncomingPChannelContext(pchannel string) context.Context {
-	outgoing := worknodehandler.EncodeQueryViewPChannelToOutgoingContext(context.Background(), types.PChannelInfo{
+func newIncomingPChannelContext(pchannel string, walReplicaID ...int64) context.Context {
+	replicaID := int64(0)
+	if len(walReplicaID) > 0 {
+		replicaID = walReplicaID[0]
+	}
+	outgoing := worknodehandler.EncodeQueryViewWALReplicaToOutgoingContext(context.Background(), types.PChannelInfo{
 		Name:       pchannel,
 		Term:       7,
 		AccessMode: types.AccessModeRW,
-	})
+	}, replicaID)
 	md, _ := metadata.FromOutgoingContext(outgoing)
 	return metadata.NewIncomingContext(context.Background(), md)
 }

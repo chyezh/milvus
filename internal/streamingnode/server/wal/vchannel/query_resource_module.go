@@ -68,14 +68,16 @@ func (m *VChannelRecoveryModule) queryWALViewLocked(meta *viewpb.QueryViewMeta) 
 	if !ok {
 		return walview.VChannelWALView{}, false
 	}
-	finalCommitsReady := true
-	for _, segment := range m.segments {
-		if !segment.EnsureFinalCommit() {
-			finalCommitsReady = false
+	if !m.readOnlyProjection {
+		finalCommitsReady := true
+		for _, segment := range m.segments {
+			if !segment.EnsureFinalCommit() {
+				finalCommitsReady = false
+			}
 		}
-	}
-	if !finalCommitsReady {
-		return walview.VChannelWALView{}, false
+		if !finalCommitsReady {
+			return walview.VChannelWALView{}, false
+		}
 	}
 	baseTransformTimeTick := m.transformLog.LatestTimeTick()
 	baseGrowingTimeTick := m.dataObservedTimeTick

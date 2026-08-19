@@ -62,6 +62,7 @@ type PChannelRecoveryManager struct {
 
 	config                  PChannelManagerConfig
 	metaAndData             atomic.Bool
+	readOnlyProjection      atomic.Bool
 	streamManager           *transformlog.StreamManager
 	queryTransformLogStream wal.TransformLogStream
 	queryDispatcher         *queryresource.Dispatcher
@@ -81,7 +82,7 @@ func NewPChannelRecoveryManager(config PChannelManagerConfig) (*PChannelRecovery
 		streamManager:      transformlog.NewStreamManager(config.PChannel),
 		queryDispatcher:    queryresource.NewDispatcher(4),
 	}
-	queryTransformLogStream, err := manager.streamManager.AcquireStream(context.Background(), config.PChannel)
+	queryTransformLogStream, err := manager.streamManager.AcquireStream(context.Background(), config.PChannel, 0)
 	if err != nil {
 		manager.queryDispatcher.Close()
 		return nil, err
@@ -176,6 +177,17 @@ func (m *PChannelRecoveryManager) SwitchIntoMetaAndData() moduleapi.ModuleSnapsh
 		return true
 	})
 	return aggregateModuleSnapshots(snapshots)
+}
+
+func (m *PChannelRecoveryManager) SwitchIntoReadOnlyProjection() {
+	if m == nil {
+		return
+	}
+	m.readOnlyProjection.Store(true)
+	m.modules.Range(func(_ string, module *VChannelRecoveryModule) bool {
+		module.SwitchIntoReadOnlyProjection()
+		return true
+	})
 }
 
 func aggregateModuleSnapshots(snapshots []moduleapi.ModuleSnapshot) moduleapi.ModuleSnapshot {
@@ -294,8 +306,8 @@ func (m *PChannelRecoveryManager) Module(vchannel string) *VChannelRecoveryModul
 	return module
 }
 
-func (m *PChannelRecoveryManager) AcquireStream(ctx context.Context, pchannel string) (wal.TransformLogStream, error) {
-	return m.streamManager.AcquireStream(ctx, pchannel)
+func (m *PChannelRecoveryManager) AcquireStream(ctx context.Context, pchannel string, walReplicaID int64) (wal.TransformLogStream, error) {
+	return m.streamManager.AcquireStream(ctx, pchannel, walReplicaID)
 }
 
 func (m *PChannelRecoveryManager) Acquire(req snview.AcquireResource) {
@@ -355,6 +367,9 @@ func (m *PChannelRecoveryManager) Close() {
 	if m.queryTransformLogStream != nil {
 		_ = m.queryTransformLogStream.Close()
 	}
+	if m.streamManager != nil {
+		m.streamManager.Close()
+	}
 	if m.queryDispatcher != nil {
 		m.queryDispatcher.Close()
 	}
@@ -406,10 +421,15 @@ func (m *PChannelRecoveryManager) moduleForMessage(msg message.ImmutableMessage)
 	if m.metaAndData.Load() {
 		module.SwitchIntoMetaAndData()
 		switched = true
+	} else if m.readOnlyProjection.Load() {
+		module.SwitchIntoReadOnlyProjection()
+		switched = true
 	}
 	module, loaded := m.modules.GetOrInsert(vchannel, module)
 	if !loaded && !switched && m.metaAndData.Load() {
 		module.SwitchIntoMetaAndData()
+	} else if !loaded && !switched && m.readOnlyProjection.Load() {
+		module.SwitchIntoReadOnlyProjection()
 	}
 	if !loaded {
 		m.syncTransformLogStream(module)

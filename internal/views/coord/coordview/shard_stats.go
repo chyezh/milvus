@@ -19,6 +19,14 @@ type ShardStats struct {
 	// Zero when no view is currently Up.
 	UpLoadInfoVersion uint64
 
+	// UpWALReplicaID is the WAL replica binding of the current Up view.
+	// Zero when no view is currently Up, which is also the legacy default replica.
+	UpWALReplicaID int64
+
+	// WALReplicaDependencies records WAL replica bindings used by active
+	// QueryViews that still block WAL replica removal.
+	WALReplicaDependencies map[int64]struct{}
+
 	// PreparingVersion is the version of the current Preparing or Ready view,
 	// if any. Nil when there is no in-flight view.
 	PreparingVersion *qviews.QueryViewVersion
@@ -31,6 +39,16 @@ type ShardStats struct {
 	// receive Down and the loaded segments are still more reusable than
 	// Preparing placements. Dropping and Dropped views are excluded.
 	Segments map[int64]*SegmentStats
+}
+
+// DependsOnWALReplica returns whether this shard still has an active QueryView
+// bound to the given WAL replica.
+func (s *ShardStats) DependsOnWALReplica(walReplicaID int64) bool {
+	if s == nil {
+		return false
+	}
+	_, ok := s.WALReplicaDependencies[walReplicaID]
+	return ok
 }
 
 // SegmentState is the per-node segment progress observed by Coord. Larger

@@ -56,6 +56,11 @@ func TestClassifyTransformLogMessage(t *testing.T) {
 			kind: TransformLogKindBarrier,
 		},
 		{
+			name: "time tick",
+			msg:  newTransformLogTestTimeTickMessage(t, 45),
+			kind: TransformLogKindBarrier,
+		},
+		{
 			name: "insert",
 			msg:  newTransformLogTxnInsertMessage(t, 50),
 			kind: TransformLogKindNone,
@@ -149,6 +154,23 @@ func newTransformLogTestRecoveryBarrierMessage(t *testing.T, timetick uint64) me
 	mutable := message.NewRecoveryBarrierMessageBuilderV2().
 		WithHeader(&message.RecoveryBarrierMessageHeader{}).
 		WithBody(&message.RecoveryBarrierMessageBody{}).
+		WithAllVChannel().
+		MustBuildMutable()
+	return mutable.WithTimeTick(timetick).
+		WithLastConfirmed(walimplstest.NewTestMessageID(int64(timetick))).
+		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick + 1)))
+}
+
+func newTransformLogTestTimeTickMessage(t *testing.T, timetick uint64) message.ImmutableMessage {
+	t.Helper()
+	mutable := message.NewTimeTickMessageBuilderV1().
+		WithHeader(&message.TimeTickMessageHeader{}).
+		WithBody(&msgpb.TimeTickMsg{
+			Base: &commonpb.MsgBase{
+				MsgType:   commonpb.MsgType_TimeTick,
+				Timestamp: timetick,
+			},
+		}).
 		WithAllVChannel().
 		MustBuildMutable()
 	return mutable.WithTimeTick(timetick).

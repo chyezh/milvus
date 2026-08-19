@@ -88,6 +88,144 @@ func TestShardResolverImplResolvesShardReplicas(t *testing.T) {
 	assert.ElementsMatch(t, []qviews.ShardID{primaryShard, secondaryShard}, replicas.ShardIDs)
 }
 
+func TestShardResolverImplDerivesPrimaryFromWALReplicaAccessMode(t *testing.T) {
+	const collectionID int64 = 100
+	vchannel := funcutil.GetVirtualChannel("p0", collectionID, 0)
+	primaryShard := qviews.ShardID{ReplicaID: 10, VChannel: vchannel}
+	secondaryShard := qviews.ShardID{ReplicaID: 20, VChannel: vchannel}
+
+	cache := buildShardResolverCache(&types.VersionedStreamingNodeAssignments{
+		Version: typeutil.VersionInt64Pair{Global: 1, Local: 1},
+		Assignments: map[int64]types.StreamingNodeAssignment{
+			1: {
+				NodeInfo: types.StreamingNodeInfo{ServerID: 1, Address: "localhost:1"},
+				Channels: map[string]types.PChannelInfo{
+					"p0": {Name: "p0", Term: 1, AccessMode: types.AccessModeRW},
+				},
+				WALReplicas: map[types.ChannelID]types.WALReplicaInfo{
+					{Name: "p0", WALReplicaID: 0}: {
+						ChannelID:  types.ChannelID{Name: "p0", WALReplicaID: 0},
+						AccessMode: types.AccessModeRW,
+						State:      streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+					},
+					{Name: "p0", WALReplicaID: 2}: {
+						ChannelID:  types.ChannelID{Name: "p0", WALReplicaID: 2},
+						AccessMode: types.AccessModeRO,
+						State:      streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+					},
+				},
+				ShardAssignment: types.ShardAssignmentInfo{
+					PChannelAssignments: []types.PChannelShardAssignment{
+						{
+							PChannel: "p0",
+							Entries: []types.ShardAssignmentEntry{
+								{CollectionID: collectionID, ShardIndex: 0, ReplicaID: primaryShard.ReplicaID, WALReplicaID: 0},
+								{CollectionID: collectionID, ShardIndex: 0, ReplicaID: secondaryShard.ReplicaID, WALReplicaID: 2},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	replicas := cache.shardReplicas[collectionVChannelKey{collectionID: collectionID, vchannel: vchannel}]
+	require.NotNil(t, replicas)
+	assert.Equal(t, primaryShard, replicas.PrimaryShardID)
+	assert.ElementsMatch(t, []qviews.ShardID{primaryShard, secondaryShard}, replicas.ShardIDs)
+}
+
+func TestShardResolverImplRequiresAssignedRWWALReplicaForPrimary(t *testing.T) {
+	const collectionID int64 = 100
+	vchannel := funcutil.GetVirtualChannel("p0", collectionID, 0)
+	rwShard := qviews.ShardID{ReplicaID: 10, VChannel: vchannel}
+	roShard := qviews.ShardID{ReplicaID: 20, VChannel: vchannel}
+
+	cache := buildShardResolverCache(&types.VersionedStreamingNodeAssignments{
+		Version: typeutil.VersionInt64Pair{Global: 1, Local: 1},
+		Assignments: map[int64]types.StreamingNodeAssignment{
+			1: {
+				NodeInfo: types.StreamingNodeInfo{ServerID: 1, Address: "localhost:1"},
+				WALReplicas: map[types.ChannelID]types.WALReplicaInfo{
+					{Name: "p0", WALReplicaID: 1}: {
+						ChannelID:  types.ChannelID{Name: "p0", WALReplicaID: 1},
+						AccessMode: types.AccessModeRW,
+						State:      streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNING,
+					},
+					{Name: "p0", WALReplicaID: 2}: {
+						ChannelID:  types.ChannelID{Name: "p0", WALReplicaID: 2},
+						AccessMode: types.AccessModeRO,
+						State:      streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+					},
+				},
+				ShardAssignment: types.ShardAssignmentInfo{
+					PChannelAssignments: []types.PChannelShardAssignment{
+						{
+							PChannel: "p0",
+							Entries: []types.ShardAssignmentEntry{
+								{CollectionID: collectionID, ShardIndex: 0, ReplicaID: rwShard.ReplicaID, WALReplicaID: 1},
+								{CollectionID: collectionID, ShardIndex: 0, ReplicaID: roShard.ReplicaID, WALReplicaID: 2},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	replicas := cache.shardReplicas[collectionVChannelKey{collectionID: collectionID, vchannel: vchannel}]
+	require.NotNil(t, replicas)
+	assert.Equal(t, qviews.ShardID{}, replicas.PrimaryShardID)
+	assert.ElementsMatch(t, []qviews.ShardID{rwShard, roShard}, replicas.ShardIDs)
+}
+
+func TestShardResolverImplKeepsLastServiceableShardDuringWALPrimaryTransition(t *testing.T) {
+	const collectionID int64 = 100
+	vchannel := funcutil.GetVirtualChannel("p0", collectionID, 0)
+	primaryShard := qviews.ShardID{ReplicaID: 10, VChannel: vchannel}
+	secondaryShard := qviews.ShardID{ReplicaID: 20, VChannel: vchannel}
+	watcher := newControlledAssignmentWatcher()
+	resolver := NewShardResolverImpl(watcher)
+	defer resolver.Close()
+
+	watcher.push(t, walReplicaAssignment(collectionID, "p0", primaryShard, 0, secondaryShard, 2))
+	replicas, err := resolver.ResolveShard(context.Background(), collectionID, vchannel)
+	require.NoError(t, err)
+	require.Equal(t, primaryShard, replicas.PrimaryShardID)
+	require.ElementsMatch(t, []qviews.ShardID{primaryShard, secondaryShard}, replicas.ShardIDs)
+
+	watcher.push(t, &types.VersionedStreamingNodeAssignments{
+		Version: typeutil.VersionInt64Pair{Global: 1, Local: 2},
+		Assignments: map[int64]types.StreamingNodeAssignment{
+			2: {
+				NodeInfo: types.StreamingNodeInfo{ServerID: 2, Address: "localhost:2"},
+				WALReplicas: map[types.ChannelID]types.WALReplicaInfo{
+					{Name: "p0", WALReplicaID: 2}: {
+						ChannelID:  types.ChannelID{Name: "p0", WALReplicaID: 2},
+						AccessMode: types.AccessModeRO,
+						State:      streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+					},
+				},
+				ShardAssignment: types.ShardAssignmentInfo{
+					PChannelAssignments: []types.PChannelShardAssignment{
+						{
+							PChannel: "p0",
+							Entries: []types.ShardAssignmentEntry{
+								{CollectionID: collectionID, ShardIndex: 0, ReplicaID: secondaryShard.ReplicaID, WALReplicaID: 2},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	replicas, err = resolver.ResolveShard(context.Background(), collectionID, vchannel)
+	require.NoError(t, err)
+	assert.Equal(t, primaryShard, replicas.PrimaryShardID)
+	assert.ElementsMatch(t, []qviews.ShardID{primaryShard, secondaryShard}, replicas.ShardIDs)
+}
+
 func TestShardResolverImplIgnoresShardAssignmentsForUnknownPChannel(t *testing.T) {
 	resolver := NewShardResolverImpl(&staticAssignmentWatcher{
 		assignments: []*types.VersionedStreamingNodeAssignments{
@@ -254,6 +392,39 @@ func (w *waitableAssignmentWatcher) ReportAssignmentError(ctx context.Context, p
 	return nil
 }
 
+type controlledAssignmentWatcher struct {
+	assignments chan *types.VersionedStreamingNodeAssignments
+	acks        chan error
+}
+
+func newControlledAssignmentWatcher() *controlledAssignmentWatcher {
+	return &controlledAssignmentWatcher{
+		assignments: make(chan *types.VersionedStreamingNodeAssignments),
+		acks:        make(chan error),
+	}
+}
+
+func (w *controlledAssignmentWatcher) push(t *testing.T, assignment *types.VersionedStreamingNodeAssignments) {
+	t.Helper()
+	w.assignments <- assignment
+	require.NoError(t, <-w.acks)
+}
+
+func (w *controlledAssignmentWatcher) AssignmentDiscover(ctx context.Context, cb func(*types.VersionedStreamingNodeAssignments) error) error {
+	for {
+		select {
+		case assignment := <-w.assignments:
+			w.acks <- cb(assignment)
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
+}
+
+func (w *controlledAssignmentWatcher) ReportAssignmentError(ctx context.Context, pchannel types.PChannelInfo, err error) error {
+	return nil
+}
+
 func versionedAssignment(
 	serverID int64,
 	address string,
@@ -277,6 +448,61 @@ func versionedAssignment(
 							PChannel: pchannel,
 							Entries: []types.ShardAssignmentEntry{
 								{CollectionID: collectionID, ShardIndex: shardIndex, ReplicaID: replicaID},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func walReplicaAssignment(
+	collectionID int64,
+	pchannel string,
+	primaryShard qviews.ShardID,
+	primaryWALReplicaID int64,
+	secondaryShard qviews.ShardID,
+	secondaryWALReplicaID int64,
+) *types.VersionedStreamingNodeAssignments {
+	return &types.VersionedStreamingNodeAssignments{
+		Version: typeutil.VersionInt64Pair{Global: 1, Local: 1},
+		Assignments: map[int64]types.StreamingNodeAssignment{
+			1: {
+				NodeInfo: types.StreamingNodeInfo{ServerID: 1, Address: "localhost:1"},
+				WALReplicas: map[types.ChannelID]types.WALReplicaInfo{
+					{Name: pchannel, WALReplicaID: primaryWALReplicaID}: {
+						ChannelID:  types.ChannelID{Name: pchannel, WALReplicaID: primaryWALReplicaID},
+						AccessMode: types.AccessModeRW,
+						State:      streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+					},
+				},
+				ShardAssignment: types.ShardAssignmentInfo{
+					PChannelAssignments: []types.PChannelShardAssignment{
+						{
+							PChannel: pchannel,
+							Entries: []types.ShardAssignmentEntry{
+								{CollectionID: collectionID, ShardIndex: 0, ReplicaID: primaryShard.ReplicaID, WALReplicaID: primaryWALReplicaID},
+							},
+						},
+					},
+				},
+			},
+			2: {
+				NodeInfo: types.StreamingNodeInfo{ServerID: 2, Address: "localhost:2"},
+				WALReplicas: map[types.ChannelID]types.WALReplicaInfo{
+					{Name: pchannel, WALReplicaID: secondaryWALReplicaID}: {
+						ChannelID:  types.ChannelID{Name: pchannel, WALReplicaID: secondaryWALReplicaID},
+						AccessMode: types.AccessModeRO,
+						State:      streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+					},
+				},
+				ShardAssignment: types.ShardAssignmentInfo{
+					PChannelAssignments: []types.PChannelShardAssignment{
+						{
+							PChannel: pchannel,
+							Entries: []types.ShardAssignmentEntry{
+								{CollectionID: collectionID, ShardIndex: 0, ReplicaID: secondaryShard.ReplicaID, WALReplicaID: secondaryWALReplicaID},
 							},
 						},
 					},

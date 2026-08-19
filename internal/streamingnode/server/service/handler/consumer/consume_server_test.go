@@ -51,14 +51,14 @@ func TestCreateConsumeServer(t *testing.T) {
 	ctx := metadata.NewIncomingContext(context.Background(), meta)
 	grpcConsumeServer.ExpectedCalls = nil
 	grpcConsumeServer.EXPECT().Context().Return(ctx)
-	manager.EXPECT().GetAvailableWAL(types.PChannelInfo{Name: "test", Term: int64(1)}).Return(nil, errors.New("wal not exist"))
+	manager.EXPECT().GetAvailableWALReplica(types.PChannelInfo{Name: "test", Term: int64(1)}, int64(0)).Return(nil, errors.New("wal not exist"))
 	assertCreateConsumeServerFail(t, manager, grpcConsumeServer)
 
 	// Return error if send created failed.
 	l := mock_wal.NewMockWAL(t)
 	manager.ExpectedCalls = nil
 	l.EXPECT().WALName().Return(message.WALNameTest)
-	manager.EXPECT().GetAvailableWAL(types.PChannelInfo{Name: "test", Term: int64(1)}).Return(l, nil)
+	manager.EXPECT().GetAvailableWALReplica(types.PChannelInfo{Name: "test", Term: int64(1)}, int64(0)).Return(l, nil)
 	grpcConsumeServer.EXPECT().Send(mock.Anything).Return(errors.New("send created failed"))
 	assertCreateConsumeServerFail(t, manager, grpcConsumeServer)
 
@@ -81,7 +81,7 @@ func TestCreateConsumeServer(t *testing.T) {
 	l.EXPECT().Read(mock.Anything, mock.Anything).Return(nil, errors.New("create scanner failed"))
 	l.EXPECT().WALName().Return(message.WALNameTest)
 	manager.ExpectedCalls = nil
-	manager.EXPECT().GetAvailableWAL(types.PChannelInfo{Name: "test", Term: int64(1)}).Return(l, nil)
+	manager.EXPECT().GetAvailableWALReplica(types.PChannelInfo{Name: "test", Term: int64(1)}, int64(0)).Return(l, nil)
 	assertCreateConsumeServerFail(t, manager, grpcConsumeServer)
 
 	// Return error if send created failed.
@@ -108,6 +108,44 @@ func TestCreateConsumeServer(t *testing.T) {
 		Name: "test",
 		Term: 1,
 	})
+	server, err := CreateConsumeServer(manager, grpcConsumeServer)
+	assert.NoError(t, err)
+	assert.NotNil(t, server)
+}
+
+func TestCreateConsumeServerUsesWALReplicaID(t *testing.T) {
+	resource.InitForTest(t)
+	manager := mock_walmanager.NewMockManager(t)
+	grpcConsumeServer := mock_streamingpb.NewMockStreamingNodeHandlerService_ConsumeServer(t)
+
+	meta, _ := metadata.FromOutgoingContext(contextutil.WithCreateConsumer(context.Background(), &streamingpb.CreateConsumerRequest{
+		Pchannel: &streamingpb.PChannelInfo{
+			Name:       "test",
+			Term:       3,
+			AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+		},
+		WalReplicaId: 2,
+	}))
+	ctx := metadata.NewIncomingContext(context.Background(), meta)
+	grpcConsumeServer.EXPECT().Context().Return(ctx).Maybe()
+	grpcConsumeServer.EXPECT().Send(mock.Anything).Return(nil)
+	grpcConsumeServer.EXPECT().Recv().Return(&streamingpb.ConsumeRequest{
+		Request: &streamingpb.ConsumeRequest_CreateVchannelConsumer{
+			CreateVchannelConsumer: &streamingpb.CreateVChannelConsumerRequest{
+				Vchannel: "test_100v0",
+			},
+		},
+	}, nil)
+
+	scanner := mock_wal.NewMockScanner(t)
+	w := mock_wal.NewMockWAL(t)
+	w.EXPECT().WALName().Return(message.WALNameTest)
+	w.EXPECT().Read(mock.Anything, mock.Anything).Return(scanner, nil)
+	w.EXPECT().Channel().Return(types.PChannelInfo{Name: "test", Term: 3, AccessMode: types.AccessModeRW})
+	manager.EXPECT().
+		GetAvailableWALReplica(types.PChannelInfo{Name: "test", Term: 3, AccessMode: types.AccessModeRW}, int64(2)).
+		Return(w, nil)
+
 	server, err := CreateConsumeServer(manager, grpcConsumeServer)
 	assert.NoError(t, err)
 	assert.NotNil(t, server)

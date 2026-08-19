@@ -17,7 +17,8 @@ import (
 )
 
 type mockWALManager struct {
-	t *testing.T
+	t            *testing.T
+	walReplicaID int64
 }
 
 func (m *mockWALManager) Metrics() (*types.StreamingNodeMetrics, error) {
@@ -25,10 +26,15 @@ func (m *mockWALManager) Metrics() (*types.StreamingNodeMetrics, error) {
 }
 
 func (m *mockWALManager) GetAvailableWAL(channel types.PChannelInfo) (wal.WAL, error) {
+	return m.GetAvailableWALReplica(channel, 0)
+}
+
+func (m *mockWALManager) GetAvailableWALReplica(_ types.PChannelInfo, walReplicaID int64) (wal.WAL, error) {
+	m.walReplicaID = walReplicaID
 	l := mock_wal.NewMockWAL(m.t)
-	l.EXPECT().Append(mock.Anything, mock.Anything).Return(&types.AppendResult{}, nil)
-	l.EXPECT().AppendAsync(mock.Anything, mock.Anything, mock.Anything).Return()
-	l.EXPECT().Read(mock.Anything, mock.Anything).Return(mock_wal.NewMockScanner(m.t), nil)
+	l.EXPECT().Append(mock.Anything, mock.Anything).Return(&types.AppendResult{}, nil).Maybe()
+	l.EXPECT().AppendAsync(mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+	l.EXPECT().Read(mock.Anything, mock.Anything).Return(mock_wal.NewMockScanner(m.t), nil).Maybe()
 	return l, nil
 }
 
@@ -43,6 +49,7 @@ func TestGetLocalAvailableWAL(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, walInstance)
 	assert.True(t, IsLocal(walInstance))
+	assert.Equal(t, int64(0), manager.walReplicaID)
 
 	msg, _ := message.NewTimeTickMessageBuilderV1().
 		WithAllVChannel().
@@ -56,4 +63,18 @@ func TestGetLocalAvailableWAL(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, walInstance)
 	assert.True(t, IsLocal(s))
+}
+
+func TestGetLocalAvailableWALReplica(t *testing.T) {
+	paramtable.Init()
+	paramtable.SetLocalComponentEnabled(typeutil.StreamingNodeRole)
+	ResetRegisterLocalWALManager()
+
+	manager := &mockWALManager{t: t}
+	RegisterLocalWALManager(manager)
+
+	walInstance, err := GetLocalAvailableWALReplica(types.PChannelInfo{}, 2)
+	assert.NoError(t, err)
+	assert.NotNil(t, walInstance)
+	assert.Equal(t, int64(2), manager.walReplicaID)
 }

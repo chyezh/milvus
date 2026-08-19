@@ -15,7 +15,9 @@ import (
 	"github.com/milvus-io/milvus/internal/views/coord/loadmgr"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 )
 
 // --- fake providers used throughout the tests ---
@@ -95,6 +97,38 @@ func (f *fakeDataViewProvider) SegmentSnapshot(_ context.Context, segmentIDs []i
 	return newMapSegmentSnapshot(segments)
 }
 
+type fakeWALReplicaProvider struct {
+	snapshot *WALReplicaSnapshot
+}
+
+func (f *fakeWALReplicaProvider) WALReplicaSnapshot(context.Context) *WALReplicaSnapshot {
+	return f.snapshot
+}
+
+type fakeWALReplicaDemandExecutor struct {
+	demands  []WALReplicaDemand
+	releases []WALReplicaRelease
+	err      error
+}
+
+func (f *fakeWALReplicaDemandExecutor) EnsureReadOnlyWALReplica(_ context.Context, demand WALReplicaDemand) error {
+	f.demands = append(f.demands, demand)
+	return f.err
+}
+
+func (f *fakeWALReplicaDemandExecutor) ReleaseReadOnlyWALReplica(_ context.Context, release WALReplicaRelease) error {
+	f.releases = append(f.releases, release)
+	return f.err
+}
+
+type fakeBalancePolicy struct {
+	plan *BalancePlan
+}
+
+func (p fakeBalancePolicy) Plan(*BalancerSnapshot, []qviews.ShardID) *BalancePlan {
+	return p.plan
+}
+
 // --- fake catalog/syncer for the registry and store ---
 
 type stubCatalog struct{}
@@ -107,10 +141,23 @@ func (s *stubCatalog) SaveQueryViews(ctx context.Context, views []*viewpb.QueryV
 	return nil
 }
 
+type staticQueryViewCatalog struct {
+	views []*viewpb.QueryViewOfShard
+}
+
+func (s *staticQueryViewCatalog) ListQueryViews(ctx context.Context) ([]*viewpb.QueryViewOfShard, error) {
+	return s.views, nil
+}
+
+func (s *staticQueryViewCatalog) SaveQueryViews(ctx context.Context, views []*viewpb.QueryViewOfShard) error {
+	return nil
+}
+
 type stubSyncer struct{}
 
 func (s *stubSyncer) SyncViews(ctx context.Context, group syncer.SyncGroup) error { return nil }
 func (s *stubSyncer) Close() error                                                { return nil }
+func (s *stubSyncer) HasWALReplicaDependency(types.ChannelID) bool                { return false }
 
 // --- test helpers ---
 
@@ -138,6 +185,17 @@ func emptyRegistry(t *testing.T) *coordview.ShardViewRegistry {
 // storeWithConfig returns a LoadConfigStore seeded via Recover with one
 // collection + one replica + given partitions.
 func storeWithConfig(t *testing.T, collectionID, replicaID int64, partitions []int64, nodes []int64) *loadmgr.LoadConfigStore {
+	return storeWithConfigInResourceGroup(t, collectionID, replicaID, partitions, nodes, "")
+}
+
+func storeWithConfigInResourceGroup(
+	t *testing.T,
+	collectionID int64,
+	replicaID int64,
+	partitions []int64,
+	nodes []int64,
+	resourceGroup string,
+) *loadmgr.LoadConfigStore {
 	t.Helper()
 	catalog := mocks.NewQueryCoordCatalog(t)
 	catalog.EXPECT().GetCollections(mock.Anything).Return([]*querypb.CollectionLoadInfo{
@@ -150,7 +208,7 @@ func storeWithConfig(t *testing.T, collectionID, replicaID int64, partitions []i
 	catalog.EXPECT().GetPartitions(mock.Anything, mock.Anything).
 		Return(map[int64][]*querypb.PartitionLoadInfo{collectionID: parts}, nil).Once()
 	catalog.EXPECT().GetReplicas(mock.Anything).Return([]*querypb.Replica{
-		{ID: replicaID, CollectionID: collectionID, Nodes: nodes},
+		{ID: replicaID, CollectionID: collectionID, Nodes: nodes, ResourceGroup: resourceGroup},
 	}, nil).Once()
 	store, err := loadmgr.RecoverLoadConfigStore(context.Background(), catalog)
 	require.NoError(t, err)
@@ -204,6 +262,76 @@ func TestSnapshotBuilder_EmptyInputs(t *testing.T) {
 	assert.Equal(t, uint64(1), snap.DataViewSnapshot.Version())
 	assert.Empty(t, snap.Nodes)
 	assert.NotNil(t, snap.Config)
+}
+
+func TestSnapshotBuilder_AttachesWALReplicaSnapshot(t *testing.T) {
+	store := emptyLoadConfigStore(t)
+	reg := emptyRegistry(t)
+	walSnapshot := NewWALReplicaSnapshot([]types.WALReplicaInfo{
+		{
+			ChannelID:     types.ChannelID{Name: "p0", WALReplicaID: 2},
+			AccessMode:    types.AccessModeRO,
+			ResourceGroup: "rg1",
+			State:         streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+		},
+	})
+
+	builder := NewSnapshotBuilder(
+		store,
+		reg,
+		&fakeNodeProvider{infos: map[int64]*NodeInfo{}},
+		&fakeDataViewProvider{},
+		&BalanceConfig{},
+	)
+	builder.SetWALReplicaProvider(&fakeWALReplicaProvider{snapshot: walSnapshot})
+
+	snap := buildFullSnapshot(builder)
+
+	assert.Same(t, walSnapshot, snap.WALReplicaSnapshot)
+}
+
+func TestSnapshotBuilder_AttachesPendingWALReplicaDependencies(t *testing.T) {
+	store := emptyLoadConfigStore(t)
+	reg := emptyRegistry(t)
+	shardID := qviews.ShardID{ReplicaID: 1, VChannel: "by-dev-rootcoord-dml_0_1v0"}
+	mgr := reg.Ensure(shardID)
+	dataView := &viewpb.DataViewOfCollection{
+		CollectionId: 1,
+		DataVersion:  &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 1},
+		Shards:       []*viewpb.DataViewOfShard{{Vchannel: shardID.VChannel}},
+	}
+	qvBuilder := qviews.NewQueryViewAtCoordBuilder(shardID.ReplicaID, dataView, shardID.VChannel)
+	qvBuilder.SetWALReplicaID(2)
+	qvBuilder.SetAssignments(map[int64]map[int64][]int64{1: {10: {101}}})
+	require.NoError(t, mgr.AddPreparing(context.Background(), qvBuilder))
+
+	walSnapshot := NewWALReplicaSnapshot([]types.WALReplicaInfo{
+		{
+			ChannelID:     types.ChannelID{Name: "by-dev-rootcoord-dml_0", WALReplicaID: 2},
+			AccessMode:    types.AccessModeRO,
+			ResourceGroup: "rg1",
+			State:         streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+		},
+		{
+			ChannelID:     types.ChannelID{Name: "by-dev-rootcoord-dml_0", WALReplicaID: 3},
+			AccessMode:    types.AccessModeRO,
+			ResourceGroup: "rg1",
+			State:         streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+		},
+	})
+	builder := NewSnapshotBuilder(
+		store,
+		reg,
+		&fakeNodeProvider{infos: map[int64]*NodeInfo{}},
+		&fakeDataViewProvider{},
+		&BalanceConfig{},
+	)
+	builder.SetWALReplicaProvider(&fakeWALReplicaProvider{snapshot: walSnapshot})
+
+	snap := buildFullSnapshot(builder)
+
+	assert.True(t, snap.HasWALReplicaDependency(types.ChannelID{Name: "by-dev-rootcoord-dml_0", WALReplicaID: 2}))
+	assert.False(t, snap.HasWALReplicaDependency(types.ChannelID{Name: "by-dev-rootcoord-dml_0", WALReplicaID: 3}))
 }
 
 func TestSnapshotBuilder_NodeInfosCopied(t *testing.T) {

@@ -8,12 +8,15 @@ import (
 	"github.com/stretchr/testify/mock"
 	"google.golang.org/protobuf/types/known/anypb"
 
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus/internal/flushcommon/metacache"
 	"github.com/milvus-io/milvus/internal/flushcommon/syncmgr"
 	"github.com/milvus-io/milvus/internal/flushcommon/writebuffer"
 	"github.com/milvus-io/milvus/internal/mocks/streamingnode/server/mock_wal"
 	"github.com/milvus-io/milvus/internal/mocks/streamingnode/server/mock_walmanager"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 )
@@ -75,6 +78,70 @@ func registerReleaseManualFlushHandoffProvider(t *testing.T, channel string) *re
 	return provider
 }
 
+func TestHandlerServiceGetReplicateCheckpointUsesWALReplicaID(t *testing.T) {
+	manager := mock_walmanager.NewMockManager(t)
+	w := mock_wal.NewMockWAL(t)
+	w.EXPECT().GetReplicateCheckpoint().Return(&wal.ReplicateCheckpoint{
+		ClusterID: "cluster",
+		PChannel:  "pchannel",
+		TimeTick:  100,
+	}, nil)
+	manager.EXPECT().
+		GetAvailableWALReplica(types.PChannelInfo{Name: "pchannel", Term: 3, AccessMode: types.AccessModeRW}, int64(2)).
+		Return(w, nil)
+
+	service := NewHandlerService(manager)
+	resp, err := service.GetReplicateCheckpoint(context.Background(), &streamingpb.GetReplicateCheckpointRequest{
+		Pchannel: &streamingpb.PChannelInfo{
+			Name:       "pchannel",
+			Term:       3,
+			AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+		},
+		WalReplicaId: 2,
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, &commonpb.ReplicateCheckpoint{
+		ClusterId: "cluster",
+		Pchannel:  "pchannel",
+		TimeTick:  100,
+	}, resp.GetCheckpoint())
+}
+
+func TestHandlerServiceGetSalvageCheckpointUsesWALReplicaID(t *testing.T) {
+	manager := mock_walmanager.NewMockManager(t)
+	w := mock_wal.NewMockWAL(t)
+	w.EXPECT().GetSalvageCheckpoint().Return([]*wal.ReplicateCheckpoint{
+		{
+			ClusterID: "cluster",
+			PChannel:  "pchannel",
+			TimeTick:  100,
+		},
+	})
+	manager.EXPECT().
+		GetAvailableWALReplica(types.PChannelInfo{Name: "pchannel", Term: 3, AccessMode: types.AccessModeRW}, int64(2)).
+		Return(w, nil)
+
+	service := NewHandlerService(manager)
+	resp, err := service.GetSalvageCheckpoint(context.Background(), &streamingpb.GetSalvageCheckpointRequest{
+		Pchannel: &streamingpb.PChannelInfo{
+			Name:       "pchannel",
+			Term:       3,
+			AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+		},
+		WalReplicaId: 2,
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, []*commonpb.ReplicateCheckpoint{
+		{
+			ClusterId: "cluster",
+			Pchannel:  "pchannel",
+			TimeTick:  100,
+		},
+	}, resp.GetCheckpoints())
+}
+
 func TestReleaseManualFlushPreparer(t *testing.T) {
 	ctx := context.Background()
 	releaseSegmentIDs := []int64{1001}
@@ -98,7 +165,7 @@ func TestReleaseManualFlushPreparer(t *testing.T) {
 	}, nil)
 
 	manager := mock_walmanager.NewMockManager(t)
-	manager.EXPECT().GetAvailableWAL(mock.Anything).Return(wal, nil)
+	manager.EXPECT().GetAvailableWALReplica(mock.Anything, int64(0)).Return(wal, nil)
 
 	wbManager := writebuffer.NewMockBufferManager(t)
 	wbManager.EXPECT().AllowGrowingSourceFlush("vchannel").Return(true)
@@ -114,10 +181,50 @@ func TestReleaseManualFlushPreparer(t *testing.T) {
 		}, nil)
 
 	preparer := NewReleaseManualFlushPreparer(manager, wbManager)
-	prepared, err := preparer.PrepareReleaseManualFlush(ctx, types.PChannelInfo{Name: "pchannel", Term: 1}, 10, "vchannel", releaseSegmentIDs)
+	prepared, err := preparer.PrepareReleaseManualFlush(ctx, types.PChannelInfo{Name: "pchannel", Term: 1}, 0, 10, "vchannel", releaseSegmentIDs)
 
 	assert.NoError(t, err)
 	assert.True(t, prepared)
+	assert.Equal(t, releaseSegmentIDs, handoffProvider.beginSegmentIDs)
+	assert.False(t, handoffProvider.rolledBack)
+}
+
+func TestReleaseManualFlushPreparerUsesWALReplicaID(t *testing.T) {
+	ctx := context.Background()
+	releaseSegmentIDs := []int64{1001}
+	handoffProvider := registerReleaseManualFlushHandoffProvider(t, "vchannel")
+
+	extra, err := anypb.New(&message.ManualFlushExtraResponse{})
+	assert.NoError(t, err)
+
+	w := mock_wal.NewMockWAL(t)
+	w.EXPECT().Append(mock.Anything, mock.Anything).Return(&types.AppendResult{
+		TimeTick: 200,
+		Extra:    extra,
+	}, nil)
+
+	manager := mock_walmanager.NewMockManager(t)
+	manager.EXPECT().
+		GetAvailableWALReplica(types.PChannelInfo{Name: "pchannel", Term: 1, AccessMode: types.AccessModeRW}, int64(2)).
+		Return(w, nil)
+
+	wbManager := writebuffer.NewMockBufferManager(t)
+	wbManager.EXPECT().AllowGrowingSourceFlush("vchannel").Return(true)
+	wbManager.EXPECT().
+		GetGrowingFlushProgress(mock.Anything, "vchannel", releaseSegmentIDs, uint64(200)).
+		Return([]writebuffer.GrowingFlushSegmentProgress{
+			{
+				SegmentID:          1001,
+				NeedReleaseHandoff: false,
+				SourceMode:         metacache.FlushSourceUnknown,
+			},
+		}, nil)
+
+	preparer := NewReleaseManualFlushPreparer(manager, wbManager)
+	prepared, err := preparer.PrepareReleaseManualFlush(ctx, types.PChannelInfo{Name: "pchannel", Term: 1, AccessMode: types.AccessModeRW}, 2, 10, "vchannel", releaseSegmentIDs)
+
+	assert.NoError(t, err)
+	assert.False(t, prepared)
 	assert.Equal(t, releaseSegmentIDs, handoffProvider.beginSegmentIDs)
 	assert.False(t, handoffProvider.rolledBack)
 }
@@ -137,7 +244,7 @@ func TestReleaseManualFlushPreparerNoGrowingProgress(t *testing.T) {
 	}, nil)
 
 	manager := mock_walmanager.NewMockManager(t)
-	manager.EXPECT().GetAvailableWAL(mock.Anything).Return(wal, nil)
+	manager.EXPECT().GetAvailableWALReplica(mock.Anything, int64(0)).Return(wal, nil)
 
 	wbManager := writebuffer.NewMockBufferManager(t)
 	wbManager.EXPECT().AllowGrowingSourceFlush("vchannel").Return(true)
@@ -152,7 +259,7 @@ func TestReleaseManualFlushPreparerNoGrowingProgress(t *testing.T) {
 		}, nil)
 
 	preparer := NewReleaseManualFlushPreparer(manager, wbManager)
-	prepared, err := preparer.PrepareReleaseManualFlush(ctx, types.PChannelInfo{Name: "pchannel", Term: 1}, 10, "vchannel", releaseSegmentIDs)
+	prepared, err := preparer.PrepareReleaseManualFlush(ctx, types.PChannelInfo{Name: "pchannel", Term: 1}, 0, 10, "vchannel", releaseSegmentIDs)
 
 	assert.NoError(t, err)
 	assert.False(t, prepared)
@@ -181,7 +288,7 @@ func TestReleaseManualFlushPreparerSkipsManualFlushWhenCurrentSegmentsDoNotNeedH
 		}, nil)
 
 	preparer := NewReleaseManualFlushPreparer(mock_walmanager.NewMockManager(t), wbManager)
-	prepared, err := preparer.PrepareReleaseManualFlush(ctx, types.PChannelInfo{Name: "pchannel", Term: 1}, 10, "vchannel", releaseSegmentIDs)
+	prepared, err := preparer.PrepareReleaseManualFlush(ctx, types.PChannelInfo{Name: "pchannel", Term: 1}, 0, 10, "vchannel", releaseSegmentIDs)
 
 	assert.NoError(t, err)
 	assert.False(t, prepared)
@@ -211,7 +318,7 @@ func TestReleaseManualFlushPreparerPreparesExistingProgressWithoutManualFlush(t 
 		}, nil)
 
 	preparer := NewReleaseManualFlushPreparer(mock_walmanager.NewMockManager(t), wbManager)
-	prepared, err := preparer.PrepareReleaseManualFlush(ctx, types.PChannelInfo{Name: "pchannel", Term: 1}, 10, "vchannel", releaseSegmentIDs)
+	prepared, err := preparer.PrepareReleaseManualFlush(ctx, types.PChannelInfo{Name: "pchannel", Term: 1}, 0, 10, "vchannel", releaseSegmentIDs)
 
 	assert.NoError(t, err)
 	assert.True(t, prepared)
@@ -233,7 +340,7 @@ func TestReleaseManualFlushPreparerSkipsManualFlushForEmptyInitialSegments(t *te
 		Return(nil, nil)
 
 	preparer := NewReleaseManualFlushPreparer(mock_walmanager.NewMockManager(t), wbManager)
-	prepared, err := preparer.PrepareReleaseManualFlush(ctx, types.PChannelInfo{Name: "pchannel", Term: 1}, 10, "vchannel", nil)
+	prepared, err := preparer.PrepareReleaseManualFlush(ctx, types.PChannelInfo{Name: "pchannel", Term: 1}, 0, 10, "vchannel", nil)
 
 	assert.NoError(t, err)
 	assert.False(t, prepared)
@@ -256,7 +363,7 @@ func TestReleaseManualFlushPreparerFencesEmptyInitialSegments(t *testing.T) {
 	}, nil)
 
 	manager := mock_walmanager.NewMockManager(t)
-	manager.EXPECT().GetAvailableWAL(mock.Anything).Return(wal, nil)
+	manager.EXPECT().GetAvailableWALReplica(mock.Anything, int64(0)).Return(wal, nil)
 
 	wbManager := writebuffer.NewMockBufferManager(t)
 	wbManager.EXPECT().AllowGrowingSourceFlush("vchannel").Return(true)
@@ -272,7 +379,7 @@ func TestReleaseManualFlushPreparerFencesEmptyInitialSegments(t *testing.T) {
 		}, nil)
 
 	preparer := NewReleaseManualFlushPreparer(manager, wbManager)
-	prepared, err := preparer.PrepareReleaseManualFlush(ctx, types.PChannelInfo{Name: "pchannel", Term: 1}, 10, "vchannel", nil)
+	prepared, err := preparer.PrepareReleaseManualFlush(ctx, types.PChannelInfo{Name: "pchannel", Term: 1}, 0, 10, "vchannel", nil)
 
 	assert.NoError(t, err)
 	assert.True(t, prepared)
@@ -286,7 +393,7 @@ func TestReleaseManualFlushPreparerSkipNonGrowingSource(t *testing.T) {
 	wbManager.EXPECT().AllowGrowingSourceFlush("vchannel").Return(false)
 
 	preparer := NewReleaseManualFlushPreparer(mock_walmanager.NewMockManager(t), wbManager)
-	prepared, err := preparer.PrepareReleaseManualFlush(ctx, types.PChannelInfo{Name: "pchannel", Term: 1}, 10, "vchannel", []int64{1001})
+	prepared, err := preparer.PrepareReleaseManualFlush(ctx, types.PChannelInfo{Name: "pchannel", Term: 1}, 0, 10, "vchannel", []int64{1001})
 
 	assert.NoError(t, err)
 	assert.False(t, prepared)

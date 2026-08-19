@@ -16,7 +16,7 @@ import (
 // All public methods are concurrent-safe via the internal mutex.
 type qnShardView struct {
 	mu      sync.Mutex
-	views   map[qviews.QueryViewVersion]*qnViewEntry
+	views   map[qviews.QueryViewKey]*qnViewEntry
 	segMgr  SegmentManager
 	onEmpty func() // called (under mu) when the last view entry is removed
 }
@@ -53,7 +53,7 @@ func (s *qnShardView) ApplyViews(views []handler.ApplyView) {
 // applyOneLocked applies a single view. Caller must hold s.mu.
 func (s *qnShardView) applyOneLocked(av *handler.ApplyView) {
 	key := av.View.QueryViewKey()
-	entry, exists := s.views[key.QueryViewVersion]
+	entry, exists := s.views[key]
 	pushedState := av.View.State()
 
 	if !exists {
@@ -67,7 +67,7 @@ func (s *qnShardView) applyOneLocked(av *handler.ApplyView) {
 				qnView.ViewOfQueryNode(),
 			)
 			entry = &qnViewEntry{ApplyView: *av, sm: sm}
-			s.views[key.QueryViewVersion] = entry
+			s.views[key] = entry
 			qvobserve.Observe(context.TODO(), qvobserve.QueryNodeAcquireSegmentsEvent{
 				View:         key,
 				SegmentCount: countViewSegments(qnView.ViewOfQueryNode()),
@@ -79,10 +79,10 @@ func (s *qnShardView) applyOneLocked(av *handler.ApplyView) {
 				Meta: proto.Clone(meta).(*viewpb.QueryViewMeta),
 				View: proto.Clone(qnView.ViewOfQueryNode()).(*viewpb.QueryViewOfQueryNode),
 				OnReady: func(readySegments map[int64][]int64) {
-					s.notifySegmentsReady(key.QueryViewVersion, readySegments)
+					s.notifySegmentsReady(key, readySegments)
 				},
 				OnUnrecoverable: func() {
-					s.notifyUnrecoverable(key.QueryViewVersion)
+					s.notifyUnrecoverable(key)
 				},
 			})
 		case qviews.QueryViewStateDropped:
@@ -120,16 +120,15 @@ func (s *qnShardView) applyOneLocked(av *handler.ApplyView) {
 
 // notifySegmentsReady is called by SegmentManager callback when segments
 // have been loaded. Drives the SM from Preparing → Ready.
-func (s *qnShardView) notifySegmentsReady(version qviews.QueryViewVersion, readySegments map[int64][]int64) {
+func (s *qnShardView) notifySegmentsReady(key qviews.QueryViewKey, readySegments map[int64][]int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	entry, exists := s.views[version]
+	entry, exists := s.views[key]
 	if !exists {
 		return
 	}
 
-	key := entry.View.QueryViewKey()
 	before := entry.sm.State()
 	entry.sm.OnSegmentsReady(readySegments)
 	qvobserve.Observe(context.TODO(), qvobserve.QueryNodeSegmentsReadyEvent{
@@ -146,16 +145,15 @@ func (s *qnShardView) notifySegmentsReady(version qviews.QueryViewVersion, ready
 
 // notifyUnrecoverable is called by SegmentManager callback when a fatal error
 // occurs during segment loading.
-func (s *qnShardView) notifyUnrecoverable(version qviews.QueryViewVersion) {
+func (s *qnShardView) notifyUnrecoverable(key qviews.QueryViewKey) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	entry, exists := s.views[version]
+	entry, exists := s.views[key]
 	if !exists {
 		return
 	}
 
-	key := entry.View.QueryViewKey()
 	before := entry.sm.State()
 	entry.sm.OnUnrecoverable()
 	qvobserve.Observe(context.TODO(), qvobserve.QueryNodeSegmentUnrecoverableEvent{
@@ -171,16 +169,15 @@ func (s *qnShardView) notifyUnrecoverable(version qviews.QueryViewVersion) {
 
 // notifyDropped is called by the SegmentManager Release callback when segment
 // release completes. Drives the SM from Dropping → Dropped.
-func (s *qnShardView) notifyDropped(version qviews.QueryViewVersion) {
+func (s *qnShardView) notifyDropped(key qviews.QueryViewKey) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	entry, exists := s.views[version]
+	entry, exists := s.views[key]
 	if !exists {
 		return
 	}
 
-	key := entry.View.QueryViewKey()
 	before := entry.sm.State()
 	entry.sm.OnDropped()
 	qvobserve.Observe(context.TODO(), qvobserve.QueryNodeReleaseDoneEvent{
@@ -210,11 +207,11 @@ func (s *qnShardView) consumeReportAndCleanup(key qviews.QueryViewKey, entry *qn
 		if entry.queryRefs > 0 {
 			entry.releasePending = true
 		} else {
-			s.releaseQueryResourceLocked(key.QueryViewVersion, entry)
+			s.releaseQueryResourceLocked(key, entry)
 		}
 	}
 	if entry.sm.State() == qviews.QueryViewStateDropped {
-		delete(s.views, key.QueryViewVersion)
+		delete(s.views, key)
 		if len(s.views) == 0 && s.onEmpty != nil {
 			s.onEmpty()
 		}
@@ -241,16 +238,15 @@ func countViewSegments(view *viewpb.QueryViewOfQueryNode) int {
 	return total
 }
 
-func (s *qnShardView) releaseQueryResourceLocked(version qviews.QueryViewVersion, entry *qnViewEntry) {
+func (s *qnShardView) releaseQueryResourceLocked(key qviews.QueryViewKey, entry *qnViewEntry) {
 	entry.releasePending = false
-	key := entry.View.QueryViewKey()
 	qvobserve.Observe(context.TODO(), qvobserve.QueryNodeReleaseSegmentsEvent{
 		View: key,
 	})
 	s.segMgr.Release(ReleaseSegments{
 		Key: key,
 		OnDropped: func() {
-			s.notifyDropped(version)
+			s.notifyDropped(key)
 		},
 	})
 }

@@ -9,7 +9,9 @@ import (
 	"github.com/milvus-io/milvus/internal/views/coord/loadmgr"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 )
 
 // --- helpers ---
@@ -205,6 +207,31 @@ func TestClassify_NodeStopping_Must(t *testing.T) {
 		placement(101, 10, 1, coordview.SegmentStateUp),
 	)
 	snap.Nodes[1] = &BalanceNode{NodeID: 1, Alive: true, Stopping: true}
+	setTestDataSnapshot(snap, 1, qviews.DataVersion{StreamingVersion: 1, CompactVersion: 1}, nil)
+
+	assert.Equal(t, actionMust, classifyShard(snap, shardID))
+}
+
+func TestClassify_UpWALReplicaUnavailable_Must(t *testing.T) {
+	shardID := qviews.ShardID{ReplicaID: 1, VChannel: "by-dev-rootcoord-dml_0_1v0"}
+	cfg := cfgFor(1, 1, []int64{10}, nil)
+	snap := baseSnap(cfg, shardID)
+	stats := testShardStats(
+		ver(1, 1, 1),
+		loadInfoVersion(1),
+		placement(101, 10, 1, coordview.SegmentStateUp),
+	)
+	stats.UpWALReplicaID = 0
+	snap.ShardStatsMap()[shardID] = stats
+	snap.Nodes[1] = &BalanceNode{NodeID: 1, Alive: true, ResourceGroup: "rg1"}
+	snap.WALReplicaSnapshot = NewWALReplicaSnapshot([]types.WALReplicaInfo{
+		{
+			ChannelID:     types.ChannelID{Name: "by-dev-rootcoord-dml_0", WALReplicaID: 1},
+			AccessMode:    types.AccessModeRW,
+			ResourceGroup: "rg1",
+			State:         streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+		},
+	})
 	setTestDataSnapshot(snap, 1, qviews.DataVersion{StreamingVersion: 1, CompactVersion: 1}, nil)
 
 	assert.Equal(t, actionMust, classifyShard(snap, shardID))

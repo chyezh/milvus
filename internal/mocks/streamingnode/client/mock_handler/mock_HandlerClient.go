@@ -122,9 +122,14 @@ func (_c *MockHandlerClient_CreateConsumer_Call) RunAndReturn(run func(context.C
 	return _c
 }
 
-// AcquireTransformLogStream provides a mock function with given fields: ctx, pchannel
-func (_m *MockHandlerClient) AcquireTransformLogStream(ctx context.Context, pchannel string) (wal.TransformLogStream, error) {
-	ret := _m.Called(ctx, pchannel)
+// AcquireTransformLogStream provides a mock function with given fields: ctx, pchannel, walReplicaID
+func (_m *MockHandlerClient) AcquireTransformLogStream(ctx context.Context, pchannel string, walReplicaID ...int64) (wal.TransformLogStream, error) {
+	_va := make([]interface{}, 0, len(walReplicaID)+2)
+	_va = append(_va, ctx, pchannel)
+	for _, _v := range walReplicaID {
+		_va = append(_va, _v)
+	}
+	ret := _m.Called(_va...)
 
 	if len(ret) == 0 {
 		panic("no return value specified for AcquireTransformLogStream")
@@ -132,10 +137,15 @@ func (_m *MockHandlerClient) AcquireTransformLogStream(ctx context.Context, pcha
 
 	var r0 wal.TransformLogStream
 	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, ...int64) (wal.TransformLogStream, error)); ok {
+		return rf(ctx, pchannel, walReplicaID...)
+	}
 	if rf, ok := ret.Get(0).(func(context.Context, string) (wal.TransformLogStream, error)); ok {
 		return rf(ctx, pchannel)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, string) wal.TransformLogStream); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, string, ...int64) wal.TransformLogStream); ok {
+		r0 = rf(ctx, pchannel, walReplicaID...)
+	} else if rf, ok := ret.Get(0).(func(context.Context, string) wal.TransformLogStream); ok {
 		r0 = rf(ctx, pchannel)
 	} else {
 		if ret.Get(0) != nil {
@@ -143,7 +153,9 @@ func (_m *MockHandlerClient) AcquireTransformLogStream(ctx context.Context, pcha
 		}
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, string) error); ok {
+	if rf, ok := ret.Get(1).(func(context.Context, string, ...int64) error); ok {
+		r1 = rf(ctx, pchannel, walReplicaID...)
+	} else if rf, ok := ret.Get(1).(func(context.Context, string) error); ok {
 		r1 = rf(ctx, pchannel)
 	} else {
 		r1 = ret.Error(1)
@@ -160,13 +172,21 @@ type MockHandlerClient_AcquireTransformLogStream_Call struct {
 // AcquireTransformLogStream is a helper method to define mock.On call
 //   - ctx context.Context
 //   - pchannel string
-func (_e *MockHandlerClient_Expecter) AcquireTransformLogStream(ctx interface{}, pchannel interface{}) *MockHandlerClient_AcquireTransformLogStream_Call {
-	return &MockHandlerClient_AcquireTransformLogStream_Call{Call: _e.mock.On("AcquireTransformLogStream", ctx, pchannel)}
+//   - walReplicaID ...int64
+func (_e *MockHandlerClient_Expecter) AcquireTransformLogStream(ctx interface{}, pchannel interface{}, walReplicaID ...interface{}) *MockHandlerClient_AcquireTransformLogStream_Call {
+	_va := make([]interface{}, 0, len(walReplicaID)+2)
+	_va = append(_va, ctx, pchannel)
+	_va = append(_va, walReplicaID...)
+	return &MockHandlerClient_AcquireTransformLogStream_Call{Call: _e.mock.On("AcquireTransformLogStream", _va...)}
 }
 
-func (_c *MockHandlerClient_AcquireTransformLogStream_Call) Run(run func(ctx context.Context, pchannel string)) *MockHandlerClient_AcquireTransformLogStream_Call {
+func (_c *MockHandlerClient_AcquireTransformLogStream_Call) Run(run func(ctx context.Context, pchannel string, walReplicaID ...int64)) *MockHandlerClient_AcquireTransformLogStream_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string))
+		walReplicaID := make([]int64, 0, len(args)-2)
+		for _, arg := range args[2:] {
+			walReplicaID = append(walReplicaID, arg.(int64))
+		}
+		run(args[0].(context.Context), args[1].(string), walReplicaID...)
 	})
 	return _c
 }
@@ -176,7 +196,7 @@ func (_c *MockHandlerClient_AcquireTransformLogStream_Call) Return(_a0 wal.Trans
 	return _c
 }
 
-func (_c *MockHandlerClient_AcquireTransformLogStream_Call) RunAndReturn(run func(context.Context, string) (wal.TransformLogStream, error)) *MockHandlerClient_AcquireTransformLogStream_Call {
+func (_c *MockHandlerClient_AcquireTransformLogStream_Call) RunAndReturn(run func(context.Context, string, ...int64) (wal.TransformLogStream, error)) *MockHandlerClient_AcquireTransformLogStream_Call {
 	_c.Call.Return(run)
 	return _c
 }

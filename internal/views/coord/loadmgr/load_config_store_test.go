@@ -33,6 +33,7 @@ func sampleConfig() *LoadConfig {
 	return &LoadConfig{
 		DbID:         1,
 		CollectionID: 100,
+		LoadType:     querypb.LoadType_LoadCollection,
 		PartitionIDs: []int64{10, 20},
 		LoadFields: []*messagespb.LoadFieldConfig{
 			{FieldId: 200, IndexId: 300},
@@ -95,6 +96,7 @@ func TestLoadConfigPersistedStatusIsLoaded(t *testing.T) {
 
 	collection := cfg.toCollectionLoadInfoProto()
 	assert.Equal(t, querypb.LoadStatus_Loaded, collection.GetStatus())
+	assert.Equal(t, querypb.LoadType_LoadCollection, collection.GetLoadType())
 
 	partitions := cfg.toPartitionLoadInfoProtos()
 	require.Len(t, partitions, len(cfg.PartitionIDs))
@@ -438,6 +440,7 @@ func TestRecoverLoadConfigStore_WithPersistedData(t *testing.T) {
 		{
 			CollectionID:             100,
 			DbID:                     1,
+			LoadType:                 querypb.LoadType_LoadPartition,
 			LoadFields:               []int64{200},
 			FieldIndexID:             map[int64]int64{200: 300},
 			UserSpecifiedReplicaMode: true,
@@ -465,6 +468,7 @@ func TestRecoverLoadConfigStore_WithPersistedData(t *testing.T) {
 	cfg := snapshot.ConfigsMap()[100]
 	require.NotNil(t, cfg)
 	assert.Equal(t, int64(1), cfg.DbID)
+	assert.Equal(t, querypb.LoadType_LoadPartition, cfg.LoadType)
 	assert.True(t, cfg.UserSpecifiedReplicaMode)
 	assert.ElementsMatch(t, []int64{10, 20}, cfg.PartitionIDs)
 	require.Len(t, cfg.LoadFields, 1)
@@ -480,6 +484,7 @@ func TestFromAlterLoadConfigMessage(t *testing.T) {
 	msg := &messagespb.AlterLoadConfigMessageHeader{
 		DbId:                     1,
 		CollectionId:             100,
+		LoadType:                 int32(querypb.LoadType_LoadPartition),
 		PartitionIds:             []int64{10, 20},
 		LoadFields:               []*messagespb.LoadFieldConfig{{FieldId: 200, IndexId: 300}},
 		UserSpecifiedReplicaMode: true,
@@ -491,6 +496,7 @@ func TestFromAlterLoadConfigMessage(t *testing.T) {
 	cfg := FromAlterLoadConfigMessage(msg)
 	assert.Equal(t, int64(1), cfg.DbID)
 	assert.Equal(t, int64(100), cfg.CollectionID)
+	assert.Equal(t, querypb.LoadType_LoadPartition, cfg.LoadType)
 	assert.ElementsMatch(t, []int64{10, 20}, cfg.PartitionIDs)
 	assert.True(t, cfg.UserSpecifiedReplicaMode)
 	require.Len(t, cfg.Replicas, 1)
