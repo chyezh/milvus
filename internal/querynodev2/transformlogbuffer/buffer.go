@@ -10,6 +10,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/querynodev2/qnview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	streamingstatus "github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
@@ -217,7 +218,7 @@ func (b *Buffer) acquireStream(ctx context.Context, key streamIdentity) (wal.Tra
 	select {
 	case <-stream.Done():
 		_ = stream.Close()
-		return nil, errors.New("transform log stream is closed")
+		return nil, streamingstatus.NewOnShutdownError("transform log stream is closed")
 	default:
 		return stream, nil
 	}

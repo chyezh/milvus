@@ -78,7 +78,8 @@ type VChannelRecoveryModule struct {
 	segmentPackWriter       segment.PackWriter
 	externalOnSegmentSealed func(walview.SegmentSealedEvent)
 
-	metaAndData bool
+	metaAndData        bool
+	readOnlyProjection bool
 
 	queryTransformLogStream wal.TransformLogStream
 	queryResources          *queryresource.Manager
@@ -260,6 +261,7 @@ func (m *VChannelRecoveryModule) SwitchIntoReadOnlyProjection() {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.readOnlyProjection = true
 	if m.transformLog != nil {
 		m.transformLog.SwitchIntoMetaAndData()
 	}

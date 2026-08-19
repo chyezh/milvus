@@ -9,6 +9,7 @@ import (
 	"github.com/cockroachdb/errors"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 )
 
@@ -48,7 +49,7 @@ func (m *StreamManager) AcquireStream(ctx context.Context, pchannel string, _ in
 	m.streamMu.Lock()
 	if m.closed {
 		m.streamMu.Unlock()
-		return nil, errors.New("transform log stream manager is closed")
+		return nil, status.NewOnShutdownError("transform log stream manager is closed")
 	}
 	m.streamMu.Unlock()
 
@@ -61,7 +62,7 @@ func (m *StreamManager) AcquireStream(ctx context.Context, pchannel string, _ in
 	if m.closed {
 		m.streamMu.Unlock()
 		_ = stream.Close()
-		return nil, errors.New("transform log stream manager is closed")
+		return nil, status.NewOnShutdownError("transform log stream manager is closed")
 	}
 	stream.onFinish = m.removeStream
 	m.streams[stream] = struct{}{}

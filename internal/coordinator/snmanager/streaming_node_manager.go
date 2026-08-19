@@ -170,7 +170,7 @@ func (s *StreamingNodeManager) RegisterWALReplicaDependencyProvider(ctx context.
 	}
 	walReplicaBalancer, ok := b.(walReplicaDependencyBalancer)
 	if !ok {
-		return errors.New("streaming balancer does not support WAL replica dependency provider")
+		return merr.WrapErrServiceInternalMsg("streaming balancer does not support WAL replica dependency provider")
 	}
 	walReplicaBalancer.SetWALReplicaDependencyProvider(provider)
 	return nil

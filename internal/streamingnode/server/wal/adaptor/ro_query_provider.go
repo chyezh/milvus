@@ -19,9 +19,11 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
-var _ queryplanprovider.QueryPlanProvider = (*roWALAdaptorImpl)(nil)
-var _ snview.QueryViewHandlerProvider = (*roWALAdaptorImpl)(nil)
-var _ viewquery.TaskProvider = (*roWALAdaptorImpl)(nil)
+var (
+	_ queryplanprovider.QueryPlanProvider = (*roWALAdaptorImpl)(nil)
+	_ snview.QueryViewHandlerProvider     = (*roWALAdaptorImpl)(nil)
+	_ viewquery.TaskProvider              = (*roWALAdaptorImpl)(nil)
+)
 
 func (w *roWALAdaptorImpl) QueryViewHandler() worknodehandler.QueryViewHandler {
 	return w.queryViewHandler

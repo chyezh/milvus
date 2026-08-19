@@ -246,7 +246,7 @@ func (w *roWALAdaptorImpl) startReadOnlyProjectionScanner(startMessageID message
 	if startMessageID == nil || w.viewResourceManager == nil {
 		return
 	}
-	ctx, cancel := context.WithCancel(w.availableCtx)
+	ctx, cancel := context.WithCancel(w.availableCtx) // #nosec G118 -- cancel is owned by roWALAdaptorImpl.Close.
 	done := make(chan struct{})
 	w.projectionCancel = cancel
 	w.projectionDone = done

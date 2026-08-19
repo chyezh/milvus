@@ -62,7 +62,7 @@ func (s *Server) broadcastAlterLoadConfigCollectionV2ForReleasePartitions(ctx co
 					CollectionId: coll.CollectionID,
 				}).
 				WithBody(&message.DropLoadConfigMessageBody{}).
-				WithBroadcast(collectionLoadConfigBroadcastChannels(coll), message.OptBuildBroadcastAckSyncUp()).
+				WithBroadcast([]string{loadConfigBroadcastChannel()}).
 				MustBuildBroadcast()
 			collectionReleased = true
 		} else {

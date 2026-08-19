@@ -661,7 +661,7 @@ func readOnlyVChannelMetaMap(vchannels []*streamingpb.VChannelMeta) (map[string]
 	for _, meta := range vchannels {
 		vchannel := meta.GetVchannel()
 		if _, ok := metas[vchannel]; ok {
-			return nil, errors.Errorf("duplicate vchannel owner in read-only recovery meta: %s", vchannel)
+			return nil, merr.WrapErrDataIntegrityMsg("duplicate vchannel owner in read-only recovery meta: %s", vchannel)
 		}
 		metas[vchannel] = meta
 	}
@@ -673,7 +673,7 @@ func readOnlySegmentAssignmentMetaMap(segments []*streamingpb.SegmentAssignmentM
 	for _, meta := range segments {
 		segmentID := meta.GetSegmentId()
 		if _, ok := metas[segmentID]; ok {
-			return nil, errors.Errorf("duplicate segment owner in read-only recovery meta: %d", segmentID)
+			return nil, merr.WrapErrDataIntegrityMsg("duplicate segment owner in read-only recovery meta: %d", segmentID)
 		}
 		metas[segmentID] = meta
 	}
