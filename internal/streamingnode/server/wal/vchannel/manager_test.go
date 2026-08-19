@@ -435,7 +435,7 @@ func TestPChannelRecoveryManagerReadOnlyProjectionTimeTickAdvancesTransformLogSt
 	manager := newTestManager(t, "p1", "v1")
 	manager.SwitchIntoReadOnlyProjection()
 
-	manager.ObserveMessage(ctx, newTestTimeTickMessage(t, 20))
+	observeTestMessage(ctx, t, manager, newTestTimeTickMessage(t, 20))
 
 	stream, err := manager.AcquireStream(ctx, "p1", 1)
 	require.NoError(t, err)
