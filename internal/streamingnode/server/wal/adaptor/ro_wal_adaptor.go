@@ -274,7 +274,11 @@ func (w *roWALAdaptorImpl) runReadOnlyProjectionScanner(ctx context.Context, sca
 				}
 				return
 			}
-			w.viewResourceManager.ObserveMessage(ctx, msg)
+			owner := message.NewOwnedImmutableMessage(msg, nil)
+			dispatch := owner.Clone()
+			w.viewResourceManager.ObserveMessage(ctx, dispatch)
+			dispatch.Release()
+			owner.Release()
 		}
 	}
 }

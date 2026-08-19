@@ -302,15 +302,14 @@ func (s *snShardView) applyOneLocked(av *handler.ApplyView) {
 // DataVersion. Normal handoff views are not marked recovered and remain under
 // Coord's lease-driven lifecycle.
 func (s *snShardView) retireSupersededRecoveredViewsLocked(upVersion qviews.QueryViewVersion) {
-	for version, entry := range s.views {
-		if !entry.recovered || !upVersion.GT(version) {
+	for key, entry := range s.views {
+		if !entry.recovered || !upVersion.GT(key.QueryViewVersion) {
 			continue
 		}
 		state := entry.sm.State()
 		if state != qviews.QueryViewStateUp && state != qviews.QueryViewStateUpRecovering {
 			continue
 		}
-		key := entry.View.QueryViewKey()
 		entry.sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
 		qvobserve.Observe(context.TODO(), qvobserve.StreamingNodeApplyCoordViewEvent{
 			ViewStateTransition: qvobserve.ViewStateTransition{
@@ -320,7 +319,7 @@ func (s *snShardView) retireSupersededRecoveredViewsLocked(upVersion qviews.Quer
 				To:           entry.sm.State(),
 			},
 		})
-		s.consumeReportPersistAndCleanup(version, entry)
+		s.consumeReportPersistAndCleanup(key, entry)
 	}
 }
 
