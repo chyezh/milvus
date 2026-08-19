@@ -550,7 +550,7 @@ func TestViewScopedPhysicalSegmentManager_CoalescesRevisionRevertDuringInFlightU
 	inFlightRevision := SegmentLoadInfoRevision{Revision: 11}
 
 	mgr.views[key] = &viewRef{segments: map[int64]int64{1000: 10}}
-	mgr.segments[1000] = &physicalSegmentState{
+	mgr.segments[newSegmentRefKey(1000, 0)] = &physicalSegmentState{
 		segment:      &fakeTransformSegment{id: 1000, partitionID: 10},
 		refs:         map[qviews.QueryViewKey]struct{}{key: {}},
 		requests:     map[qviews.QueryViewKey]segmentLoadRequest{key: {meta: meta, collection: runtime}},

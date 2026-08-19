@@ -2,7 +2,8 @@ package qnview
 
 import (
 	"context"
-	"errors"
+
+	"github.com/cockroachdb/errors"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	streamingstatus "github.com/milvus-io/milvus/internal/util/streamingutil/status"
