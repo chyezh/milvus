@@ -107,7 +107,6 @@ func TestCollectionLoadManager_SyncNewCreatedPartitionForLoadedCollection(t *tes
 	var notified []int64
 	manager := NewCollectionLoadManager(
 		store,
-		func(qviews.ShardID) {},
 		func(collectionID int64) { notified = append(notified, collectionID) },
 	)
 
@@ -142,7 +141,7 @@ func TestCollectionLoadManager_SyncNewCreatedPartitionForLoadedCollection(t *tes
 func TestCollectionLoadManager_SyncNewCreatedPartitionSkipsPartitionLoad(t *testing.T) {
 	catalog := mocks.NewQueryCoordCatalog(t)
 	store := newEmptyLoadConfigStore(t, catalog)
-	manager := NewCollectionLoadManager(store, func(qviews.ShardID) {}, func(int64) {})
+	manager := NewCollectionLoadManager(store, func(int64) {})
 
 	cfg := &LoadConfig{
 		DbID:         1,
