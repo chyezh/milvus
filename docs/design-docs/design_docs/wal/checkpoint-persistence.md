@@ -43,17 +43,24 @@ The following state is represented as component snapshots:
 - PChannel replication and AlterWAL control state;
 - VChannel collection, partition, schema, and lifecycle state;
 - Segment assignment, object references, row statistics, and lifecycle state;
-- TransformLog chunk and readable-window metadata;
+- the VChannel transform materialization frontier
+  (`VChannelMeta.transform_materialized_time_tick`);
 - salvage and cleanup metadata that must precede checkpoint publication.
+
+Transform records themselves are not a component snapshot: their durability is
+owned by the pchannel-scoped WALSummary (chunk + manifest on object storage,
+term fencing in etcd). The summary releases message handles only after a chunk
+and its manifest are durable, so the global checkpoint can never pass a
+transform record the summary has not persisted. See
+[WALSummary Design](summary.md).
 
 The persisted component fields use one uniform name:
 
 | Snapshot | Component checkpoint field |
 |---|---|
 | `PChannelRecoveryControlMeta` | `checkpoint_time_tick` |
-| `VChannelMeta` | `checkpoint_time_tick` |
+| `VChannelMeta` | `checkpoint_time_tick` (+ `transform_materialized_time_tick` for the L0 frontier) |
 | `SegmentAssignmentMeta` | `checkpoint_time_tick` |
-| `VChannelTransformLogMeta` | `checkpoint_time_tick` |
 
 There is no `applied_through_time_tick`, `data_checkpoint_time_tick`, persisted
 `sync_up_time_tick`, or persisted last-Delete frontier. Component code uses the
