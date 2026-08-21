@@ -1,0 +1,328 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package walsummary
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
+	"github.com/milvus-io/milvus/internal/storage"
+	"github.com/milvus-io/milvus/pkg/v3/objectstorage"
+	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/walimplstest"
+	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
+)
+
+type recordingScheduler struct {
+	tasks []nodescheduler.Task
+}
+
+func (s *recordingScheduler) Submit(task nodescheduler.Task) nodescheduler.TaskHandle {
+	s.tasks = append(s.tasks, task)
+	return recordingTaskHandle{}
+}
+
+type recordingTaskHandle struct{}
+
+func (recordingTaskHandle) Cancel() {}
+
+func (recordingTaskHandle) Wait(context.Context) error { return nil }
+
+func newTestManager(t *testing.T, store *Store, flushMaxBytes, retentionMaxBytes uint64) *Manager {
+	t.Helper()
+	return NewManager(ManagerConfig{
+		PChannel:          store.PChannel(),
+		Term:              store.Term(),
+		Store:             store,
+		Runtime:           moduleapi.Runtime{},
+		FlushMaxBytes:     flushMaxBytes,
+		RetentionMaxBytes: retentionMaxBytes,
+	})
+}
+
+func newTestManagerWithStore(t *testing.T) (*Manager, *Store) {
+	t.Helper()
+	cm := storage.NewLocalChunkManager(objectstorage.RootPath(t.TempDir()))
+	store := NewStore(cm, "by-dev-rootcoord-dml_0_40451v0", 1)
+	return newTestManager(t, store, 1<<20, 1<<30), store
+}
+
+// newTestDeleteMessage builds a delete message of the given vchannel.
+func newTestDeleteMessage(t *testing.T, vchannel string, timetick uint64, partitionID int64, pks ...int64) message.ImmutableMessage {
+	t.Helper()
+	mutableMsg := message.NewDeleteMessageBuilderV1().
+		WithVChannel(vchannel).
+		WithHeader(&message.DeleteMessageHeader{
+			CollectionId: 1,
+			Rows:         1,
+		}).
+		WithBody(&msgpb.DeleteRequest{
+			Base:         &commonpb.MsgBase{MsgType: commonpb.MsgType_Delete},
+			CollectionID: 1,
+			PartitionID:  partitionID,
+			PrimaryKeys:  &schemapb.IDs{IdField: &schemapb.IDs_IntId{IntId: &schemapb.LongArray{Data: pks}}},
+			Timestamps:   []uint64{timetick},
+		}).
+		MustBuildMutable()
+	return mutableMsg.WithTimeTick(timetick).
+		WithLastConfirmed(walimplstest.NewTestMessageID(int64(timetick))).
+		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick + 1)))
+}
+
+// observeDelete observes one delete message and releases the owner, setting
+// *finalized when the message is fully released (no retained handle survives).
+func observeDelete(t *testing.T, view *SummaryView, timetick uint64, finalized *bool) {
+	t.Helper()
+	msg := newTestDeleteMessage(t, view.VChannel(), timetick, 10, int64(timetick))
+	owner := message.NewOwnedImmutableMessage(msg, func() { *finalized = true })
+	retained := owner.Clone()
+	view.ObserveMessage(context.Background(), retained)
+	retained.Release()
+	owner.Release()
+}
+
+func TestViewObserveAndFlushReleasesHandles(t *testing.T) {
+	manager, _ := newTestManagerWithStore(t)
+	view := manager.View("v1")
+	ctx := context.Background()
+
+	// A payload-free message (insert) is not retained at all.
+	insert := message.NewInsertMessageBuilderV1().
+		WithVChannel("v1").
+		WithHeader(&message.InsertMessageHeader{CollectionId: 1}).
+		WithBody(&msgpb.InsertRequest{CollectionID: 1}).
+		MustBuildMutable().
+		WithTimeTick(1).
+		WithLastConfirmed(walimplstest.NewTestMessageID(1)).
+		IntoImmutableMessage(walimplstest.NewTestMessageID(2))
+	insertFinalized := false
+	insertOwner := message.NewOwnedImmutableMessage(insert, func() { insertFinalized = true })
+	insertRetained := insertOwner.Clone()
+	view.ObserveMessage(ctx, insertRetained)
+	insertRetained.Release()
+	insertOwner.Release()
+	// Not retained: the owner release finalized the message immediately.
+	assert.True(t, insertFinalized)
+
+	// A delete message is retained until the flush is durable.
+	finalized := false
+	observeDelete(t, view, 100, &finalized)
+	assert.False(t, finalized, "message must stay alive while staging")
+
+	require.NoError(t, manager.flushOnce(ctx))
+	assert.True(t, finalized, "message handle must be released after a durable flush")
+	assert.Equal(t, uint64(100), view.DurableTimeTick())
+	assert.Equal(t, uint64(100), manager.LatestCoveredTimeTick())
+
+	// The chunk is readable and carries the record.
+	decoded, footer, err := manager.cfg.Store.ReadChunk(ctx, 0)
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), footer.GetGeneration())
+	require.Len(t, decoded["v1"], 1)
+	assert.Equal(t, uint64(100), decoded["v1"][0].GetTimeTick())
+	assert.Equal(t, int64(10), decoded["v1"][0].GetDelete().GetBlocks()[0].GetPartitionId())
+}
+
+func TestViewFlushFailureKeepsHandles(t *testing.T) {
+	manager, _ := newTestManagerWithStore(t)
+	view := manager.View("v1")
+	ctx := context.Background()
+
+	finalized := false
+	observeDelete(t, view, 100, &finalized)
+
+	// Break the chunk manager so the chunk write fails.
+	original := manager.cfg.Store.chunkManager
+	manager.cfg.Store.chunkManager = &failingChunkManager{ChunkManager: original}
+	err := manager.flushOnce(ctx)
+	assert.Error(t, err)
+	manager.cfg.Store.chunkManager = original
+	assert.False(t, finalized, "handles must survive a failed flush")
+	// The staging must still be there for the retry.
+	require.NoError(t, manager.flushOnce(ctx))
+	assert.True(t, finalized)
+}
+
+type failingChunkManager struct {
+	storage.ChunkManager
+}
+
+func (f *failingChunkManager) Exist(context.Context, string) (bool, error) {
+	return false, errors.New("injected failure")
+}
+
+func TestManagerRecover(t *testing.T) {
+	manager, _ := newTestManagerWithStore(t)
+	view := manager.View("v1")
+	ctx := context.Background()
+
+	// Two flushes produce two chunks.
+	unused := false
+	observeDelete(t, view, 100, &unused)
+	require.NoError(t, manager.flushOnce(ctx))
+	observeDelete(t, view, 200, &unused)
+	require.NoError(t, manager.flushOnce(ctx))
+
+	// A new manager over the same store recovers both chunks and continues
+	// generations after them.
+	recovered := newTestManager(t, manager.cfg.Store, 1<<20, 1<<30)
+	require.NoError(t, recovered.Recover(ctx))
+	assert.Equal(t, uint64(2), recovered.nextGeneration)
+	assert.Equal(t, uint64(200), recovered.LatestCoveredTimeTick())
+	assert.Len(t, recovered.Manifest().GetChunks(), 2)
+}
+
+func TestManagerRecoverProbesOrphanChunk(t *testing.T) {
+	manager, _ := newTestManagerWithStore(t)
+	view := manager.View("v1")
+	ctx := context.Background()
+
+	unused := false
+	observeDelete(t, view, 100, &unused)
+	require.NoError(t, manager.flushOnce(ctx))
+
+	// Simulate a crash between chunk write and manifest publish: write a chunk
+	// directly without recording it.
+	orphanRecords := map[string][]*streamingpb.VChannelSummaryTransformRecord{
+		"v1": {{TimeTick: 300, Delete: &streamingpb.TransformDeleteEntry{}}},
+	}
+	_, _, err := manager.cfg.Store.WriteChunk(ctx, 2, orphanRecords)
+	require.NoError(t, err)
+
+	recovered := newTestManager(t, manager.cfg.Store, 1<<20, 1<<30)
+	require.NoError(t, recovered.Recover(ctx))
+	assert.Equal(t, uint64(3), recovered.nextGeneration)
+	assert.Equal(t, uint64(300), recovered.LatestCoveredTimeTick())
+	require.Len(t, recovered.Manifest().GetChunks(), 2)
+	// The probed tail is sealed into a published manifest: a third recovery
+	// sees it without probing again.
+	again := newTestManager(t, manager.cfg.Store, 1<<20, 1<<30)
+	require.NoError(t, again.Recover(ctx))
+	assert.Equal(t, uint64(3), again.nextGeneration)
+}
+
+func TestManagerGCReleaseAndMaterializationFloor(t *testing.T) {
+	manager, _ := newTestManagerWithStore(t)
+	view := manager.View("v1")
+	ctx := context.Background()
+
+	flush := func(tt uint64) {
+		unused := false
+		observeDelete(t, view, tt, &unused)
+		require.NoError(t, manager.flushOnce(ctx))
+	}
+	flush(100)
+	flush(200)
+	flush(300)
+	require.Len(t, manager.Manifest().GetChunks(), 3)
+
+	// Without a materialization frontier nothing is eligible.
+	manager.cfg.RetentionMaxBytes = 0
+	require.NoError(t, manager.GCOnce(ctx))
+	assert.Len(t, manager.Manifest().GetChunks(), 3)
+
+	// Materialize through 200 (a completed frontier): chunks 0 (end 100) and
+	// 1 (end 200) are fully consumed and released; chunk 2 (end 300) still
+	// holds un-materialized records and stays.
+	manager.SetMaterializedTimeTick("v1", 200)
+	require.NoError(t, manager.GCOnce(ctx))
+	chunks := manager.Manifest().GetChunks()
+	require.Len(t, chunks, 1)
+	assert.Equal(t, uint64(2), chunks[0].GetGeneration())
+	// The released object is gone.
+	_, _, err := manager.cfg.Store.ReadChunk(ctx, 0)
+	assert.Error(t, err)
+	// pending_gc drained.
+	assert.Empty(t, manager.Manifest().GetPendingGc())
+
+	// Materialize everything: all chunks are released.
+	manager.SetMaterializedTimeTick("v1", 400)
+	require.NoError(t, manager.GCOnce(ctx))
+	assert.Empty(t, manager.Manifest().GetChunks())
+}
+
+func TestViewSyncUpAndRequestPersistThroughScheduleFlush(t *testing.T) {
+	manager, _ := newTestManagerWithStore(t)
+	scheduler := &recordingScheduler{}
+	manager.cfg.Runtime.Scheduler = scheduler
+	view := manager.View("v1")
+
+	unused := false
+	observeDelete(t, view, 100, &unused)
+	// Observe below the byte threshold schedules nothing.
+	assert.Empty(t, scheduler.tasks)
+	view.SyncUp(200)
+	assert.Len(t, scheduler.tasks, 1)
+
+	scheduler.tasks = nil
+	observeDelete(t, view, 150, &unused)
+	view.RequestPersistThrough(160)
+	assert.Len(t, scheduler.tasks, 1)
+}
+
+func TestViewObserveAboveThresholdSchedulesFlush(t *testing.T) {
+	manager, _ := newTestManagerWithStore(t)
+	scheduler := &recordingScheduler{}
+	manager.cfg.Runtime.Scheduler = scheduler
+	view := manager.View("v1")
+
+	manager.cfg.FlushMaxBytes = 1 // any record triggers.
+	unused := false
+	observeDelete(t, view, 100, &unused)
+	assert.Len(t, scheduler.tasks, 1)
+}
+
+func TestManagerHasPendingWork(t *testing.T) {
+	manager, _ := newTestManagerWithStore(t)
+	view := manager.View("v1")
+	ctx := context.Background()
+
+	assert.False(t, manager.HasPendingWork())
+	unused := false
+	observeDelete(t, view, 100, &unused)
+	// Staging alone is not pending work (no flush scheduled).
+	assert.False(t, manager.HasPendingWork())
+	manager.requestFlush()
+	assert.True(t, manager.HasPendingWork())
+	// Executing the scheduled task completes it and drains the queue.
+	require.Len(t, manager.flushTasks, 1)
+	require.NoError(t, manager.flushTasks[0].Execute(ctx))
+	assert.False(t, manager.HasPendingWork())
+}
+
+func TestFlushTaskOrdering(t *testing.T) {
+	manager, _ := newTestManagerWithStore(t)
+	ctx := context.Background()
+
+	manager.requestFlush()
+	manager.requestFlush()
+	require.Len(t, manager.flushTasks, 2)
+	// Executing the second task without the first returns ErrDelay.
+	err := manager.flushTasks[1].Execute(ctx)
+	assert.Error(t, err)
+	require.NoError(t, manager.flushTasks[0].Execute(ctx))
+	require.NoError(t, manager.flushTasks[1].Execute(ctx))
+}
