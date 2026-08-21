@@ -1,9 +1,9 @@
 # TransformLog Design
 
-TransformLog is the VChannel-level ordered transform stream owned by
-`VChannelRecoveryModule`. Delete is the initial transform payload. QueryNode
-and StreamingNode query resources consume the stream to advance transform
-visibility.
+TransformLog is the VChannel-level transform **consumer**: it turns the
+transform records of the pchannel-scoped WALSummary into DataCoord-managed L0
+segments. Delete is the initial transform payload. QueryNode and StreamingNode
+query resources consume the L0 output to advance transform visibility.
 
 Per-message ownership is defined by
 [WAL Message Ack Design](../message_ack.md).
@@ -11,145 +11,120 @@ Per-message ownership is defined by
 ## 1. Ownership
 
 ```text
-RecoveryStorage
+RecoveryStorage (pchannel)
   -> PChannelRecoveryManager
        +-- VChannelRecoveryModule A
-       |     +-- TransformLog A
+       |     +-- summaryView (walsummary.SummaryView of vchannel A)
+       |     +-- TransformLog A   (materialize-only consumer)
        +-- VChannelRecoveryModule B
+       |     +-- summaryView (walsummary.SummaryView of vchannel B)
        |     +-- TransformLog B
-       +-- transformlog.StreamManager
-             +-- PChannel stream
-                   +-- per-VChannel subscriptions
+       +-- walsummary.Manager (pchannel-scoped summary store, owns persistence)
+             +-- views per vchannel
+             +-- flushListeners per vchannel  -> TransformLog.OnSummaryFlushed
 ```
+
+Persistence lives exclusively in the [WALSummary](../summary.md) of the
+pchannel; the TransformLog owns **no** buffer, no chunk objects, and no catalog
+metadata.
 
 TransformLog owns:
 
-- conversion of Delete and Txn(Delete) messages into transform entries;
-- an open buffer and durable object-storage chunks;
-- a readable retained chunk window;
-- transform SyncUp visibility;
-- L0 materialization and chunk truncation state;
-- one continuous component `checkpoint_time_tick`.
+- the in-memory materialization window (`pending`): durable records of its
+  vchannel after the committed frontier, replaced by flush events;
+- the committed materialization frontier `materialized_time_tick`, carried by
+  `VChannelMeta.transform_materialized_time_tick`;
+- the L1 upper bound derived from uncommitted L0 segments;
+- L0 materialization (batching, ordering, retry).
 
-## 2. Persistent Metadata
+## 2. Persistence Model
 
-Conceptually, the snapshot contains:
+The transform records are persisted by the WALSummary as pchannel chunks with
+a per-vchannel section, plus a manifest. The summary decides **entirely on its
+own** when records become durable:
 
-```proto
-message VChannelTransformLogMeta {
-    uint64 checkpoint_time_tick = 1;
-    uint64 truncate_time_tick = 2;
-    uint64 first_chunk_id = 3;
-    uint64 next_chunk_id = 4;
-    uint64 materialized_time_tick = 5;
-}
+- autonomous flush at the binary size threshold;
+- forced persistence through `RequestPersistThrough` (tracker stall / under
+  pressure);
+- barrier `SyncUp` (flush / flush-all / manual-flush / drop / truncate ...).
+
+The TransformLog never reads the summary store and never triggers persistence.
+It observes the outcome: after a chunk and its manifest are durable, the
+summary delivers a `FlushedBatch` per vchannel through `FlushListener`, and
+only then releases the message handles. The handle lifecycle therefore
+guarantees: **WAL checkpoint <= durable summary frontier**, and the consumer's
+window only ever contains durable records, so
+
+```text
+materialized_time_tick <= durable frontier <= WAL checkpoint
 ```
-
-The persisted TimeTicks have distinct meanings:
-
-| Frontier | Meaning |
-|---|---|
-| `checkpoint_time_tick` | Complete recoverable effects of every TransformLog-relevant message through this TimeTick. All preceding Delete entries are durable in chunks and payload-free ranges are known to contain no missing transform. It is also the recovered SyncUp frontier. |
-| `materialized_time_tick` | Delete payloads through this point have been emitted as L0 output. |
-| `truncate_time_tick` | Earlier entries are outside the retained readable window. |
-
-There is no separately persisted last-Delete or SyncUp frontier. The chunk id
-range identifies durable chunk objects, and `checkpoint_time_tick` already
-proves that all TransformLog effects through the value are recoverable. Only
-the PChannel global WAL checkpoint starts recovery or truncates WAL.
 
 ## 3. Message Classification
 
-| Kind | WAL messages | TransformLog effect |
+| Kind | WAL messages | Effect |
 |---|---|---|
-| Payload | Delete, committed Txn containing Delete | Append one ordered Delete entry. |
-| Sync-up | RecoveryBarrier, Flush, ManualFlush, FlushAll, DropPartition, DropCollection, TruncateCollection, schema-changing AlterCollection, AlterWAL | Advance transform visibility and flush preceding payload when required. |
-| None | Insert and other messages | No TransformLog effect or handle. |
+| Payload | Delete, committed Txn containing Delete | `summaryView.ObserveMessage` appends one ordered Delete record to the summary staging. |
+| Barrier | RecoveryBarrier, Flush, ManualFlush, FlushAll, DropPartition, DropCollection, TruncateCollection, CreateCollection, schema-changing AlterCollection, AlterWAL | `RequestMaterializeThrough(tt)` records the frontier and `summaryView.SyncUp(tt)` asks the summary to make everything through the barrier durable. |
+| None | Insert and other messages | No transform effect. |
 
-A committed Txn creates one entry at the outer Txn TimeTick and stores Delete
-blocks for all Delete children. The outer Txn owns one TransformLog handle.
+A committed Txn creates one record at the outer Txn TimeTick and stores Delete
+blocks for all Delete children.
 
-## 4. Observe
+## 4. Observe And Materialization Trigger
 
 There is one Observe path for recovery and live messages:
 
 1. classify the message;
 2. return for `None`;
-3. if `message.TimeTick <= checkpoint_time_tick`, return as a durable
-   no-op;
-4. deduplicate against the current pending queue;
-5. append a Delete entry or stage a SyncUp transition;
-6. clone a retained handle if chunk durability work is required;
-7. expose new entries and SyncUp changes to local subscribers in WAL order;
-8. schedule chunk persistence as needed.
+3. `summaryView.ObserveMessage`: build the transform record (a standalone
+   proto), append it to the view staging, retain a message handle, and let the
+   summary decide about flushing (size threshold);
+4. for Barrier messages, additionally `RequestMaterializeThrough` +
+   `summaryView.SyncUp`.
 
-There is no `MetaOnly`, `DataOnly`, or `MetaAndData` state.
+The TransformLog itself schedules materialization only when two conditions
+hold:
 
-A SyncUp message without payload still advances the stable
-`checkpoint_time_tick`, but only after every earlier TransformLog payload is
-durable. The live in-memory SyncUp frontier may run ahead while work is pending;
-it is not an additional persisted field.
+- a request exists: `RequestMaterializeThrough` recorded a frontier, or the L1
+  upper bound advanced via `SetMaterializeUpperBound`;
+- the durable frontier covers the target: a flush event moved the window
+  (`DurableTimeTick() >= target`).
 
-## 5. Chunk Persistence
+## 5. Flush Event And The Window
 
-The open buffer flushes on size pressure, an explicit sync-up requirement, or a
-VChannel `RequestPersistThrough` call.
-
-```text
-select open entries through target T
-  -> write TransformLogChunk(next_chunk_id)
-  -> install chunk descriptor
-  -> commit continuous pending message effects
-  -> advance checkpoint_time_tick when gaps permit
-  -> mark stable TransformLog metadata dirty
-  -> release covered retained handles
-```
-
-Chunk ids are VChannel-local and dense in
-`[first_chunk_id, next_chunk_id)`. The object path is deterministic:
-
-```text
-<chunk-root>/transform-log/<pchannel>/<vchannel>/chunks/<chunk_id>.pb
-```
-
-Handle release does not wait for catalog IO. Stable metadata is installed and
-marked dirty first; RecoveryStorage writes that snapshot before publishing a
-global checkpoint that covers the message.
-
-## 6. RequestPersistThrough
+A successful summary flush delivers to the TransformLog:
 
 ```go
-RequestPersistThrough(targetTimeTick uint64)
+type FlushedBatch struct {
+    RecordsByVChannel map[string][]*TransformLogEntry // ascending timetick
+    CoveredTimeTick   uint64
+}
 ```
 
-The request flushes pending transform payload necessary to cover the target and
-may include later entries already in the same open chunk. It is a no-op when
-`checkpoint_time_tick` or an existing task already covers the target.
+`OnSummaryFlushed`:
 
-It does not materialize L0 merely to satisfy RecoveryStorage. Chunk durability
-is the source-message completion condition.
+1. appends the vchannel's entries after the committed frontier to `pending`;
+2. advances `durableTimeTick`;
+3. schedules a materialize task for the retained request when the window now
+   covers part of it (deduplicated against a pending task).
 
-## 7. Dirty Snapshot Publication
+The entries are standalone protos that survive the handle release: the
+consumer may retain them as long as needed.
 
-`ConsumeDirtySnapshots` returns an immutable clone of the stable metadata.
-`MarkPersisted` advances exact persisted bookkeeping through the captured
-`checkpoint_time_tick` and leaves newer changes dirty.
+## 6. L0 Materialization
 
-There are no MetaTimeTick/DataTimeTick snapshot fields. TransformLog emits one
-component snapshot with one `checkpoint_time_tick`.
-
-## 8. L0 Materialization
-
-Materialization converts retained Delete entries into DataCoord-managed L0
-deltalogs. It may be triggered by explicit sync-up policy or size pressure.
+Materialization converts the windowed Delete entries into DataCoord-managed L0
+deltalogs. It may be triggered by explicit barrier requests or size pressure.
 
 Materialization:
 
+- consumes only **durable** records (never the summary staging or store);
 - does not retain source WAL messages;
 - does not delay BroadcastAck;
 - does not gate the global recovery checkpoint;
 - does not pass the earliest uncommitted L1 Segment's creation TimeTick;
-- updates `materialized_time_tick` in TransformLog stable metadata;
+- commits `materialized_time_tick` into `VChannelMeta`, marking the vchannel
+  snapshot dirty for the next RecoveryStorage checkpoint;
 - may be retried idempotently at the logical level.
 
 `VChannelRecoveryModule` derives one inclusive materialization upper bound from
@@ -164,64 +139,51 @@ safe to include because rows assigned to that Segment have later TimeTicks.
 This guarantees that an L0 Segment never covers a transform range whose L1
 data has not completed its final commit.
 
+The target of one batch is `min(requested, upper_bound, durableTimeTick)`.
 TransformLog keeps the requested materialization TimeTick separately from the
-currently executable TimeTick. It schedules `min(requested, upper_bound)` and
-retains the original request. Every completed L1 final commit makes the owning
-VChannel recompute the bound, which retries the retained request without
-requiring another WAL trigger. TransformLog still owns batching and may combine
-all eligible entries through the scheduled frontier into its materializer call.
+currently executable TimeTick, schedules
+`min(requested, upper_bound, durable)` and retains the original request. Every
+completed L1 final commit makes the owning VChannel recompute the bound, which
+retries the retained request without requiring another WAL trigger. Batches
+are capped by rows/bytes; a capped batch schedules a continuation task whose
+predecessor is the current one, keeping batches strictly sequential. A task
+whose data has not been flushed yet stays delayed in the scheduler until a
+flush event covers its target.
 
 Physical duplicate L0 output after a crash is outside the WAL checkpoint
 protocol and requires lifecycle idempotency or reconciliation.
 
-## 9. Recovery
+## 7. Recovery
 
-1. load TransformLog stable metadata;
-2. reconstruct cold descriptors for `[first_chunk_id, next_chunk_id)`;
-3. initialize `checkpoint_time_tick` and the independent materialization and
-   truncation state from the snapshot;
-4. receive the single PChannel replay from the global checkpoint;
-5. skip relevant messages at or before `checkpoint_time_tick`;
-6. append later Delete entries and SyncUp transitions with fresh handles;
-7. continue into live observation after RecoveryBarrier catch-up.
+1. the summary recovers its manifest (and fences the term via the catalog
+   meta);
+2. legacy per-vchannel transform logs are migrated into the summary (see
+   Recovery Storage);
+3. for every vchannel, recovery loads the initial materialization window once:
+   `summaryManager.ReadTransformEntries(vchannel, materializedTimeTick, +inf)`
+   — the only read of the summary store in the whole consumer path;
+4. the module restores `materialized_time_tick` from
+   `VChannelMeta.transform_materialized_time_tick` and seeds the window;
+5. live operation continues from the restored frontier; runtime flushes
+   replace the window through flush events.
 
-Cold chunk loading validates chunk id, non-empty content, strict entry ordering,
-and ordering across adjacent chunks.
+## 8. GC
 
-## 10. Subscription
+The summary releases chunk objects by retention budget, bounded below by the
+per-vchannel materialization frontiers mirrored via
+`Manager.SetMaterializedTimeTick`. Because the consumer only ever consumes
+durable records, a chunk fully covered by the materialization frontier is
+guaranteed to have been consumed, so releasing it cannot lose transform data.
 
-A PChannel stream supports multiple VChannel subscriptions. On creation, a
-subscription captures:
+## 9. Invariants
 
-```text
-syncUpTarget = max(checkpoint_time_tick, open-buffer tail, live sync-up frontier)
-```
-
-Catch-up delivers entries after `StartAfterTimeTick` through the captured
-target, emits `SyncUp(target)`, and then joins live delivery. Moving entries
-from the open buffer into chunks never creates subscription events or changes
-cursor semantics.
-
-A start point older than `truncate_time_tick` is rejected.
-
-## 11. GC And Defrag
-
-TransformLog GC truncates only entries no longer required by active readers and
-already protected by the persisted materialization frontier. Metadata removal
-is published before old chunk objects are deleted.
-
-Defrag may merge small TransformLog chunks and atomically replace their object
-references. It cannot alter entry TimeTicks, subscription cursors, component
-`checkpoint_time_tick`, or the PChannel global checkpoint.
-
-## 12. Invariants
-
-1. TransformLog is VChannel-owned.
+1. TransformLog is VChannel-owned; persistence is pchannel-owned (WALSummary).
 2. All entry positions use source WAL TimeTick.
-3. `checkpoint_time_tick` is a continuous TransformLog-relevant prefix.
-4. A Delete handle releases only after covering chunk durability and dirty
-   stable metadata installation.
-5. Payload-free SyncUp visibility is represented by `checkpoint_time_tick`
-   before the global checkpoint may pass it.
+3. `materialized_time_tick <= durable frontier <= WAL checkpoint`.
+4. A Delete handle releases only after the chunk and manifest are durable
+   (summary-owned), never before the flush event was delivered.
+5. Barrier visibility advances only after the summary made the records
+   durable.
 6. L0 materialization does not gate source-message Ack.
-7. Catalog metadata stops referencing a chunk before its object is deleted.
+7. The transform consumer never triggers persistence and never reads the
+   summary store at runtime.
