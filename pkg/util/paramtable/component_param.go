@@ -8211,6 +8211,9 @@ type streamingConfig struct {
 	FlushL0MaxRowNum   ParamItem `refreshable:"true"`
 	FlushL0MaxSize     ParamItem `refreshable:"true"`
 
+	// summary store retention
+	SummaryMaxBytesPerPChannel ParamItem `refreshable:"true"`
+
 	// recovery configuration.
 	WALRecoveryPersistInterval           ParamItem `refreshable:"true"`
 	WALRecoveryMaxDirtyMessage           ParamItem `refreshable:"true"`
@@ -8610,6 +8613,18 @@ If the binary size of l0 segment is greater than this size, it will be flushed.`
 		Export:       true,
 	}
 	p.FlushL0MaxSize.Init(base.mgr)
+
+	p.SummaryMaxBytesPerPChannel = ParamItem{
+		Key:     "streaming.summary.maxBytesPerPChannel",
+		Version: "3.0.0",
+		Doc: `The soft budget of the retained WALSummary chunk objects per pchannel, 4GB by default.
+The summary store keeps the transform records of every vchannel so the L0 materializer can read them back;
+chunks are released by the retention GC when the budget is exceeded, but never below the per-vchannel
+materialization frontiers.`,
+		DefaultValue: "4GB",
+		Export:       false,
+	}
+	p.SummaryMaxBytesPerPChannel.Init(base.mgr)
 
 	p.WALRecoveryPersistInterval = ParamItem{
 		Key:     "streaming.walRecovery.persistInterval",

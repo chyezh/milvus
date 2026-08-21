@@ -9,8 +9,10 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/transformlog"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walsummary"
+	"github.com/milvus-io/milvus/pkg/v3/objectstorage"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/walimplstest"
@@ -32,51 +34,52 @@ func (recordingVChannelTaskHandle) Cancel() {}
 
 func (recordingVChannelTaskHandle) Wait(context.Context) error { return nil }
 
-type discardTransformLogStore struct{}
-
-func (discardTransformLogStore) WriteTransformLogChunk(
-	context.Context,
-	string,
-	*streamingpb.TransformLogChunk,
-) error {
-	return nil
+// newTestSummaryManager builds a summary manager backed by a temp-dir chunk
+// manager, so flush tasks can actually execute. The runtime scheduler routes
+// flush tasks to the given scheduler when non-nil.
+func newTestSummaryManager(t *testing.T, scheduler nodescheduler.Scheduler) *walsummary.Manager {
+	t.Helper()
+	cm := storage.NewLocalChunkManager(objectstorage.RootPath(t.TempDir()))
+	store := walsummary.NewStore(cm, "p1", 1)
+	return walsummary.NewManager(walsummary.ManagerConfig{
+		PChannel:          "p1",
+		Term:              1,
+		Store:             store,
+		Runtime:           moduleapi.Runtime{Scheduler: scheduler},
+		FlushMaxBytes:     1 << 20,
+		RetentionMaxBytes: 1 << 30,
+	})
 }
 
-func (discardTransformLogStore) ReadTransformLogChunk(
-	context.Context,
-	string,
-	uint64,
-) (*streamingpb.TransformLogChunk, error) {
-	return nil, nil
-}
-
-func TestPChannelRecoveryManagerRequestsOnlyNamedVChannel(t *testing.T) {
+func TestPChannelRecoveryManagerRequestsPersistThroughSummary(t *testing.T) {
 	scheduler := &recordingVChannelScheduler{}
+	summaryManager := newTestSummaryManager(t, scheduler)
 	manager, err := NewPChannelRecoveryManager(PChannelManagerConfig{
 		PChannel: "p1",
 		VChannelMetas: map[string]*streamingpb.VChannelMeta{
 			"v1": {Vchannel: "v1", State: streamingpb.VChannelState_VCHANNEL_STATE_NORMAL},
 			"v2": {Vchannel: "v2", State: streamingpb.VChannelState_VCHANNEL_STATE_NORMAL},
 		},
-		Runtime:             moduleapi.Runtime{Scheduler: scheduler},
-		TransformLogStore:   discardTransformLogStore{},
-		TransformLogMaxRows: 100,
+		SummaryManager: summaryManager,
+		Runtime:        moduleapi.Runtime{Scheduler: scheduler},
 	})
 	require.NoError(t, err)
 	t.Cleanup(manager.Close)
-	observeVChannelDelete(t, manager.Module("v1"), "v1", 10)
-	observeVChannelDelete(t, manager.Module("v2"), "v2", 20)
+
+	// No observation yet: a persist request must not schedule a flush.
+	manager.RequestPersistThrough("v1", 10)
 	require.Empty(t, scheduler.tasks)
 
+	// Observe a delete on v1: the summary view stages it and the request
+	// schedules exactly one flush task covering it.
+	observeVChannelDelete(t, manager.Module("v1"), "v1", 10)
 	manager.RequestPersistThrough("v1", 10)
 	require.Len(t, scheduler.tasks, 1)
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
 
-	// The request for v1 must not schedule buffered v2 data.
-	require.Len(t, scheduler.tasks, 1)
+	// The v2 view has nothing staged, so a request for v2 schedules nothing.
 	manager.RequestPersistThrough("v2", 20)
-	require.Len(t, scheduler.tasks, 2)
-	require.NoError(t, scheduler.tasks[1].Execute(context.Background()))
+	require.Len(t, scheduler.tasks, 1)
 }
 
 func observeVChannelDelete(t *testing.T, module *VChannelRecoveryModule, vchannel string, timetick uint64) {
@@ -103,5 +106,3 @@ func observeVChannelDelete(t *testing.T, module *VChannelRecoveryModule, vchanne
 	retained.Release()
 	owner.Release()
 }
-
-var _ transformlog.Store = discardTransformLogStore{}

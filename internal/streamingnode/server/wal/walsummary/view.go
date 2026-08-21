@@ -37,7 +37,7 @@ import (
 // it; releasing the handle then is what lets the WAL checkpoint advance past
 // the record.
 type SummaryView struct {
-	manager *Manager
+	manager  *Manager
 	vchannel string
 
 	mu sync.Mutex
@@ -51,6 +51,10 @@ type SummaryView struct {
 	// durable chunk. Records with timetick > durableTimeTick are only in
 	// staging or nowhere.
 	durableTimeTick uint64
+	// latestTimeTick is the newest timetick observed on this vchannel,
+	// payload-carrying or not. It is the materialization ceiling: no record
+	// may be materialized past the newest observed message.
+	latestTimeTick uint64
 }
 
 // stagedRecord is one retained WAL message and the transform record it yields.
@@ -84,12 +88,16 @@ func (v *SummaryView) ObserveMessage(ctx context.Context, retained message.Retai
 	if retained == nil {
 		return
 	}
-	entry := messageutil.BuildTransformLogEntry(retained.Message(), messageutil.TransformEntryOption{})
+	msg := retained.Message()
+	v.mu.Lock()
+	if msg.TimeTick() > v.latestTimeTick {
+		v.latestTimeTick = msg.TimeTick()
+	}
+	entry := messageutil.BuildTransformLogEntry(msg, messageutil.TransformEntryOption{})
 	if entry == nil {
+		v.mu.Unlock()
 		return
 	}
-	v.mu.Lock()
-	defer v.mu.Unlock()
 	handle := retained.Clone()
 	v.staging = append(v.staging, &stagedRecord{
 		timeTick: entry.GetTimeTick(),
@@ -97,6 +105,7 @@ func (v *SummaryView) ObserveMessage(ctx context.Context, retained message.Retai
 		handle:   handle,
 	})
 	v.stagingBytes += uint64(proto.Size(entry))
+	v.mu.Unlock()
 	if v.stagingBytes >= v.manager.config().FlushMaxBytes {
 		v.manager.requestFlush()
 	}
@@ -106,11 +115,26 @@ func (v *SummaryView) ObserveMessage(ctx context.Context, retained message.Retai
 // barrier is flushed so the durable frontier stays close to the WAL frontier.
 func (v *SummaryView) SyncUp(timeTick uint64) {
 	v.mu.Lock()
+	if timeTick > v.latestTimeTick {
+		v.latestTimeTick = timeTick
+	}
 	hasStaging := len(v.staging) > 0
 	v.mu.Unlock()
 	if hasStaging {
 		v.manager.requestFlush()
 	}
+}
+
+// Manager returns the owning summary manager.
+func (v *SummaryView) Manager() *Manager {
+	return v.manager
+}
+
+// LatestTimeTick returns the newest timetick observed on this vchannel.
+func (v *SummaryView) LatestTimeTick() uint64 {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.latestTimeTick
 }
 
 // RequestPersistThrough schedules persistence when the view holds staging
@@ -163,19 +187,6 @@ func (v *SummaryView) DurableTimeTick() uint64 {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	return v.durableTimeTick
-}
-
-// stagingAfterLocked returns the staging records with timetick strictly
-// greater than from, without consuming them. Materialization reads this tail
-// that no chunk covers yet.
-func (v *SummaryView) stagingAfterLocked(from uint64) []*streamingpb.TransformLogEntry {
-	entries := make([]*streamingpb.TransformLogEntry, 0, len(v.staging))
-	for _, record := range v.staging {
-		if record.timeTick > from {
-			entries = append(entries, record.entry)
-		}
-	}
-	return entries
 }
 
 // recordTimetickRange returns the [start, end] span of the records, or zeros

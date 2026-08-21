@@ -198,6 +198,27 @@ func (s *Store) ReadChunk(
 	return unmarshalChunk(payload)
 }
 
+// ReadTransformSection decodes one vchannel's transform section of one chunk.
+// The section location comes from the manifest's per-vchannel index, so the
+// caller does not need the whole chunk decoded first.
+func (s *Store) ReadTransformSection(
+	ctx context.Context,
+	generation uint64,
+	vchannel string,
+	index *streamingpb.VChannelSummaryChunkIndex,
+) ([]*streamingpb.VChannelSummaryTransformRecord, error) {
+	key := s.ChunkKey(generation)
+	payload, err := s.chunkManager.Read(ctx, key)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to read summary chunk %s", key)
+	}
+	_, footerStart, err := unmarshalChunkTail(payload)
+	if err != nil {
+		return nil, err
+	}
+	return unmarshalTransformSection(payload, footerStart, index)
+}
+
 // DeleteChunk removes one chunk object. It is only called by the GC worker for
 // chunks already released from the manifest.
 func (s *Store) DeleteChunk(ctx context.Context, generation uint64) error {
@@ -378,7 +399,7 @@ func marshalChunk(
 			return nil, nil, err
 		}
 		index := &streamingpb.VChannelSummaryChunkIndex{
-			Vchannel: vchannel,
+			Vchannel:  vchannel,
 			Transform: ref,
 		}
 		index.StartTimetick, index.EndTimetick = transformRecordTimetickRange(records)

@@ -245,7 +245,7 @@ func TestStoreDeleteChunk(t *testing.T) {
 
 func TestInheritManifest(t *testing.T) {
 	previous := &streamingpb.PChannelSummaryManifest{
-		Chunks: []*streamingpb.PChannelSummaryChunkIndexEntry{{Generation: 0}},
+		Chunks:    []*streamingpb.PChannelSummaryChunkIndexEntry{{Generation: 0}},
 		PendingGc: []*streamingpb.PChannelSummaryChunkRef{{Generation: 0}},
 	}
 	discovered := []*streamingpb.PChannelSummaryChunkIndexEntry{
@@ -277,4 +277,3 @@ func timeticks(records []*streamingpb.VChannelSummaryTransformRecord) []uint64 {
 	}
 	return tts
 }
-

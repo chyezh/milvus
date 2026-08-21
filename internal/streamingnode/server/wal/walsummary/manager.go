@@ -40,9 +40,12 @@ import (
 // durable, so the global WAL checkpoint — which advances past a message only
 // when every retained handle is released — can never outrun the summary.
 type Manager struct {
-	mu   sync.Mutex
-	cfg  ManagerConfig
-	view *SummaryView
+	mu  sync.Mutex
+	cfg ManagerConfig
+	// views holds one summary view per vchannel. A vchannel's view lives for
+	// the whole lifetime of the manager; the vchannel module drops it on
+	// cleanup via RemoveView.
+	views map[string]*SummaryView
 
 	// nextGeneration is the generation the next flush writes.
 	nextGeneration uint64
@@ -55,6 +58,10 @@ type Manager struct {
 	// vchannel, mirrored from VChannelMeta. It is the hard lower bound of the
 	// retention: records not yet materialized must not be released.
 	materializedFrontiers map[string]uint64
+	// flushListeners receives the flush completion event of one vchannel.
+	// The transform consumer of the vchannel registers here and replaces its
+	// in-memory window from the delivered entries.
+	flushListeners map[string]FlushListener
 
 	// flushTasks are the in-flight / queued flush tasks, ordered by
 	// scheduling; every task is a predecessor of the next, so flushes never
@@ -78,16 +85,67 @@ type ManagerConfig struct {
 	// releases chunks above the budget, bounded below by the per-vchannel
 	// materialization frontiers.
 	RetentionMaxBytes uint64
-	Logger            *mlog.Logger
+	// MetaCatalog persists the pchannel summary meta: the fencing marker that
+	// records which term last owned the summary store. It may be nil for
+	// embedded uses without a catalog.
+	MetaCatalog MetaCatalog
+	Logger      *mlog.Logger
+}
+
+// MetaCatalog persists the pchannel summary meta of one pchannel.
+type MetaCatalog interface {
+	GetPChannelSummaryMeta(ctx context.Context, pchannel string) (*streamingpb.PChannelSummaryMeta, error)
+	SavePChannelSummaryMeta(ctx context.Context, pchannel string, meta *streamingpb.PChannelSummaryMeta) error
 }
 
 // NewManager creates the summary manager of one pchannel.
 func NewManager(config ManagerConfig) *Manager {
 	return &Manager{
 		cfg:                   config,
+		views:                 make(map[string]*SummaryView),
 		manifest:              &streamingpb.PChannelSummaryManifest{},
 		materializedFrontiers: make(map[string]uint64),
+		flushListeners:        make(map[string]FlushListener),
 	}
+}
+
+// FlushedBatch is the outcome of one successful flush. The entries of each
+// vchannel are standalone protos that no longer hold a message handle: a
+// listener may retain them (e.g. as its in-memory materialization window).
+type FlushedBatch struct {
+	// RecordsByVChannel holds the durable transform entries per vchannel, in
+	// ascending timetick order.
+	RecordsByVChannel map[string][]*streamingpb.TransformLogEntry
+	// CoveredTimeTick is the newest timetick covered by the flushed chunk.
+	CoveredTimeTick uint64
+}
+
+// FlushListener receives the flush completion event of one vchannel. It is the
+// only channel through which the transform consumer sees new durable records:
+// persistence decisions (autonomous size threshold, forced RequestPersistThrough,
+// barrier SyncUp) belong exclusively to the summary.
+//
+// Precondition: the implementation must be non-blocking and must not call back
+// into the manager (no observation, no flush requests, no view access). The
+// vchannel module registers the transform consumer here.
+type FlushListener interface {
+	OnSummaryFlushed(batch *FlushedBatch)
+}
+
+// SetFlushListener registers the flush listener of one vchannel, replacing any
+// previous registration.
+func (m *Manager) SetFlushListener(vchannel string, listener FlushListener) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.flushListeners[vchannel] = listener
+}
+
+// RemoveFlushListener drops the flush listener of one vchannel. It is called
+// together with RemoveView when the vchannel is cleaned up.
+func (m *Manager) RemoveFlushListener(vchannel string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.flushListeners, vchannel)
 }
 
 func (m *Manager) config() ManagerConfig {
@@ -99,10 +157,34 @@ func (m *Manager) config() ManagerConfig {
 func (m *Manager) View(vchannel string) *SummaryView {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.view == nil {
-		m.view = NewSummaryView(m, vchannel)
+	view, ok := m.views[vchannel]
+	if !ok {
+		view = NewSummaryView(m, vchannel)
+		m.views[vchannel] = view
 	}
-	return m.view
+	return view
+}
+
+// RemoveView drops the summary view of a vchannel, discarding its staging.
+// It is called by the vchannel module after the vchannel cleanup snapshot is
+// durable: no record of a dropped vchannel may survive in memory. The staged
+// handles are released so the WAL checkpoint can advance past them.
+func (m *Manager) RemoveView(vchannel string) {
+	m.mu.Lock()
+	view, ok := m.views[vchannel]
+	if ok {
+		delete(m.views, vchannel)
+	}
+	m.mu.Unlock()
+	if !ok {
+		return
+	}
+	view.mu.Lock()
+	records := view.takeStagingLocked()
+	view.mu.Unlock()
+	for _, record := range records {
+		record.handle.Release()
+	}
 }
 
 // SetMaterializedTimeTick mirrors the transform materialization frontier of a
@@ -176,6 +258,66 @@ func (m *Manager) HasPendingWork() bool {
 	return len(m.flushTasks) > 0
 }
 
+// ReadTransformEntries returns the durable transform entries of one vchannel
+// with timetick in (from, to], collected from the retained chunks. The chunks
+// are scanned in generation order; a chunk whose span ends at or before from
+// is skipped, a chunk whose span starts after to stops the scan.
+//
+// The transform consumer normally receives durable entries through the flush
+// listener (FlushListener) and never reads object storage. This method is the
+// one-time recovery path: after a restart the consumer's in-memory window is
+// empty, and recovery loads the durable backlog between the restored
+// materialization frontier and the durable frontier through this method.
+func (m *Manager) ReadTransformEntries(
+	ctx context.Context,
+	vchannel string,
+	from, to uint64,
+) ([]*streamingpb.TransformLogEntry, error) {
+	m.mu.Lock()
+	chunks := m.manifest.GetChunks()
+	m.mu.Unlock()
+	out := make([]*streamingpb.TransformLogEntry, 0)
+	for _, chunk := range chunks {
+		if chunk.GetEndTimetick() <= from {
+			continue
+		}
+		if chunk.GetStartTimetick() > to {
+			break
+		}
+		index := vchannelChunkIndex(chunk, vchannel)
+		if index == nil {
+			continue
+		}
+		records, err := m.cfg.Store.ReadTransformSection(ctx, chunk.GetGeneration(), vchannel, index)
+		if err != nil {
+			return nil, err
+		}
+		for _, record := range records {
+			tt := record.GetTimeTick()
+			if tt <= from || tt > to {
+				continue
+			}
+			out = append(out, &streamingpb.TransformLogEntry{
+				TimeTick: tt,
+				Entry: &streamingpb.TransformLogEntry_Delete{
+					Delete: record.GetDelete(),
+				},
+			})
+		}
+	}
+	return out, nil
+}
+
+// vchannelChunkIndex returns a chunk's index entry of one vchannel, or nil.
+func vchannelChunkIndex(chunk *streamingpb.PChannelSummaryChunkIndexEntry, vchannel string) *streamingpb.VChannelSummaryChunkIndex {
+	for _, index := range chunk.GetVchannels() {
+		if index.GetVchannel() == vchannel {
+			return index
+		}
+	}
+	return nil
+}
+
 // LatestCoveredTimeTick returns the newest timetick covered by a durable
 // chunk.
 func (m *Manager) LatestCoveredTimeTick() uint64 {
@@ -221,8 +363,24 @@ func (m *Manager) flushOnce(ctx context.Context) error {
 // original order. The handles were never released, so the records remain
 // valid; only the staging bookkeeping needs rebuilding.
 func (m *Manager) restoreStaging(batch *flushBatch) {
+	m.mu.Lock()
+	views := make(map[string]*SummaryView, len(batch.recordsByVChannel))
+	for vchannel := range batch.recordsByVChannel {
+		if view, ok := m.views[vchannel]; ok {
+			views[vchannel] = view
+		}
+	}
+	m.mu.Unlock()
 	for vchannel, records := range batch.recordsByVChannel {
-		view := m.View(vchannel)
+		view, ok := views[vchannel]
+		if !ok {
+			// The view was dropped while the flush failed; its records are
+			// discarded together with the vchannel.
+			for _, record := range records {
+				record.handle.Release()
+			}
+			continue
+		}
 		view.mu.Lock()
 		view.staging = append(records, view.staging...)
 		for _, record := range records {
@@ -235,19 +393,21 @@ func (m *Manager) restoreStaging(batch *flushBatch) {
 // collectStaging takes the staging of every view.
 func (m *Manager) collectStaging() *flushBatch {
 	m.mu.Lock()
-	view := m.view
-	m.mu.Unlock()
-	if view == nil {
-		return &flushBatch{}
+	views := make([]*SummaryView, 0, len(m.views))
+	for _, view := range m.views {
+		views = append(views, view)
 	}
-	view.mu.Lock()
-	records := view.takeStagingLocked()
-	view.mu.Unlock()
+	m.mu.Unlock()
 	batch := &flushBatch{
 		recordsByVChannel: make(map[string][]*stagedRecord),
 	}
-	if len(records) > 0 {
-		batch.recordsByVChannel[view.vchannel] = records
+	for _, view := range views {
+		view.mu.Lock()
+		records := view.takeStagingLocked()
+		view.mu.Unlock()
+		if len(records) > 0 {
+			batch.recordsByVChannel[view.vchannel] = records
+		}
 	}
 	return batch
 }
@@ -301,15 +461,58 @@ func (m *Manager) publishManifest(ctx context.Context, generation uint64, batch 
 	return nil
 }
 
-// completeBatch installs the durable state and releases the handles.
+// completeBatch installs the durable state, notifies the flush listeners, and
+// releases the handles.
 func (m *Manager) completeBatch(generation uint64, batch *flushBatch) {
+	// Build the per-vchannel entry lists first: the records are no longer
+	// referenced by the message handles (the entries are standalone protos
+	// produced at observation time), so the event can safely be delivered
+	// before or after the handle release.
+	entriesByVChannel := make(map[string][]*streamingpb.TransformLogEntry, len(batch.recordsByVChannel))
+	for vchannel, records := range batch.recordsByVChannel {
+		entries := make([]*streamingpb.TransformLogEntry, 0, len(records))
+		for _, record := range records {
+			entries = append(entries, &streamingpb.TransformLogEntry{
+				TimeTick: record.timeTick,
+				Entry: &streamingpb.TransformLogEntry_Delete{
+					Delete: record.entry.GetDelete(),
+				},
+			})
+		}
+		entriesByVChannel[vchannel] = entries
+	}
 	m.mu.Lock()
 	if batch.maxTimeTick > m.latestCoveredTimeTick {
 		m.latestCoveredTimeTick = batch.maxTimeTick
 	}
+	views := make([]*SummaryView, 0, len(batch.recordsByVChannel))
+	listeners := make(map[string]FlushListener, len(batch.recordsByVChannel))
+	for vchannel := range batch.recordsByVChannel {
+		// The view may already be gone (vchannel cleanup raced the flush);
+		// its staging was released by RemoveView, so nothing to mark durable
+		// and no event is delivered.
+		if view, ok := m.views[vchannel]; ok {
+			views = append(views, view)
+		}
+		if listener := m.flushListeners[vchannel]; listener != nil {
+			listeners[vchannel] = listener
+		}
+	}
 	m.mu.Unlock()
-	if m.view != nil {
-		m.view.markDurable(batch.maxTimeTick)
+	for _, view := range views {
+		view.markDurable(batch.maxTimeTick)
+	}
+	// Deliver the flush event outside any lock. A listener must be
+	// non-blocking and must not call back into the manager (see
+	// FlushListener); the transform consumer appends the entries to its own
+	// in-memory window and schedules its own materialization work.
+	for vchannel, listener := range listeners {
+		listener.OnSummaryFlushed(&FlushedBatch{
+			RecordsByVChannel: map[string][]*streamingpb.TransformLogEntry{
+				vchannel: entriesByVChannel[vchannel],
+			},
+			CoveredTimeTick: batch.maxTimeTick,
+		})
 	}
 	for _, records := range batch.recordsByVChannel {
 		for _, record := range records {

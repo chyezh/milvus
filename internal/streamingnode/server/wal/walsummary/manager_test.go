@@ -19,6 +19,7 @@ package walsummary
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -27,8 +28,8 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/storage"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/pkg/v3/objectstorage"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
@@ -325,4 +326,107 @@ func TestFlushTaskOrdering(t *testing.T) {
 	assert.Error(t, err)
 	require.NoError(t, manager.flushTasks[0].Execute(ctx))
 	require.NoError(t, manager.flushTasks[1].Execute(ctx))
+}
+
+// recordingFlushListener captures the flush events of one vchannel.
+type recordingFlushListener struct {
+	mu       sync.Mutex
+	batches  []*FlushedBatch
+	vchannel string
+}
+
+func (l *recordingFlushListener) OnSummaryFlushed(batch *FlushedBatch) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.batches = append(l.batches, batch)
+}
+
+func (l *recordingFlushListener) events() []*FlushedBatch {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]*FlushedBatch(nil), l.batches...)
+}
+
+func TestManagerFlushEventDeliversDurableEntries(t *testing.T) {
+	ctx := context.Background()
+	manager, _ := newTestManagerWithStore(t)
+	require.NoError(t, manager.Recover(ctx))
+	listener := &recordingFlushListener{vchannel: "v1"}
+	manager.SetFlushListener("v1", listener)
+
+	finalized := false
+	observeDelete(t, manager.View("v1"), 100, &finalized)
+	manager.requestFlushThrough(100)
+	require.NoError(t, manager.flushOnce(ctx))
+	assert.True(t, finalized, "handles released after the flush event")
+
+	events := listener.events()
+	require.Len(t, events, 1)
+	assert.Equal(t, uint64(100), events[0].CoveredTimeTick)
+	entries := events[0].RecordsByVChannel["v1"]
+	require.Len(t, entries, 1)
+	assert.Equal(t, uint64(100), entries[0].GetTimeTick())
+	assert.NotNil(t, entries[0].GetDelete())
+	// The entries are standalone protos: they survive the handle release.
+	assert.Equal(t, uint64(100), entries[0].GetTimeTick())
+}
+
+func TestManagerFlushEventPerVChannel(t *testing.T) {
+	ctx := context.Background()
+	manager, _ := newTestManagerWithStore(t)
+	require.NoError(t, manager.Recover(ctx))
+	listenerV1 := &recordingFlushListener{vchannel: "v1"}
+	listenerV2 := &recordingFlushListener{vchannel: "v2"}
+	manager.SetFlushListener("v1", listenerV1)
+	manager.SetFlushListener("v2", listenerV2)
+
+	var unused bool
+	observeDelete(t, manager.View("v1"), 100, &unused)
+	observeDelete(t, manager.View("v2"), 200, &unused)
+	manager.requestFlushThrough(200)
+	require.NoError(t, manager.flushOnce(ctx))
+
+	eventsV1 := listenerV1.events()
+	require.Len(t, eventsV1, 1)
+	assert.Len(t, eventsV1[0].RecordsByVChannel, 1)
+	assert.Equal(t, uint64(100), eventsV1[0].RecordsByVChannel["v1"][0].GetTimeTick())
+	eventsV2 := listenerV2.events()
+	require.Len(t, eventsV2, 1)
+	assert.Equal(t, uint64(200), eventsV2[0].RecordsByVChannel["v2"][0].GetTimeTick())
+
+	// Removing the listener stops delivery. The second flush only carries
+	// v1 data, so v2 gets no event either: events are delivered per vchannel
+	// with data in the batch.
+	manager.RemoveFlushListener("v1")
+	observeDelete(t, manager.View("v1"), 300, &unused)
+	manager.requestFlushThrough(300)
+	require.NoError(t, manager.flushOnce(ctx))
+	assert.Len(t, listenerV1.events(), 1)
+	assert.Len(t, listenerV2.events(), 1)
+}
+
+func TestManagerReadTransformEntriesAcrossChunks(t *testing.T) {
+	ctx := context.Background()
+	manager, _ := newTestManagerWithStore(t)
+	require.NoError(t, manager.Recover(ctx))
+	manager.View("v1")
+
+	// Two flushes produce two chunks; recovery-style reads span them.
+	var unused bool
+	for _, tt := range []uint64{100, 200} {
+		observeDelete(t, manager.View("v1"), tt, &unused)
+		manager.requestFlushThrough(tt)
+		require.NoError(t, manager.flushOnce(ctx))
+	}
+	entries, err := manager.ReadTransformEntries(ctx, "v1", 0, 1000)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	assert.Equal(t, uint64(100), entries[0].GetTimeTick())
+	assert.Equal(t, uint64(200), entries[1].GetTimeTick())
+
+	// The from-boundary is exclusive.
+	entries, err = manager.ReadTransformEntries(ctx, "v1", 100, 1000)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, uint64(200), entries[0].GetTimeTick())
 }

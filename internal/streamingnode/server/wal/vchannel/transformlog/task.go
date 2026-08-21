@@ -1,3 +1,19 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package transformlog
 
 import (
@@ -6,7 +22,6 @@ import (
 	"github.com/cockroachdb/errors"
 	"go.uber.org/atomic"
 
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
@@ -47,129 +62,28 @@ func (t *transformTaskBase) execute(ctx context.Context, ready bool, fn func(con
 	return errors.Mark(err, nodescheduler.ErrDelay)
 }
 
-type transformFlushTask struct {
-	transformTaskBase
-}
-
-func (t *transformFlushTask) Execute(ctx context.Context) error {
-	return t.execute(ctx, t.predecessorsDone(), func(ctx context.Context) error {
-		result, err := t.log.flush(ctx, flushOption{TargetTimeTick: t.timetick})
-		if err != nil {
-			return err
-		}
-		if result.NextTargetTimeTick > 0 {
-			t.log.submitFlushTask(result.NextTargetTimeTick)
-		}
-		if t.log.shouldMaterialize(ctx) {
-			t.log.RequestMaterializeThrough(t.log.checkpointTimeTick())
-		}
-		t.log.notifyUpdated()
-		releaseMessages(result.CompletedMessages)
-		return nil
-	})
-}
-
 type transformMaterializeTask struct {
 	transformTaskBase
 }
 
 func (t *transformMaterializeTask) Execute(ctx context.Context) error {
-	ready := t.predecessorsDone() && t.log.LatestTimeTick() >= t.timetick
+	// The task runs only once the summary has made the requested frontier
+	// durable: a flush event moves the window, and only then may
+	// materialization consume it.
+	ready := t.predecessorsDone() && t.log.DurableTimeTick() >= t.timetick
 	return t.execute(ctx, ready, func(ctx context.Context) error {
 		if _, err := t.log.materialize(ctx, materializeOption{TargetTimeTick: t.timetick}); err != nil {
 			return err
 		}
-		t.log.notifyUpdated()
 		return nil
 	})
 }
 
-func (t *TransformLog) submitFlushTask(timetick uint64) {
-	scheduler := t.runtime.Scheduler
-	if scheduler == nil {
-		return
-	}
-	t.mu.Lock()
-	task := t.newFlushTaskLocked(timetick)
-	t.mu.Unlock()
-	scheduler.Submit(task)
-}
-
-func (t *TransformLog) newFlushTaskLocked(timetick uint64) *transformFlushTask {
-	task := &transformFlushTask{
-		transformTaskBase: transformTaskBase{
-			log:          t,
-			timetick:     timetick,
-			predecessors: t.taskPredecessorsLocked(),
-		},
-	}
-	t.flushTasks = append(t.flushTasks, task)
-	return task
-}
-
-// RequestMaterializeThrough records the desired materialization frontier and
-// schedules the largest safe prefix allowed by the current L1 upper bound.
-// The desired frontier is retained so advancing the upper bound can continue
-// the same request without another WAL trigger.
-func (t *TransformLog) RequestMaterializeThrough(timetick uint64) bool {
-	if t == nil || t.runtime.Scheduler == nil {
-		return false
-	}
-	t.mu.Lock()
-	if timetick > t.requestedMaterializeTimeTick {
-		t.requestedMaterializeTimeTick = timetick
-	}
-	task := t.newRequestedMaterializeTaskLocked()
-	t.mu.Unlock()
-	if task == nil {
-		return false
-	}
-	t.runtime.Scheduler.Submit(task)
-	return true
-}
-
-// SetMaterializeUpperBound updates the VChannel-wide L1 safety frontier and
-// retries any previously requested materialization that can now make progress.
-// Publishing the same bound again is a no-op: the bound only changes on segment
-// create / cleanup / final-commit transitions, and skipping unchanged publishes
-// keeps the WAL observation hot path from rescheduling materialize tasks on
-// every accepted insert.
-func (t *TransformLog) SetMaterializeUpperBound(timetick uint64) bool {
-	if t == nil {
-		return false
-	}
-	t.mu.Lock()
-	if timetick == t.materializeUpperBound {
-		t.mu.Unlock()
-		return false
-	}
-	t.materializeUpperBound = timetick
-	if t.runtime.Scheduler == nil {
-		t.mu.Unlock()
-		return false
-	}
-	task := t.newRequestedMaterializeTaskLocked()
-	t.mu.Unlock()
-	if task == nil {
-		return false
-	}
-	t.runtime.Scheduler.Submit(task)
-	return true
-}
-
-// materializeTargetLocked returns the largest materialization frontier that is
-// both requested and allowed by the current L1 upper bound.
-func (t *TransformLog) materializeTargetLocked() uint64 {
-	target := t.requestedMaterializeTimeTick
-	if target > t.materializeUpperBound {
-		target = t.materializeUpperBound
-	}
-	return target
-}
-
+// newRequestedMaterializeTaskLocked returns a task for the current requested
+// frontier, or nil when there is nothing to do or a task is already pending.
 func (t *TransformLog) newRequestedMaterializeTaskLocked() *transformMaterializeTask {
 	target := t.materializeTargetLocked()
-	if target <= t.meta.GetMaterializedTimeTick() || t.pendingMaterializeTargetLocked() >= target {
+	if target <= t.materializedTimeTick || t.pendingMaterializeTargetLocked() >= target {
 		return nil
 	}
 	return t.newMaterializeTaskLocked(target)
@@ -192,38 +106,12 @@ func (t *TransformLog) newMaterializeTaskLocked(target uint64) *transformMateria
 }
 
 func (t *TransformLog) taskPredecessorsLocked() []transformTask {
-	t.flushTasks = compactTransformFlushTasks(t.flushTasks)
 	t.materializeTasks = compactTransformMaterializeTasks(t.materializeTasks)
-	predecessors := make([]transformTask, 0, len(t.flushTasks)+len(t.materializeTasks))
-	for _, task := range t.flushTasks {
-		predecessors = append(predecessors, task)
-	}
+	predecessors := make([]transformTask, 0, len(t.materializeTasks))
 	for _, task := range t.materializeTasks {
 		predecessors = append(predecessors, task)
 	}
 	return predecessors
-}
-
-func (t *TransformLog) HasPendingFlushTask() bool {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.hasPendingFlushTaskLocked()
-}
-
-func (t *TransformLog) hasPendingFlushTaskLocked() bool {
-	t.flushTasks = compactTransformFlushTasks(t.flushTasks)
-	return len(t.flushTasks) > 0
-}
-
-func (t *TransformLog) pendingFlushTargetLocked() uint64 {
-	t.flushTasks = compactTransformFlushTasks(t.flushTasks)
-	var target uint64
-	for _, task := range t.flushTasks {
-		if task.timetick > target {
-			target = task.timetick
-		}
-	}
-	return target
 }
 
 func (t *TransformLog) HasPendingMaterializeTask() bool {
@@ -244,25 +132,6 @@ func (t *TransformLog) pendingMaterializeTargetLocked() uint64 {
 	return target
 }
 
-func (t *TransformLog) notifyUpdated() {
-	if t.runtime.Notifier == nil {
-		return
-	}
-	t.runtime.Notifier.NotifyModuleUpdated(moduleapi.ModuleNameTransformLog)
-}
-
-func compactTransformFlushTasks(tasks []*transformFlushTask) []*transformFlushTask {
-	pending := tasks[:0]
-	for _, task := range tasks {
-		if task == nil || task.Done() {
-			continue
-		}
-		pending = append(pending, task)
-	}
-	clear(pending[len(pending):])
-	return pending
-}
-
 func compactTransformMaterializeTasks(tasks []*transformMaterializeTask) []*transformMaterializeTask {
 	pending := tasks[:0]
 	for _, task := range tasks {
@@ -276,6 +145,5 @@ func compactTransformMaterializeTasks(tasks []*transformMaterializeTask) []*tran
 }
 
 var (
-	_ nodescheduler.Task = (*transformFlushTask)(nil)
 	_ nodescheduler.Task = (*transformMaterializeTask)(nil)
 )
