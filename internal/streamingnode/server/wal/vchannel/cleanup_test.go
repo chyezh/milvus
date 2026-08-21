@@ -32,14 +32,11 @@ func TestPChannelRecoveryManagerCleansDroppedVChannelInTwoPhases(t *testing.T) {
 
 	pastTombstone := moduleapi.CleanupContext{PhysicalTimeTick: 11}
 	deleteSnapshots := manager.ConsumeCleanupSnapshots(pastTombstone)
-	require.Len(t, deleteSnapshots, 2)
-	assert.Equal(t, moduleapi.ModuleNameTransformLog, deleteSnapshots[0].ModuleName())
+	require.Len(t, deleteSnapshots, 1)
+	assert.Equal(t, moduleapi.ModuleNameVChannel, deleteSnapshots[0].ModuleName())
 	assert.Equal(t, moduleapi.SnapshotOpDelete, deleteSnapshots[0].Op())
-	assert.Equal(t, moduleapi.ModuleNameVChannel, deleteSnapshots[1].ModuleName())
-	assert.Equal(t, moduleapi.SnapshotOpDelete, deleteSnapshots[1].Op())
 
 	deleteSnapshots[0].MarkPersisted()
-	deleteSnapshots[1].MarkPersisted()
 	assert.Nil(t, manager.Module("v1"))
 }
 
@@ -64,9 +61,8 @@ func TestPChannelRecoveryManagerDeletesSegmentsBeforeVChannel(t *testing.T) {
 	segmentDeletes[0].MarkPersisted()
 
 	vchannelDeletes := manager.ConsumeCleanupSnapshots(cleanup)
-	require.Len(t, vchannelDeletes, 2)
-	assert.Equal(t, moduleapi.ModuleNameTransformLog, vchannelDeletes[0].ModuleName())
-	assert.Equal(t, moduleapi.ModuleNameVChannel, vchannelDeletes[1].ModuleName())
+	require.Len(t, vchannelDeletes, 1)
+	assert.Equal(t, moduleapi.ModuleNameVChannel, vchannelDeletes[0].ModuleName())
 	for _, snapshot := range vchannelDeletes {
 		snapshot.MarkPersisted()
 	}
@@ -124,10 +120,11 @@ func newCleanupTestManager(
 		PChannel: "p1",
 		VChannelMetas: map[string]*streamingpb.VChannelMeta{
 			"v1": {
-				Vchannel:           "v1",
-				State:              state,
-				CheckpointTimeTick: 10,
-				TombstoneTimeTick:  tombstoneTimeTick,
+				Vchannel:                      "v1",
+				State:                         state,
+				CheckpointTimeTick:            10,
+				TombstoneTimeTick:             tombstoneTimeTick,
+				TransformMaterializedTimeTick: 10,
 				CollectionInfo: &streamingpb.CollectionInfoOfVChannel{
 					CollectionId: 1,
 					Partitions: []*streamingpb.PartitionInfoOfVChannel{
@@ -144,11 +141,6 @@ func newCleanupTestManager(
 			},
 		},
 		Segments: segments,
-		TransformLogMetas: map[string]*streamingpb.VChannelTransformLogMeta{
-			"v1": {
-				MaterializedTimeTick: 10,
-			},
-		},
 	})
 	require.NoError(t, err)
 	t.Cleanup(manager.Close)

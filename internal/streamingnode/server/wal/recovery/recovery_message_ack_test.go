@@ -269,8 +269,6 @@ func TestBuildRecoverySnapshotBatchesModuleMutations(t *testing.T) {
 		newOrderedDirtySnapshot(moduleapi.ModuleNameVChannel, moduleapi.SnapshotKey{VChannel: "v3"}, moduleapi.SnapshotOpDelete, vchannel("v3")),
 		newOrderedDirtySnapshot(moduleapi.ModuleNameSegment, moduleapi.SnapshotKey{SegmentID: 1}, moduleapi.SnapshotOpUpsert, &streamingpb.SegmentAssignmentMeta{SegmentId: 1}),
 		newOrderedDirtySnapshot(moduleapi.ModuleNameSegment, moduleapi.SnapshotKey{SegmentID: 2}, moduleapi.SnapshotOpDelete, &streamingpb.SegmentAssignmentMeta{SegmentId: 2}),
-		newOrderedDirtySnapshot(moduleapi.ModuleNameTransformLog, moduleapi.SnapshotKey{VChannel: "v1"}, moduleapi.SnapshotOpUpsert, &streamingpb.VChannelTransformLogMeta{CheckpointTimeTick: 10}),
-		newOrderedDirtySnapshot(moduleapi.ModuleNameTransformLog, moduleapi.SnapshotKey{VChannel: "v2"}, moduleapi.SnapshotOpDelete, &streamingpb.VChannelTransformLogMeta{}),
 	}
 
 	snapshot, err := storage.buildRecoverySnapshot(&dirtyPersistSnapshot{
@@ -284,8 +282,6 @@ func TestBuildRecoverySnapshotBatchesModuleMutations(t *testing.T) {
 	assert.Contains(t, snapshot.RemovedVChannels, "v3")
 	assert.Contains(t, snapshot.SegmentAssignments, int64(1))
 	assert.Equal(t, []int64{2}, snapshot.RemovedSegmentIDs)
-	assert.Contains(t, snapshot.TransformLogMetas, "v1")
-	assert.Equal(t, []string{"v2"}, snapshot.RemovedTransformLogs)
 	assert.Equal(t, checkpoint.TimeTick, snapshot.ConsumeCheckpoint.GetTimeTick())
 }
 

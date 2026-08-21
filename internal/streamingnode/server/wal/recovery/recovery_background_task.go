@@ -39,7 +39,23 @@ func (rs *recoveryStorageImpl) backgroundTask() {
 		if err := rs.persistDirtySnapshot(rs.backgroundTaskNotifier.Context(), mlog.DebugLevel); err != nil {
 			return
 		}
+		if err := rs.gcSummaryStore(rs.backgroundTaskNotifier.Context()); err != nil {
+			return
+		}
 	}
+}
+
+// gcSummaryStore runs the WALSummary retention sweep. The sweep is cheap when
+// there is nothing to release; a failure here (e.g. object storage outage)
+// must not stall checkpoint persistence, so errors only log.
+func (rs *recoveryStorageImpl) gcSummaryStore(ctx context.Context) error {
+	if rs.summaryManager == nil {
+		return nil
+	}
+	if err := rs.summaryManager.GCOnce(ctx); err != nil {
+		rs.Logger().Warn(context.TODO(), "failed to gc summary store", mlog.Err(err))
+	}
+	return nil
 }
 
 // persistDirtySnapshot persists the dirty snapshot to the catalog.
@@ -190,25 +206,6 @@ func (rs *recoveryStorageImpl) buildRecoverySnapshot(snapshot *dirtyPersistSnaps
 				recoverySnapshot.RemovedSegmentIDs = append(recoverySnapshot.RemovedSegmentIDs, key.SegmentID)
 			default:
 				return nil, merr.WrapErrServiceInternalMsg("unknown segment snapshot op: %d", dirtySnapshot.Op())
-			}
-		case moduleapi.ModuleNameTransformLog:
-			if key.VChannel == "" {
-				return nil, merr.WrapErrServiceInternalMsg("transformlog dirty snapshot is missing vchannel key")
-			}
-			switch dirtySnapshot.Op() {
-			case moduleapi.SnapshotOpUpsert:
-				meta, ok := dirtySnapshot.Payload().(*streamingpb.VChannelTransformLogMeta)
-				if !ok || meta == nil {
-					return nil, merr.WrapErrServiceInternalMsg("transformlog dirty snapshot payload is not VChannelTransformLogMeta")
-				}
-				if recoverySnapshot.TransformLogMetas == nil {
-					recoverySnapshot.TransformLogMetas = make(map[string]*streamingpb.VChannelTransformLogMeta)
-				}
-				recoverySnapshot.TransformLogMetas[key.VChannel] = meta
-			case moduleapi.SnapshotOpDelete:
-				recoverySnapshot.RemovedTransformLogs = append(recoverySnapshot.RemovedTransformLogs, key.VChannel)
-			default:
-				return nil, merr.WrapErrServiceInternalMsg("unknown transformlog snapshot op: %d", dirtySnapshot.Op())
 			}
 		default:
 			return nil, merr.WrapErrServiceInternalMsg("unknown module dirty snapshot: %s", dirtySnapshot.ModuleName())

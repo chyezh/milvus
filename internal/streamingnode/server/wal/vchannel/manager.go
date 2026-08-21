@@ -9,6 +9,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/segment"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/transformlog"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walsummary"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
@@ -20,18 +21,25 @@ import (
 type PChannelManagerConfig struct {
 	PChannel string
 
-	VChannelMetas     map[string]*streamingpb.VChannelMeta
-	Segments          map[int64]*streamingpb.SegmentAssignmentMeta
-	TransformLogMetas map[string]*streamingpb.VChannelTransformLogMeta
+	VChannelMetas map[string]*streamingpb.VChannelMeta
+	Segments      map[int64]*streamingpb.SegmentAssignmentMeta
 
-	Runtime                   moduleapi.Runtime
-	Logger                    *mlog.Logger
-	SegmentLifecycle          segment.Lifecycle
-	SegmentPackWriter         segment.PackWriter
-	TransformLogStore         transformlog.Store
+	Runtime           moduleapi.Runtime
+	Logger            *mlog.Logger
+	SegmentLifecycle  segment.Lifecycle
+	SegmentPackWriter segment.PackWriter
+	// SummaryManager is the pchannel-scoped WALSummary runtime. Each vchannel
+	// module observes messages into its summary view; the transform consumer
+	// receives the durable records through the summary's flush events.
+	SummaryManager *walsummary.Manager
+	// PendingTransformEntries is the recovery-loaded initial materialization
+	// window per vchannel: the durable records after the restored
+	// transform_materialized_time_tick. Runtime flushes replace it through
+	// the summary's flush listener.
+	PendingTransformEntries map[string][]*streamingpb.TransformLogEntry
+	// TransformLogMaterializer writes the L0 segments of the transform
+	// consumer.
 	TransformLogMaterializer  transformlog.Materializer
-	TransformLogMaxRows       uint64
-	TransformLogMaxBytes      uint64
 	TransformLogMaterialRows  uint64
 	TransformLogMaterialBytes uint64
 }
@@ -81,9 +89,6 @@ func (m *PChannelRecoveryManager) initialVChannels(config PChannelManagerConfig)
 	for vchannel := range m.segmentsByVChannel {
 		index[vchannel] = struct{}{}
 	}
-	for vchannel := range config.TransformLogMetas {
-		index[vchannel] = struct{}{}
-	}
 	vchannels := make([]string, 0, len(index))
 	for vchannel := range index {
 		vchannels = append(vchannels, vchannel)
@@ -110,7 +115,6 @@ func groupSegmentsByVChannel(segments map[int64]*streamingpb.SegmentAssignmentMe
 func (m *PChannelRecoveryManager) releaseInitialState() {
 	m.config.VChannelMetas = nil
 	m.config.Segments = nil
-	m.config.TransformLogMetas = nil
 	m.segmentsByVChannel = nil
 }
 
@@ -277,15 +281,13 @@ func (m *PChannelRecoveryManager) newModule(vchannel string) (*VChannelRecoveryM
 		VChannel:                  vchannel,
 		VChannelMeta:              m.config.VChannelMetas[vchannel],
 		Segments:                  m.segmentsByVChannel[vchannel],
-		TransformLogMeta:          m.config.TransformLogMetas[vchannel],
 		Runtime:                   runtime,
 		Logger:                    m.config.Logger,
 		SegmentLifecycle:          m.config.SegmentLifecycle,
 		SegmentPackWriter:         m.config.SegmentPackWriter,
-		TransformLogStore:         m.config.TransformLogStore,
+		SummaryManager:            m.config.SummaryManager,
+		PendingTransformEntries:   m.config.PendingTransformEntries[vchannel],
 		TransformLogMaterializer:  m.config.TransformLogMaterializer,
-		TransformLogMaxRows:       m.config.TransformLogMaxRows,
-		TransformLogMaxBytes:      m.config.TransformLogMaxBytes,
 		TransformLogMaterialRows:  m.config.TransformLogMaterialRows,
 		TransformLogMaterialBytes: m.config.TransformLogMaterialBytes,
 		OnCleanup:                 m.removeModule,

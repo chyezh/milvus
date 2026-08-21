@@ -21,6 +21,7 @@ import (
 
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 // probeLimit bounds a single forward probe. A term that wrote more than this
@@ -43,7 +44,33 @@ const probeLimit = 1 << 16
 //     recovery and is lost silently;
 //  4. only now may this owner write chunks (generations start past the
 //     inherited set).
+//
+// The catalog meta is the fencing marker of the store: it records which term
+// last owned the summary. A term older than the recorded one must not touch
+// the store (a newer owner is already writing). The check is best-effort —
+// the object-level arbitration on the chunk keys is the authoritative fence —
+// and the meta is written whenever this term differs from the recorded one.
 func (m *Manager) Recover(ctx context.Context) error {
+	if m.cfg.MetaCatalog != nil {
+		meta, err := m.cfg.MetaCatalog.GetPChannelSummaryMeta(ctx, m.cfg.PChannel)
+		if err != nil {
+			return err
+		}
+		if meta != nil && m.cfg.Term < meta.GetTerm() {
+			return merr.WrapErrServiceInternalMsg(
+				"walsummary of pchannel %s is fenced: catalog term %d is newer than term %d",
+				m.cfg.PChannel, meta.GetTerm(), m.cfg.Term,
+			)
+		}
+		if meta == nil || m.cfg.Term != meta.GetTerm() {
+			if err := m.cfg.MetaCatalog.SavePChannelSummaryMeta(ctx, m.cfg.PChannel, &streamingpb.PChannelSummaryMeta{
+				Pchannel: m.cfg.PChannel,
+				Term:     m.cfg.Term,
+			}); err != nil {
+				return err
+			}
+		}
+	}
 	previous, found, err := m.cfg.Store.ReadManifest(ctx)
 	if err != nil {
 		return err

@@ -41,10 +41,11 @@ func newVChannelView(
 	dirty bool,
 ) *VChannelView {
 	return &VChannelView{
-		meta:                  meta,
-		persistedMetaTimeTick: persistedMetaTimeTick,
-		dirty:                 dirty,
-		schemaDirty:           dirty,
+		meta:                          meta,
+		persistedMetaTimeTick:         persistedMetaTimeTick,
+		persistedMaterializedTimeTick: meta.GetTransformMaterializedTimeTick(),
+		dirty:                         dirty,
+		schemaDirty:                   dirty,
 	}
 }
 
@@ -83,7 +84,8 @@ type VChannelView struct {
 
 	meta                             *streamingpb.VChannelMeta
 	persistedMetaTimeTick            uint64
-	dirty                            bool // whether the current vchannel recovery info still needs catalog persistence.
+	persistedMaterializedTimeTick    uint64 // the transform materialization frontier already stored in the catalog.
+	dirty                            bool   // whether the current vchannel recovery info still needs catalog persistence.
 	schemaDirty                      bool
 	pendingDirtySnapshot             *streamingpb.VChannelMeta
 	pendingDirtySnapshotSavesSchemas bool
@@ -148,10 +150,34 @@ func (info *VChannelView) markMetaPersistedLocked(timetick uint64) {
 	}
 }
 
+// SetTransformMaterializedTimeTick advances the transform materialization
+// frontier held in the vchannel meta and marks the snapshot dirty, so the
+// frontier persists with the next catalog checkpoint. It is called by the
+// transform consumer after every committed materialization batch.
+func (info *VChannelView) SetTransformMaterializedTimeTick(timetick uint64) {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	if timetick > info.meta.GetTransformMaterializedTimeTick() {
+		info.meta.TransformMaterializedTimeTick = timetick
+		info.dirty = true
+	}
+}
+
+// PersistedMaterializedTimeTick returns the transform materialization frontier
+// already stored in the recovery catalog.
+func (info *VChannelView) PersistedMaterializedTimeTick() uint64 {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	return info.persistedMaterializedTimeTick
+}
+
 func (info *VChannelView) MarkSnapshotPersisted(snapshot *streamingpb.VChannelMeta) {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	info.markMetaPersistedLocked(snapshot.GetCheckpointTimeTick())
+	if materialized := snapshot.GetTransformMaterializedTimeTick(); materialized > info.persistedMaterializedTimeTick {
+		info.persistedMaterializedTimeTick = materialized
+	}
 	if info.pendingDirtySnapshot != nil && proto.Equal(info.pendingDirtySnapshot, snapshot) {
 		if info.pendingDirtySnapshotSavesSchemas && vchannelSchemasEqual(info.meta, snapshot) {
 			info.schemaDirty = false

@@ -572,8 +572,9 @@ func TestMigrateLegacyRecoveryInfoUsesSafeCheckpoint(t *testing.T) {
 	assert.Equal(t, uint64(100), vchannels["v1"].GetCheckpointTimeTick())
 	assert.Equal(t, streamingpb.PartitionState_PARTITION_STATE_NORMAL, vchannels["v1"].CollectionInfo.Partitions[0].GetState())
 	assert.Equal(t, uint64(0), vchannels["v1"].CollectionInfo.Schemas[0].GetCheckpointTimeTick())
-	assert.Equal(t, uint64(80), transformLogs["v1"].GetCheckpointTimeTick())
-	assert.Equal(t, uint64(20), transformLogs["v2"].GetCheckpointTimeTick())
+	// The pre-summary format had no transform log: the migration must not
+	// manufacture per-vchannel transform metas.
+	assert.Empty(t, transformLogs)
 }
 
 func TestRebuildLegacySegmentSnapshotUsesDataCoordDurableState(t *testing.T) {

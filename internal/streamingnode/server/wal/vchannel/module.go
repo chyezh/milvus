@@ -10,6 +10,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/segment"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/transformlog"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walsummary"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
@@ -29,18 +30,20 @@ type ModuleConfig struct {
 	PChannel string
 	VChannel string
 
-	VChannelMeta     *streamingpb.VChannelMeta
-	Segments         map[int64]*streamingpb.SegmentAssignmentMeta
-	TransformLogMeta *streamingpb.VChannelTransformLogMeta
+	VChannelMeta *streamingpb.VChannelMeta
+	Segments     map[int64]*streamingpb.SegmentAssignmentMeta
 
-	Runtime                   moduleapi.Runtime
-	Logger                    *mlog.Logger
-	SegmentLifecycle          segment.Lifecycle
-	SegmentPackWriter         segment.PackWriter
-	TransformLogStore         transformlog.Store
+	Runtime           moduleapi.Runtime
+	Logger            *mlog.Logger
+	SegmentLifecycle  segment.Lifecycle
+	SegmentPackWriter segment.PackWriter
+	SummaryManager    *walsummary.Manager
+	// PendingTransformEntries is the initial materialization window of the
+	// transform consumer: the durable records after the restored
+	// transform_materialized_time_tick, loaded once by recovery. Runtime
+	// flushes replace it through the summary's flush listener.
+	PendingTransformEntries   []*streamingpb.TransformLogEntry
 	TransformLogMaterializer  transformlog.Materializer
-	TransformLogMaxRows       uint64
-	TransformLogMaxBytes      uint64
 	TransformLogMaterialRows  uint64
 	TransformLogMaterialBytes uint64
 	OnCleanup                 func(*VChannelRecoveryModule)
@@ -52,7 +55,7 @@ type VChannelRecoveryModule struct {
 	// particular, segments may grow when CreateSegment is observed while the
 	// recovery background task is collecting dirty snapshots.
 	//
-	// Lock order is m.mu -> SegmentView.mu -> TransformLog.mu. Never take a
+	// Lock order is m.mu -> SegmentView.mu -> SummaryView.mu. Never take a
 	// SegmentView lock (directly or via a Locked helper) while holding another
 	// module's mu, and never call SegmentView.NotifyDataUpdated with a view
 	// lock held (it re-enters the module).
@@ -71,6 +74,7 @@ type VChannelRecoveryModule struct {
 	pendingCleanup  map[int64]*segment.SegmentView
 
 	transformLog *transformlog.TransformLog
+	summaryView  *walsummary.SummaryView
 
 	// materializeUpperBound mirrors the last bound published to the transform
 	// log, so refreshTransformMaterializeUpperBoundLocked can skip unchanged
@@ -139,16 +143,24 @@ func newModule(config ModuleConfig, adoptVChannelMeta bool) (*VChannelRecoveryMo
 			module.cleanupSegments[id] = view
 		}
 	}
+	if config.SummaryManager != nil {
+		module.summaryView = config.SummaryManager.View(config.VChannel)
+	}
 	module.transformLog = transformlog.New(transformlog.Config{
-		VChannel:            config.VChannel,
-		MaxRows:             config.TransformLogMaxRows,
-		MaterializeMaxRows:  config.TransformLogMaterialRows,
-		MaterializeMaxBytes: config.TransformLogMaterialBytes,
-		Meta:                config.TransformLogMeta,
-		Store:               config.TransformLogStore,
-		Materializer:        config.TransformLogMaterializer,
-		Runtime:             config.Runtime,
+		VChannel:             config.VChannel,
+		MaterializedTimeTick: config.VChannelMeta.GetTransformMaterializedTimeTick(),
+		PendingEntries:       config.PendingTransformEntries,
+		MaterializeMaxRows:   config.TransformLogMaterialRows,
+		MaterializeMaxBytes:  config.TransformLogMaterialBytes,
+		Materializer:         config.TransformLogMaterializer,
+		Runtime:              config.Runtime,
+		OnMaterialized:       module.markTransformMaterialized,
 	})
+	if config.SummaryManager != nil {
+		// The transform consumer sees durable records exclusively through the
+		// summary's flush events; persistence decisions stay with the summary.
+		config.SummaryManager.SetFlushListener(config.VChannel, module.transformLog)
+	}
 	module.mu.Lock()
 	module.refreshTransformMaterializeUpperBoundLocked()
 	module.mu.Unlock()
@@ -213,8 +225,21 @@ func (m *VChannelRecoveryModule) ObserveMessage(
 	case message.MessageTypeAlterWAL:
 		m.handleAlterWALMessage(ctx, retained)
 	}
-	if m.transformLog != nil {
-		m.transformLog.ObserveMessage(ctx, retained)
+	if m.summaryView != nil {
+		m.summaryView.ObserveMessage(ctx, retained)
+	}
+	// Barrier messages demand the transform consumer catch up through their
+	// timetick: the request is recorded, and the summary is asked to make
+	// everything through the barrier durable (its SyncUp). Regular deletes
+	// are materialized lazily when their flush events arrive (see
+	// RequestMaterializeThrough callers). Persistence stays exclusively with
+	// the summary; the consumer only listens for the flush events.
+	switch messageutil.ClassifyTransformLogMessage(retained.Message()) {
+	case messageutil.TransformLogKindBarrier:
+		m.transformLog.RequestMaterializeThrough(retained.Message().TimeTick())
+		if m.summaryView != nil {
+			m.summaryView.SyncUp(retained.Message().TimeTick())
+		}
 	}
 	return true
 }
@@ -282,18 +307,6 @@ func (m *VChannelRecoveryModule) ConsumeDirtySnapshots() []moduleapi.DirtySnapsh
 			))
 		}
 	}
-	if m.transformLog != nil {
-		if meta := m.transformLog.ConsumeDirtyAndGetSnapshot(); meta != nil {
-			snapshot := meta
-			snapshots = append(snapshots, newDirtySnapshot(
-				moduleapi.ModuleNameTransformLog,
-				moduleapi.SnapshotKey{PChannel: m.pchannel, VChannel: m.vchannel},
-				moduleapi.SnapshotOpUpsert,
-				snapshot,
-				func() { m.markTransformSnapshotPersisted(snapshot) },
-			))
-		}
-	}
 	return snapshots
 }
 
@@ -320,8 +333,8 @@ func (m *VChannelRecoveryModule) RequestPersistThrough(targetTimeTick uint64) {
 	for _, view := range m.segments {
 		view.RequestPersistThrough(targetTimeTick)
 	}
-	if m.transformLog != nil {
-		m.transformLog.RequestPersistThrough(targetTimeTick)
+	if m.summaryView != nil {
+		m.summaryView.RequestPersistThrough(targetTimeTick)
 	}
 }
 
@@ -618,10 +631,36 @@ func (m *VChannelRecoveryModule) tryFinalizeSegmentLocked(segmentID int64, view 
 	return true
 }
 
-func (m *VChannelRecoveryModule) markTransformSnapshotPersisted(snapshot *streamingpb.VChannelTransformLogMeta) {
+// markTransformMaterialized mirrors the transform materialization frontier
+// into the vchannel meta (transform_materialized_time_tick) and marks the
+// vchannel snapshot dirty, so the frontier persists with the next catalog
+// checkpoint. The transform consumer calls it after every committed batch; it
+// must not call back into the TransformLog.
+func (m *VChannelRecoveryModule) markTransformMaterialized(timeTick uint64) {
 	m.mu.Lock()
-	m.transformLog.MarkSnapshotPersisted(snapshot)
+	if m.vchannelView != nil {
+		m.vchannelView.SetTransformMaterializedTimeTick(timeTick)
+	}
+	summaryManager := m.summaryManager()
 	m.mu.Unlock()
+	if summaryManager != nil {
+		// The frontier is the hard lower bound of the summary retention: no
+		// record below it may be released.
+		summaryManager.SetMaterializedTimeTick(m.vchannel, timeTick)
+	}
+	if m.runtime.Notifier != nil {
+		m.runtime.Notifier.NotifyModuleUpdated(moduleapi.ModuleNameVChannel)
+	}
+}
+
+// summaryManager returns the pchannel-scoped summary manager this module
+// observes into, or nil. It is read under m.mu; the manager itself outlives
+// the module.
+func (m *VChannelRecoveryModule) summaryManager() *walsummary.Manager {
+	if m.summaryView == nil {
+		return nil
+	}
+	return m.summaryView.Manager()
 }
 
 func (m *VChannelRecoveryModule) markSegmentSnapshotPersisted(
@@ -682,24 +721,16 @@ func (m *VChannelRecoveryModule) ConsumeCleanupSnapshots(cleanup moduleapi.Clean
 			func() { m.completeSegmentCleanup(segmentID, owner) },
 		))
 	}
-	if m.vchannelView != nil && m.transformLog != nil {
+	if m.vchannelView != nil {
 		dropSnapshot, cleanupPartitions := m.vchannelView.TombstonedCleanupPlan(
 			cleanup.PhysicalTimeTick,
-			m.transformLog.PersistedMaterializedTimeTick(),
+			m.vchannelView.PersistedMaterializedTimeTick(),
 		)
 		if len(cleanupPartitions) > 0 {
 			vchannelChanged = m.vchannelView.ApplyPartitionCleanup(cleanupPartitions) || vchannelChanged
-		} else if dropSnapshot != nil && len(m.segments) == 0 &&
-			!m.transformLog.HasDirty() && !m.transformLog.HasPendingWork() {
+		} else if dropSnapshot != nil && len(m.segments) == 0 {
 			tombstoneTimeTick := dropSnapshot.GetTombstoneTimeTick()
 			snapshots = append(snapshots,
-				newDirtySnapshot(
-					moduleapi.ModuleNameTransformLog,
-					moduleapi.SnapshotKey{PChannel: m.pchannel, VChannel: m.vchannel},
-					moduleapi.SnapshotOpDelete,
-					m.transformLog.SnapshotMeta(),
-					nil,
-				),
 				newDirtySnapshot(
 					moduleapi.ModuleNameVChannel,
 					moduleapi.SnapshotKey{PChannel: m.pchannel, VChannel: m.vchannel},
@@ -725,6 +756,14 @@ func (m *VChannelRecoveryModule) completeVChannelCleanup(tombstoneTimeTick uint6
 		return
 	}
 	m.removed = true
+	if m.summaryView != nil {
+		// Drop the summary view: no record of the dropped vchannel may
+		// survive in memory, and its staged handles must be released so the
+		// WAL checkpoint can advance past them.
+		m.summaryView.Manager().RemoveView(m.vchannel)
+		m.summaryView.Manager().RemoveFlushListener(m.vchannel)
+		m.summaryView = nil
+	}
 	if m.onCleanup != nil {
 		m.onCleanup(m)
 	}

@@ -10,8 +10,52 @@ import (
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/segment"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/transformlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 )
+
+// recordingMaterializer records the materialize calls it receives.
+type recordingMaterializer struct {
+	mu      sync.Mutex
+	batches []MaterializeBatch
+}
+
+type MaterializeBatch struct {
+	TargetTimeTick uint64
+	TimeTicks      []uint64
+}
+
+func (m *recordingMaterializer) Materialize(_ context.Context, req transformlog.MaterializeRequest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	batch := MaterializeBatch{TargetTimeTick: req.TargetTimeTick}
+	for _, entry := range req.Entries {
+		batch.TimeTicks = append(batch.TimeTicks, entry.GetTimeTick())
+	}
+	m.batches = append(m.batches, batch)
+	return nil
+}
+
+// newMaterializeBoundTestModule builds a module whose summary view has staged
+// transform records at the given timeticks, ready for materialization.
+func newMaterializeBoundTestModule(t *testing.T, scheduler *recordingVChannelScheduler, segmentMetas map[int64]*streamingpb.SegmentAssignmentMeta, timeticks ...uint64) *VChannelRecoveryModule {
+	t.Helper()
+	summaryManager := newTestSummaryManager(t, scheduler)
+	module, err := NewModule(ModuleConfig{
+		PChannel:                 "p1",
+		VChannel:                 "v1",
+		VChannelMeta:             &streamingpb.VChannelMeta{Vchannel: "v1", State: streamingpb.VChannelState_VCHANNEL_STATE_NORMAL},
+		Segments:                 segmentMetas,
+		SummaryManager:           summaryManager,
+		TransformLogMaterializer: &recordingMaterializer{},
+		Runtime:                  moduleapi.Runtime{Scheduler: scheduler},
+	})
+	require.NoError(t, err)
+	for _, timetick := range timeticks {
+		observeVChannelDelete(t, module, "v1", timetick)
+	}
+	return module
+}
 
 func TestVChannelAdvancesTransformMaterializationAfterL1Commit(t *testing.T) {
 	ctx := context.Background()
@@ -20,19 +64,18 @@ func TestVChannelAdvancesTransformMaterializationAfterL1Commit(t *testing.T) {
 		1: newMaterializationBlockerMeta(1, 100, false),
 		2: newMaterializationBlockerMeta(2, 200, false),
 	}
-	module, err := NewModule(ModuleConfig{
-		PChannel:         "p1",
-		VChannel:         "v1",
-		Segments:         segmentMetas,
-		TransformLogMeta: &streamingpb.VChannelTransformLogMeta{CheckpointTimeTick: 300},
-		Runtime:          moduleapi.Runtime{Scheduler: scheduler},
-	})
-	require.NoError(t, err)
+	module := newMaterializeBoundTestModule(t, scheduler, segmentMetas, 100, 200, 300)
 
+	// The materialization request is recorded first; the summary then makes
+	// the records durable (its own decision, forced here by
+	// RequestPersistThrough) and the flush event moves the consumer window.
 	require.True(t, module.transformLog.RequestMaterializeThrough(300))
-	require.Len(t, scheduler.tasks, 1)
+	module.RequestPersistThrough(300)
+	require.Len(t, scheduler.tasks, 2)
+	require.NoError(t, scheduler.tasks[1].Execute(ctx))
+	assert.Equal(t, uint64(300), module.transformLog.DurableTimeTick())
 	require.NoError(t, scheduler.tasks[0].Execute(ctx))
-	assert.Equal(t, uint64(100), module.transformLog.SnapshotMeta().GetMaterializedTimeTick())
+	assert.Equal(t, uint64(100), module.transformLog.MaterializedTimeTick())
 
 	first := segment.NewSegmentViewFromMetaWithConfig(
 		newMaterializationBlockerMeta(1, 100, true),
@@ -43,9 +86,9 @@ func TestVChannelAdvancesTransformMaterializationAfterL1Commit(t *testing.T) {
 	module.segments[1] = first
 	module.mu.Unlock()
 	module.SegmentDataUpdated(1, first)
-	require.Len(t, scheduler.tasks, 2)
-	require.NoError(t, scheduler.tasks[1].Execute(ctx))
-	assert.Equal(t, uint64(200), module.transformLog.SnapshotMeta().GetMaterializedTimeTick())
+	require.Len(t, scheduler.tasks, 3)
+	require.NoError(t, scheduler.tasks[2].Execute(ctx))
+	assert.Equal(t, uint64(200), module.transformLog.MaterializedTimeTick())
 
 	second := segment.NewSegmentViewFromMetaWithConfig(
 		newMaterializationBlockerMeta(2, 200, true),
@@ -56,9 +99,14 @@ func TestVChannelAdvancesTransformMaterializationAfterL1Commit(t *testing.T) {
 	module.segments[2] = second
 	module.mu.Unlock()
 	module.SegmentDataUpdated(2, second)
-	require.Len(t, scheduler.tasks, 3)
-	require.NoError(t, scheduler.tasks[2].Execute(ctx))
-	assert.Equal(t, uint64(300), module.transformLog.SnapshotMeta().GetMaterializedTimeTick())
+	require.Len(t, scheduler.tasks, 4)
+	require.NoError(t, scheduler.tasks[3].Execute(ctx))
+	assert.Equal(t, uint64(300), module.transformLog.MaterializedTimeTick())
+
+	// The frontier is mirrored into the vchannel meta for the next checkpoint.
+	module.mu.Lock()
+	assert.Equal(t, uint64(300), module.vchannelView.AssignmentMeta().GetTransformMaterializedTimeTick())
+	module.mu.Unlock()
 }
 
 func newMaterializationBlockerMeta(segmentID int64, createTimeTick uint64, l1CommitDone bool) *streamingpb.SegmentAssignmentMeta {
@@ -80,19 +128,14 @@ func TestVChannelMaterializeBoundAdvancesAfterSegmentCleanup(t *testing.T) {
 		1: newMaterializationBlockerMeta(1, 100, false),
 		2: newMaterializationBlockerMeta(2, 200, false),
 	}
-	module, err := NewModule(ModuleConfig{
-		PChannel:         "p1",
-		VChannel:         "v1",
-		Segments:         segmentMetas,
-		TransformLogMeta: &streamingpb.VChannelTransformLogMeta{CheckpointTimeTick: 300},
-		Runtime:          moduleapi.Runtime{Scheduler: scheduler},
-	})
-	require.NoError(t, err)
+	module := newMaterializeBoundTestModule(t, scheduler, segmentMetas, 100, 200, 300)
 
 	require.True(t, module.transformLog.RequestMaterializeThrough(300))
-	require.Len(t, scheduler.tasks, 1)
+	module.RequestPersistThrough(300)
+	require.Len(t, scheduler.tasks, 2)
+	require.NoError(t, scheduler.tasks[1].Execute(ctx))
 	require.NoError(t, scheduler.tasks[0].Execute(ctx))
-	assert.Equal(t, uint64(100), module.transformLog.SnapshotMeta().GetMaterializedTimeTick())
+	assert.Equal(t, uint64(100), module.transformLog.MaterializedTimeTick())
 
 	// Segment 1 is cleaned up (snapshot persisted and completeSegmentCleanup
 	// invoked); its create tick must stop pinning the bound.
@@ -107,9 +150,9 @@ func TestVChannelMaterializeBoundAdvancesAfterSegmentCleanup(t *testing.T) {
 	require.Equal(t, uint64(200), module.materializeUpperBound)
 
 	// The advance releases a new materialize task up to the next blocker.
-	require.Len(t, scheduler.tasks, 2)
-	require.NoError(t, scheduler.tasks[1].Execute(ctx))
-	assert.Equal(t, uint64(200), module.transformLog.SnapshotMeta().GetMaterializedTimeTick())
+	require.Len(t, scheduler.tasks, 3)
+	require.NoError(t, scheduler.tasks[2].Execute(ctx))
+	assert.Equal(t, uint64(200), module.transformLog.MaterializedTimeTick())
 }
 
 func TestVChannelMaterializeBoundRetractsOnNewBlocker(t *testing.T) {
@@ -117,11 +160,12 @@ func TestVChannelMaterializeBoundRetractsOnNewBlocker(t *testing.T) {
 		1: newMaterializationBlockerMeta(1, 100, false),
 	}
 	module, err := NewModule(ModuleConfig{
-		PChannel:         "p1",
-		VChannel:         "v1",
-		Segments:         segmentMetas,
-		TransformLogMeta: &streamingpb.VChannelTransformLogMeta{CheckpointTimeTick: 300},
-		Runtime:          moduleapi.Runtime{},
+		PChannel:       "p1",
+		VChannel:       "v1",
+		VChannelMeta:   &streamingpb.VChannelMeta{Vchannel: "v1", State: streamingpb.VChannelState_VCHANNEL_STATE_NORMAL},
+		Segments:       segmentMetas,
+		SummaryManager: newTestSummaryManager(t, nil),
+		Runtime:        moduleapi.Runtime{},
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint64(100), module.materializeUpperBound)
@@ -145,11 +189,12 @@ func TestVChannelConcurrentDataUpdateAndBlockerScan(t *testing.T) {
 		2: newMaterializationBlockerMeta(2, 200, false),
 	}
 	module, err := NewModule(ModuleConfig{
-		PChannel:         "p1",
-		VChannel:         "v1",
-		Segments:         segmentMetas,
-		TransformLogMeta: &streamingpb.VChannelTransformLogMeta{CheckpointTimeTick: 300},
-		Runtime:          moduleapi.Runtime{},
+		PChannel:       "p1",
+		VChannel:       "v1",
+		VChannelMeta:   &streamingpb.VChannelMeta{Vchannel: "v1", State: streamingpb.VChannelState_VCHANNEL_STATE_NORMAL},
+		Segments:       segmentMetas,
+		SummaryManager: newTestSummaryManager(t, nil),
+		Runtime:        moduleapi.Runtime{},
 	})
 	require.NoError(t, err)
 	view := module.segments[1]

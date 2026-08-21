@@ -2,6 +2,7 @@ package recovery
 
 import (
 	"context"
+	"math"
 	"sync"
 
 	"google.golang.org/protobuf/proto"
@@ -17,6 +18,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/segment"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/transformlog"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walsummary"
 	"github.com/milvus-io/milvus/internal/util/idalloc"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
@@ -152,6 +154,7 @@ type recoveryStorageImpl struct {
 	recoveryTailRateLimiter RecoveryTailRateLimiter
 	broadcastAck            *broadcastAckModule
 	vchannelManager         *vchannel.PChannelRecoveryManager
+	summaryManager          *walsummary.Manager
 	nodeScheduler           nodescheduler.Scheduler
 	taskScheduler           *scopedTaskScheduler
 	dirtyCounter            int // records the message count since last persist snapshot.
@@ -209,7 +212,7 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 	ctx context.Context,
 	vchannels map[string]*streamingpb.VChannelMeta,
 	segments map[int64]*streamingpb.SegmentAssignmentMeta,
-	transformLogMetas map[string]*streamingpb.VChannelTransformLogMeta,
+	summaryManager *walsummary.Manager,
 ) error {
 	coord, err := resource.Resource().MixCoordClient().GetWithContext(ctx)
 	if err != nil {
@@ -219,31 +222,43 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 		Scheduler: r.taskScheduler,
 		Notifier:  r,
 	}
-	transformLogStore := transformlog.NewObjectChunkStore(
-		resource.Resource().ChunkManager(),
-		r.channel.Name,
-	)
 	transformLogMaterializer := transformlog.NewSyncMaterializer(
 		resource.Resource().ChunkManager(),
 		idalloc.NewMAllocator(resource.Resource().IDAllocator()),
 		syncmgr.BrokerMetaWriter(broker.NewCoordBroker(coord, paramtable.GetNodeID()), paramtable.GetNodeID()),
 	)
+	// Load the initial materialization window of every vchannel: the durable
+	// records after the restored transform_materialized_time_tick. This is
+	// the only read of the summary store the transform consumer relies on; at
+	// runtime it receives the durable records through the summary's flush
+	// events instead.
+	pendingTransformEntries := make(map[string][]*streamingpb.TransformLogEntry, len(vchannels))
+	for vchannel, meta := range vchannels {
+		entries, err := summaryManager.ReadTransformEntries(
+			ctx, vchannel, meta.GetTransformMaterializedTimeTick(), math.MaxUint64,
+		)
+		if err != nil {
+			return err
+		}
+		if len(entries) > 0 {
+			pendingTransformEntries[vchannel] = entries
+		}
+	}
 	manager, err := vchannel.NewPChannelRecoveryManager(vchannel.PChannelManagerConfig{
-		PChannel:          r.channel.Name,
-		VChannelMetas:     vchannels,
-		Segments:          segments,
-		TransformLogMetas: transformLogMetas,
-		Runtime:           moduleRuntime,
-		Logger:            r.Logger(),
-		SegmentLifecycle:  segment.NewSegmentLifecycleWriter(coord, paramtable.GetNodeID()),
+		PChannel:         r.channel.Name,
+		VChannelMetas:    vchannels,
+		Segments:         segments,
+		Runtime:          moduleRuntime,
+		Logger:           r.Logger(),
+		SegmentLifecycle: segment.NewSegmentLifecycleWriter(coord, paramtable.GetNodeID()),
 		SegmentPackWriter: segment.NewBulkPackWriter(
 			resource.Resource().ChunkManager(),
 			idalloc.NewMAllocator(resource.Resource().IDAllocator()),
 			packed.CreateStorageConfig(),
 		),
-		TransformLogStore:         transformLogStore,
+		SummaryManager:            summaryManager,
+		PendingTransformEntries:   pendingTransformEntries,
 		TransformLogMaterializer:  transformLogMaterializer,
-		TransformLogMaxRows:       uint64(paramtable.Get().StreamingCfg.FlushL0MaxRowNum.GetAsInt()),
 		TransformLogMaterialRows:  uint64(paramtable.Get().StreamingCfg.FlushL0MaxRowNum.GetAsInt()),
 		TransformLogMaterialBytes: uint64(paramtable.Get().StreamingCfg.FlushL0MaxSize.GetAsSize()),
 	})
@@ -251,8 +266,28 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 		return err
 	}
 	r.vchannelManager = manager
+	r.summaryManager = summaryManager
 	r.installCheckpoint(r.checkpoint)
 	return nil
+}
+
+// newSummaryManager creates the pchannel-scoped WALSummary manager and wires
+// it to the recovery runtime and the catalog fencing marker.
+func (r *recoveryStorageImpl) newSummaryManager(runtime moduleapi.Runtime) *walsummary.Manager {
+	return walsummary.NewManager(walsummary.ManagerConfig{
+		PChannel: r.channel.Name,
+		Term:     r.channel.Term,
+		Store: walsummary.NewStore(
+			resource.Resource().ChunkManager(),
+			r.channel.Name,
+			r.channel.Term,
+		),
+		Runtime:           runtime,
+		FlushMaxBytes:     uint64(paramtable.Get().StreamingCfg.FlushL0MaxSize.GetAsSize()),
+		RetentionMaxBytes: uint64(paramtable.Get().StreamingCfg.SummaryMaxBytesPerPChannel.GetAsSize()),
+		MetaCatalog:       resource.Resource().StreamingNodeCatalog(),
+		Logger:            r.Logger(),
+	})
 }
 
 func (r *recoveryStorageImpl) NotifyModuleUpdated(moduleapi.ModuleName) {
