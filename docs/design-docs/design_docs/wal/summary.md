@@ -16,9 +16,12 @@ walsummary                  -> (no dependency on vchannel / transformlog)
 ```
 
 The transform consumer of each vchannel (see
-[TransformLog](transformlog/transform_log.md)) registers as a `FlushListener`
-and receives durable records through flush events; it never reads the summary
-store at runtime.
+[TransformLog](transformlog/transform_log.md)) is deliberately decoupled from
+the summary: it observes the vchannel's messages directly and materializes at
+its own pace, while the summary persists at its own pace. Neither drives the
+other — in particular, no barrier or external write API forces a summary flush
+or a materialization. There is no ordering constraint between L0
+materialization and WALSummary persistence; recovery reconciles them (below).
 
 ## 2. Object Model
 
@@ -72,13 +75,12 @@ migration.
 ```text
 ObserveMessage(retained)
   -> build TransformLogEntry (standalone proto)
-  -> append to view staging (retained.Clone)
+  -> if record timetick > durable frontier: append to view staging (retained.Clone)
   -> if stagingBytes >= FlushMaxBytes: requestFlush
 flush task (summary-owned decision)
   -> collectStaging of every view
   -> write chunk (generation)
   -> publish manifest
-  -> deliver FlushedBatch to each vchannel's FlushListener
   -> release handles            (WAL checkpoint may now advance)
 ```
 
@@ -88,34 +90,40 @@ The summary alone decides when persistence happens:
 |---|---|
 | size threshold | `FlushMaxBytes` (staging binary size, configured as `FlushL0MaxSize`) |
 | forced persist | `SummaryView.RequestPersistThrough(tt)` (tracker stall / pressure) |
-| barrier | `SummaryView.SyncUp(tt)` (flush / flush-all / manual-flush / drop / truncate) |
+
+There is no barrier trigger: external write APIs (flush / flush-all /
+manual-flush / drop / truncate) never force a flush. Their semantics still
+hold — the checkpoint cannot advance past a delete until the covering chunk is
+durable, so a flush request waits on the tracker path
+(`RequestPersistThrough`) for whatever the summary has not persisted yet.
 
 Handle release happens only after the chunk object AND the manifest record are
 durable, so the global WAL checkpoint — which advances past a message only
 when every retained handle is released — can never outrun the summary:
 
 ```text
-materialized frontier <= durable frontier <= WAL checkpoint
+WAL checkpoint <= durable frontier (of the summary)
 ```
 
-## 4. Flush Events
+L0 materialization is **not** ordered against the durable frontier: the
+transform consumer may be ahead of (records observed but not yet persisted) or
+behind (records persisted but not yet materialized) the summary at any moment.
+Neither position loses data on crash: materialization commits only after its
+L0 output is in object storage, and un-materialized records are rebuilt by
+recovery from the retained chunks (see
+[TransformLog](transformlog/transform_log.md)).
 
-```go
-type FlushedBatch struct {
-    RecordsByVChannel map[string][]*streamingpb.TransformLogEntry
-    CoveredTimeTick   uint64
-}
+## 4. Decoupling From The Transform Consumer
 
-type FlushListener interface {
-    OnSummaryFlushed(batch *FlushedBatch)
-}
-```
-
-`Manager.SetFlushListener(vchannel, listener)` registers one listener per
-vchannel; the vchannel module unregisters it (`RemoveFlushListener`) together
-with `RemoveView` on cleanup. The delivered entries are standalone protos that
-survive the handle release. Precondition: a listener must be non-blocking and
-must not call back into the manager.
+The summary delivers no flush events: there is no `FlushListener` /
+`FlushedBatch`. The transform consumer of a vchannel observes the same message
+stream through the vchannel module and keeps its own materialization window.
+The only interaction between the two components is the materialization
+frontier mirror (`Manager.SetMaterializedTimeTick`), which bounds the summary
+retention from below, and the recovery-time restore
+(`Manager.SetDurableTimeTick`), which tells a fresh summary view where the
+manifest's coverage starts so replay does not re-stage already-durable
+records.
 
 ## 5. Recovery And Fencing
 
@@ -126,6 +134,13 @@ must not call back into the manager.
 2. read the manifest; if absent, probe forward for chunks of the own term and
    seal them into a fresh manifest;
 3. the manifest is the durable chunk index for the live flush path.
+
+After recovery the recovery path restores each vchannel's durable frontier
+(`Manager.DurableTimeTick`, the largest per-vchannel chunk index end in the
+manifest) into its summary view via `Manager.SetDurableTimeTick`, before the
+vchannel modules build their views. WAL replay then re-observes records the
+manifest already covers; the view skips them, so the same records are never
+staged and rewritten into new chunks.
 
 Write arbitration across terms: an `Exist -> Write` of a chunk key is not
 atomic; on a byte mismatch the footer is decoded — a footer term greater than
@@ -138,9 +153,8 @@ different content is corruption.
 `Manager.GCOnce` releases chunks above `RetentionMaxBytes`
 (`streaming.summary.maxBytesPerPChannel`, default 4 GB), bounded below by the
 per-vchannel materialization frontiers (`SetMaterializedTimeTick`): records
-not yet materialized must never be released. Because the consumer only
-consumes durable records, the materialization frontier is a hard lower bound
-of the retention.
+not yet materialized must never be released. The materialization frontier
+mirrored from the transform consumer is a hard lower bound of the retention.
 
 ## 7. Migration
 
