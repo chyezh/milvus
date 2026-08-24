@@ -70,16 +70,18 @@ func TestPChannelRecoveryManagerRequestsPersistThroughSummary(t *testing.T) {
 	manager.RequestPersistThrough("v1", 10)
 	require.Empty(t, scheduler.tasks)
 
-	// Observe a delete on v1: the summary view stages it and the request
-	// schedules exactly one flush task covering it.
+	// Observe a delete on v1: the transform consumer schedules its own
+	// materialize task (decoupled, no barrier involved); the persist request
+	// then schedules the flush task covering the staged record.
 	observeVChannelDelete(t, manager.Module("v1"), "v1", 10)
-	manager.RequestPersistThrough("v1", 10)
 	require.Len(t, scheduler.tasks, 1)
-	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
+	manager.RequestPersistThrough("v1", 10)
+	require.Len(t, scheduler.tasks, 2)
+	require.NoError(t, scheduler.tasks[1].Execute(context.Background()))
 
 	// The v2 view has nothing staged, so a request for v2 schedules nothing.
 	manager.RequestPersistThrough("v2", 20)
-	require.Len(t, scheduler.tasks, 1)
+	require.Len(t, scheduler.tasks, 2)
 }
 
 func observeVChannelDelete(t *testing.T, module *VChannelRecoveryModule, vchannel string, timetick uint64) {

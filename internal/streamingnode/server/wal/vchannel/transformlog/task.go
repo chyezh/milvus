@@ -67,10 +67,9 @@ type transformMaterializeTask struct {
 }
 
 func (t *transformMaterializeTask) Execute(ctx context.Context) error {
-	// The task runs only once the summary has made the requested frontier
-	// durable: a flush event moves the window, and only then may
-	// materialization consume it.
-	ready := t.predecessorsDone() && t.log.DurableTimeTick() >= t.timetick
+	// Materialization consumes the in-memory window, which observation (and
+	// recovery) feeds directly; it never waits for the summary to persist.
+	ready := t.predecessorsDone()
 	return t.execute(ctx, ready, func(ctx context.Context) error {
 		if _, err := t.log.materialize(ctx, materializeOption{TargetTimeTick: t.timetick}); err != nil {
 			return err
@@ -79,20 +78,25 @@ func (t *transformMaterializeTask) Execute(ctx context.Context) error {
 	})
 }
 
-// newRequestedMaterializeTaskLocked returns a task for the current requested
+// maybeScheduleMaterializeLocked returns a task for the current window
 // frontier, or nil when there is nothing to do or a task is already pending.
-func (t *TransformLog) newRequestedMaterializeTaskLocked() *transformMaterializeTask {
+//
+// At most one task is scheduled per observation moment: the cap-batch
+// continuation inside materialize (see transform_log.go) keeps the chain
+// going, so observation never needs to append one task per record.
+func (t *TransformLog) maybeScheduleMaterializeLocked() *transformMaterializeTask {
 	target := t.materializeTargetLocked()
-	if target <= t.materializedTimeTick || t.pendingMaterializeTargetLocked() >= target {
+	t.materializeTasks = compactTransformMaterializeTasks(t.materializeTasks)
+	if target <= t.materializedTimeTick || len(t.materializeTasks) > 0 {
 		return nil
 	}
 	return t.newMaterializeTaskLocked(target)
 }
 
-// newMaterializeTaskLocked appends a materialize task for target without the
-// pending-target dedup of newRequestedMaterializeTaskLocked. It continues a
-// capped batch: the current task is still pending (and becomes a predecessor of
-// the new one), so execution order keeps the batches sequential.
+// newMaterializeTaskLocked appends a materialize task for target. It
+// continues a capped batch: the current task is still pending (and becomes a
+// predecessor of the new one), so execution order keeps the batches
+// sequential.
 func (t *TransformLog) newMaterializeTaskLocked(target uint64) *transformMaterializeTask {
 	task := &transformMaterializeTask{
 		transformTaskBase: transformTaskBase{

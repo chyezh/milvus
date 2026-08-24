@@ -19,7 +19,6 @@ package walsummary
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -265,7 +264,7 @@ func TestManagerGCReleaseAndMaterializationFloor(t *testing.T) {
 	assert.Empty(t, manager.Manifest().GetChunks())
 }
 
-func TestViewSyncUpAndRequestPersistThroughScheduleFlush(t *testing.T) {
+func TestViewRequestPersistThroughSchedulesFlush(t *testing.T) {
 	manager, _ := newTestManagerWithStore(t)
 	scheduler := &recordingScheduler{}
 	manager.cfg.Runtime.Scheduler = scheduler
@@ -275,13 +274,60 @@ func TestViewSyncUpAndRequestPersistThroughScheduleFlush(t *testing.T) {
 	observeDelete(t, view, 100, &unused)
 	// Observe below the byte threshold schedules nothing.
 	assert.Empty(t, scheduler.tasks)
-	view.SyncUp(200)
-	assert.Len(t, scheduler.tasks, 1)
-
-	scheduler.tasks = nil
 	observeDelete(t, view, 150, &unused)
 	view.RequestPersistThrough(160)
 	assert.Len(t, scheduler.tasks, 1)
+}
+
+func TestViewSkipsRecordsAtOrBelowDurableFrontier(t *testing.T) {
+	manager, _ := newTestManagerWithStore(t)
+	ctx := context.Background()
+	require.NoError(t, manager.Recover(ctx))
+	manager.SetDurableTimeTick("v1", 150)
+	view := manager.View("v1")
+	manager.cfg.FlushMaxBytes = 1 // any retained record triggers.
+
+	// Records at or below the restored durable frontier are skipped entirely:
+	// recovery replay re-observes them, and staging them again would rewrite
+	// the same records into a new chunk.
+	unused := false
+	observeDelete(t, view, 100, &unused)
+	observeDelete(t, view, 150, &unused)
+	assert.Empty(t, manager.flushTasks)
+	assert.Empty(t, view.staging)
+
+	// A record past the frontier is staged as usual.
+	observeDelete(t, view, 200, &unused)
+	assert.Len(t, manager.flushTasks, 1)
+	require.NoError(t, manager.flushTasks[0].Execute(ctx))
+	entries, err := manager.ReadTransformEntries(ctx, "v1", 0, 1000)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, uint64(200), entries[0].GetTimeTick())
+}
+
+func TestManagerDurableTimeTickDerivedFromManifest(t *testing.T) {
+	ctx := context.Background()
+	manager, _ := newTestManagerWithStore(t)
+	require.NoError(t, manager.Recover(ctx))
+	assert.Zero(t, manager.DurableTimeTick("v1"))
+
+	var unused bool
+	observeDelete(t, manager.View("v1"), 100, &unused)
+	observeDelete(t, manager.View("v1"), 200, &unused)
+	manager.requestFlush()
+	require.NoError(t, manager.flushOnce(ctx))
+	assert.Equal(t, uint64(200), manager.DurableTimeTick("v1"))
+
+	// A vchannel with no records has no frontier.
+	assert.Zero(t, manager.DurableTimeTick("v2"))
+}
+
+func TestManagerSetDurableTimeTickAppliesToExistingView(t *testing.T) {
+	manager, _ := newTestManagerWithStore(t)
+	view := manager.View("v1")
+	manager.SetDurableTimeTick("v1", 250)
+	assert.Equal(t, uint64(250), view.DurableTimeTick())
 }
 
 func TestViewObserveAboveThresholdSchedulesFlush(t *testing.T) {
@@ -328,81 +374,17 @@ func TestFlushTaskOrdering(t *testing.T) {
 	require.NoError(t, manager.flushTasks[1].Execute(ctx))
 }
 
-// recordingFlushListener captures the flush events of one vchannel.
-type recordingFlushListener struct {
-	mu       sync.Mutex
-	batches  []*FlushedBatch
-	vchannel string
-}
-
-func (l *recordingFlushListener) OnSummaryFlushed(batch *FlushedBatch) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.batches = append(l.batches, batch)
-}
-
-func (l *recordingFlushListener) events() []*FlushedBatch {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return append([]*FlushedBatch(nil), l.batches...)
-}
-
-func TestManagerFlushEventDeliversDurableEntries(t *testing.T) {
+func TestManagerFlushReleasesHandles(t *testing.T) {
 	ctx := context.Background()
 	manager, _ := newTestManagerWithStore(t)
 	require.NoError(t, manager.Recover(ctx))
-	listener := &recordingFlushListener{vchannel: "v1"}
-	manager.SetFlushListener("v1", listener)
+	view := manager.View("v1")
 
 	finalized := false
-	observeDelete(t, manager.View("v1"), 100, &finalized)
-	manager.requestFlushThrough(100)
+	observeDelete(t, view, 100, &finalized)
+	manager.requestFlush()
 	require.NoError(t, manager.flushOnce(ctx))
-	assert.True(t, finalized, "handles released after the flush event")
-
-	events := listener.events()
-	require.Len(t, events, 1)
-	assert.Equal(t, uint64(100), events[0].CoveredTimeTick)
-	entries := events[0].RecordsByVChannel["v1"]
-	require.Len(t, entries, 1)
-	assert.Equal(t, uint64(100), entries[0].GetTimeTick())
-	assert.NotNil(t, entries[0].GetDelete())
-	// The entries are standalone protos: they survive the handle release.
-	assert.Equal(t, uint64(100), entries[0].GetTimeTick())
-}
-
-func TestManagerFlushEventPerVChannel(t *testing.T) {
-	ctx := context.Background()
-	manager, _ := newTestManagerWithStore(t)
-	require.NoError(t, manager.Recover(ctx))
-	listenerV1 := &recordingFlushListener{vchannel: "v1"}
-	listenerV2 := &recordingFlushListener{vchannel: "v2"}
-	manager.SetFlushListener("v1", listenerV1)
-	manager.SetFlushListener("v2", listenerV2)
-
-	var unused bool
-	observeDelete(t, manager.View("v1"), 100, &unused)
-	observeDelete(t, manager.View("v2"), 200, &unused)
-	manager.requestFlushThrough(200)
-	require.NoError(t, manager.flushOnce(ctx))
-
-	eventsV1 := listenerV1.events()
-	require.Len(t, eventsV1, 1)
-	assert.Len(t, eventsV1[0].RecordsByVChannel, 1)
-	assert.Equal(t, uint64(100), eventsV1[0].RecordsByVChannel["v1"][0].GetTimeTick())
-	eventsV2 := listenerV2.events()
-	require.Len(t, eventsV2, 1)
-	assert.Equal(t, uint64(200), eventsV2[0].RecordsByVChannel["v2"][0].GetTimeTick())
-
-	// Removing the listener stops delivery. The second flush only carries
-	// v1 data, so v2 gets no event either: events are delivered per vchannel
-	// with data in the batch.
-	manager.RemoveFlushListener("v1")
-	observeDelete(t, manager.View("v1"), 300, &unused)
-	manager.requestFlushThrough(300)
-	require.NoError(t, manager.flushOnce(ctx))
-	assert.Len(t, listenerV1.events(), 1)
-	assert.Len(t, listenerV2.events(), 1)
+	assert.True(t, finalized, "handles released after the flush is durable end to end")
 }
 
 func TestManagerReadTransformEntriesAcrossChunks(t *testing.T) {
@@ -415,7 +397,7 @@ func TestManagerReadTransformEntriesAcrossChunks(t *testing.T) {
 	var unused bool
 	for _, tt := range []uint64{100, 200} {
 		observeDelete(t, manager.View("v1"), tt, &unused)
-		manager.requestFlushThrough(tt)
+		manager.requestFlush()
 		require.NoError(t, manager.flushOnce(ctx))
 	}
 	entries, err := manager.ReadTransformEntries(ctx, "v1", 0, 1000)

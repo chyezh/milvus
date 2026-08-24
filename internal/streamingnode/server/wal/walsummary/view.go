@@ -84,6 +84,11 @@ func (v *SummaryView) VChannel() string {
 // The view retains one handle per payload-carrying message. The caller keeps
 // ownership of its own handle; the view's clone is released by the manager once
 // the covering chunk is durable.
+//
+// A record whose timetick is not greater than the durable frontier is skipped:
+// recovery replay re-observes records the manifest already covers, and staging
+// them again would rewrite the same records into new chunks. The durable
+// frontier is restored from the manifest by the recovery path.
 func (v *SummaryView) ObserveMessage(ctx context.Context, retained message.RetainedImmutableMessage) {
 	if retained == nil {
 		return
@@ -94,7 +99,7 @@ func (v *SummaryView) ObserveMessage(ctx context.Context, retained message.Retai
 		v.latestTimeTick = msg.TimeTick()
 	}
 	entry := messageutil.BuildTransformLogEntry(msg, messageutil.TransformEntryOption{})
-	if entry == nil {
+	if entry == nil || entry.GetTimeTick() <= v.durableTimeTick {
 		v.mu.Unlock()
 		return
 	}
@@ -107,20 +112,6 @@ func (v *SummaryView) ObserveMessage(ctx context.Context, retained message.Retai
 	v.stagingBytes += uint64(proto.Size(entry))
 	v.mu.Unlock()
 	if v.stagingBytes >= v.manager.config().FlushMaxBytes {
-		v.manager.requestFlush()
-	}
-}
-
-// SyncUp advances the view at a barrier timetick. Any staging left at a
-// barrier is flushed so the durable frontier stays close to the WAL frontier.
-func (v *SummaryView) SyncUp(timeTick uint64) {
-	v.mu.Lock()
-	if timeTick > v.latestTimeTick {
-		v.latestTimeTick = timeTick
-	}
-	hasStaging := len(v.staging) > 0
-	v.mu.Unlock()
-	if hasStaging {
 		v.manager.requestFlush()
 	}
 }

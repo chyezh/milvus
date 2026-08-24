@@ -230,8 +230,7 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 	// Load the initial materialization window of every vchannel: the durable
 	// records after the restored transform_materialized_time_tick. This is
 	// the only read of the summary store the transform consumer relies on; at
-	// runtime it receives the durable records through the summary's flush
-	// events instead.
+	// runtime it observes the vchannel's messages directly instead.
 	pendingTransformEntries := make(map[string][]*streamingpb.TransformLogEntry, len(vchannels))
 	for vchannel, meta := range vchannels {
 		entries, err := summaryManager.ReadTransformEntries(
@@ -243,6 +242,11 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 		if len(entries) > 0 {
 			pendingTransformEntries[vchannel] = entries
 		}
+		// Restore the durable frontier into the summary view before the
+		// module builds it: WAL replay re-observes records the manifest
+		// already covers, and the view must skip them to avoid rewriting the
+		// same records into new chunks.
+		summaryManager.SetDurableTimeTick(vchannel, summaryManager.DurableTimeTick(vchannel))
 	}
 	manager, err := vchannel.NewPChannelRecoveryManager(vchannel.PChannelManagerConfig{
 		PChannel:         r.channel.Name,

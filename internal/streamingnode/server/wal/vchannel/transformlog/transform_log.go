@@ -17,15 +17,15 @@
 // Package transformlog implements the transform consumer of a vchannel: it
 // turns the transform records of the WALSummary into L0 segments.
 //
-// The transform records used to be persisted per-vchannel as TransformLogChunk
-// objects with a VChannelTransformLogMeta recovery meta. That persistence now
-// lives in the pchannel-scoped WALSummary (see the walsummary package), which
-// decides entirely on its own when records become durable. This package never
-// reads the summary store: it registers as a FlushListener of the summary and
-// replaces its in-memory materialization window from the delivered flush
-// events. Its materialization frontier is carried by VChannelMeta
-// (transform_materialized_time_tick), persisted together with the vchannel
-// catalog snapshot instead of a dedicated transform meta.
+// The transform records are persisted by the pchannel-scoped WALSummary (see
+// the walsummary package), which decides entirely on its own when records
+// become durable; this package never reads the summary store and never reacts
+// to its persistence. It observes the vchannel's messages directly and keeps
+// its own in-memory materialization window, so L0 materialization is not
+// ordered against summary persistence in any way. Its materialization frontier
+// is carried by VChannelMeta (transform_materialized_time_tick), persisted
+// together with the vchannel catalog snapshot instead of a dedicated
+// transform meta.
 package transformlog
 
 import (
@@ -36,8 +36,9 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walsummary"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message/messageutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
@@ -49,7 +50,8 @@ type Config struct {
 	MaterializedTimeTick uint64
 	// PendingEntries is the initial in-memory materialization window: the
 	// durable records of this vchannel after MaterializedTimeTick, loaded
-	// once by recovery. Runtime flushes replace it through OnSummaryFlushed.
+	// once by recovery. Runtime observation appends to it through
+	// ObserveMessage.
 	PendingEntries      []*streamingpb.TransformLogEntry
 	MaterializeMaxRows  uint64
 	MaterializeMaxBytes uint64
@@ -87,16 +89,17 @@ type TransformLog struct {
 	// materializeUpperBound is the VChannel-wide L1 safety frontier: the
 	// largest timetick materialization may currently reach.
 	materializeUpperBound uint64
-	// requestedMaterializeTimeTick is the desired materialization frontier,
-	// retained so advancing the upper bound can continue the same request
-	// without another WAL trigger.
-	requestedMaterializeTimeTick uint64
-	// durableTimeTick is the newest timetick the summary has made durable
-	// for this vchannel. It advances only through flush events.
-	durableTimeTick uint64
-	// pending is the in-memory materialization window: the durable records
+	// loadedThrough is the newest timetick the recovery-loaded window covers:
+	// the durable frontier of this vchannel at restart. Observation skips
+	// records at or below it — they were either already committed (at or
+	// below materializedTimeTick) or already loaded into the window by
+	// recovery. It is a constant set once at construction: live observation
+	// only ever sees newer records.
+	loadedThrough uint64
+	// pending is the in-memory materialization window: the transform records
 	// of this vchannel after the committed frontier, in ascending timetick
-	// order. Flush events append to it; committed batches trim its head.
+	// order. Recovery loads its head; observation appends to its tail;
+	// committed batches trim its head.
 	pending []*streamingpb.TransformLogEntry
 
 	materializeMaxRows  uint64
@@ -125,15 +128,20 @@ func New(config Config) *TransformLog {
 			pending = append(pending, entry)
 		}
 	}
-	durable := config.MaterializedTimeTick
+	// loadedThrough is the coverage of the recovered window: the newest
+	// timetick the summary had made durable for this vchannel. Observation
+	// skips records at or below it so recovery replay does not re-append
+	// what the loaded window already holds. When the window is empty the
+	// committed frontier is the best available bound.
+	loadedThrough := config.MaterializedTimeTick
 	if len(pending) > 0 {
-		durable = pending[len(pending)-1].GetTimeTick()
+		loadedThrough = pending[len(pending)-1].GetTimeTick()
 	}
 	return &TransformLog{
 		vchannel:              config.VChannel,
 		materializedTimeTick:  config.MaterializedTimeTick,
 		materializeUpperBound: upperBound,
-		durableTimeTick:       durable,
+		loadedThrough:         loadedThrough,
 		pending:               pending,
 		materializer:          config.Materializer,
 		materializeMaxRows:    config.MaterializeMaxRows,
@@ -150,75 +158,42 @@ func (t *TransformLog) MaterializedTimeTick() uint64 {
 	return t.materializedTimeTick
 }
 
-// DurableTimeTick returns the newest timetick the summary has made durable
-// for this vchannel. Materialization never runs past it: only records already
-// persisted by the summary are visible to the consumer.
-func (t *TransformLog) DurableTimeTick() uint64 {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.durableTimeTick
-}
-
-// OnSummaryFlushed implements walsummary.FlushListener: it replaces the
-// in-memory window with the durable records of the flushed chunk. The summary
-// alone decides when persistence happens; this consumer only observes the
-// outcome. It must be non-blocking and must not call back into the summary.
-func (t *TransformLog) OnSummaryFlushed(batch *walsummary.FlushedBatch) {
-	if t == nil {
+// ObserveMessage observes one WAL message of this vchannel. Delete messages
+// are appended to the in-memory materialization window immediately and may
+// schedule a materialization task; the summary decides persistence entirely on
+// its own, so materialization never waits for a flush event.
+//
+// Precondition: called synchronously on the WAL observation hot path; must be
+// non-blocking and must not do metadata I/O.
+func (t *TransformLog) ObserveMessage(retained message.RetainedImmutableMessage) {
+	if t == nil || retained == nil {
 		return
 	}
-	entries := batch.RecordsByVChannel[t.vchannel]
-	if len(entries) == 0 {
+	entry := messageutil.BuildTransformLogEntry(retained.Message(), messageutil.TransformEntryOption{})
+	if entry == nil {
+		return
+	}
+	timetick := entry.GetTimeTick()
+	if timetick <= t.materializedTimeTick || timetick <= t.loadedThrough {
+		// Already committed, or already loaded into the window by recovery
+		// (replay re-observes the recovered backlog).
 		return
 	}
 	t.mu.Lock()
-	last := entries[len(entries)-1].GetTimeTick()
-	if last > t.durableTimeTick {
-		t.durableTimeTick = last
-	}
-	// Append only what the committed frontier does not cover yet. The entries
-	// of one flush are ascending, and flushes are strictly sequential, so the
-	// window stays ascending.
-	for _, entry := range entries {
-		if entry.GetTimeTick() > t.materializedTimeTick {
-			t.pending = append(t.pending, entry)
-		}
-	}
-	// New durable data may unblock a pending materialization request.
-	task := t.newRequestedMaterializeTaskLocked()
+	t.pending = append(t.pending, entry)
+	task := t.maybeScheduleMaterializeLocked()
 	t.mu.Unlock()
 	if task != nil && t.runtime.Scheduler != nil {
 		t.runtime.Scheduler.Submit(task)
 	}
 }
 
-// RequestMaterializeThrough records the desired materialization frontier and
-// schedules the largest safe prefix allowed by the current L1 upper bound.
-// The desired frontier is retained so advancing the upper bound can continue
-// the same request without another WAL trigger.
-func (t *TransformLog) RequestMaterializeThrough(timetick uint64) bool {
-	if t == nil || t.runtime.Scheduler == nil {
-		return false
-	}
-	t.mu.Lock()
-	if timetick > t.requestedMaterializeTimeTick {
-		t.requestedMaterializeTimeTick = timetick
-	}
-	task := t.newRequestedMaterializeTaskLocked()
-	t.mu.Unlock()
-	if task == nil {
-		return false
-	}
-	t.runtime.Scheduler.Submit(task)
-	return true
-}
-
 // SetMaterializeUpperBound updates the VChannel-wide L1 safety frontier and
-// retries any previously requested materialization that can now make progress.
-// Publishing the same bound again is a no-op: the bound only changes on segment
-// create / cleanup / final-commit transitions, and skipping unchanged publishes
-// keeps the WAL observation hot path from rescheduling materialize tasks on
-// every accepted insert.
+// schedules any materialization that can now make progress. Publishing the
+// same bound again is a no-op: the bound only changes on segment create /
+// cleanup / final-commit transitions, and skipping unchanged publishes keeps
+// the WAL observation hot path from rescheduling materialize tasks on every
+// accepted insert.
 func (t *TransformLog) SetMaterializeUpperBound(timetick uint64) bool {
 	if t == nil {
 		return false
@@ -233,7 +208,7 @@ func (t *TransformLog) SetMaterializeUpperBound(timetick uint64) bool {
 		t.mu.Unlock()
 		return false
 	}
-	task := t.newRequestedMaterializeTaskLocked()
+	task := t.maybeScheduleMaterializeLocked()
 	t.mu.Unlock()
 	if task == nil {
 		return false
@@ -243,9 +218,13 @@ func (t *TransformLog) SetMaterializeUpperBound(timetick uint64) bool {
 }
 
 // materializeTargetLocked returns the largest materialization frontier that is
-// both requested and allowed by the current L1 upper bound.
+// both covered by the in-memory window and allowed by the current L1 upper
+// bound.
 func (t *TransformLog) materializeTargetLocked() uint64 {
-	target := t.requestedMaterializeTimeTick
+	if len(t.pending) == 0 {
+		return 0
+	}
+	target := t.pending[len(t.pending)-1].GetTimeTick()
 	if target > t.materializeUpperBound {
 		target = t.materializeUpperBound
 	}
@@ -260,19 +239,6 @@ func (t *TransformLog) materialize(ctx context.Context, opt materializeOption) (
 	targetTimeTick := opt.TargetTimeTick
 	if targetTimeTick == 0 {
 		targetTimeTick = t.materializeTargetLocked()
-	}
-	if targetTimeTick > t.materializeUpperBound {
-		targetTimeTick = t.materializeUpperBound
-	}
-	if targetTimeTick <= t.materializedTimeTick {
-		t.mu.Unlock()
-		return materializeResult{}, nil
-	}
-	// Only records already made durable by the summary are visible: the
-	// consumer never reads the summary store, its window moves with flush
-	// events only.
-	if targetTimeTick > t.durableTimeTick {
-		targetTimeTick = t.durableTimeTick
 	}
 	if targetTimeTick <= t.materializedTimeTick {
 		t.mu.Unlock()
@@ -303,14 +269,12 @@ func (t *TransformLog) materialize(ctx context.Context, opt materializeOption) (
 	result := t.commitMaterializeLocked(work)
 	var nextTask *transformMaterializeTask
 	if t.runtime.Scheduler != nil {
-		// Schedule the continuation while the retained request is still
-		// pending. This covers both a capped batch (rows/bytes limit) and a
-		// frontier that advanced only partially: the summary may not have
-		// flushed the requested frontier yet (durable-timetick cutoff) or the
-		// L1 upper bound may have retracted it. The current task has not
-		// completed yet, so it becomes a predecessor of the continuation and
-		// the batches stay strictly sequential; a continuation whose data has
-		// not been flushed yet stays delayed in the scheduler.
+		// Schedule the continuation while the window may still hold records
+		// past the committed frontier. This covers both a capped batch
+		// (rows/bytes limit) and a frontier the L1 upper bound retracted:
+		// records newly appended after the target are materialized next. The
+		// current task has not completed yet, so it becomes a predecessor of
+		// the continuation and the batches stay strictly sequential.
 		if target := t.materializeTargetLocked(); target > t.materializedTimeTick {
 			nextTask = t.newMaterializeTaskLocked(target)
 		}
@@ -326,10 +290,10 @@ func (t *TransformLog) materialize(ctx context.Context, opt materializeOption) (
 }
 
 // prepareMaterialize walks the in-memory window through targetTimeTick and
-// caps the batch by rows and bytes. The retained materialize request
-// continues from the capped frontier in a follow-up task, so a whole backlog
-// is never built into a single Materialize call. The window holds only
-// durable records, so nothing here reads the summary store.
+// caps the batch by rows and bytes. The materialization continues from the
+// capped frontier in a follow-up task, so a whole backlog is never built into
+// a single Materialize call. The window is fed by direct observation (and
+// once, by recovery), so nothing here reads the summary store.
 func (t *TransformLog) prepareMaterialize(
 	targetTimeTick uint64,
 	maxRows uint64,

@@ -66,14 +66,10 @@ func TestVChannelAdvancesTransformMaterializationAfterL1Commit(t *testing.T) {
 	}
 	module := newMaterializeBoundTestModule(t, scheduler, segmentMetas, 100, 200, 300)
 
-	// The materialization request is recorded first; the summary then makes
-	// the records durable (its own decision, forced here by
-	// RequestPersistThrough) and the flush event moves the consumer window.
-	require.True(t, module.transformLog.RequestMaterializeThrough(300))
-	module.RequestPersistThrough(300)
-	require.Len(t, scheduler.tasks, 2)
-	require.NoError(t, scheduler.tasks[1].Execute(ctx))
-	assert.Equal(t, uint64(300), module.transformLog.DurableTimeTick())
+	// Observation schedules the materialize task directly: no barrier or
+	// summary flush event drives it. The L1 upper bound (min create tick of
+	// the uncommitted segments, 100) caps the first batch.
+	require.Len(t, scheduler.tasks, 1)
 	require.NoError(t, scheduler.tasks[0].Execute(ctx))
 	assert.Equal(t, uint64(100), module.transformLog.MaterializedTimeTick())
 
@@ -86,8 +82,8 @@ func TestVChannelAdvancesTransformMaterializationAfterL1Commit(t *testing.T) {
 	module.segments[1] = first
 	module.mu.Unlock()
 	module.SegmentDataUpdated(1, first)
-	require.Len(t, scheduler.tasks, 3)
-	require.NoError(t, scheduler.tasks[2].Execute(ctx))
+	require.Len(t, scheduler.tasks, 2)
+	require.NoError(t, scheduler.tasks[1].Execute(ctx))
 	assert.Equal(t, uint64(200), module.transformLog.MaterializedTimeTick())
 
 	second := segment.NewSegmentViewFromMetaWithConfig(
@@ -99,8 +95,8 @@ func TestVChannelAdvancesTransformMaterializationAfterL1Commit(t *testing.T) {
 	module.segments[2] = second
 	module.mu.Unlock()
 	module.SegmentDataUpdated(2, second)
-	require.Len(t, scheduler.tasks, 4)
-	require.NoError(t, scheduler.tasks[3].Execute(ctx))
+	require.Len(t, scheduler.tasks, 3)
+	require.NoError(t, scheduler.tasks[2].Execute(ctx))
 	assert.Equal(t, uint64(300), module.transformLog.MaterializedTimeTick())
 
 	// The frontier is mirrored into the vchannel meta for the next checkpoint.
@@ -130,10 +126,8 @@ func TestVChannelMaterializeBoundAdvancesAfterSegmentCleanup(t *testing.T) {
 	}
 	module := newMaterializeBoundTestModule(t, scheduler, segmentMetas, 100, 200, 300)
 
-	require.True(t, module.transformLog.RequestMaterializeThrough(300))
-	module.RequestPersistThrough(300)
-	require.Len(t, scheduler.tasks, 2)
-	require.NoError(t, scheduler.tasks[1].Execute(ctx))
+	// Observation drives the first batch; the bound pins it at 100.
+	require.Len(t, scheduler.tasks, 1)
 	require.NoError(t, scheduler.tasks[0].Execute(ctx))
 	assert.Equal(t, uint64(100), module.transformLog.MaterializedTimeTick())
 
@@ -150,8 +144,8 @@ func TestVChannelMaterializeBoundAdvancesAfterSegmentCleanup(t *testing.T) {
 	require.Equal(t, uint64(200), module.materializeUpperBound)
 
 	// The advance releases a new materialize task up to the next blocker.
-	require.Len(t, scheduler.tasks, 3)
-	require.NoError(t, scheduler.tasks[2].Execute(ctx))
+	require.Len(t, scheduler.tasks, 2)
+	require.NoError(t, scheduler.tasks[1].Execute(ctx))
 	assert.Equal(t, uint64(200), module.transformLog.MaterializedTimeTick())
 }
 
