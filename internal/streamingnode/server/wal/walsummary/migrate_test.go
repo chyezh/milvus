@@ -81,7 +81,7 @@ func TestManagerMigrateLegacyTransformLogsSkipsWhenStoreOwnsChunks(t *testing.T)
 	// A normal flush already owns a chunk: migration must not run.
 	finalized := false
 	observeDelete(t, manager.View("v1"), 10, &finalized)
-	manager.requestFlushThrough(10)
+	manager.requestFlush()
 	require.NoError(t, manager.flushOnce(ctx))
 
 	require.NoError(t, manager.MigrateLegacyTransformLogs(ctx, map[string][]*streamingpb.TransformLogEntry{

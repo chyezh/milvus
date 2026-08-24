@@ -41,7 +41,7 @@ type ModuleConfig struct {
 	// PendingTransformEntries is the initial materialization window of the
 	// transform consumer: the durable records after the restored
 	// transform_materialized_time_tick, loaded once by recovery. Runtime
-	// flushes replace it through the summary's flush listener.
+	// observation appends to it directly.
 	PendingTransformEntries   []*streamingpb.TransformLogEntry
 	TransformLogMaterializer  transformlog.Materializer
 	TransformLogMaterialRows  uint64
@@ -156,11 +156,6 @@ func newModule(config ModuleConfig, adoptVChannelMeta bool) (*VChannelRecoveryMo
 		Runtime:              config.Runtime,
 		OnMaterialized:       module.markTransformMaterialized,
 	})
-	if config.SummaryManager != nil {
-		// The transform consumer sees durable records exclusively through the
-		// summary's flush events; persistence decisions stay with the summary.
-		config.SummaryManager.SetFlushListener(config.VChannel, module.transformLog)
-	}
 	module.mu.Lock()
 	module.refreshTransformMaterializeUpperBoundLocked()
 	module.mu.Unlock()
@@ -228,19 +223,11 @@ func (m *VChannelRecoveryModule) ObserveMessage(
 	if m.summaryView != nil {
 		m.summaryView.ObserveMessage(ctx, retained)
 	}
-	// Barrier messages demand the transform consumer catch up through their
-	// timetick: the request is recorded, and the summary is asked to make
-	// everything through the barrier durable (its SyncUp). Regular deletes
-	// are materialized lazily when their flush events arrive (see
-	// RequestMaterializeThrough callers). Persistence stays exclusively with
-	// the summary; the consumer only listens for the flush events.
-	switch messageutil.ClassifyTransformLogMessage(retained.Message()) {
-	case messageutil.TransformLogKindBarrier:
-		m.transformLog.RequestMaterializeThrough(retained.Message().TimeTick())
-		if m.summaryView != nil {
-			m.summaryView.SyncUp(retained.Message().TimeTick())
-		}
-	}
+	// The transform consumer observes the same message stream directly and
+	// materializes at its own pace; the summary persists at its own pace. The
+	// two are deliberately not ordered: no barrier or external write API
+	// drives either of them.
+	m.transformLog.ObserveMessage(retained)
 	return true
 }
 
@@ -761,7 +748,6 @@ func (m *VChannelRecoveryModule) completeVChannelCleanup(tombstoneTimeTick uint6
 		// survive in memory, and its staged handles must be released so the
 		// WAL checkpoint can advance past them.
 		m.summaryView.Manager().RemoveView(m.vchannel)
-		m.summaryView.Manager().RemoveFlushListener(m.vchannel)
 		m.summaryView = nil
 	}
 	if m.onCleanup != nil {

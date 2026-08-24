@@ -24,10 +24,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walsummary"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/walimplstest"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
@@ -112,13 +115,31 @@ func newTestDeleteEntry(timetick uint64) *streamingpb.TransformLogEntry {
 	}
 }
 
-// flushed delivers a flush event of the vchannel with the given entries.
-func flushed(t *testing.T, log *TransformLog, entries ...*streamingpb.TransformLogEntry) {
+// observeDelete observes one delete message of the vchannel.
+func observeDelete(t *testing.T, log *TransformLog, timetick uint64) {
 	t.Helper()
-	log.OnSummaryFlushed(&walsummary.FlushedBatch{
-		RecordsByVChannel: map[string][]*streamingpb.TransformLogEntry{"v1": entries},
-		CoveredTimeTick:   entries[len(entries)-1].GetTimeTick(),
-	})
+	mutableMsg := message.NewDeleteMessageBuilderV1().
+		WithVChannel(log.vchannel).
+		WithHeader(&message.DeleteMessageHeader{
+			CollectionId: 1,
+			Rows:         1,
+		}).
+		WithBody(&msgpb.DeleteRequest{
+			Base:         &commonpb.MsgBase{MsgType: commonpb.MsgType_Delete},
+			CollectionID: 1,
+			PartitionID:  10,
+			PrimaryKeys:  &schemapb.IDs{IdField: &schemapb.IDs_IntId{IntId: &schemapb.LongArray{Data: []int64{int64(timetick)}}}},
+			Timestamps:   []uint64{timetick},
+		}).
+		MustBuildMutable()
+	msg := mutableMsg.WithTimeTick(timetick).
+		WithLastConfirmed(walimplstest.NewTestMessageID(int64(timetick))).
+		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick + 1)))
+	owner := message.NewOwnedImmutableMessage(msg, nil)
+	retained := owner.Clone()
+	log.ObserveMessage(retained)
+	retained.Release()
+	owner.Release()
 }
 
 func newTestTransformLog(t *testing.T, materializer Materializer, initialMaterialized uint64) (*TransformLog, *recordingScheduler, *recordingMaterializer) {
@@ -140,33 +161,43 @@ func newTestTransformLog(t *testing.T, materializer Materializer, initialMateria
 	return log, scheduler, rec
 }
 
-func TestTransformLogMaterializeThroughRequest(t *testing.T) {
+func TestTransformLogObserveSchedulesMaterialize(t *testing.T) {
 	log, scheduler, rec := newTestTransformLog(t, nil, 0)
-	flushed(t, log, newTestDeleteEntry(100), newTestDeleteEntry(200), newTestDeleteEntry(300))
+	observeDelete(t, log, 100)
+	observeDelete(t, log, 200)
+	observeDelete(t, log, 300)
 	onMaterialized := []uint64{}
 	log.onMaterialized = func(tt uint64) { onMaterialized = append(onMaterialized, tt) }
 
-	require.True(t, log.RequestMaterializeThrough(300))
+	// Observation schedules at most one task; the cap-batch continuation
+	// inside materialize keeps the chain going.
 	require.Len(t, scheduler.tasks, 1)
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
+	// The first task was scheduled when the window frontier was 100; the
+	// continuation catches the window up to 300.
+	require.Len(t, scheduler.tasks, 2)
+	require.NoError(t, scheduler.tasks[1].Execute(context.Background()))
 	assert.Equal(t, uint64(300), log.MaterializedTimeTick())
-	assert.Equal(t, []uint64{300}, onMaterialized)
+	assert.Equal(t, []uint64{100, 300}, onMaterialized)
 
 	calls := rec.calls()
-	require.Len(t, calls, 1)
-	assert.Equal(t, uint64(300), calls[0].TargetTimeTick)
-	assert.Len(t, calls[0].Entries, 3)
+	require.Len(t, calls, 2)
+	assert.Equal(t, uint64(100), calls[0].TargetTimeTick)
+	assert.Len(t, calls[0].Entries, 1)
+	assert.Equal(t, uint64(300), calls[1].TargetTimeTick)
+	assert.Len(t, calls[1].Entries, 2)
 
-	// A repeated request for the same frontier is a no-op.
-	require.False(t, log.RequestMaterializeThrough(300))
+	// Nothing new observed: no further task is scheduled.
+	assert.Len(t, scheduler.tasks, 2)
 }
 
 func TestTransformLogMaterializeCapsBatchAndContinues(t *testing.T) {
 	log, scheduler, rec := newTestTransformLog(t, nil, 0)
-	flushed(t, log, newTestDeleteEntry(100), newTestDeleteEntry(200), newTestDeleteEntry(300))
+	observeDelete(t, log, 100)
+	observeDelete(t, log, 200)
+	observeDelete(t, log, 300)
 	log.materializeMaxRows = 1
 
-	require.True(t, log.RequestMaterializeThrough(300))
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
 	assert.Equal(t, uint64(100), log.MaterializedTimeTick())
 	require.Len(t, scheduler.tasks, 2)
@@ -186,10 +217,10 @@ func TestTransformLogMaterializeCapsBatchAndContinues(t *testing.T) {
 func TestTransformLogMaterializeRetriesOnFailure(t *testing.T) {
 	fail := &failingMaterializer{}
 	log, scheduler, _ := newTestTransformLog(t, fail, 0)
-	flushed(t, log, newTestDeleteEntry(100))
+	observeDelete(t, log, 100)
 	fail.setFail(true)
 
-	require.True(t, log.RequestMaterializeThrough(100))
+	require.Len(t, scheduler.tasks, 1)
 	err := scheduler.tasks[0].Execute(context.Background())
 	assert.Error(t, err)
 	assert.False(t, scheduler.tasks[0].(*transformMaterializeTask).Done())
@@ -203,85 +234,103 @@ func TestTransformLogMaterializeRetriesOnFailure(t *testing.T) {
 
 func TestTransformLogMaterializeUpperBoundLimitsTarget(t *testing.T) {
 	log, scheduler, rec := newTestTransformLog(t, nil, 0)
-	flushed(t, log, newTestDeleteEntry(100), newTestDeleteEntry(200), newTestDeleteEntry(300))
-
-	require.True(t, log.RequestMaterializeThrough(300))
-	require.Len(t, scheduler.tasks, 1)
+	observeDelete(t, log, 100)
+	observeDelete(t, log, 200)
+	observeDelete(t, log, 300)
 
 	// The upper bound retracts the frontier before the task runs.
 	log.SetMaterializeUpperBound(200)
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
-	assert.Equal(t, uint64(200), log.MaterializedTimeTick())
-
-	// Advancing the bound continues the retained request without a new WAL
-	// trigger.
-	log.SetMaterializeUpperBound(300)
 	require.Len(t, scheduler.tasks, 2)
 	require.NoError(t, scheduler.tasks[1].Execute(context.Background()))
+	assert.Equal(t, uint64(200), log.MaterializedTimeTick())
+
+	// Advancing the bound continues materialization without a new WAL
+	// trigger.
+	log.SetMaterializeUpperBound(300)
+	require.Len(t, scheduler.tasks, 3)
+	require.NoError(t, scheduler.tasks[2].Execute(context.Background()))
 	assert.Equal(t, uint64(300), log.MaterializedTimeTick())
-	assert.Len(t, rec.calls(), 2)
+	assert.Len(t, rec.calls(), 3)
 }
 
-func TestTransformLogMaterializeTargetCappedByDurableTimeTick(t *testing.T) {
+func TestTransformLogMaterializesObservedRecordsImmediately(t *testing.T) {
+	// The core of the decoupling: materialization consumes the observed
+	// window directly and never waits for the summary to persist.
 	log, scheduler, rec := newTestTransformLog(t, nil, 0)
-	// Only 100 is durable: requesting 300 must not materialize records the
-	// summary has not persisted yet.
-	flushed(t, log, newTestDeleteEntry(100))
-
-	require.True(t, log.RequestMaterializeThrough(300))
-	require.Error(t, scheduler.tasks[0].Execute(context.Background()))
-	assert.Equal(t, uint64(0), log.MaterializedTimeTick())
-	require.Empty(t, rec.calls())
-
-	// The next flush event delivers the rest; the pending task completes.
-	flushed(t, log, newTestDeleteEntry(300))
-	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
-	assert.Equal(t, uint64(300), log.MaterializedTimeTick())
-	require.Len(t, rec.calls(), 1)
-}
-
-func TestTransformLogMaterializeWaitsForFlushEvent(t *testing.T) {
-	log, scheduler, rec := newTestTransformLog(t, nil, 0)
-
-	// Nothing is durable: the request is recorded, the task stays delayed,
-	// and nothing is emitted.
-	require.True(t, log.RequestMaterializeThrough(100))
+	observeDelete(t, log, 100)
 	require.Len(t, scheduler.tasks, 1)
-	require.Error(t, scheduler.tasks[0].Execute(context.Background()))
-	require.Empty(t, rec.calls())
-	assert.Equal(t, uint64(0), log.MaterializedTimeTick())
-
-	// The flush event replaces the window; the pending task completes.
-	flushed(t, log, newTestDeleteEntry(100))
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
 	assert.Equal(t, uint64(100), log.MaterializedTimeTick())
 	require.Len(t, rec.calls(), 1)
-}
-
-func TestTransformLogFlushEventUnblocksPendingTask(t *testing.T) {
-	log, scheduler, rec := newTestTransformLog(t, nil, 0)
-	require.True(t, log.RequestMaterializeThrough(200))
-	require.Len(t, scheduler.tasks, 1)
-
-	// The pending task stays delayed until the flush event moves the window;
-	// the event does not schedule a duplicate (pending-target dedup).
-	flushed(t, log, newTestDeleteEntry(100), newTestDeleteEntry(200))
-	require.Len(t, scheduler.tasks, 1)
-	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
-	assert.Equal(t, uint64(200), log.MaterializedTimeTick())
-	require.Len(t, rec.calls(), 1)
+	assert.Equal(t, uint64(100), rec.calls()[0].TargetTimeTick)
 }
 
 func TestTransformLogRecoveryWindow(t *testing.T) {
 	// Recovery loads the durable backlog into the initial window: records
-	// after the restored frontier are materializable without any flush event.
-	log, scheduler, rec := newTestTransformLog(t, nil, 100)
-	log.pending = []*streamingpb.TransformLogEntry{newTestDeleteEntry(200)}
-	log.durableTimeTick = 200
+	// after the restored frontier are materializable without any observation
+	// or flush event.
+	scheduler := &recordingScheduler{}
+	rec := &recordingMaterializer{}
+	log := New(Config{
+		VChannel:             "v1",
+		MaterializedTimeTick: 100,
+		PendingEntries:       []*streamingpb.TransformLogEntry{newTestDeleteEntry(200)},
+		MaterializeMaxRows:   500000,
+		MaterializeMaxBytes:  32 * 1024 * 1024,
+		Materializer:         rec,
+		Runtime:              moduleapi.Runtime{Scheduler: scheduler},
+	})
 
-	require.True(t, log.RequestMaterializeThrough(200))
+	// The loaded window alone is not materialized until a trigger arrives
+	// (here, the upper bound publish on segment creation).
+	log.SetMaterializeUpperBound(200)
+	require.Len(t, scheduler.tasks, 1)
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
 	assert.Equal(t, uint64(200), log.MaterializedTimeTick())
 	assert.Empty(t, log.pending)
 	require.Len(t, rec.calls(), 1)
+}
+
+func TestTransformLogObserveSkipsRecordsAtOrBelowLoadedThrough(t *testing.T) {
+	// Recovery loaded (100, 200]; replay re-observes 200 and must not append
+	// it again. Records past the loaded frontier are appended normally.
+	scheduler := &recordingScheduler{}
+	rec := &recordingMaterializer{}
+	log := New(Config{
+		VChannel:             "v1",
+		MaterializedTimeTick: 100,
+		PendingEntries:       []*streamingpb.TransformLogEntry{newTestDeleteEntry(200)},
+		MaterializeMaxRows:   500000,
+		MaterializeMaxBytes:  32 * 1024 * 1024,
+		Materializer:         rec,
+		Runtime:              moduleapi.Runtime{Scheduler: scheduler},
+	})
+
+	observeDelete(t, log, 200) // at the loaded frontier: skipped.
+	require.Empty(t, scheduler.tasks)
+	require.Len(t, log.pending, 1)
+
+	observeDelete(t, log, 300) // past the frontier: appended and scheduled.
+	require.Len(t, scheduler.tasks, 1)
+	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
+	assert.Equal(t, uint64(300), log.MaterializedTimeTick())
+	assert.Empty(t, log.pending)
+}
+
+func TestTransformLogObserveIgnoresNonDelete(t *testing.T) {
+	log, scheduler, _ := newTestTransformLog(t, nil, 0)
+	insert := message.NewInsertMessageBuilderV1().
+		WithVChannel("v1").
+		WithHeader(&message.InsertMessageHeader{CollectionId: 1}).
+		WithBody(&msgpb.InsertRequest{CollectionID: 1, PartitionID: 10}).
+		MustBuildMutable()
+	msg := insert.WithTimeTick(100).IntoImmutableMessage(walimplstest.NewTestMessageID(101))
+	owner := message.NewOwnedImmutableMessage(msg, nil)
+	retained := owner.Clone()
+	log.ObserveMessage(retained)
+	retained.Release()
+	owner.Release()
+	require.Empty(t, scheduler.tasks)
+	require.Empty(t, log.pending)
 }
