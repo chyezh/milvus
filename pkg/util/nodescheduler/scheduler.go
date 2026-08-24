@@ -22,6 +22,7 @@ import (
 	"math"
 	"reflect"
 	"sync"
+	"time"
 
 	"github.com/cockroachdb/errors"
 
@@ -91,6 +92,9 @@ type taskEntry struct {
 	done   chan struct{}
 	once   sync.Once
 	wakeup func()
+	// nextRun is the earliest time a delayed (ErrDelay) requeue may execute
+	// again. Zero means the entry may run immediately.
+	nextRun time.Time
 }
 
 func (e *taskEntry) finish() {
@@ -258,8 +262,16 @@ func (s *nodeScheduler) dequeue() *taskEntry {
 		}
 		if s.queue.Len() > 0 {
 			element := s.queue.Front()
+			entry := element.Value.(*taskEntry)
+			// A delayed requeue is not runnable yet: wait for the requeue's
+			// wake-up timer instead of spinning. Other entries behind it stay
+			// queued until it is runnable, keeping execution order stable.
+			if !entry.nextRun.IsZero() && time.Now().Before(entry.nextRun) {
+				s.cond.Wait()
+				continue
+			}
 			s.queue.Remove(element)
-			return element.Value.(*taskEntry)
+			return entry
 		}
 		s.cond.Wait()
 	}
@@ -272,10 +284,22 @@ func (s *nodeScheduler) requeue(entry *taskEntry) bool {
 	if s.closed || entry.ctx.Err() != nil {
 		return false
 	}
+	// Back off a delayed retry: without the delay, a task whose Execute keeps
+	// failing (e.g. an object-storage outage surfaced as ErrDelay) is dequeued
+	// and re-executed in a tight loop, burning a worker at 100% CPU. The timer
+	// wakes the condition variable once the entry becomes runnable again.
+	entry.nextRun = time.Now().Add(delayOnRequeue)
 	s.queue.PushBack(entry)
 	s.cond.Signal()
+	time.AfterFunc(delayOnRequeue, s.wakeup)
 	return true
 }
+
+// delayOnRequeue is the minimum pause between a failed (ErrDelay) execution
+// and its retry. It bounds the retry rate of every scheduler task without
+// blocking the queue: delayed entries are simply not runnable until the pause
+// elapses.
+const delayOnRequeue = 100 * time.Millisecond
 
 var getGlobalScheduler = sync.OnceValue(func() *nodeScheduler {
 	params := paramtable.Get()

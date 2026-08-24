@@ -2,6 +2,7 @@ package recovery
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -996,4 +997,53 @@ func newBroadcastAckMessageWith(t *testing.T, builder interface {
 		WithTimeTick(timeTick).
 		WithLastConfirmed(walimplstest.NewTestMessageID(9)).
 		IntoImmutableMessage(walimplstest.NewTestMessageID(10))
+}
+
+// TestRecoverRecoveryStorageFailureReleasesResources covers the second-phase
+// failure path: recoverRecoveryInfoFromMeta succeeded (modules started), but
+// runBoundedRecovery failed. The half-built storage must release the started
+// goroutines and schedulers — otherwise a PChannelCheckpointUpdater keeps
+// reporting forever and the scheduler keeps retrying a dead store.
+func TestRecoverRecoveryStorageFailureReleasesResources(t *testing.T) {
+	nodeScheduler := nodescheduler.New(4)
+	t.Cleanup(nodeScheduler.Close)
+	rs := newRecoveryStorage(
+		types.PChannelInfo{Name: "test-pchannel"},
+		&utility.WALCheckpoint{
+			MessageID: walimplstest.NewTestMessageID(10),
+			TimeTick:  10,
+			Magic:     utility.RecoveryMagicRecoveryStorageV2,
+		},
+		WithNodeScheduler(nodeScheduler),
+	)
+	manager, err := vchannel.NewPChannelRecoveryManager(vchannel.PChannelManagerConfig{
+		PChannel: "test-pchannel",
+		Runtime: moduleapi.Runtime{
+			Scheduler: rs.taskScheduler,
+			Notifier:  rs,
+		},
+	})
+	require.NoError(t, err)
+	rs.vchannelManager = manager
+	rs.installCheckpoint(rs.checkpoint)
+
+	// First phase succeeds, second phase fails: exactly the path that used to
+	// leak the started modules.
+	metaMock := mockey.Mock((*recoveryStorageImpl).recoverRecoveryInfoFromMeta).To(func(
+		_ *recoveryStorageImpl, _ context.Context, _ types.PChannelInfo,
+	) error {
+		return nil
+	}).Build()
+	defer metaMock.UnPatch()
+	boundedMock := mockey.Mock((*recoveryStorageImpl).runBoundedRecovery).To(func(
+		_ *recoveryStorageImpl, _ context.Context, _ RecoveryStreamBuilder, _ message.ImmutableMessage,
+	) (*RecoverySnapshot, error) {
+		return nil, errors.New("injected bounded recovery failure")
+	}).Build()
+	defer boundedMock.UnPatch()
+
+	storage, snapshot, err := RecoverRecoveryStorage(context.Background(), &recordingRecoveryStreamBuilder{}, rs.checkpoint, nil)
+	require.Error(t, err)
+	assert.Nil(t, storage)
+	assert.Nil(t, snapshot)
 }

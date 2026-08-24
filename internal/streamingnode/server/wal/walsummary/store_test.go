@@ -116,7 +116,7 @@ func TestStoreWriteReadChunk(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, uint64(0), footer.GetGeneration())
 
-	decoded, decodedFooter, err := store.ReadChunk(ctx, 0)
+	decoded, decodedFooter, err := store.ReadChunk(ctx, 0, 1)
 	assert.NoError(t, err)
 	assert.Equal(t, footer.GetGeneration(), decodedFooter.GetGeneration())
 	assert.Equal(t, []uint64{100}, timeticks(decoded["v1"]))
@@ -236,11 +236,11 @@ func TestStoreDeleteChunk(t *testing.T) {
 	}
 	_, _, err := store.WriteChunk(ctx, 0, records)
 	assert.NoError(t, err)
-	assert.NoError(t, store.DeleteChunk(ctx, 0))
-	_, _, err = store.ReadChunk(ctx, 0)
+	assert.NoError(t, store.DeleteChunk(ctx, 0, 1))
+	_, _, err = store.ReadChunk(ctx, 0, 1)
 	assert.Error(t, err)
 	// deleting again is a no-op (missing object tolerated).
-	assert.NoError(t, store.DeleteChunk(ctx, 0))
+	assert.NoError(t, store.DeleteChunk(ctx, 0, 1))
 }
 
 func TestInheritManifest(t *testing.T) {

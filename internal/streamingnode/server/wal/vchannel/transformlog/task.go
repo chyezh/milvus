@@ -79,15 +79,36 @@ func (t *transformMaterializeTask) Execute(ctx context.Context) error {
 }
 
 // maybeScheduleMaterializeLocked returns a task for the current window
-// frontier, or nil when there is nothing to do or a task is already pending.
+// frontier, or nil when nothing needs scheduling.
 //
-// At most one task is scheduled per observation moment: the cap-batch
-// continuation inside materialize (see transform_log.go) keeps the chain
-// going, so observation never needs to append one task per record.
-func (t *TransformLog) maybeScheduleMaterializeLocked() *transformMaterializeTask {
+// On the observation path (observe=true) at most one task is scheduled per
+// observation moment: the cap-batch continuation inside materialize (see
+// transform_log.go) chases the frontier, so observation never needs to append
+// one task per record.
+//
+// On the upper-bound path (observe=false) a raise must not be swallowed. A
+// raise that lands after the newest pending task committed under the old
+// bound — between its continuation decision and its Done flag — would
+// otherwise strand the (old bound, new bound] records in the window with no
+// successor. A raise that lands before that task commits needs no new task:
+// the task's own continuation decision re-reads the bound and covers it.
+func (t *TransformLog) maybeScheduleMaterializeLocked(observe bool) *transformMaterializeTask {
 	target := t.materializeTargetLocked()
 	t.materializeTasks = compactTransformMaterializeTasks(t.materializeTasks)
-	if target <= t.materializedTimeTick || len(t.materializeTasks) > 0 {
+	if target <= t.materializedTimeTick {
+		return nil
+	}
+	if observe {
+		if len(t.materializeTasks) > 0 {
+			return nil
+		}
+		return t.newMaterializeTaskLocked(target)
+	}
+	if len(t.materializeTasks) == 0 {
+		return t.newMaterializeTaskLocked(target)
+	}
+	pending := t.pendingMaterializeTargetLocked()
+	if pending >= target || t.materializedTimeTick < pending {
 		return nil
 	}
 	return t.newMaterializeTaskLocked(target)
@@ -111,11 +132,13 @@ func (t *TransformLog) newMaterializeTaskLocked(target uint64) *transformMateria
 
 func (t *TransformLog) taskPredecessorsLocked() []transformTask {
 	t.materializeTasks = compactTransformMaterializeTasks(t.materializeTasks)
-	predecessors := make([]transformTask, 0, len(t.materializeTasks))
-	for _, task := range t.materializeTasks {
-		predecessors = append(predecessors, task)
+	// Chain only the newest pending task: it already transitively depends on
+	// every earlier one, so the graph stays O(1) per task instead of copying
+	// the whole backlog into each continuation.
+	if n := len(t.materializeTasks); n > 0 {
+		return []transformTask{t.materializeTasks[n-1]}
 	}
-	return predecessors
+	return nil
 }
 
 func (t *TransformLog) HasPendingMaterializeTask() bool {

@@ -31,6 +31,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message/adaptor"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/rmq"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/walimplstest"
 )
 
 type stubCheckpointReporter struct {
@@ -116,6 +117,19 @@ func TestCheckpointUpdaterExecuteEmptyVChannels(t *testing.T) {
 		reporter,
 	)
 	updater.execute()
+	calls, _ := reporter.snap()
+	assert.Zero(t, calls)
+}
+
+// TestCheckpointUpdaterExecuteUnsupportedMessageID covers a message ID type
+// without an MQ wrapper counterpart (e.g. test-only IDs): the updater must
+// skip the tick, never panic.
+func TestCheckpointUpdaterExecuteUnsupportedMessageID(t *testing.T) {
+	reporter := &stubCheckpointReporter{}
+	updater := newTestCheckpointUpdater(reporter, func() *utility.WALCheckpoint {
+		return &utility.WALCheckpoint{MessageID: walimplstest.NewTestMessageID(1), TimeTick: 100, Magic: 1}
+	})
+	require.NotPanics(t, updater.execute)
 	calls, _ := reporter.snap()
 	assert.Zero(t, calls)
 }

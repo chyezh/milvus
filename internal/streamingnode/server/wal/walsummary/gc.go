@@ -20,6 +20,8 @@ import (
 	"context"
 	"sort"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 )
@@ -41,12 +43,15 @@ import (
 // A manifest write that fails mid-GC is safe: the in-memory manifest still
 // lists everything, and the next attempt redoes the same computation.
 func (m *Manager) GCOnce(ctx context.Context) error {
+	// Snapshot the pending queue: removePendingGC compacts the live array in
+	// place, so ranging over the live slice while deleting would shift the
+	// indexes and skip entries.
 	m.mu.Lock()
-	// Finish deletes queued by an earlier GC first.
-	pendingGC := m.manifest.GetPendingGc()
+	pendingGC := make([]*streamingpb.PChannelSummaryChunkRef, 0, len(m.manifest.GetPendingGc()))
+	pendingGC = append(pendingGC, m.manifest.GetPendingGc()...)
 	m.mu.Unlock()
 	for _, ref := range pendingGC {
-		if err := m.cfg.Store.DeleteChunk(ctx, ref.GetGeneration()); err != nil {
+		if err := m.cfg.Store.DeleteChunk(ctx, ref.GetGeneration(), ref.GetTerm()); err != nil {
 			return err
 		}
 		m.removePendingGC(ref)
@@ -56,22 +61,31 @@ func (m *Manager) GCOnce(ctx context.Context) error {
 	if len(released) == 0 {
 		return nil
 	}
-	// Move the released chunks into pending_gc and publish.
+	// Move the released chunks into pending_gc and publish. The publish
+	// serializes with flush publishes through manifestMu: the edit is made on
+	// a clone and only installed after the write succeeds, so a concurrent
+	// marshal never sees a half-edited manifest and a failed write leaves the
+	// in-memory state untouched for the next run to recompute.
+	m.manifestMu.Lock()
+	defer m.manifestMu.Unlock()
 	m.mu.Lock()
+	next := proto.Clone(m.manifest).(*streamingpb.PChannelSummaryManifest)
 	for _, ref := range released {
-		m.manifest.Chunks = removeChunkEntry(m.manifest.Chunks, ref.GetGeneration())
-		m.manifest.PendingGc = append(m.manifest.PendingGc, ref)
+		next.Chunks = removeChunkEntry(next.Chunks, ref.GetGeneration())
+		next.PendingGc = append(next.PendingGc, ref)
 	}
-	sortChunkEntries(m.manifest.Chunks)
-	manifest := m.manifest
+	sortChunkEntries(next.Chunks)
 	m.mu.Unlock()
-	if err := m.cfg.Store.WriteManifest(ctx, manifest); err != nil {
+	if err := m.cfg.Store.WriteManifest(ctx, next); err != nil {
 		return err
 	}
+	m.mu.Lock()
+	m.manifest = next
+	m.mu.Unlock()
 	// The manifest no longer references the released chunks: delete the objects.
 	// A failure here leaves the entries in pending_gc for the next run.
 	for _, ref := range released {
-		if err := m.cfg.Store.DeleteChunk(ctx, ref.GetGeneration()); err != nil {
+		if err := m.cfg.Store.DeleteChunk(ctx, ref.GetGeneration(), ref.GetTerm()); err != nil {
 			return err
 		}
 		m.removePendingGC(ref)
