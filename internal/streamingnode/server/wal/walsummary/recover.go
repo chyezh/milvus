@@ -98,16 +98,27 @@ func (m *Manager) Recover(ctx context.Context) error {
 		return err
 	}
 	if !needsPublish && m.cfg.Term > 0 {
-		// Term handoff: this term has no chunks of its own yet. Adopt the
-		// previous term's index wholesale so its un-materialized records stay
-		// reachable, then seal the union into this term's manifest.
-		previous, previousNeedsPublish, err := m.recoverManifestOfTerm(ctx, m.cfg.Term-1)
-		if err != nil {
-			return err
-		}
-		if previousNeedsPublish {
-			manifest = previous
-			needsPublish = true
+		// Term handoff: this term has no chunks of its own yet. Adopt the most
+		// recent non-empty earlier term's index wholesale so un-materialized
+		// records stay reachable, then seal the union into this term's manifest.
+		//
+		// The walk must look back past a single term: an intermediate term can
+		// fence (SavePChannelSummaryMeta in recoverManifestOfTerm) and then die
+		// before sealing its manifest — TryAssignToServerID burns a term on every
+		// assignment attempt — leaving an empty manifest at term-1 while the real
+		// records live at an older term. Reading only term-1 would strand those
+		// records: their delete would silently resurrect and the orphaned chunk
+		// objects would be unreachable to GC.
+		for t := m.cfg.Term - 1; t >= 0; t-- {
+			previous, previousNeedsPublish, err := m.recoverManifestOfTerm(ctx, t)
+			if err != nil {
+				return err
+			}
+			if previousNeedsPublish {
+				manifest = previous
+				needsPublish = true
+				break
+			}
 		}
 	}
 	// Publish this term's manifest whenever it now records anything (its own
