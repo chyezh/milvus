@@ -157,9 +157,17 @@ func (r *recoveryStorageImpl) fenceConsumeCheckpoint(ctx context.Context) error 
 	}
 	stamped := r.checkpoint.Clone()
 	stamped.Term = r.channel.Term
-	return resource.Resource().StreamingNodeCatalog().SaveRecoverySnapshot(ctx, r.channel.Name, &metastore.WALRecoverySnapshot{
+	if err := resource.Resource().StreamingNodeCatalog().SaveRecoverySnapshot(ctx, r.channel.Name, &metastore.WALRecoverySnapshot{
 		ConsumeCheckpoint: stamped.IntoProto(),
-	})
+	}); err != nil {
+		return err
+	}
+	// Mirror the stamped term back into the in-memory checkpoint: the
+	// background persistence path re-submits r.checkpoint on every interval,
+	// and it must present the same term the fence just won, or the term
+	// pre-check of SaveRecoverySnapshot refuses it as fenced.
+	r.checkpoint.Term = r.channel.Term
+	return nil
 }
 
 // migrateLegacyTransformLogsToSummary migrates the pre-summary per-vchannel

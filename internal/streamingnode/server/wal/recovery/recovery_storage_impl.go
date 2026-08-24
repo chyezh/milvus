@@ -412,6 +412,11 @@ func (r *recoveryStorageImpl) consumeDirtySnapshot() *dirtyPersistSnapshot {
 		MessageID: completedPoint.MessageID,
 		TimeTick:  completedPoint.TimeTick,
 		Magic:     utility.RecoveryMagicRecoveryStorageV2,
+		// The checkpoint carries the publisher term: the advancement is fenced
+		// by the term pre-check and the value CAS of SaveRecoverySnapshot, so
+		// a stale term here would be refused (and with it, the whole
+		// persistence) as soon as this term's fence has taken the checkpoint.
+		Term: r.channel.Term,
 	}
 	checkpointDirty := checkpoint == nil ||
 		!consumeCheckpointEqual(checkpoint, frozenCheckpoint)

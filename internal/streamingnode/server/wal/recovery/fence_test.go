@@ -58,6 +58,11 @@ func TestFenceConsumeCheckpointStampsOwnTerm(t *testing.T) {
 	assert.Equal(t, int64(3), received.GetTerm(), "fence must stamp the own term")
 	assert.Equal(t, uint64(10), received.GetTimeTick(), "fence must preserve the published position")
 	assert.Equal(t, "10", received.GetMessageId().GetId(), "fence must preserve the published message id")
+	// The in-memory checkpoint must mirror the stamped term: the background
+	// persistence path re-submits r.checkpoint, and a stale term would be
+	// refused by the term pre-check of SaveRecoverySnapshot.
+	assert.Equal(t, int64(3), storage.checkpoint.Term,
+		"fence must mirror the term into the in-memory checkpoint")
 }
 
 // TestFenceConsumeCheckpointNilCheckpointSkips proves the fence is a no-op
@@ -69,4 +74,24 @@ func TestFenceConsumeCheckpointNilCheckpointSkips(t *testing.T) {
 	resource.InitForTest(t, resource.OptStreamingNodeCatalog(mock_metastore.NewMockStreamingNodeCataLog(t)))
 
 	require.NoError(t, storage.fenceConsumeCheckpoint(context.Background()))
+}
+
+// TestConsumeDirtySnapshotCarriesPublisherTerm proves the persistence path
+// re-submits the checkpoint with the publisher's term: without it, the term
+// pre-check of SaveRecoverySnapshot would refuse the advancement as fenced
+// right after this term's takeover fence.
+func TestConsumeDirtySnapshotCarriesPublisherTerm(t *testing.T) {
+	storage := newTestRecoveryStorage(t, &utility.WALCheckpoint{
+		MessageID: walimplstest.NewTestMessageID(1),
+		TimeTick:  10,
+	})
+	storage.channel.Term = 3
+	t.Cleanup(storage.metrics.Close)
+
+	storage.observeMessage(context.Background(), newAckTestTimeTickMessage(t, 20, 2))
+	snapshot := storage.consumeDirtySnapshot()
+	require.NotNil(t, snapshot)
+	assert.Equal(t, int64(3), snapshot.Checkpoint.Term,
+		"persisted checkpoint must carry the publisher term")
+	assert.Equal(t, uint64(20), snapshot.Checkpoint.TimeTick)
 }
