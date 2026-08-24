@@ -21,7 +21,6 @@ RecoveryStorage (pchannel)
        |     +-- TransformLog B
        +-- walsummary.Manager (pchannel-scoped summary store, owns persistence)
              +-- views per vchannel
-             +-- flushListeners per vchannel  -> TransformLog.OnSummaryFlushed
 ```
 
 Persistence lives exclusively in the [WALSummary](../summary.md) of the
@@ -30,8 +29,9 @@ metadata.
 
 TransformLog owns:
 
-- the in-memory materialization window (`pending`): durable records of its
-  vchannel after the committed frontier, replaced by flush events;
+- the in-memory materialization window (`pending`): the transform records of
+  its vchannel after the committed frontier, fed by direct observation (and
+  once, by recovery);
 - the committed materialization frontier `materialized_time_tick`, carried by
   `VChannelMeta.transform_materialized_time_tick`;
 - the L1 upper bound derived from uncommitted L0 segments;
@@ -45,26 +45,25 @@ own** when records become durable:
 
 - autonomous flush at the binary size threshold;
 - forced persistence through `RequestPersistThrough` (tracker stall / under
-  pressure);
-- barrier `SyncUp` (flush / flush-all / manual-flush / drop / truncate ...).
+  pressure).
 
-The TransformLog never reads the summary store and never triggers persistence.
-It observes the outcome: after a chunk and its manifest are durable, the
-summary delivers a `FlushedBatch` per vchannel through `FlushListener`, and
-only then releases the message handles. The handle lifecycle therefore
-guarantees: **WAL checkpoint <= durable summary frontier**, and the consumer's
-window only ever contains durable records, so
-
-```text
-materialized_time_tick <= durable frontier <= WAL checkpoint
-```
+There is no barrier trigger: external write APIs never force a summary flush.
+The TransformLog never reads the summary store and never triggers persistence,
+and — crucially — **never waits for persistence either**: it observes the
+vchannel's messages directly and keeps its own window. L0 materialization and
+WALSummary persistence are not ordered against each other in any way. The
+message handles are retained by the summary view and released only after the
+covering chunk and manifest are durable, which still guarantees
+**WAL checkpoint <= durable summary frontier**; the materialization frontier
+may be ahead of or behind the durable frontier at any moment without losing
+data (see Recovery).
 
 ## 3. Message Classification
 
 | Kind | WAL messages | Effect |
 |---|---|---|
-| Payload | Delete, committed Txn containing Delete | `summaryView.ObserveMessage` appends one ordered Delete record to the summary staging. |
-| Barrier | RecoveryBarrier, Flush, ManualFlush, FlushAll, DropPartition, DropCollection, TruncateCollection, CreateCollection, schema-changing AlterCollection, AlterWAL | `RequestMaterializeThrough(tt)` records the frontier and `summaryView.SyncUp(tt)` asks the summary to make everything through the barrier durable. |
+| Payload | Delete, committed Txn containing Delete | `summaryView.ObserveMessage` appends one ordered Delete record to the summary staging; `TransformLog.ObserveMessage` appends the same record to its own materialization window. |
+| Barrier | RecoveryBarrier, Flush, ManualFlush, FlushAll, DropPartition, DropCollection, TruncateCollection, CreateCollection, schema-changing AlterCollection, AlterWAL | VChannel-level handlers only (segment flush etc.). No transform effect: neither the summary nor the TransformLog reacts to barriers. |
 | None | Insert and other messages | No transform effect. |
 
 A committed Txn creates one record at the outer Txn TimeTick and stores Delete
@@ -79,46 +78,44 @@ There is one Observe path for recovery and live messages:
 3. `summaryView.ObserveMessage`: build the transform record (a standalone
    proto), append it to the view staging, retain a message handle, and let the
    summary decide about flushing (size threshold);
-4. for Barrier messages, additionally `RequestMaterializeThrough` +
-   `summaryView.SyncUp`.
+4. `TransformLog.ObserveMessage`: build the same record, skip it when its
+   timetick is at or below the committed frontier or the recovery-loaded
+   window coverage, append it to `pending` otherwise, and schedule a
+   materialize task for the current window frontier (at most one task per
+   observation moment; the cap-batch continuation keeps the chain going).
 
-The TransformLog itself schedules materialization only when two conditions
-hold:
+No external request exists: the transform consumer materializes whatever its
+window holds, as soon as the L1 upper bound allows, at its own pace.
 
-- a request exists: `RequestMaterializeThrough` recorded a frontier, or the L1
-  upper bound advanced via `SetMaterializeUpperBound`;
-- the durable frontier covers the target: a flush event moved the window
-  (`DurableTimeTick() >= target`).
+## 5. The Materialization Window
 
-## 5. Flush Event And The Window
+The window (`pending`) is the transform records of the vchannel after the
+committed frontier, in ascending timetick order:
 
-A successful summary flush delivers to the TransformLog:
+- recovery seeds its head once: the durable records after
+  `materialized_time_tick`, loaded from the summary store
+  (`ReadTransformEntries`); the coverage of that load is remembered as
+  `loadedThrough`;
+- live observation appends the tail: delete records past `loadedThrough` (and
+  past the committed frontier);
+- committed batches trim the head.
 
-```go
-type FlushedBatch struct {
-    RecordsByVChannel map[string][]*TransformLogEntry // ascending timetick
-    CoveredTimeTick   uint64
-}
-```
-
-`OnSummaryFlushed`:
-
-1. appends the vchannel's entries after the committed frontier to `pending`;
-2. advances `durableTimeTick`;
-3. schedules a materialize task for the retained request when the window now
-   covers part of it (deduplicated against a pending task).
-
-The entries are standalone protos that survive the handle release: the
-consumer may retain them as long as needed.
+Replay deduplication: after a restart, WAL replay re-observes the records the
+recovered window already holds. Observation skips records at or below
+`loadedThrough`, so the window never duplicates the recovered backlog; the
+summary view independently skips records at or below its restored durable
+frontier, so the same records are never rewritten into new chunks.
 
 ## 6. L0 Materialization
 
 Materialization converts the windowed Delete entries into DataCoord-managed L0
-deltalogs. It may be triggered by explicit barrier requests or size pressure.
+deltalogs. It is triggered autonomously: observation (or an L1 upper bound
+advance) schedules a task whenever the window holds materializable records.
 
 Materialization:
 
-- consumes only **durable** records (never the summary staging or store);
+- consumes the **observed window** directly (never the summary staging or
+  store), so it does not wait for persistence;
 - does not retain source WAL messages;
 - does not delay BroadcastAck;
 - does not gate the global recovery checkpoint;
@@ -139,16 +136,11 @@ safe to include because rows assigned to that Segment have later TimeTicks.
 This guarantees that an L0 Segment never covers a transform range whose L1
 data has not completed its final commit.
 
-The target of one batch is `min(requested, upper_bound, durableTimeTick)`.
-TransformLog keeps the requested materialization TimeTick separately from the
-currently executable TimeTick, schedules
-`min(requested, upper_bound, durable)` and retains the original request. Every
+The target of one batch is `min(window_frontier, upper_bound)`. Every
 completed L1 final commit makes the owning VChannel recompute the bound, which
-retries the retained request without requiring another WAL trigger. Batches
-are capped by rows/bytes; a capped batch schedules a continuation task whose
-predecessor is the current one, keeping batches strictly sequential. A task
-whose data has not been flushed yet stays delayed in the scheduler until a
-flush event covers its target.
+schedules the next batch without requiring another WAL trigger. Batches are
+capped by rows/bytes; a capped batch schedules a continuation task whose
+predecessor is the current one, keeping batches strictly sequential.
 
 Physical duplicate L0 output after a crash is outside the WAL checkpoint
 protocol and requires lifecycle idempotency or reconciliation.
@@ -161,29 +153,45 @@ protocol and requires lifecycle idempotency or reconciliation.
    Recovery Storage);
 3. for every vchannel, recovery loads the initial materialization window once:
    `summaryManager.ReadTransformEntries(vchannel, materializedTimeTick, +inf)`
-   — the only read of the summary store in the whole consumer path;
+   — the only read of the summary store in the whole consumer path; the
+   coverage of the load becomes `loadedThrough`;
 4. the module restores `materialized_time_tick` from
    `VChannelMeta.transform_materialized_time_tick` and seeds the window;
-5. live operation continues from the restored frontier; runtime flushes
-   replace the window through flush events.
+5. the summary view's durable frontier is restored from the manifest
+   (`Manager.DurableTimeTick` / `SetDurableTimeTick`), so replay does not
+   re-stage already-durable records;
+6. live operation continues from the restored frontier.
+
+Consistency argument (no ordering between materialization and persistence):
+
+- materialization commits a frontier only after its L0 output is in object
+  storage, so `materialized_time_tick` never claims un-materialized records;
+- un-materialized records are, by construction, still covered by a retained
+  summary chunk (the summary never releases a chunk above a vchannel's
+  materialization frontier), so recovery step 3 rebuilds them even when the
+  WAL checkpoint has already advanced past them;
+- a materialization ahead of the durable frontier is safe: the L0 output
+  survives independently, and replay observation skips what the window
+  already holds.
 
 ## 8. GC
 
 The summary releases chunk objects by retention budget, bounded below by the
 per-vchannel materialization frontiers mirrored via
-`Manager.SetMaterializedTimeTick`. Because the consumer only ever consumes
-durable records, a chunk fully covered by the materialization frontier is
-guaranteed to have been consumed, so releasing it cannot lose transform data.
+`Manager.SetMaterializedTimeTick`. A chunk fully covered by the materialization
+frontier is guaranteed to have been materialized (its L0 output is durable), so
+releasing it cannot lose transform data.
 
 ## 9. Invariants
 
 1. TransformLog is VChannel-owned; persistence is pchannel-owned (WALSummary).
 2. All entry positions use source WAL TimeTick.
-3. `materialized_time_tick <= durable frontier <= WAL checkpoint`.
+3. `WAL checkpoint <= durable summary frontier` (handle lifecycle, summary
+   owns the handles); the materialization frontier has **no** ordering
+   relation with either.
 4. A Delete handle releases only after the chunk and manifest are durable
-   (summary-owned), never before the flush event was delivered.
-5. Barrier visibility advances only after the summary made the records
-   durable.
+   (summary-owned).
+5. Barriers have no effect on the summary or the TransformLog.
 6. L0 materialization does not gate source-message Ack.
 7. The transform consumer never triggers persistence and never reads the
-   summary store at runtime.
+   summary store at runtime (except the one-time recovery window load).
