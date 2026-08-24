@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/segment"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/transformlog"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walsummary"
@@ -42,6 +43,15 @@ type PChannelManagerConfig struct {
 	TransformLogMaterializer  transformlog.Materializer
 	TransformLogMaterialRows  uint64
 	TransformLogMaterialBytes uint64
+
+	// Deprecated: GetRecoveryCheckpoint and CoordinatorBroker wire the
+	// temporary channel-checkpoint reporting (PChannelCheckpointUpdater) that
+	// mirrors the removed flusher's DataCoord.UpdateChannelCheckpoint calls.
+	// When both are non-nil the manager runs the updater; remove them
+	// together with the updater once the new checkpoint-propagation path
+	// lands.
+	GetRecoveryCheckpoint func() *utility.WALCheckpoint
+	CoordinatorBroker      checkpointReporter
 }
 
 // PChannelRecoveryManager owns all vchannel recovery modules on one pchannel.
@@ -53,6 +63,10 @@ type PChannelRecoveryManager struct {
 	dirtyMu            sync.Mutex
 	dirtyModules       map[string]*VChannelRecoveryModule
 	cleanupModules     map[string]*VChannelRecoveryModule
+
+	// Deprecated: periodic DataCoord channel-checkpoint reporting (see
+	// PChannelCheckpointUpdater). Non-nil only when the config wires it.
+	checkpointUpdater *PChannelCheckpointUpdater
 
 	config PChannelManagerConfig
 }
@@ -69,6 +83,14 @@ func NewPChannelRecoveryManager(config PChannelManagerConfig) (*PChannelRecovery
 		dirtyModules:       make(map[string]*VChannelRecoveryModule),
 		config:             config,
 	}
+	if config.GetRecoveryCheckpoint != nil && config.CoordinatorBroker != nil {
+		manager.checkpointUpdater = newPChannelCheckpointUpdater(
+			config.PChannel,
+			manager.activeVChannels,
+			config.GetRecoveryCheckpoint,
+			config.CoordinatorBroker,
+		)
+	}
 	for _, vchannel := range manager.initialVChannels(config) {
 		module, err := manager.newModule(vchannel)
 		if err != nil {
@@ -79,6 +101,17 @@ func NewPChannelRecoveryManager(config PChannelManagerConfig) (*PChannelRecovery
 	}
 	manager.releaseInitialState()
 	return manager, nil
+}
+
+// activeVChannels returns the currently active vchannels of the pchannel.
+func (m *PChannelRecoveryManager) activeVChannels() []string {
+	vchannels := make([]string, 0, m.modules.Len())
+	m.modules.Range(func(vchannel string, _ *VChannelRecoveryModule) bool {
+		vchannels = append(vchannels, vchannel)
+		return true
+	})
+	sort.Strings(vchannels)
+	return vchannels
 }
 
 func (m *PChannelRecoveryManager) initialVChannels(config PChannelManagerConfig) []string {
@@ -225,10 +258,24 @@ func (m *PChannelRecoveryManager) RequestPersistThrough(vchannel string, targetT
 	module.RequestPersistThrough(targetTimeTick)
 }
 
-// Close is intentionally a no-op: every module task runs on the recovery
-// storage's scopedTaskScheduler, which recoveryStorageImpl.Close cancels and
-// drains. No resource owned by the manager survives beyond that teardown.
-func (m *PChannelRecoveryManager) Close() {}
+// Start starts the deprecated DataCoord channel-checkpoint reporting loop
+// (PChannelCheckpointUpdater). Every other manager resource runs on the
+// recovery storage's scopedTaskScheduler and needs no start hook.
+func (m *PChannelRecoveryManager) Start() {
+	if m.checkpointUpdater != nil {
+		go m.checkpointUpdater.Start()
+	}
+}
+
+// Close stops the deprecated DataCoord channel-checkpoint reporting loop.
+// Every module task runs on the recovery storage's scopedTaskScheduler,
+// which recoveryStorageImpl.Close cancels and drains; no other resource
+// owned by the manager survives beyond that teardown.
+func (m *PChannelRecoveryManager) Close() {
+	if m.checkpointUpdater != nil {
+		m.checkpointUpdater.Close()
+	}
+}
 
 func (m *PChannelRecoveryManager) shouldBroadcast(msg message.ImmutableMessage) bool {
 	return msg.VChannel() == "" || msg.IsPChannelLevel()

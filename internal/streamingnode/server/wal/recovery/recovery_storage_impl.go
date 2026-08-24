@@ -248,6 +248,13 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 		// same records into new chunks.
 		summaryManager.SetDurableTimeTick(vchannel, summaryManager.DurableTimeTick(vchannel))
 	}
+	// Deprecated: the manager periodically reports the pchannel recovery
+	// checkpoint to DataCoord (DataCoord.UpdateChannelCheckpoint) so that
+	// GetFlushState can observe flush progress. The recovery storage write
+	// path itself never calls UpdateChannelCheckpoint; remove this wiring
+	// together with PChannelCheckpointUpdater once the new
+	// checkpoint-propagation path lands.
+	coordinatorBroker := broker.NewCoordBroker(coord, paramtable.GetNodeID())
 	manager, err := vchannel.NewPChannelRecoveryManager(vchannel.PChannelManagerConfig{
 		PChannel:         r.channel.Name,
 		VChannelMetas:    vchannels,
@@ -265,10 +272,13 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 		TransformLogMaterializer:  transformLogMaterializer,
 		TransformLogMaterialRows:  uint64(paramtable.Get().StreamingCfg.FlushL0MaxRowNum.GetAsInt()),
 		TransformLogMaterialBytes: uint64(paramtable.Get().StreamingCfg.FlushL0MaxSize.GetAsSize()),
+		GetRecoveryCheckpoint: func() *utility.WALCheckpoint { return r.GetCheckpoint(context.TODO()) },
+		CoordinatorBroker:     coordinatorBroker,
 	})
 	if err != nil {
 		return err
 	}
+	manager.Start()
 	r.vchannelManager = manager
 	r.summaryManager = summaryManager
 	r.installCheckpoint(r.checkpoint)
@@ -334,6 +344,10 @@ func (r *recoveryStorageImpl) Close() {
 	}
 	if r.taskScheduler != nil {
 		r.taskScheduler.Close()
+	}
+	if r.vchannelManager != nil {
+		// Stops the deprecated DataCoord channel-checkpoint reporting loop.
+		r.vchannelManager.Close()
 	}
 	r.metrics.Close()
 }
