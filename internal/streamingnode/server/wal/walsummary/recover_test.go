@@ -43,7 +43,7 @@ func TestRecoverInheritsPreviousTermChunks(t *testing.T) {
 	require.NoError(t, manager1.Recover(ctx))
 	var unused bool
 	observeDelete(t, manager1.View("v1"), 100, &unused)
-	require.NoError(t, manager1.flushOnce(ctx))
+	require.NoError(t, manager1.flushOnce(ctx, &summaryFlushTask{log: manager1}))
 	assert.Len(t, manager1.manifest.GetChunks(), 1)
 
 	// Term 2 takes over the pchannel (term handoff) and recovers. It must see
@@ -87,7 +87,7 @@ func TestRecoverInheritsPreviousTermProbedTail(t *testing.T) {
 	require.NoError(t, manager1.Recover(ctx))
 	var unused bool
 	observeDelete(t, manager1.View("v1"), 100, &unused)
-	require.NoError(t, manager1.flushOnce(ctx))
+	require.NoError(t, manager1.flushOnce(ctx, &summaryFlushTask{log: manager1}))
 	require.Len(t, manager1.manifest.GetChunks(), 1)
 
 	// Term 2 recovers: it finds no manifest of its own, then probes term 1.
@@ -114,6 +114,48 @@ func TestRecoverFencesOlderTerm(t *testing.T) {
 	})
 	err := older.Recover(ctx)
 	require.Error(t, err)
+}
+
+// TestRecoverInheritsSkipsBurnedIntermediateTerm covers chained handoffs: a
+// term that fenced (persisted its catalog meta) but died before sealing any
+// manifest leaves an empty manifest at term-1. Recovery must keep walking back
+// until it finds the most recent term that actually holds chunks — otherwise
+// the records of an older term vanish from the manifest chain, their deletes
+// silently resurrect, and the orphaned chunk objects become unreachable to GC.
+func TestRecoverInheritsSkipsBurnedIntermediateTerm(t *testing.T) {
+	ctx := context.Background()
+	cm := storage.NewLocalChunkManager(objectstorage.RootPath(t.TempDir()))
+
+	// Term 1 flushes one delete into chunk 0 and publishes its manifest.
+	store1 := NewStore(cm, "by-dev-rootcoord-dml_0_40451v0", 1)
+	manager1 := newTestManager(t, store1, 1, 1<<30)
+	require.NoError(t, manager1.Recover(ctx))
+	var unused bool
+	observeDelete(t, manager1.View("v1"), 100, &unused)
+	require.NoError(t, manager1.flushOnce(ctx, &summaryFlushTask{log: manager1}))
+	require.Len(t, manager1.manifest.GetChunks(), 1)
+
+	// Term 2 was assigned and burned without ever recovering (a failed open):
+	// the catalog records it (fencing any older owner), but no manifest of it
+	// exists. A term-3 recovery must walk past the empty term 2 down to term 1.
+	catalog := &catalogRecorder{term: 2}
+
+	// Term 3 recovers: term 2 left an empty manifest, so the inheritance walk
+	// must keep going back to term 1 and adopt its chunk.
+	store3 := NewStore(cm, "by-dev-rootcoord-dml_0_40451v0", 3)
+	manager3 := newTestManager(t, store3, 1, 1<<30)
+	manager3.cfg.MetaCatalog = catalog
+	require.NoError(t, manager3.Recover(ctx))
+	require.Len(t, manager3.manifest.GetChunks(), 1)
+	assert.Equal(t, uint64(0), manager3.manifest.GetChunks()[0].GetGeneration())
+	assert.Equal(t, int64(1), manager3.manifest.GetChunks()[0].GetTerm())
+	assert.Equal(t, uint64(1), manager3.nextGeneration, "generations continue past the inherited set")
+
+	// The delete of term 1 is reachable through term 3's sealed manifest.
+	entries, err := manager3.ReadTransformEntries(ctx, "v1", 0, 1000)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, uint64(100), entries[0].GetTimeTick())
 }
 
 type catalogRecorder struct {

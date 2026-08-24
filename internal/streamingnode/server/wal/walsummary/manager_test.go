@@ -135,7 +135,7 @@ func TestViewObserveAndFlushReleasesHandles(t *testing.T) {
 	observeDelete(t, view, 100, &finalized)
 	assert.False(t, finalized, "message must stay alive while staging")
 
-	require.NoError(t, manager.flushOnce(ctx))
+	require.NoError(t, manager.flushOnce(ctx, &summaryFlushTask{log: manager}))
 	assert.True(t, finalized, "message handle must be released after a durable flush")
 	assert.Equal(t, uint64(100), view.DurableTimeTick())
 	assert.Equal(t, uint64(100), manager.LatestCoveredTimeTick())
@@ -160,12 +160,12 @@ func TestViewFlushFailureKeepsHandles(t *testing.T) {
 	// Break the chunk manager so the chunk write fails.
 	original := manager.cfg.Store.chunkManager
 	manager.cfg.Store.chunkManager = &failingChunkManager{ChunkManager: original}
-	err := manager.flushOnce(ctx)
+	err := manager.flushOnce(ctx, &summaryFlushTask{log: manager})
 	assert.Error(t, err)
 	manager.cfg.Store.chunkManager = original
 	assert.False(t, finalized, "handles must survive a failed flush")
 	// The staging must still be there for the retry.
-	require.NoError(t, manager.flushOnce(ctx))
+	require.NoError(t, manager.flushOnce(ctx, &summaryFlushTask{log: manager}))
 	assert.True(t, finalized)
 }
 
@@ -185,9 +185,9 @@ func TestManagerRecover(t *testing.T) {
 	// Two flushes produce two chunks.
 	unused := false
 	observeDelete(t, view, 100, &unused)
-	require.NoError(t, manager.flushOnce(ctx))
+	require.NoError(t, manager.flushOnce(ctx, &summaryFlushTask{log: manager}))
 	observeDelete(t, view, 200, &unused)
-	require.NoError(t, manager.flushOnce(ctx))
+	require.NoError(t, manager.flushOnce(ctx, &summaryFlushTask{log: manager}))
 
 	// A new manager over the same store recovers both chunks and continues
 	// generations after them.
@@ -205,7 +205,7 @@ func TestManagerRecoverProbesOrphanChunk(t *testing.T) {
 
 	unused := false
 	observeDelete(t, view, 100, &unused)
-	require.NoError(t, manager.flushOnce(ctx))
+	require.NoError(t, manager.flushOnce(ctx, &summaryFlushTask{log: manager}))
 
 	// Simulate a crash between chunk write and manifest publish: write a chunk
 	// directly without recording it.
@@ -235,7 +235,7 @@ func TestManagerGCReleaseAndMaterializationFloor(t *testing.T) {
 	flush := func(tt uint64) {
 		unused := false
 		observeDelete(t, view, tt, &unused)
-		require.NoError(t, manager.flushOnce(ctx))
+		require.NoError(t, manager.flushOnce(ctx, &summaryFlushTask{log: manager}))
 	}
 	flush(100)
 	flush(200)
@@ -319,7 +319,7 @@ func TestManagerDurableTimeTickDerivedFromManifest(t *testing.T) {
 	observeDelete(t, manager.View("v1"), 100, &unused)
 	observeDelete(t, manager.View("v1"), 200, &unused)
 	manager.requestFlush()
-	require.NoError(t, manager.flushOnce(ctx))
+	require.NoError(t, manager.flushOnce(ctx, &summaryFlushTask{log: manager}))
 	assert.Equal(t, uint64(200), manager.DurableTimeTick("v1"))
 
 	// A vchannel with no records has no frontier.
@@ -392,7 +392,7 @@ func TestManagerFlushReleasesHandles(t *testing.T) {
 	finalized := false
 	observeDelete(t, view, 100, &finalized)
 	manager.requestFlush()
-	require.NoError(t, manager.flushOnce(ctx))
+	require.NoError(t, manager.flushOnce(ctx, &summaryFlushTask{log: manager}))
 	assert.True(t, finalized, "handles released after the flush is durable end to end")
 }
 
@@ -407,7 +407,7 @@ func TestManagerReadTransformEntriesAcrossChunks(t *testing.T) {
 	for _, tt := range []uint64{100, 200} {
 		observeDelete(t, manager.View("v1"), tt, &unused)
 		manager.requestFlush()
-		require.NoError(t, manager.flushOnce(ctx))
+		require.NoError(t, manager.flushOnce(ctx, &summaryFlushTask{log: manager}))
 	}
 	entries, err := manager.ReadTransformEntries(ctx, "v1", 0, 1000)
 	require.NoError(t, err)
@@ -436,7 +436,7 @@ func (c *failInjectingChunkManager) Write(ctx context.Context, filePath string, 
 
 // TestFlushPublishFailureRollsBackAndRetriesSameGeneration covers the retry
 // path: the chunk is written, the manifest publish fails, and the retry must
-// rewrite the SAME generation — never a second chunk object for the same
+// finish the SAME generation — never a second chunk object for the same
 // batch — so a reader can never observe the batch twice.
 func TestFlushPublishFailureRollsBackAndRetriesSameGeneration(t *testing.T) {
 	ctx := context.Background()
@@ -451,24 +451,84 @@ func TestFlushPublishFailureRollsBackAndRetriesSameGeneration(t *testing.T) {
 
 	cm.failManifest.Store(true)
 	observeDelete(t, view, 100, &finalized)
+	task := &summaryFlushTask{log: manager}
 	// Chunk write succeeds, manifest publish fails.
-	require.Error(t, manager.flushOnce(ctx))
+	require.Error(t, task.Execute(ctx))
 	// The amendment and the claimed generation were rolled back; the handles
-	// stay retained because the batch is not durable end to end.
+	// stay retained because the batch is not durable end to end. The chunk
+	// object itself is already durable and pinned for the retry.
 	assert.Len(t, manager.manifest.GetChunks(), 0)
 	assert.Equal(t, uint64(0), manager.nextGeneration)
 	assert.False(t, finalized)
+	require.NotNil(t, task.pendingPublish)
 
-	// The retry succeeds and rewrites the same generation: exactly one chunk
-	// object and one manifest entry.
+	// The retry succeeds: the pinned batch is published with the same
+	// generation — exactly one chunk object and one manifest entry.
 	cm.failManifest.Store(false)
-	require.NoError(t, manager.flushOnce(ctx))
+	require.NoError(t, task.Execute(ctx))
 	assert.True(t, finalized)
 	require.Len(t, manager.manifest.GetChunks(), 1)
 	assert.Equal(t, uint64(0), manager.manifest.GetChunks()[0].GetGeneration())
 	keys, _, err := storage.ListAllChunkWithPrefix(ctx, cm, buildChunkPrefix(cm, store.PChannel()), false)
 	require.NoError(t, err)
 	assert.Len(t, keys, 1, "the retry must not duplicate the chunk object")
+}
+
+// TestFlushPublishFailurePinsBatchAvoidsLivelock covers the flush retry under
+// staging growth: the chunk [A] is written, the manifest publish fails, and a
+// new record [B] is staged during the retry window. The retry must publish the
+// pinned [A] batch with the same generation instead of re-collecting the grown
+// staging set — a grown batch would collide with the durable chunk object
+// (storeCorrupted) and livelock the flush forever. [B] is collected by the
+// next flush task into a fresh generation.
+func TestFlushPublishFailurePinsBatchAvoidsLivelock(t *testing.T) {
+	ctx := context.Background()
+	cm := &failInjectingChunkManager{
+		ChunkManager: storage.NewLocalChunkManager(objectstorage.RootPath(t.TempDir())),
+	}
+	store := NewStore(cm, "by-dev-rootcoord-dml_0_40451v0", 1)
+	manager := newTestManager(t, store, 1, 1<<30)
+	require.NoError(t, manager.Recover(ctx))
+	view := manager.View("v1")
+	finalizedA := false
+	finalizedB := false
+
+	// First attempt: chunk [A] written, manifest publish fails; the batch is
+	// pinned on the task for the retry.
+	cm.failManifest.Store(true)
+	observeDelete(t, view, 100, &finalizedA)
+	task := &summaryFlushTask{log: manager}
+	require.Error(t, task.Execute(ctx))
+	require.NotNil(t, task.pendingPublish)
+	assert.False(t, finalizedA)
+	assert.Len(t, manager.manifest.GetChunks(), 0)
+	keys, _, err := storage.ListAllChunkWithPrefix(ctx, cm, buildChunkPrefix(cm, store.PChannel()), false)
+	require.NoError(t, err)
+	require.Len(t, keys, 1, "chunk 0 with [A] is already durable")
+
+	// A new record [B] is staged during the retry window.
+	observeDelete(t, view, 200, &finalizedB)
+
+	// Retry of the same task: publishes only the pinned [A] batch; [B] stays
+	// staged and never joins the durable generation-0 object.
+	cm.failManifest.Store(false)
+	require.NoError(t, task.Execute(ctx))
+	assert.True(t, finalizedA, "the pinned batch completes")
+	assert.False(t, finalizedB, "B is not part of the pinned batch")
+	assert.Nil(t, task.pendingPublish)
+	require.Len(t, manager.manifest.GetChunks(), 1)
+	assert.Equal(t, uint64(0), manager.manifest.GetChunks()[0].GetGeneration())
+
+	// The next task collects [B] into generation 1: one object per batch,
+	// never a conflicting rewrite of generation 0.
+	nextTask := &summaryFlushTask{log: manager}
+	require.NoError(t, nextTask.Execute(ctx))
+	assert.True(t, finalizedB)
+	require.Len(t, manager.manifest.GetChunks(), 2)
+	assert.Equal(t, uint64(1), manager.manifest.GetChunks()[1].GetGeneration())
+	keys, _, err = storage.ListAllChunkWithPrefix(ctx, cm, buildChunkPrefix(cm, store.PChannel()), false)
+	require.NoError(t, err)
+	assert.Len(t, keys, 2, "one object per batch; the durable generation-0 object was never rewritten")
 }
 
 // TestGCOnceRemovesAllPendingCovers the snapshot iteration of the pending GC
@@ -544,7 +604,7 @@ func TestConcurrentFlushAndGCRelease(t *testing.T) {
 		for i := 0; i < 50; i++ {
 			unused := false
 			observeDelete(t, view, uint64(100+i), &unused)
-			require.NoError(t, manager.flushOnce(ctx))
+			require.NoError(t, manager.flushOnce(ctx, &summaryFlushTask{log: manager}))
 		}
 		close(stop)
 	}()

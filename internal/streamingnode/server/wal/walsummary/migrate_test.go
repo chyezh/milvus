@@ -82,7 +82,7 @@ func TestManagerMigrateLegacyTransformLogsSkipsWhenStoreOwnsChunks(t *testing.T)
 	finalized := false
 	observeDelete(t, manager.View("v1"), 10, &finalized)
 	manager.requestFlush()
-	require.NoError(t, manager.flushOnce(ctx))
+	require.NoError(t, manager.flushOnce(ctx, &summaryFlushTask{log: manager}))
 
 	require.NoError(t, manager.MigrateLegacyTransformLogs(ctx, map[string][]*streamingpb.TransformLogEntry{
 		"v2": {newTestTransformEntry(150)},
