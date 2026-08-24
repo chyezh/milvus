@@ -181,7 +181,7 @@ func (t *TransformLog) ObserveMessage(retained message.RetainedImmutableMessage)
 	}
 	t.mu.Lock()
 	t.pending = append(t.pending, entry)
-	task := t.maybeScheduleMaterializeLocked()
+	task := t.maybeScheduleMaterializeLocked(true)
 	t.mu.Unlock()
 	if task != nil && t.runtime.Scheduler != nil {
 		t.runtime.Scheduler.Submit(task)
@@ -208,7 +208,7 @@ func (t *TransformLog) SetMaterializeUpperBound(timetick uint64) bool {
 		t.mu.Unlock()
 		return false
 	}
-	task := t.maybeScheduleMaterializeLocked()
+	task := t.maybeScheduleMaterializeLocked(false)
 	t.mu.Unlock()
 	if task == nil {
 		return false

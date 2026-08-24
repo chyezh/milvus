@@ -51,7 +51,7 @@ type PChannelManagerConfig struct {
 	// together with the updater once the new checkpoint-propagation path
 	// lands.
 	GetRecoveryCheckpoint func() *utility.WALCheckpoint
-	CoordinatorBroker      checkpointReporter
+	CoordinatorBroker     checkpointReporter
 }
 
 // PChannelRecoveryManager owns all vchannel recovery modules on one pchannel.

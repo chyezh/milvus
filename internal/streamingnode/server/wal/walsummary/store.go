@@ -123,7 +123,12 @@ func (s *Store) ChunkKey(generation uint64) string {
 
 // ManifestKey returns the object key of this term's manifest.
 func (s *Store) ManifestKey() string {
-	return buildManifestKey(s.chunkManager, s.pchannel, s.term)
+	return s.ManifestKeyOfTerm(s.term)
+}
+
+// ManifestKeyOfTerm returns the object key of an arbitrary term's manifest.
+func (s *Store) ManifestKeyOfTerm(term int64) string {
+	return buildManifestKey(s.chunkManager, s.pchannel, term)
 }
 
 // WriteChunk writes one chunk object. It never overwrites a differing chunk of
@@ -185,12 +190,15 @@ func (s *Store) WriteChunk(
 	return nil, 0, storeCorruptedf("summary chunk already exists with different payload: %s", key)
 }
 
-// ReadChunk reads and decodes one chunk object.
+// ReadChunk reads and decodes one chunk object. The term of the chunk is
+// passed explicitly: the manifest may reference chunks written by a previous
+// term (see Recover), and the object key is term-scoped.
 func (s *Store) ReadChunk(
 	ctx context.Context,
 	generation uint64,
+	term int64,
 ) (map[string][]*streamingpb.VChannelSummaryTransformRecord, *streamingpb.PChannelSummaryChunkFooter, error) {
-	key := s.ChunkKey(generation)
+	key := buildChunkKey(s.chunkManager, s.pchannel, generation, term)
 	payload, err := s.chunkManager.Read(ctx, key)
 	if err != nil {
 		return nil, nil, errors.Wrapf(err, "failed to read summary chunk %s", key)
@@ -200,14 +208,16 @@ func (s *Store) ReadChunk(
 
 // ReadTransformSection decodes one vchannel's transform section of one chunk.
 // The section location comes from the manifest's per-vchannel index, so the
-// caller does not need the whole chunk decoded first.
+// caller does not need the whole chunk decoded first. The chunk's own term is
+// passed explicitly for the same reason as ReadChunk.
 func (s *Store) ReadTransformSection(
 	ctx context.Context,
 	generation uint64,
+	term int64,
 	vchannel string,
 	index *streamingpb.VChannelSummaryChunkIndex,
 ) ([]*streamingpb.VChannelSummaryTransformRecord, error) {
-	key := s.ChunkKey(generation)
+	key := buildChunkKey(s.chunkManager, s.pchannel, generation, term)
 	payload, err := s.chunkManager.Read(ctx, key)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to read summary chunk %s", key)
@@ -220,9 +230,11 @@ func (s *Store) ReadTransformSection(
 }
 
 // DeleteChunk removes one chunk object. It is only called by the GC worker for
-// chunks already released from the manifest.
-func (s *Store) DeleteChunk(ctx context.Context, generation uint64) error {
-	key := s.ChunkKey(generation)
+// chunks already released from the manifest; the chunk's own term is passed
+// explicitly so an inherited (previous-term) chunk is deleted from the right
+// object.
+func (s *Store) DeleteChunk(ctx context.Context, generation uint64, term int64) error {
+	key := buildChunkKey(s.chunkManager, s.pchannel, generation, term)
 	if err := s.chunkManager.Remove(ctx, key); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return errors.Wrapf(err, "failed to delete summary chunk %s", key)
 	}
@@ -232,7 +244,14 @@ func (s *Store) DeleteChunk(ctx context.Context, generation uint64) error {
 // ReadManifest reads this term's manifest. A missing object is reported as
 // (nil, false, nil): that is the normal answer for a term that never wrote one.
 func (s *Store) ReadManifest(ctx context.Context) (*streamingpb.PChannelSummaryManifest, bool, error) {
-	key := s.ManifestKey()
+	return s.ReadManifestOfTerm(ctx, s.term)
+}
+
+// ReadManifestOfTerm reads the manifest of an arbitrary term. The object key
+// is term-scoped, so a handoff can read the previous owner's manifest and
+// inherit its chunk index (see Recover).
+func (s *Store) ReadManifestOfTerm(ctx context.Context, term int64) (*streamingpb.PChannelSummaryManifest, bool, error) {
+	key := s.ManifestKeyOfTerm(term)
 	exists, err := s.chunkManager.Exist(ctx, key)
 	if err != nil {
 		return nil, false, errors.Wrapf(err, "failed to probe summary manifest %s", key)
@@ -252,7 +271,9 @@ func (s *Store) ReadManifest(ctx context.Context) (*streamingpb.PChannelSummaryM
 }
 
 // WriteManifest publishes the manifest. The manifest is always written as the
-// previous manifest plus amendments (see inheritManifest).
+// previous manifest plus amendments (see inheritManifest): recovery reads the
+// prior term's manifest on a term handoff and seals the inherited index into
+// the new term's manifest, so the chain never grows beyond one hop.
 func (s *Store) WriteManifest(ctx context.Context, manifest *streamingpb.PChannelSummaryManifest) error {
 	payload, err := marshalManifest(manifest)
 	if err != nil {
@@ -270,13 +291,20 @@ func (s *Store) WriteManifest(ctx context.Context, manifest *streamingpb.PChanne
 // manifest record was lost to a crash between the chunk write and the manifest
 // write.
 func (s *Store) ProbeChunkForward(ctx context.Context, fromGeneration uint64) ([]*streamingpb.PChannelSummaryChunkIndexEntry, error) {
+	return s.ProbeChunkForwardOfTerm(ctx, s.term, fromGeneration)
+}
+
+// ProbeChunkForwardOfTerm lists the chunk objects of an arbitrary term at or
+// after fromGeneration. A term handoff probes the previous owner's chunks the
+// same way this term's own tail is probed (see Recover).
+func (s *Store) ProbeChunkForwardOfTerm(ctx context.Context, term int64, fromGeneration uint64) ([]*streamingpb.PChannelSummaryChunkIndexEntry, error) {
 	prefix := buildChunkPrefix(s.chunkManager, s.pchannel)
 	keys, _, err := storage.ListAllChunkWithPrefix(ctx, s.chunkManager, prefix, false)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, errors.Wrapf(err, "failed to list summary chunks under %s", prefix)
 	}
 	entries := make([]*streamingpb.PChannelSummaryChunkIndexEntry, 0, len(keys))
-	termSuffix := ".term" + strconv.FormatInt(s.term, 10) + chunkObjectExt
+	termSuffix := ".term" + strconv.FormatInt(term, 10) + chunkObjectExt
 	for _, key := range keys {
 		base := strings.TrimPrefix(key, prefix)
 		if !strings.HasPrefix(base, chunkObjectPrefix) || !strings.HasSuffix(base, termSuffix) {

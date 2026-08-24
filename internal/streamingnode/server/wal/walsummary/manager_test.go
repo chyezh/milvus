@@ -19,6 +19,9 @@ package walsummary
 import (
 	"context"
 	"errors"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -138,7 +141,7 @@ func TestViewObserveAndFlushReleasesHandles(t *testing.T) {
 	assert.Equal(t, uint64(100), manager.LatestCoveredTimeTick())
 
 	// The chunk is readable and carries the record.
-	decoded, footer, err := manager.cfg.Store.ReadChunk(ctx, 0)
+	decoded, footer, err := manager.cfg.Store.ReadChunk(ctx, 0, 1)
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), footer.GetGeneration())
 	require.Len(t, decoded["v1"], 1)
@@ -253,7 +256,7 @@ func TestManagerGCReleaseAndMaterializationFloor(t *testing.T) {
 	require.Len(t, chunks, 1)
 	assert.Equal(t, uint64(2), chunks[0].GetGeneration())
 	// The released object is gone.
-	_, _, err := manager.cfg.Store.ReadChunk(ctx, 0)
+	_, _, err := manager.cfg.Store.ReadChunk(ctx, 0, 1)
 	assert.Error(t, err)
 	// pending_gc drained.
 	assert.Empty(t, manager.Manifest().GetPendingGc())
@@ -360,18 +363,24 @@ func TestManagerHasPendingWork(t *testing.T) {
 	assert.False(t, manager.HasPendingWork())
 }
 
-func TestFlushTaskOrdering(t *testing.T) {
+func TestFlushTaskMergesConcurrentRequests(t *testing.T) {
 	manager, _ := newTestManagerWithStore(t)
 	ctx := context.Background()
 
 	manager.requestFlush()
 	manager.requestFlush()
-	require.Len(t, manager.flushTasks, 2)
-	// Executing the second task without the first returns ErrDelay.
-	err := manager.flushTasks[1].Execute(ctx)
-	assert.Error(t, err)
+	manager.requestFlush()
+	// At most one flush task exists at a time: the executing task collects
+	// every view's staging, so concurrent requests merge into it instead of
+	// queueing one task per request.
+	require.Len(t, manager.flushTasks, 1)
 	require.NoError(t, manager.flushTasks[0].Execute(ctx))
-	require.NoError(t, manager.flushTasks[1].Execute(ctx))
+	assert.False(t, manager.HasPendingWork())
+	// The completed task is compacted away; a later request schedules the
+	// successor.
+	manager.requestFlush()
+	require.Len(t, manager.flushTasks, 1)
+	require.NoError(t, manager.flushTasks[0].Execute(ctx))
 }
 
 func TestManagerFlushReleasesHandles(t *testing.T) {
@@ -411,4 +420,147 @@ func TestManagerReadTransformEntriesAcrossChunks(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, uint64(200), entries[0].GetTimeTick())
+}
+
+type failInjectingChunkManager struct {
+	storage.ChunkManager
+	failManifest atomic.Bool
+}
+
+func (c *failInjectingChunkManager) Write(ctx context.Context, filePath string, content []byte) error {
+	if c.failManifest.Load() && strings.Contains(filePath, manifestObjectExt) {
+		return errors.New("injected manifest write failure")
+	}
+	return c.ChunkManager.Write(ctx, filePath, content)
+}
+
+// TestFlushPublishFailureRollsBackAndRetriesSameGeneration covers the retry
+// path: the chunk is written, the manifest publish fails, and the retry must
+// rewrite the SAME generation — never a second chunk object for the same
+// batch — so a reader can never observe the batch twice.
+func TestFlushPublishFailureRollsBackAndRetriesSameGeneration(t *testing.T) {
+	ctx := context.Background()
+	cm := &failInjectingChunkManager{
+		ChunkManager: storage.NewLocalChunkManager(objectstorage.RootPath(t.TempDir())),
+	}
+	store := NewStore(cm, "by-dev-rootcoord-dml_0_40451v0", 1)
+	manager := newTestManager(t, store, 1, 1<<30)
+	require.NoError(t, manager.Recover(ctx))
+	view := manager.View("v1")
+	finalized := false
+
+	cm.failManifest.Store(true)
+	observeDelete(t, view, 100, &finalized)
+	// Chunk write succeeds, manifest publish fails.
+	require.Error(t, manager.flushOnce(ctx))
+	// The amendment and the claimed generation were rolled back; the handles
+	// stay retained because the batch is not durable end to end.
+	assert.Len(t, manager.manifest.GetChunks(), 0)
+	assert.Equal(t, uint64(0), manager.nextGeneration)
+	assert.False(t, finalized)
+
+	// The retry succeeds and rewrites the same generation: exactly one chunk
+	// object and one manifest entry.
+	cm.failManifest.Store(false)
+	require.NoError(t, manager.flushOnce(ctx))
+	assert.True(t, finalized)
+	require.Len(t, manager.manifest.GetChunks(), 1)
+	assert.Equal(t, uint64(0), manager.manifest.GetChunks()[0].GetGeneration())
+	keys, _, err := storage.ListAllChunkWithPrefix(ctx, cm, buildChunkPrefix(cm, store.PChannel()), false)
+	require.NoError(t, err)
+	assert.Len(t, keys, 1, "the retry must not duplicate the chunk object")
+}
+
+// TestGCOnceRemovesAllPendingCovers the snapshot iteration of the pending GC
+// queue: removePendingGC compacts the live slice in place, and a naive range
+// over the live slice would skip entries once the indexes shift.
+func TestGCOnceRemovesAllPending(t *testing.T) {
+	ctx := context.Background()
+	manager, store := newTestManagerWithStore(t)
+	require.NoError(t, manager.Recover(ctx))
+
+	// Seed three chunks and three pending refs, and write the objects.
+	manager.mu.Lock()
+	for gen := uint64(0); gen < 3; gen++ {
+		manager.manifest.Chunks = append(manager.manifest.Chunks, &streamingpb.PChannelSummaryChunkIndexEntry{
+			Generation:    gen,
+			Term:          1,
+			StartTimetick: gen * 100,
+			EndTimetick:   gen*100 + 50,
+		})
+		manager.manifest.PendingGc = append(manager.manifest.PendingGc, &streamingpb.PChannelSummaryChunkRef{
+			Generation: gen,
+			Term:       1,
+		})
+	}
+	manager.mu.Unlock()
+	for gen := uint64(0); gen < 3; gen++ {
+		_, _, err := store.WriteChunk(ctx, gen, nil)
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, manager.GCOnce(ctx))
+	assert.Empty(t, manager.manifest.GetPendingGc())
+	for gen := uint64(0); gen < 3; gen++ {
+		_, _, err := store.ReadChunk(ctx, gen, 1)
+		require.Error(t, err, "chunk %d must be deleted", gen)
+	}
+}
+
+// TestRestoreStagingAfterViewRemovedReleasesHandles covers the failure path of
+// a flush racing a vchannel cleanup: restoring a batch into a view that was
+// already removed must release the handles, never leak them.
+func TestRestoreStagingAfterViewRemovedReleasesHandles(t *testing.T) {
+	manager, _ := newTestManagerWithStore(t)
+	view := manager.View("v1")
+	finalized := false
+	observeDelete(t, view, 100, &finalized)
+
+	batch := manager.collectStaging()
+	require.Len(t, batch.recordsByVChannel["v1"], 1)
+	manager.RemoveView("v1")
+	manager.restoreStaging(batch)
+	assert.True(t, finalized, "restoring into a removed view releases the handles")
+}
+
+// TestConcurrentFlushAndGCRelease exercises the manifest publish paths
+// concurrently. Run with -race: a torn publish (a marshal racing an in-place
+// edit of the shared manifest) would surface here as a data race, and the
+// serialization through manifestMu is what keeps flush and GC publishes from
+// interleaving.
+func TestConcurrentFlushAndGCRelease(t *testing.T) {
+	ctx := context.Background()
+	manager, _ := newTestManagerWithStore(t)
+	manager.cfg.RetentionMaxBytes = 1 // any chunk becomes releasable once materialized
+	require.NoError(t, manager.Recover(ctx))
+	view := manager.View("v1")
+	manager.SetMaterializedTimeTick("v1", 1<<30)
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 50; i++ {
+			unused := false
+			observeDelete(t, view, uint64(100+i), &unused)
+			require.NoError(t, manager.flushOnce(ctx))
+		}
+		close(stop)
+	}()
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				if err := manager.GCOnce(ctx); err != nil {
+					t.Errorf("GCOnce: %v", err)
+					return
+				}
+			}
+		}
+	}()
+	wg.Wait()
 }

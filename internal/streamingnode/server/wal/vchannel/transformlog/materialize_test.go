@@ -334,3 +334,37 @@ func TestTransformLogObserveIgnoresNonDelete(t *testing.T) {
 	require.Empty(t, scheduler.tasks)
 	require.Empty(t, log.pending)
 }
+
+// TestTransformLogUpperBoundRaiseAfterCommitSchedulesSuccessor covers the
+// window between a task's materialize commit and its Done flag: a bound raise
+// landing there was previously swallowed (the pending task's presence made the
+// scheduler think the frontier was still covered), stranding the
+// (old bound, new bound] records in the window forever.
+func TestTransformLogUpperBoundRaiseAfterCommitSchedulesSuccessor(t *testing.T) {
+	log, scheduler, _ := newTestTransformLog(t, nil, 0)
+	observeDelete(t, log, 100)
+	observeDelete(t, log, 200)
+	observeDelete(t, log, 300)
+	log.SetMaterializeUpperBound(200)
+
+	// task[0] materializes 100 and schedules the continuation to 200.
+	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
+	require.Len(t, scheduler.tasks, 2)
+
+	// Simulate the window: the continuation already committed its batch
+	// (materialized = 200) but has not flipped its Done flag yet — exactly the
+	// state between materialize's commit and execute's done.Store.
+	log.mu.Lock()
+	log.materializedTimeTick = 200
+	log.mu.Unlock()
+
+	// A bound raise in that window must schedule a successor, not be swallowed.
+	assert.True(t, log.SetMaterializeUpperBound(300))
+	require.Len(t, scheduler.tasks, 3)
+	// The successor chains behind the still-pending continuation: the
+	// continuation finishes first (its already-committed batch makes it a
+	// no-op), then the successor materializes the raised frontier.
+	require.NoError(t, scheduler.tasks[1].Execute(context.Background()))
+	require.NoError(t, scheduler.tasks[2].Execute(context.Background()))
+	assert.Equal(t, uint64(300), log.MaterializedTimeTick())
+}

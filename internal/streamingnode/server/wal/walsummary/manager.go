@@ -42,6 +42,13 @@ import (
 type Manager struct {
 	mu  sync.Mutex
 	cfg ManagerConfig
+	// manifestMu serializes manifest edits and publishes. Every path that
+	// amends the in-memory manifest and writes it out (flush publish, GC
+	// release, pending-GC removal) must take manifestMu first: the publish
+	// marshals a clone taken under mu, and a concurrent edit of the same
+	// backing arrays (recordChunk's sort, removeChunkEntry, removePendingGC)
+	// would otherwise publish a torn view.
+	manifestMu sync.Mutex
 	// views holds one summary view per vchannel. A vchannel's view lives for
 	// the whole lifetime of the manager; the vchannel module drops it on
 	// cleanup via RemoveView.
@@ -64,9 +71,11 @@ type Manager struct {
 	// so replay does not re-stage records the manifest already covers.
 	pendingDurableFrontiers map[string]uint64
 
-	// flushTasks are the in-flight / queued flush tasks, ordered by
-	// scheduling; every task is a predecessor of the next, so flushes never
-	// overlap and generations are claimed in order.
+	// flushTasks are the in-flight / queued flush tasks. At most one task is
+	// scheduled at a time: a request while one is pending is a no-op, because
+	// the executing task collects every view's staging. This keeps the
+	// predecessor graph a single chain instead of growing one task per
+	// observation.
 	flushTasks []*summaryFlushTask
 }
 
@@ -222,18 +231,23 @@ func (m *Manager) requestFlush() {
 	}
 }
 
-// newFlushTaskLocked appends a flush task whose predecessors are every task
-// scheduled before it. Caller holds m.mu.
+// newFlushTaskLocked returns a flush task, or nil when one is already
+// scheduled or in flight. Caller holds m.mu.
+//
+// At most one flush task exists at a time: the executing task collects every
+// view's staging (see collectStaging), so a request while one is pending would
+// only duplicate the same work. The task is compacted away once done, and the
+// next request then schedules the successor — flushes stay strictly
+// sequential, and the task set stays O(1) instead of growing one task per
+// observation.
 func (m *Manager) newFlushTaskLocked() *summaryFlushTask {
 	m.flushTasks = compactFlushTasks(m.flushTasks)
-	predecessors := make([]*summaryFlushTask, 0, len(m.flushTasks))
-	for _, task := range m.flushTasks {
-		predecessors = append(predecessors, task)
+	if len(m.flushTasks) > 0 {
+		return nil
 	}
 	task := &summaryFlushTask{
 		log: m,
 	}
-	task.predecessors = predecessors
 	m.flushTasks = append(m.flushTasks, task)
 	return task
 }
@@ -278,7 +292,7 @@ func (m *Manager) ReadTransformEntries(
 		if index == nil {
 			continue
 		}
-		records, err := m.cfg.Store.ReadTransformSection(ctx, chunk.GetGeneration(), vchannel, index)
+		records, err := m.cfg.Store.ReadTransformSection(ctx, chunk.GetGeneration(), chunk.GetTerm(), vchannel, index)
 		if err != nil {
 			return nil, err
 		}
@@ -333,12 +347,17 @@ func (m *Manager) flushOnce(ctx context.Context) error {
 	}
 	generation := m.claimGenerationLocked()
 	if err := m.persistChunk(ctx, generation, batch); err != nil {
+		// The generation was never written; hand it back so the retry rewrites
+		// it instead of skipping numbers.
+		m.rollbackGenerationLocked(generation)
 		m.restoreStaging(batch)
 		return err
 	}
 	// Chunk durable: record it in the manifest and publish. The manifest write
 	// must follow the chunk write; a crash between them is repaired by
-	// recovery probing forward.
+	// recovery probing forward. On failure publishManifest rolls the manifest
+	// amendment and the claimed generation back, so the retry rewrites the
+	// same generation — never a second chunk object for the same batch.
 	if err := m.publishManifest(ctx, generation, batch); err != nil {
 		m.restoreStaging(batch)
 		return err
@@ -349,20 +368,32 @@ func (m *Manager) flushOnce(ctx context.Context) error {
 	return nil
 }
 
+// rollbackGenerationLocked hands a claimed generation back to the allocator.
+// It is only safe when the generation's chunk was not durably recorded (a
+// failed chunk write, or a failed publish that also rolled the manifest
+// amendment back): the retry then rewrites the same generation, so no object
+// is orphaned and no batch is duplicated.
+func (m *Manager) rollbackGenerationLocked(generation uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.nextGeneration > generation {
+		m.nextGeneration = generation
+	}
+}
+
 // restoreStaging puts a failed batch's records back into their views, in the
 // original order. The handles were never released, so the records remain
 // valid; only the staging bookkeeping needs rebuilding.
+//
+// The whole pass runs under m.mu, so a concurrent RemoveView cannot interleave
+// between the membership check and the append: the view either still exists
+// (the append lands in its staging and the later RemoveView drains and
+// releases it) or is already gone (the records are released here).
 func (m *Manager) restoreStaging(batch *flushBatch) {
 	m.mu.Lock()
-	views := make(map[string]*SummaryView, len(batch.recordsByVChannel))
-	for vchannel := range batch.recordsByVChannel {
-		if view, ok := m.views[vchannel]; ok {
-			views[vchannel] = view
-		}
-	}
-	m.mu.Unlock()
+	defer m.mu.Unlock()
 	for vchannel, records := range batch.recordsByVChannel {
-		view, ok := views[vchannel]
+		view, ok := m.views[vchannel]
 		if !ok {
 			// The view was dropped while the flush failed; its records are
 			// discarded together with the vchannel.
@@ -441,13 +472,35 @@ func (m *Manager) persistChunk(ctx context.Context, generation uint64, batch *fl
 
 // publishManifest amends the in-memory manifest with the new chunk and writes
 // it. Caller must have already made the chunk durable.
+//
+// The publish is serialized with the GC publish through manifestMu: the
+// manifest is amended under mu, marshalled from a clone taken under the same
+// lock, and only installed on success. A concurrent GC edit of the same
+// backing arrays can therefore never be marshalled in a torn state, and a
+// failed write leaves the on-disk state unchanged.
+//
+// On write failure the amendment and the claimed generation are rolled back,
+// so the flush retry rewrites the same generation: the batch is never
+// duplicated into two chunk objects.
 func (m *Manager) publishManifest(ctx context.Context, generation uint64, batch *flushBatch) error {
+	m.manifestMu.Lock()
+	defer m.manifestMu.Unlock()
 	m.mu.Lock()
 	recordChunk(m.manifest, chunkIndexEntryFromFooter(batch.footer, batch.objectSize))
+	next := proto.Clone(m.manifest).(*streamingpb.PChannelSummaryManifest)
 	m.mu.Unlock()
-	if err := m.cfg.Store.WriteManifest(ctx, m.manifest); err != nil {
+	if err := m.cfg.Store.WriteManifest(ctx, next); err != nil {
+		m.mu.Lock()
+		m.manifest.Chunks = removeChunkEntry(m.manifest.Chunks, generation)
+		if m.nextGeneration > generation {
+			m.nextGeneration = generation
+		}
+		m.mu.Unlock()
 		return err
 	}
+	m.mu.Lock()
+	m.manifest = next
+	m.mu.Unlock()
 	return nil
 }
 
@@ -484,11 +537,11 @@ type flushBatch struct {
 	maxTimeTick       uint64
 }
 
-// summaryFlushTask is a nodescheduler task running one flush.
+// summaryFlushTask is a nodescheduler task running one flush. At most one task
+// exists at a time (see newFlushTaskLocked), so there is no predecessor graph.
 type summaryFlushTask struct {
-	log          *Manager
-	predecessors []*summaryFlushTask
-	done         atomic.Bool
+	log  *Manager
+	done atomic.Bool
 }
 
 // Done reports whether the task finished.
@@ -496,25 +549,15 @@ func (t *summaryFlushTask) Done() bool {
 	return t.done.Load()
 }
 
-// Execute runs the flush once its predecessors finished.
+// Execute runs the flush. A failure is marked ErrDelay so the scheduler
+// retries it; the failed batch's staging and generation were rolled back by
+// flushOnce, so the retry rewrites the same generation.
 func (t *summaryFlushTask) Execute(ctx context.Context) error {
-	if !t.predecessorsDone() {
-		return nodescheduler.ErrDelay
-	}
 	if err := t.log.flushOnce(ctx); err != nil {
 		return errors.Mark(err, nodescheduler.ErrDelay)
 	}
 	t.done.Store(true)
 	return nil
-}
-
-func (t *summaryFlushTask) predecessorsDone() bool {
-	for _, predecessor := range t.predecessors {
-		if predecessor != nil && !predecessor.Done() {
-			return false
-		}
-	}
-	return true
 }
 
 func compactFlushTasks(tasks []*summaryFlushTask) []*summaryFlushTask {

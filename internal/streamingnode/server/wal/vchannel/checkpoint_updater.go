@@ -106,7 +106,15 @@ func (u *PChannelCheckpointUpdater) execute() {
 	if len(vchannels) == 0 {
 		return
 	}
-	msgIDBytes := adaptor.MustGetMQWrapperIDFromMessage(checkpoint.MessageID).Serialize()
+	msgID, ok := adaptor.TryGetMQWrapperIDFromMessage(checkpoint.MessageID)
+	if !ok {
+		// The checkpoint message ID has no MQ wrapper counterpart (e.g. a
+		// test-only implementation); there is nothing serializable to report.
+		mlog.Warn(context.TODO(), "checkpoint message id is not a supported MQ wrapper id, skip reporting",
+			mlog.String("pchannel", u.pchannel))
+		return
+	}
+	msgIDBytes := msgID.Serialize()
 	channelCPs := make([]*msgpb.MsgPosition, 0, len(vchannels))
 	for _, vchannel := range vchannels {
 		channelCPs = append(channelCPs, &msgpb.MsgPosition{

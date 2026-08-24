@@ -110,8 +110,12 @@ func (v *SummaryView) ObserveMessage(ctx context.Context, retained message.Retai
 		handle:   handle,
 	})
 	v.stagingBytes += uint64(proto.Size(entry))
+	// Capture the threshold decision under the lock: takeStagingLocked (flush
+	// worker) and restoreStaging reset and accumulate this field concurrently,
+	// so reading it unlocked could both miss and double-trigger a flush.
+	overThreshold := v.stagingBytes >= v.manager.config().FlushMaxBytes
 	v.mu.Unlock()
-	if v.stagingBytes >= v.manager.config().FlushMaxBytes {
+	if overThreshold {
 		v.manager.requestFlush()
 	}
 }

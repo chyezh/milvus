@@ -58,6 +58,11 @@ func RecoverRecoveryStorage(
 	snapshot, err := rs.runBoundedRecovery(ctx, recoveryStreamBuilder, lastTimeTickMessage)
 	if err != nil {
 		rs.Logger().Warn(context.TODO(), "recovery storage failed", mlog.Err(err))
+		// The recovery modules are already started at this point; release them
+		// so no goroutine or scheduler keeps a half-built store alive. The full
+		// Close() cannot be used: the background task has not started yet, so
+		// BlockUntilFinish would never return.
+		rs.closeRecoveryResources()
 		return nil, nil, err
 	}
 	// recovery storage start work.
@@ -272,8 +277,8 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 		TransformLogMaterializer:  transformLogMaterializer,
 		TransformLogMaterialRows:  uint64(paramtable.Get().StreamingCfg.FlushL0MaxRowNum.GetAsInt()),
 		TransformLogMaterialBytes: uint64(paramtable.Get().StreamingCfg.FlushL0MaxSize.GetAsSize()),
-		GetRecoveryCheckpoint: func() *utility.WALCheckpoint { return r.GetCheckpoint(context.TODO()) },
-		CoordinatorBroker:     coordinatorBroker,
+		GetRecoveryCheckpoint:     func() *utility.WALCheckpoint { return r.GetCheckpoint(context.TODO()) },
+		CoordinatorBroker:         coordinatorBroker,
 	})
 	if err != nil {
 		return err
@@ -339,6 +344,14 @@ func (r *recoveryStorageImpl) Close() {
 	r.backgroundTaskNotifier.BlockUntilFinish()
 	r.scannerWG.Wait()
 	r.ackTrackerWG.Wait()
+	r.closeRecoveryResources()
+}
+
+// closeRecoveryResources releases the goroutines and schedulers started during
+// recovery. It is shared by Close (after the background task finished) and by
+// the failed-recovery path (where the background task never started, so
+// BlockUntilFinish must not be called).
+func (r *recoveryStorageImpl) closeRecoveryResources() {
 	if r.broadcastAck != nil {
 		r.broadcastAck.Close()
 	}

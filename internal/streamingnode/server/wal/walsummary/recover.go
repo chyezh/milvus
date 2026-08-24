@@ -39,10 +39,14 @@ const probeLimit = 1 << 16
 //  2. probe chunks forward from the manifest's newest generation — this
 //     recovers everything written after the last manifest publish (the crash
 //     window between chunk write and manifest write);
-//  3. publish this term's manifest, inheriting the previous one and sealing the
-//     probed tail into it — without this the tail is invisible to the NEXT
-//     recovery and is lost silently;
-//  4. only now may this owner write chunks (generations start past the
+//  3. on a term handoff, inherit the previous term's index — chunks the
+//     previous owner published (handles released, the WAL checkpoint may have
+//     passed them) but never materialized must stay visible, or those delete
+//     records are lost forever;
+//  4. publish this term's manifest, sealing the inherited and probed sets
+//     into it — without this the tail is invisible to the NEXT recovery and
+//     is lost silently;
+//  5. only now may this owner write chunks (generations start past the
 //     inherited set).
 //
 // The catalog meta is the fencing marker of the store: it records which term
@@ -71,28 +75,46 @@ func (m *Manager) Recover(ctx context.Context) error {
 			}
 		}
 	}
-	previous, found, err := m.cfg.Store.ReadManifest(ctx)
+	// Recover this term's own manifest first; a term that never wrote one
+	// (fresh owner after a term handoff) inherits the previous term's chunks
+	// below. Every step below closes a specific way data could otherwise be
+	// lost:
+	//
+	//  1. read this term's manifest (missing is fine: a term that never wrote one);
+	//  2. probe chunks forward from the manifest's newest generation — this
+	//     recovers everything written after the last manifest publish (the crash
+	//     window between chunk write and manifest write);
+	//  3. on a term handoff, inherit the previous term's manifest and probed
+	//     tail: chunks the previous owner published (handles released, the WAL
+	//     checkpoint may have passed them) but that were not yet materialized
+	//     must stay visible to this term, or the records are lost forever;
+	//  4. publish this term's manifest, sealing the inherited and probed sets
+	//     into it — without this the tail is invisible to the NEXT recovery
+	//     and is lost silently;
+	//  5. only now may this owner write chunks (generations start past the
+	//     inherited set).
+	manifest, needsPublish, err := m.recoverManifestOfTerm(ctx, m.cfg.Term)
 	if err != nil {
 		return err
 	}
-	manifest := inheritManifest(previous, nil)
-	var fromGeneration uint64
-	if latest, ok := manifestNewest(manifest); ok {
-		fromGeneration = latest.GetGeneration() + 1
+	if !needsPublish && m.cfg.Term > 0 {
+		// Term handoff: this term has no chunks of its own yet. Adopt the
+		// previous term's index wholesale so its un-materialized records stay
+		// reachable, then seal the union into this term's manifest.
+		previous, previousNeedsPublish, err := m.recoverManifestOfTerm(ctx, m.cfg.Term-1)
+		if err != nil {
+			return err
+		}
+		if previousNeedsPublish {
+			manifest = previous
+			needsPublish = true
+		}
 	}
-	discovered, err := m.cfg.Store.ProbeChunkForward(ctx, fromGeneration)
-	if err != nil {
-		return err
-	}
-	if len(discovered) > probeLimit {
-		return storeCorruptedf("summary store of %s has %d unrecorded chunks beyond generation %d",
-			m.cfg.PChannel, len(discovered), fromGeneration)
-	}
-	manifest = inheritManifest(manifest, discovered)
-	// Publish the sealed manifest even when nothing was discovered: the first
-	// owner has no previous manifest to inherit, and the publish makes the
-	// inherited set durable before any new chunk is written.
-	if !found || len(discovered) > 0 {
+	// Publish this term's manifest whenever it now records anything (its own
+	// chunks, a probed tail, or an inherited previous-term index): the seal
+	// keeps the whole set visible to the NEXT recovery and makes the inherited
+	// set durable before any new chunk is written.
+	if needsPublish {
 		if err := m.cfg.Store.WriteManifest(ctx, manifest); err != nil {
 			return err
 		}
@@ -114,6 +136,37 @@ func (m *Manager) Recover(ctx context.Context) error {
 			mlog.Uint64("nextGeneration", m.nextGeneration))
 	}
 	return nil
+}
+
+// recoverManifestOfTerm reads one term's manifest and probes the chunk tail
+// written past its last manifest publish, returning the sealed union and
+// whether the term records anything at all.
+func (m *Manager) recoverManifestOfTerm(ctx context.Context, term int64) (*streamingpb.PChannelSummaryManifest, bool, error) {
+	previous, found, err := m.cfg.Store.ReadManifestOfTerm(ctx, term)
+	if err != nil {
+		return nil, false, err
+	}
+	manifest := inheritManifest(previous, nil)
+	var fromGeneration uint64
+	if latest, ok := manifestNewest(manifest); ok {
+		fromGeneration = latest.GetGeneration() + 1
+	}
+	discovered, err := m.cfg.Store.ProbeChunkForwardOfTerm(ctx, term, fromGeneration)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(discovered) > probeLimit {
+		return nil, false, storeCorruptedf("summary store of %s has %d unrecorded chunks beyond generation %d",
+			m.cfg.PChannel, len(discovered), fromGeneration)
+	}
+	if len(discovered) > 0 {
+		manifest = inheritManifest(manifest, discovered)
+		found = true
+	}
+	if !found {
+		return &streamingpb.PChannelSummaryManifest{}, false, nil
+	}
+	return manifest, true, nil
 }
 
 // manifestNewest returns the newest chunk the manifest records.
