@@ -22,6 +22,7 @@ func NewWALCheckpointFromProto(cp *streamingpb.WALCheckpoint) *WALCheckpoint {
 		MessageID: message.MustUnmarshalMessageID(cp.MessageId),
 		TimeTick:  cp.TimeTick,
 		Magic:     cp.RecoveryMagic,
+		Term:      cp.Term,
 	}
 }
 
@@ -30,6 +31,12 @@ type WALCheckpoint struct {
 	MessageID message.MessageID // should always be not nil.
 	TimeTick  uint64
 	Magic     int64
+	// Term of the publisher that advanced this checkpoint. It fences the
+	// checkpoint advancement across term changes: a publisher whose term is
+	// older than the recorded one must never advance it (its takeover has been
+	// superseded), or WAL truncation would outrun the successor's inherited
+	// manifest coverage.
+	Term int64
 }
 
 // IntoProto converts the WALCheckpoint to a protobuf message.
@@ -41,6 +48,7 @@ func (c *WALCheckpoint) IntoProto() *streamingpb.WALCheckpoint {
 		MessageId:     message.MustMarshalMessageID(c.MessageID),
 		TimeTick:      c.TimeTick,
 		RecoveryMagic: c.Magic,
+		Term:          c.Term,
 	}
 }
 
@@ -50,6 +58,7 @@ func (c *WALCheckpoint) Clone() *WALCheckpoint {
 		MessageID: c.MessageID,
 		TimeTick:  c.TimeTick,
 		Magic:     c.Magic,
+		Term:      c.Term,
 	}
 }
 

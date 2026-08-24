@@ -10,8 +10,7 @@ const (
 	DirectorySchema        = "schema"
 	DirectorySummaryStore  = "summary-store"
 
-	KeyConsumeCheckpoint   = "consume-checkpoint"
-	KeyRecoveryControl     = "recovery-control"
-	KeySalvageCheckpoint   = "salvage-checkpoint"
-	KeyPChannelSummaryMeta = "pchannel-summary-meta"
+	KeyConsumeCheckpoint = "consume-checkpoint"
+	KeyRecoveryControl   = "recovery-control"
+	KeySalvageCheckpoint = "salvage-checkpoint"
 )

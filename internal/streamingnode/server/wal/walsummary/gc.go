@@ -32,6 +32,13 @@ import (
 // window lower bound. A chunk that still holds a not-yet-materialized record
 // is never released, whatever the budget pressure.
 //
+// TODO(term-orphan-gc): the manifest is the only index into the chunk set, so
+// objects a superseded term wrote after this term's takeover probe are
+// unreachable here — they sit in no manifest and no pending_gc. They are
+// inert (this term never reads generations it did not inherit), but they leak
+// storage until a future term-scoped orphan sweep lists chunks/* under the
+// pchannel prefix and drops objects not referenced by any manifest.
+//
 // The manifest is the only index into the chunk set, so release is a manifest
 // edit: the chunk moves from `chunks` to `pending_gc`, the manifest is
 // published, and only then is the object deleted. `pending_gc` is both the

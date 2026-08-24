@@ -25,7 +25,6 @@ import (
 
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v3/objectstorage"
-	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 )
 
 // TestRecoverInheritsPreviousTermChunks covers the term-handoff path: a chunk
@@ -98,30 +97,13 @@ func TestRecoverInheritsPreviousTermProbedTail(t *testing.T) {
 	assert.Equal(t, int64(1), manager2.manifest.GetChunks()[0].GetTerm())
 }
 
-// TestRecoverFencesOlderTerm ensures the catalog fencing still rejects an
-// owner whose term is older than the recorded one after the inheritance
-// change.
-func TestRecoverFencesOlderTerm(t *testing.T) {
-	ctx := context.Background()
-	cm := storage.NewLocalChunkManager(objectstorage.RootPath(t.TempDir()))
-	store := NewStore(cm, "by-dev-rootcoord-dml_0_40451v0", 1)
-	catalog := &catalogRecorder{term: 2}
-	older := NewManager(ManagerConfig{
-		PChannel:    "by-dev-rootcoord-dml_0_40451v0",
-		Term:        1,
-		Store:       store,
-		MetaCatalog: catalog,
-	})
-	err := older.Recover(ctx)
-	require.Error(t, err)
-}
-
 // TestRecoverInheritsSkipsBurnedIntermediateTerm covers chained handoffs: a
-// term that fenced (persisted its catalog meta) but died before sealing any
-// manifest leaves an empty manifest at term-1. Recovery must keep walking back
-// until it finds the most recent term that actually holds chunks — otherwise
-// the records of an older term vanish from the manifest chain, their deletes
-// silently resurrect, and the orphaned chunk objects become unreachable to GC.
+// term that was assigned (TryAssignToServerID burns a term on every
+// assignment attempt) but died before ever sealing a manifest leaves an empty
+// manifest at term-1. Recovery must keep walking back until it finds the most
+// recent term that actually holds chunks — otherwise the records of an older
+// term vanish from the manifest chain, their deletes silently resurrect, and
+// the orphaned chunk objects become unreachable to GC.
 func TestRecoverInheritsSkipsBurnedIntermediateTerm(t *testing.T) {
 	ctx := context.Background()
 	cm := storage.NewLocalChunkManager(objectstorage.RootPath(t.TempDir()))
@@ -136,15 +118,13 @@ func TestRecoverInheritsSkipsBurnedIntermediateTerm(t *testing.T) {
 	require.Len(t, manager1.manifest.GetChunks(), 1)
 
 	// Term 2 was assigned and burned without ever recovering (a failed open):
-	// the catalog records it (fencing any older owner), but no manifest of it
-	// exists. A term-3 recovery must walk past the empty term 2 down to term 1.
-	catalog := &catalogRecorder{term: 2}
+	// no manifest and no chunk of it exist. A term-3 recovery must walk past
+	// the empty term 2 down to term 1.
 
-	// Term 3 recovers: term 2 left an empty manifest, so the inheritance walk
-	// must keep going back to term 1 and adopt its chunk.
+	// Term 3 recovers: term 2 left no trace, so the inheritance walk must keep
+	// going back to term 1 and adopt its chunk.
 	store3 := NewStore(cm, "by-dev-rootcoord-dml_0_40451v0", 3)
 	manager3 := newTestManager(t, store3, 1, 1<<30)
-	manager3.cfg.MetaCatalog = catalog
 	require.NoError(t, manager3.Recover(ctx))
 	require.Len(t, manager3.manifest.GetChunks(), 1)
 	assert.Equal(t, uint64(0), manager3.manifest.GetChunks()[0].GetGeneration())
@@ -156,17 +136,4 @@ func TestRecoverInheritsSkipsBurnedIntermediateTerm(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, uint64(100), entries[0].GetTimeTick())
-}
-
-type catalogRecorder struct {
-	term int64
-}
-
-func (c *catalogRecorder) GetPChannelSummaryMeta(ctx context.Context, pchannel string) (*streamingpb.PChannelSummaryMeta, error) {
-	return &streamingpb.PChannelSummaryMeta{Pchannel: pchannel, Term: c.term}, nil
-}
-
-func (c *catalogRecorder) SavePChannelSummaryMeta(ctx context.Context, pchannel string, meta *streamingpb.PChannelSummaryMeta) error {
-	c.term = meta.GetTerm()
-	return nil
 }

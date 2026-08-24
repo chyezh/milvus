@@ -621,19 +621,7 @@ message VChannelTransformLogMeta {
 // so consumers (transform log, and future idempotency / insert views) can
 // recover their durable state without re-reading the whole WAL.
 //
-// Three artifacts:
-//   - PChannelSummaryMeta (etcd): the owner term, used for takeover probing.
-//   - PChannelSummaryManifest (object storage): the chunk index, the pending GC
-//     work queue and the DDL invalidation map.
-//   - chunk objects (object storage): one per generation, holding per-vchannel
-//     per-consumer sections.
-
-// PChannelSummaryMeta is the pchannel-scoped summary meta in etcd.
-message PChannelSummaryMeta {
-    string pchannel = 1;
-    int64 term      = 2;
-}
-
+// Two artifacts:
 // PChannelSummaryManifest is the pchannel-scoped chunk index in object storage.
 message PChannelSummaryManifest {
     // Every chunk recovery may read, one entry each. Generations are contiguous:
@@ -928,6 +916,12 @@ message WALCheckpoint {
     common.ReplicateConfiguration replicate_config = 4;
     common.ReplicateCheckpoint replicate_checkpoint = 5;
     AlterWALState alter_wal_state = 6;
+    // Term of the checkpoint publisher. Monotonic across term changes: a
+    // publisher of an older term must never advance the checkpoint past the
+    // latest takeover, or the truncation would outrun the successor's
+    // inherited manifest coverage. Combined with a compare-and-swap commit,
+    // this fences the checkpoint advancement across concurrent publishers.
+    int64 term = 7;
 }
 
 message PChannelRecoveryControlMeta {

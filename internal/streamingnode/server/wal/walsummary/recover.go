@@ -21,7 +21,6 @@ import (
 
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
-	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 // probeLimit bounds a single forward probe. A term that wrote more than this
@@ -49,32 +48,14 @@ const probeLimit = 1 << 16
 //  5. only now may this owner write chunks (generations start past the
 //     inherited set).
 //
-// The catalog meta is the fencing marker of the store: it records which term
-// last owned the summary. A term older than the recorded one must not touch
-// the store (a newer owner is already writing). The check is best-effort —
-// the object-level arbitration on the chunk keys is the authoritative fence —
-// and the meta is written whenever this term differs from the recorded one.
+// Recover is read-only with respect to the catalog: the summary store owns no
+// fencing marker of its own. Term arbitration lives in two other places — the
+// object keys are term-scoped (a fenced owner can never collide with the
+// successor's chunks), and the consume-checkpoint advancement is fenced by a
+// compare-and-swap on the checkpoint's term (an older-term publisher can never
+// advance it past the successor's inherited manifest coverage). See the
+// checkpoint persistence design for the takeover protocol.
 func (m *Manager) Recover(ctx context.Context) error {
-	if m.cfg.MetaCatalog != nil {
-		meta, err := m.cfg.MetaCatalog.GetPChannelSummaryMeta(ctx, m.cfg.PChannel)
-		if err != nil {
-			return err
-		}
-		if meta != nil && m.cfg.Term < meta.GetTerm() {
-			return merr.WrapErrServiceInternalMsg(
-				"walsummary of pchannel %s is fenced: catalog term %d is newer than term %d",
-				m.cfg.PChannel, meta.GetTerm(), m.cfg.Term,
-			)
-		}
-		if meta == nil || m.cfg.Term != meta.GetTerm() {
-			if err := m.cfg.MetaCatalog.SavePChannelSummaryMeta(ctx, m.cfg.PChannel, &streamingpb.PChannelSummaryMeta{
-				Pchannel: m.cfg.PChannel,
-				Term:     m.cfg.Term,
-			}); err != nil {
-				return err
-			}
-		}
-	}
 	// Recover this term's own manifest first; a term that never wrote one
 	// (fresh owner after a term handoff) inherits the previous term's chunks
 	// below. Every step below closes a specific way data could otherwise be
@@ -103,12 +84,12 @@ func (m *Manager) Recover(ctx context.Context) error {
 		// records stay reachable, then seal the union into this term's manifest.
 		//
 		// The walk must look back past a single term: an intermediate term can
-		// fence (SavePChannelSummaryMeta in recoverManifestOfTerm) and then die
-		// before sealing its manifest — TryAssignToServerID burns a term on every
-		// assignment attempt — leaving an empty manifest at term-1 while the real
-		// records live at an older term. Reading only term-1 would strand those
-		// records: their delete would silently resurrect and the orphaned chunk
-		// objects would be unreachable to GC.
+		// be assigned (TryAssignToServerID burns a term on every assignment
+		// attempt) and then die before ever sealing a manifest, leaving an
+		// empty manifest at term-1 while the real records live at an older
+		// term. Reading only term-1 would strand those records: their delete
+		// would silently resurrect and the orphaned chunk objects would be
+		// unreachable to GC.
 		for t := m.cfg.Term - 1; t >= 0; t-- {
 			previous, previousNeedsPublish, err := m.recoverManifestOfTerm(ctx, t)
 			if err != nil {
