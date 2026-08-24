@@ -83,54 +83,6 @@ func (_c *MockStreamingNodeCataLog_GetConsumeCheckpoint_Call) RunAndReturn(run f
 	return _c
 }
 
-// GetPChannelSummaryMeta provides a mock function with given fields: ctx, pchannel
-func (_m *MockStreamingNodeCataLog) GetPChannelSummaryMeta(ctx context.Context, pchannel string) (*streamingpb.PChannelSummaryMeta, error) {
-	ret := _m.Called(ctx, pchannel)
-
-	if len(ret) == 0 {
-		panic("no return value specified for GetPChannelSummaryMeta")
-	}
-
-	var r0 *streamingpb.PChannelSummaryMeta
-	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, string) (*streamingpb.PChannelSummaryMeta, error)); ok {
-		return rf(ctx, pchannel)
-	}
-	if rf, ok := ret.Get(0).(func(context.Context, string) *streamingpb.PChannelSummaryMeta); ok {
-		r0 = rf(ctx, pchannel)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*streamingpb.PChannelSummaryMeta)
-		}
-	}
-
-	if rf, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = rf(ctx, pchannel)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// SavePChannelSummaryMeta provides a mock function with given fields: ctx, pchannel, meta
-func (_m *MockStreamingNodeCataLog) SavePChannelSummaryMeta(ctx context.Context, pchannel string, meta *streamingpb.PChannelSummaryMeta) error {
-	ret := _m.Called(ctx, pchannel, meta)
-
-	if len(ret) == 0 {
-		panic("no return value specified for SavePChannelSummaryMeta")
-	}
-
-	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, *streamingpb.PChannelSummaryMeta) error); ok {
-		r0 = rf(ctx, pchannel, meta)
-	} else {
-		r0 = ret.Error(0)
-	}
-
-	return r0
-}
-
 // GetPChannelRecoveryControlMeta provides a mock function with given fields: ctx, pChannelName
 func (_m *MockStreamingNodeCataLog) GetPChannelRecoveryControlMeta(ctx context.Context, pChannelName string) (*streamingpb.PChannelRecoveryControlMeta, error) {
 	ret := _m.Called(ctx, pChannelName)
@@ -164,65 +116,6 @@ func (_m *MockStreamingNodeCataLog) GetPChannelRecoveryControlMeta(ctx context.C
 // MockStreamingNodeCataLog_GetPChannelRecoveryControlMeta_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetPChannelRecoveryControlMeta'
 type MockStreamingNodeCataLog_GetPChannelRecoveryControlMeta_Call struct {
 	*mock.Call
-}
-
-// MockStreamingNodeCataLog_GetPChannelSummaryMeta_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetPChannelSummaryMeta'
-type MockStreamingNodeCataLog_GetPChannelSummaryMeta_Call struct {
-	*mock.Call
-}
-
-// MockStreamingNodeCataLog_SavePChannelSummaryMeta_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SavePChannelSummaryMeta'
-type MockStreamingNodeCataLog_SavePChannelSummaryMeta_Call struct {
-	*mock.Call
-}
-
-// GetPChannelSummaryMeta is a helper method to define mock.On call
-//   - ctx context.Context
-//   - pchannel string
-func (_e *MockStreamingNodeCataLog_Expecter) GetPChannelSummaryMeta(ctx interface{}, pchannel interface{}) *MockStreamingNodeCataLog_GetPChannelSummaryMeta_Call {
-	return &MockStreamingNodeCataLog_GetPChannelSummaryMeta_Call{Call: _e.mock.On("GetPChannelSummaryMeta", ctx, pchannel)}
-}
-
-func (_c *MockStreamingNodeCataLog_GetPChannelSummaryMeta_Call) Run(run func(ctx context.Context, pchannel string)) *MockStreamingNodeCataLog_GetPChannelSummaryMeta_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string))
-	})
-	return _c
-}
-
-func (_c *MockStreamingNodeCataLog_GetPChannelSummaryMeta_Call) Return(_a0 *streamingpb.PChannelSummaryMeta, _a1 error) *MockStreamingNodeCataLog_GetPChannelSummaryMeta_Call {
-	_c.Call.Return(_a0, _a1)
-	return _c
-}
-
-func (_c *MockStreamingNodeCataLog_GetPChannelSummaryMeta_Call) RunAndReturn(run func(context.Context, string) (*streamingpb.PChannelSummaryMeta, error)) *MockStreamingNodeCataLog_GetPChannelSummaryMeta_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// SavePChannelSummaryMeta is a helper method to define mock.On call
-//   - ctx context.Context
-//   - pchannel string
-//   - meta *streamingpb.PChannelSummaryMeta
-func (_e *MockStreamingNodeCataLog_Expecter) SavePChannelSummaryMeta(ctx interface{}, pchannel interface{}, meta interface{}) *MockStreamingNodeCataLog_SavePChannelSummaryMeta_Call {
-	return &MockStreamingNodeCataLog_SavePChannelSummaryMeta_Call{Call: _e.mock.On("SavePChannelSummaryMeta", ctx, pchannel, meta)}
-}
-
-func (_c *MockStreamingNodeCataLog_SavePChannelSummaryMeta_Call) Run(run func(ctx context.Context, pchannel string, meta *streamingpb.PChannelSummaryMeta)) *MockStreamingNodeCataLog_SavePChannelSummaryMeta_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(*streamingpb.PChannelSummaryMeta))
-	})
-	return _c
-}
-
-func (_c *MockStreamingNodeCataLog_SavePChannelSummaryMeta_Call) Return(_a0 error) *MockStreamingNodeCataLog_SavePChannelSummaryMeta_Call {
-	_c.Call.Return(_a0)
-	return _c
-}
-
-func (_c *MockStreamingNodeCataLog_SavePChannelSummaryMeta_Call) RunAndReturn(run func(context.Context, string, *streamingpb.PChannelSummaryMeta) error) *MockStreamingNodeCataLog_SavePChannelSummaryMeta_Call {
-	_c.Call.Return(run)
-	return _c
 }
 
 // GetPChannelRecoveryControlMeta is a helper method to define mock.On call

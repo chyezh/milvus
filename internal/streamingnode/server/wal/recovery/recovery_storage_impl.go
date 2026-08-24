@@ -291,7 +291,7 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 }
 
 // newSummaryManager creates the pchannel-scoped WALSummary manager and wires
-// it to the recovery runtime and the catalog fencing marker.
+// it to the recovery runtime.
 func (r *recoveryStorageImpl) newSummaryManager(runtime moduleapi.Runtime) *walsummary.Manager {
 	return walsummary.NewManager(walsummary.ManagerConfig{
 		PChannel: r.channel.Name,
@@ -304,7 +304,6 @@ func (r *recoveryStorageImpl) newSummaryManager(runtime moduleapi.Runtime) *wals
 		Runtime:           runtime,
 		FlushMaxBytes:     uint64(paramtable.Get().StreamingCfg.FlushL0MaxSize.GetAsSize()),
 		RetentionMaxBytes: uint64(paramtable.Get().StreamingCfg.SummaryMaxBytesPerPChannel.GetAsSize()),
-		MetaCatalog:       resource.Resource().StreamingNodeCatalog(),
 		Logger:            r.Logger(),
 	})
 }

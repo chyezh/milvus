@@ -255,69 +255,6 @@ func (c *catalog) GetSalvageCheckpoint(ctx context.Context, pchannelName string)
 
 // Prefix functions: return paths ending with "/" for LoadWithPrefix queries.
 
-// buildSummaryStorePrefix returns the prefix of the pchannel summary store.
-func buildSummaryStorePrefix(pchannelName string) string {
-	return buildWALPrefix(pchannelName) + DirectorySummaryStore + "/"
-}
-
-// buildPChannelSummaryMetaKey returns the key of the pchannel summary meta.
-func buildPChannelSummaryMetaKey(pchannelName string) string {
-	return buildSummaryStorePrefix(pchannelName) + KeyPChannelSummaryMeta
-}
-
-// GetPChannelSummaryMeta gets the pchannel-level summary meta: the fencing
-// marker recording which term last owned the summary store.
-func (c *catalog) GetPChannelSummaryMeta(ctx context.Context, pchannelName string) (*streamingpb.PChannelSummaryMeta, error) {
-	key := buildPChannelSummaryMetaKey(pchannelName)
-	value, err := c.metaKV.Load(ctx, key)
-	if errors.Is(err, merr.ErrIoKeyNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	meta := &streamingpb.PChannelSummaryMeta{}
-	if err := proto.Unmarshal([]byte(value), meta); err != nil {
-		return nil, errors.Wrapf(err, "unmarshal pchannel summary meta %s failed", key)
-	}
-	meta, err = normalizePChannelSummaryMeta(pchannelName, meta)
-	if err != nil {
-		return nil, errors.Wrapf(err, "invalid pchannel summary meta %s", key)
-	}
-	return meta, nil
-}
-
-// SavePChannelSummaryMeta saves the pchannel-level summary meta.
-func (c *catalog) SavePChannelSummaryMeta(ctx context.Context, pchannelName string, meta *streamingpb.PChannelSummaryMeta) error {
-	if meta == nil {
-		return nil
-	}
-	stored, err := normalizePChannelSummaryMeta(pchannelName, meta)
-	if err != nil {
-		return err
-	}
-	data, err := proto.Marshal(stored)
-	if err != nil {
-		return errors.Wrapf(err, "marshal pchannel summary meta at pchannel %s failed", pchannelName)
-	}
-	return c.metaKV.Save(ctx, buildPChannelSummaryMetaKey(pchannelName), string(data))
-}
-
-// normalizePChannelSummaryMeta fills the pchannel of a summary meta from the
-// key when empty, and rejects a mismatch.
-func normalizePChannelSummaryMeta(pchannelName string, meta *streamingpb.PChannelSummaryMeta) (*streamingpb.PChannelSummaryMeta, error) {
-	if meta == nil {
-		return nil, merr.WrapErrServiceInternalMsg("nil pchannel summary meta")
-	}
-	stored := proto.Clone(meta).(*streamingpb.PChannelSummaryMeta)
-	if stored.GetPchannel() == "" {
-		stored.Pchannel = pchannelName
-	} else if stored.GetPchannel() != pchannelName {
-		return nil, merr.WrapErrServiceInternalMsg("pchannel mismatch: path %s, meta %s", pchannelName, stored.GetPchannel())
-	}
-	return stored, nil
-}
-
 // buildWALPrefix returns the prefix for all WAL metadata under a pchannel.
 func buildWALPrefix(pchannelName string) string {
 	return MetaPrefix + "/" + DirectoryWAL + "/" + pchannelName + "/"

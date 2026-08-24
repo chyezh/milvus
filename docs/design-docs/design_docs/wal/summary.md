@@ -42,18 +42,21 @@ Manifest: the chunk index of the current term.
 <root>/streammingnode/.../<pchannel>.manifest.<term>
 ```
 
-### 2.2 Catalog meta (etcd)
+### 2.2 Term arbitration
 
-```text
-streamingnode-meta/wal/<pchannel>/summary-store/pchannel-summary-meta
-```
+The summary store owns no catalog (etcd) record of its own. Term arbitration
+is split between two other mechanisms:
 
-`PChannelSummaryMeta{term}` fences the summary store across term changes.
+- the object keys are term-scoped (`chunk.<gen>.term<term>`, `<pchannel>.manifest.<term>`),
+  so a superseded owner can never collide with the successor's chunks;
+- the consume-checkpoint advancement is fenced by a compare-and-swap on the
+  checkpoint's term (see checkpoint-persistence.md): an older-term publisher
+  can never advance it past the successor's inherited manifest coverage, so
+  WAL truncation can never outrun un-materialized records.
 
 ### 2.3 Protos
 
 ```proto
-message PChannelSummaryMeta { int64 term = 1; }
 message PChannelSummaryManifest { repeated PChannelSummaryChunkIndexEntry chunks = 1; }
 message PChannelSummaryChunkIndexEntry {
     uint64 generation = 1;
@@ -125,15 +128,24 @@ retention from below, and the recovery-time restore
 manifest's coverage starts so replay does not re-stage already-durable
 records.
 
-## 5. Recovery And Fencing
+## 5. Recovery And Term Takeover
 
-`Manager.Recover`:
+`Manager.Recover` is read-only with respect to the catalog:
 
-1. read the catalog meta; if `meta.term > own term`, the store is fenced
-   (error); otherwise save the own term;
-2. read the manifest; if absent, probe forward for chunks of the own term and
-   seal them into a fresh manifest;
+1. read the manifest of the own term; if absent, probe forward for chunks of
+   the own term and seal them into a fresh manifest;
+2. on a term handoff, walk back past empty intermediate terms (a term can be
+   assigned and die before ever sealing a manifest) and inherit the most
+   recent non-empty earlier term's index, so un-materialized records of the
+   superseded owner stay reachable; seal the union into the own manifest;
 3. the manifest is the durable chunk index for the live flush path.
+
+The takeover of the checkpoint happens in the recovery layer, after
+`Manager.Recover` seals the inherited manifest: the checkpoint is stamped with
+the own term through a compare-and-swap (a lost CAS — the superseded owner
+advanced it mid-recovery — aborts the open, and the retry re-inherits the
+newer coverage). After that, any surviving owner of an older term fails its
+own checkpoint advancement, so truncation stays behind the inherited coverage.
 
 After recovery the recovery path restores each vchannel's durable frontier
 (`Manager.DurableTimeTick`, the largest per-vchannel chunk index end in the

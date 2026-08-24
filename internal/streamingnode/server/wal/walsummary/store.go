@@ -21,7 +21,6 @@
 // re-reading the whole WAL.
 //
 // Three artifacts:
-//   - PChannelSummaryMeta (etcd): the owner term, used for takeover probing.
 //   - PChannelSummaryManifest (object storage): the chunk index, the pending GC
 //     work queue and the DDL invalidation map.
 //   - chunk objects (object storage): one per generation, holding per-vchannel

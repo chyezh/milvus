@@ -93,17 +93,7 @@ type ManagerConfig struct {
 	// releases chunks above the budget, bounded below by the per-vchannel
 	// materialization frontiers.
 	RetentionMaxBytes uint64
-	// MetaCatalog persists the pchannel summary meta: the fencing marker that
-	// records which term last owned the summary store. It may be nil for
-	// embedded uses without a catalog.
-	MetaCatalog MetaCatalog
-	Logger      *mlog.Logger
-}
-
-// MetaCatalog persists the pchannel summary meta of one pchannel.
-type MetaCatalog interface {
-	GetPChannelSummaryMeta(ctx context.Context, pchannel string) (*streamingpb.PChannelSummaryMeta, error)
-	SavePChannelSummaryMeta(ctx context.Context, pchannel string, meta *streamingpb.PChannelSummaryMeta) error
+	Logger            *mlog.Logger
 }
 
 // NewManager creates the summary manager of one pchannel.

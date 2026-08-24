@@ -17,14 +17,6 @@ type StreamingNodeCataLog interface {
 
 	ListTransformLogMeta(ctx context.Context, pchannelName string) (map[string]*streamingpb.VChannelTransformLogMeta, error)
 
-	// GetPChannelSummaryMeta gets the pchannel-scoped summary meta: the
-	// fencing marker recording which term last owned the summary store.
-	// Returns nil, nil when no meta exists.
-	GetPChannelSummaryMeta(ctx context.Context, pchannelName string) (*streamingpb.PChannelSummaryMeta, error)
-
-	// SavePChannelSummaryMeta saves the pchannel-scoped summary meta.
-	SavePChannelSummaryMeta(ctx context.Context, pchannelName string, meta *streamingpb.PChannelSummaryMeta) error
-
 	// ListSegmentAssignment list all segment assignments for the wal.
 	ListSegmentAssignment(ctx context.Context, pChannelName string) ([]*streamingpb.SegmentAssignmentMeta, error)
 

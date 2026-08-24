@@ -49,8 +49,8 @@ The following state is represented as component snapshots:
 
 Transform records themselves are not a component snapshot: their durability is
 owned by the pchannel-scoped WALSummary (chunk + manifest on object storage,
-term fencing in etcd). The summary releases message handles only after a chunk
-and its manifest are durable, so the global checkpoint can never pass a
+term-scoped object keys). The summary releases message handles only after a
+chunk and its manifest are durable, so the global checkpoint can never pass a
 transform record the summary has not persisted. See
 [WALSummary Design](summary.md).
 
@@ -140,6 +140,23 @@ Crash behavior:
 
 The protocol provides logical exactly-once recovery state, not physical
 exactly-once object creation. Orphan object collection belongs to GC/Defrag.
+
+### 5.1 Checkpoint advancement is fenced across terms
+
+The checkpoint records the term of the publisher that advanced it
+(`WALCheckpoint.term`). Its advancement is a compare-and-swap: the commit
+applies only while the recorded term is not newer than the publisher's own
+term (an atomically checked value equality on the serialized checkpoint — etcd
+cannot compare proto fields), followed by a read-back verification because the
+etcd txn reports success even when the guard fails.
+
+On a term handoff, the successor stamps the checkpoint with its own term
+right after its summary recovery sealed the inherited manifest coverage. From
+then on, any surviving publisher of an older term fails its checkpoint
+advancement — and with it its truncation — so the WAL can never be truncated
+past the successor's inherited coverage. A lost stamping CAS (the superseded
+owner advanced the checkpoint mid-recovery) aborts the open; the retry
+re-runs recovery and re-inherits the newer coverage.
 
 ## 6. Dirty Snapshot Stability
 
