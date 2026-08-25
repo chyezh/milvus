@@ -15,8 +15,6 @@ type StreamingNodeCataLog interface {
 	// ListVChannel list all vchannels on current pchannel.
 	ListVChannel(ctx context.Context, pchannelName string) ([]*streamingpb.VChannelMeta, error)
 
-	ListTransformLogMeta(ctx context.Context, pchannelName string) (map[string]*streamingpb.VChannelTransformLogMeta, error)
-
 	// ListSegmentAssignment list all segment assignments for the wal.
 	ListSegmentAssignment(ctx context.Context, pChannelName string) ([]*streamingpb.SegmentAssignmentMeta, error)
 
@@ -74,10 +72,6 @@ type WALRecoverySnapshot struct {
 	// RemovedVChannels are the vchannel base and schema records to remove;
 	// skipped if empty.
 	RemovedVChannels map[string]*streamingpb.VChannelMeta
-	// TransformLogMetas are the transform-log metas to save; skipped if empty.
-	TransformLogMetas map[string]*streamingpb.VChannelTransformLogMeta
-	// RemovedTransformLogs are the transform-log metas to remove; skipped if empty.
-	RemovedTransformLogs []string
 	// SalvageCheckpoint is the salvage checkpoint to save; skipped if nil.
 	// It must be persisted before the consume checkpoint to guarantee ordering.
 	SalvageCheckpoint *commonpb.ReplicateCheckpoint

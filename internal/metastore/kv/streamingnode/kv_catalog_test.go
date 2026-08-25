@@ -140,47 +140,6 @@ func TestCatalogSegmentAssignments(t *testing.T) {
 	assert.Equal(t, streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING, byID[2].GetState())
 }
 
-func TestCatalogTransformLogMeta(t *testing.T) {
-	kv := mocks.NewMetaKv(t)
-	vchannel := "p1_100v2"
-	meta := &streamingpb.VChannelTransformLogMeta{
-		CheckpointTimeTick: 50,
-		FirstChunkId:       3,
-		NextChunkId:        4,
-	}
-	value, err := proto.Marshal(meta)
-	require.NoError(t, err)
-	key, err := buildTransformLogKey("p1", vchannel)
-	require.NoError(t, err)
-
-	kv.EXPECT().LoadWithPrefix(mock.Anything, buildTransformLogPrefix("p1")).
-		Return([]string{key}, []string{string(value)}, nil)
-	catalog := NewCataLog(kv)
-	ctx := context.Background()
-	metas, err := catalog.ListTransformLogMeta(ctx, "p1")
-	require.NoError(t, err)
-	require.Len(t, metas, 1)
-	assert.True(t, proto.Equal(meta, metas[vchannel]))
-
-	kv.EXPECT().MaxTxnOps().Return(128).Maybe()
-	kv.EXPECT().MultiSaveAndRemove(mock.Anything, mock.MatchedBy(func(kvs map[string]string) bool {
-		saved, ok := kvs[key]
-		if !ok {
-			return false
-		}
-		loaded := &streamingpb.VChannelTransformLogMeta{}
-		return proto.Unmarshal([]byte(saved), loaded) == nil && proto.Equal(meta, loaded)
-	}), mock.Anything).Return(nil)
-	require.NoError(t, catalog.SaveRecoverySnapshot(ctx, "p1", &metastore.WALRecoverySnapshot{
-		TransformLogMetas: map[string]*streamingpb.VChannelTransformLogMeta{vchannel: meta},
-	}))
-
-	kv.EXPECT().MultiSaveAndRemove(mock.Anything, mock.Anything, []string{key}).Return(nil)
-	require.NoError(t, catalog.SaveRecoverySnapshot(ctx, "p1", &metastore.WALRecoverySnapshot{
-		RemovedTransformLogs: []string{vchannel},
-	}))
-}
-
 func TestCatalogSaveRecoverySnapshotBaseMetaDoesNotRewriteSchemas(t *testing.T) {
 	kv := mocks.NewMetaKv(t)
 	meta := &streamingpb.VChannelMeta{
@@ -210,53 +169,6 @@ func TestCatalogSaveRecoverySnapshotBaseMetaDoesNotRewriteSchemas(t *testing.T) 
 	require.NoError(t, catalog.SaveRecoverySnapshot(context.Background(), "p1", &metastore.WALRecoverySnapshot{
 		VChannelBaseMetas: map[string]*streamingpb.VChannelMeta{meta.GetVchannel(): meta},
 	}))
-}
-
-func TestBuildCompactVChannelRecoveryKeys(t *testing.T) {
-	transformKey, err := buildTransformLogKey("p1", "p1_100v2")
-	require.NoError(t, err)
-	assert.Equal(t, "streamingnode-meta/wal/p1/tl/100/2", transformKey)
-
-	otherTransformKey, err := buildTransformLogKey("p1", "p1_200v3")
-	require.NoError(t, err)
-	assert.Equal(t, "streamingnode-meta/wal/p1/tl/200/3", otherTransformKey)
-	assert.NotEqual(t, transformKey, otherTransformKey)
-
-	_, err = buildTransformLogKey("p2", "p1_100v2")
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "pchannel")
-}
-
-func TestCatalogListCompactVChannelMetadataRejectsMalformedKeys(t *testing.T) {
-	transformValue, err := proto.Marshal(&streamingpb.VChannelTransformLogMeta{})
-	require.NoError(t, err)
-
-	for _, suffix := range []string{
-		"",
-		"100",
-		"100/2/extra",
-		"-1/2",
-		"100/-1",
-		"+100/2",
-		"100/+2",
-		"0100/2",
-		"100/02",
-		"9223372036854775808/2",
-		"100/9223372036854775808",
-	} {
-		t.Run("transform-log-"+suffix, func(t *testing.T) {
-			kv := mocks.NewMetaKv(t)
-			prefix := buildTransformLogPrefix("p1")
-			kv.EXPECT().LoadWithPrefix(mock.Anything, prefix).Return(
-				[]string{prefix + suffix},
-				[]string{string(transformValue)},
-				nil,
-			)
-			metas, err := NewCataLog(kv).ListTransformLogMeta(context.Background(), "p1")
-			require.Error(t, err)
-			assert.Nil(t, metas)
-		})
-	}
 }
 
 func TestCatalogListSegmentAssignmentRejectsMismatchedOwner(t *testing.T) {
