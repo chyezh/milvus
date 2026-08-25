@@ -7,6 +7,7 @@ import (
 
 	commonpb "github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	metastore "github.com/milvus-io/milvus/internal/metastore"
+	datapb "github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	streamingpb "github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	mock "github.com/stretchr/testify/mock"
 )
@@ -367,7 +368,164 @@ func (_c *MockStreamingNodeCataLog_SaveRecoverySnapshot_Call) RunAndReturn(run f
 	return _c
 }
 
+
+// ListPendingL0Segments provides a mock function with given fields: ctx, pChannelName
+func (_m *MockStreamingNodeCataLog) ListPendingL0Segments(ctx context.Context, pChannelName string) ([]*datapb.SaveBinlogPathsRequest, error) {
+	ret := _m.Called(ctx, pChannelName)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListPendingL0Segments")
+	}
+
+	var r0 []*datapb.SaveBinlogPathsRequest
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, string) ([]*datapb.SaveBinlogPathsRequest, error)); ok {
+		return rf(ctx, pChannelName)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, string) []*datapb.SaveBinlogPathsRequest); ok {
+		r0 = rf(ctx, pChannelName)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]*datapb.SaveBinlogPathsRequest)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, string) error); ok {
+		r1 = rf(ctx, pChannelName)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// MockStreamingNodeCataLog_ListPendingL0Segments_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListPendingL0Segments'
+type MockStreamingNodeCataLog_ListPendingL0Segments_Call struct {
+	*mock.Call
+}
+
+// ListPendingL0Segments is a helper method to define mock.On call
+//   - ctx context.Context
+//   - pChannelName string
+func (_e *MockStreamingNodeCataLog_Expecter) ListPendingL0Segments(ctx interface{}, pChannelName interface{}) *MockStreamingNodeCataLog_ListPendingL0Segments_Call {
+	return &MockStreamingNodeCataLog_ListPendingL0Segments_Call{Call: _e.mock.On("ListPendingL0Segments", ctx, pChannelName)}
+}
+
+func (_c *MockStreamingNodeCataLog_ListPendingL0Segments_Call) Run(run func(ctx context.Context, pChannelName string)) *MockStreamingNodeCataLog_ListPendingL0Segments_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string))
+	})
+	return _c
+}
+
+func (_c *MockStreamingNodeCataLog_ListPendingL0Segments_Call) Return(_a0 []*datapb.SaveBinlogPathsRequest, _a1 error) *MockStreamingNodeCataLog_ListPendingL0Segments_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *MockStreamingNodeCataLog_ListPendingL0Segments_Call) RunAndReturn(run func(context.Context, string) ([]*datapb.SaveBinlogPathsRequest, error)) *MockStreamingNodeCataLog_ListPendingL0Segments_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// RemovePendingL0Segments provides a mock function with given fields: ctx, pChannelName, segmentIDs
+func (_m *MockStreamingNodeCataLog) RemovePendingL0Segments(ctx context.Context, pChannelName string, segmentIDs []int64) error {
+	ret := _m.Called(ctx, pChannelName, segmentIDs)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RemovePendingL0Segments")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, []int64) error); ok {
+		r0 = rf(ctx, pChannelName, segmentIDs)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// MockStreamingNodeCataLog_RemovePendingL0Segments_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RemovePendingL0Segments'
+type MockStreamingNodeCataLog_RemovePendingL0Segments_Call struct {
+	*mock.Call
+}
+
+// RemovePendingL0Segments is a helper method to define mock.On call
+//   - ctx context.Context
+//   - pChannelName string
+//   - segmentIDs []int64
+func (_e *MockStreamingNodeCataLog_Expecter) RemovePendingL0Segments(ctx interface{}, pChannelName interface{}, segmentIDs interface{}) *MockStreamingNodeCataLog_RemovePendingL0Segments_Call {
+	return &MockStreamingNodeCataLog_RemovePendingL0Segments_Call{Call: _e.mock.On("RemovePendingL0Segments", ctx, pChannelName, segmentIDs)}
+}
+
+func (_c *MockStreamingNodeCataLog_RemovePendingL0Segments_Call) Run(run func(ctx context.Context, pChannelName string, segmentIDs []int64)) *MockStreamingNodeCataLog_RemovePendingL0Segments_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string), args[2].([]int64))
+	})
+	return _c
+}
+
+func (_c *MockStreamingNodeCataLog_RemovePendingL0Segments_Call) Return(_a0 error) *MockStreamingNodeCataLog_RemovePendingL0Segments_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MockStreamingNodeCataLog_RemovePendingL0Segments_Call) RunAndReturn(run func(context.Context, string, []int64) error) *MockStreamingNodeCataLog_RemovePendingL0Segments_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// SavePendingL0Segment provides a mock function with given fields: ctx, pChannelName, pending
+func (_m *MockStreamingNodeCataLog) SavePendingL0Segment(ctx context.Context, pChannelName string, pending *datapb.SaveBinlogPathsRequest) error {
+	ret := _m.Called(ctx, pChannelName, pending)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SavePendingL0Segment")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, *datapb.SaveBinlogPathsRequest) error); ok {
+		r0 = rf(ctx, pChannelName, pending)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// MockStreamingNodeCataLog_SavePendingL0Segment_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SavePendingL0Segment'
+type MockStreamingNodeCataLog_SavePendingL0Segment_Call struct {
+	*mock.Call
+}
+
+// SavePendingL0Segment is a helper method to define mock.On call
+//   - ctx context.Context
+//   - pChannelName string
+//   - pending *datapb.SaveBinlogPathsRequest
+func (_e *MockStreamingNodeCataLog_Expecter) SavePendingL0Segment(ctx interface{}, pChannelName interface{}, pending interface{}) *MockStreamingNodeCataLog_SavePendingL0Segment_Call {
+	return &MockStreamingNodeCataLog_SavePendingL0Segment_Call{Call: _e.mock.On("SavePendingL0Segment", ctx, pChannelName, pending)}
+}
+
+func (_c *MockStreamingNodeCataLog_SavePendingL0Segment_Call) Run(run func(ctx context.Context, pChannelName string, pending *datapb.SaveBinlogPathsRequest)) *MockStreamingNodeCataLog_SavePendingL0Segment_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string), args[2].(*datapb.SaveBinlogPathsRequest))
+	})
+	return _c
+}
+
+func (_c *MockStreamingNodeCataLog_SavePendingL0Segment_Call) Return(_a0 error) *MockStreamingNodeCataLog_SavePendingL0Segment_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MockStreamingNodeCataLog_SavePendingL0Segment_Call) RunAndReturn(run func(context.Context, string, *datapb.SaveBinlogPathsRequest) error) *MockStreamingNodeCataLog_SavePendingL0Segment_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // NewMockStreamingNodeCataLog creates a new instance of MockStreamingNodeCataLog. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
+
 // The first argument is typically a *testing.T value.
 func NewMockStreamingNodeCataLog(t interface {
 	mock.TestingT
