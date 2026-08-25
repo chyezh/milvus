@@ -353,6 +353,33 @@ func TestViewObserveAboveThresholdSchedulesFlush(t *testing.T) {
 	assert.Len(t, scheduler.tasks, 1)
 }
 
+// TestFlushThresholdAccumulatesAcrossVChannels proves the autonomous flush
+// decision is pchannel-wide: staging bytes accumulate across every vchannel
+// view, and a chunk is scheduled only when the TOTAL reaches FlushMaxBytes —
+// not when any single vchannel crosses it.
+func TestFlushThresholdAccumulatesAcrossVChannels(t *testing.T) {
+	manager, _ := newTestManagerWithStore(t)
+	scheduler := &recordingScheduler{}
+	manager.cfg.Runtime.Scheduler = scheduler
+	v1 := manager.View("v1")
+	v2 := manager.View("v2")
+	manager.cfg.FlushMaxBytes = 100
+
+	// A single vchannel below the pchannel-wide threshold must not flush.
+	v1.mu.Lock()
+	v1.stagingBytes = 60
+	v1.mu.Unlock()
+	manager.onStagingGrown(60)
+	assert.Len(t, scheduler.tasks, 0, "one vchannel below the pchannel threshold")
+
+	// The combined staging across vchannels crosses the threshold: flush once.
+	v2.mu.Lock()
+	v2.stagingBytes = 60
+	v2.mu.Unlock()
+	manager.onStagingGrown(60)
+	assert.Len(t, scheduler.tasks, 1, "combined staging crosses the pchannel threshold")
+}
+
 func TestManagerHasPendingWork(t *testing.T) {
 	manager, _ := newTestManagerWithStore(t)
 	view := manager.View("v1")
