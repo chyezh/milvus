@@ -149,6 +149,10 @@ func TestViewObserveAndFlushReleasesHandles(t *testing.T) {
 	assert.Equal(t, int64(10), decoded["v1"][0].GetDelete().GetBlocks()[0].GetPartitionId())
 }
 
+// TestViewFlushFailureKeepsHandles covers the failure path of a flush: when
+// the chunk write fails, the batch is pinned on the task (never restored to
+// the view) and the handles stay retained; the retry of the SAME task rewrites
+// the pinned batch and only then releases the handles.
 func TestViewFlushFailureKeepsHandles(t *testing.T) {
 	manager, _ := newTestManagerWithStore(t)
 	view := manager.View("v1")
@@ -160,12 +164,16 @@ func TestViewFlushFailureKeepsHandles(t *testing.T) {
 	// Break the chunk manager so the chunk write fails.
 	original := manager.cfg.Store.chunkManager
 	manager.cfg.Store.chunkManager = &failingChunkManager{ChunkManager: original}
-	err := manager.flushOnce(ctx, &summaryFlushTask{log: manager})
+	task := &summaryFlushTask{log: manager}
+	err := manager.flushOnce(ctx, task)
 	assert.Error(t, err)
-	manager.cfg.Store.chunkManager = original
 	assert.False(t, finalized, "handles must survive a failed flush")
-	// The staging must still be there for the retry.
-	require.NoError(t, manager.flushOnce(ctx, &summaryFlushTask{log: manager}))
+	// The batch is pinned on the task for the retry, not restored to staging.
+	require.NotNil(t, task.pendingChunk)
+	manager.cfg.Store.chunkManager = original
+	// The retry of the same task rewrites the pinned batch and releases the
+	// handles only after it is durable end to end.
+	require.NoError(t, manager.flushOnce(ctx, task))
 	assert.True(t, finalized)
 }
 
@@ -425,11 +433,15 @@ func TestManagerReadTransformEntriesAcrossChunks(t *testing.T) {
 type failInjectingChunkManager struct {
 	storage.ChunkManager
 	failManifest atomic.Bool
+	failChunk    atomic.Bool
 }
 
 func (c *failInjectingChunkManager) Write(ctx context.Context, filePath string, content []byte) error {
 	if c.failManifest.Load() && strings.Contains(filePath, manifestObjectExt) {
 		return errors.New("injected manifest write failure")
+	}
+	if c.failChunk.Load() && !strings.Contains(filePath, manifestObjectExt) {
+		return errors.New("injected chunk write failure")
 	}
 	return c.ChunkManager.Write(ctx, filePath, content)
 }
@@ -531,6 +543,103 @@ func TestFlushPublishFailurePinsBatchAvoidsLivelock(t *testing.T) {
 	assert.Len(t, keys, 2, "one object per batch; the durable generation-0 object was never rewritten")
 }
 
+// TestFlushChunkFailurePinsBatchAvoidsLivelock covers the chunk-write retry
+// under staging growth: the chunk [A] write fails (the object may or may not
+// be durable — a dropped ack), and a new record [B] is staged during the retry
+// window. The retry must rewrite the SAME generation with the pinned [A]
+// batch — restoring the staging and re-collecting would fold [B] into the
+// batch, and a grown payload under the same chunk key would collide with the
+// partially written object (storeCorrupted), livelocking the flush forever.
+// [B] is collected by the next flush task into a fresh generation.
+func TestFlushChunkFailurePinsBatchAvoidsLivelock(t *testing.T) {
+	ctx := context.Background()
+	cm := &failInjectingChunkManager{
+		ChunkManager: storage.NewLocalChunkManager(objectstorage.RootPath(t.TempDir())),
+	}
+	store := NewStore(cm, "by-dev-rootcoord-dml_0_40451v0", 1)
+	manager := newTestManager(t, store, 1, 1<<30)
+	require.NoError(t, manager.Recover(ctx))
+	view := manager.View("v1")
+	finalizedA := false
+	finalizedB := false
+
+	// First attempt: the chunk write fails; the batch is pinned on the task
+	// and the generation stays claimed for the retry.
+	cm.failChunk.Store(true)
+	observeDelete(t, view, 100, &finalizedA)
+	task := &summaryFlushTask{log: manager}
+	require.Error(t, task.Execute(ctx))
+	require.NotNil(t, task.pendingChunk)
+	assert.False(t, finalizedA)
+	keys, _, err := storage.ListAllChunkWithPrefix(ctx, cm, buildChunkPrefix(cm, store.PChannel()), false)
+	require.NoError(t, err)
+	assert.Empty(t, keys, "the failed chunk write left no durable object")
+
+	// A new record [B] is staged during the retry window.
+	observeDelete(t, view, 200, &finalizedB)
+
+	// Retry of the same task: rewrites the pinned [A] batch under the same
+	// generation; [B] stays staged and never joins the generation-0 object.
+	cm.failChunk.Store(false)
+	require.NoError(t, task.Execute(ctx))
+	assert.True(t, finalizedA, "the pinned batch completes")
+	assert.False(t, finalizedB, "B is not part of the pinned batch")
+	assert.Nil(t, task.pendingChunk)
+	require.Len(t, manager.manifest.GetChunks(), 1)
+	assert.Equal(t, uint64(0), manager.manifest.GetChunks()[0].GetGeneration())
+
+	// The next task collects [B] into generation 1: one object per batch,
+	// never a conflicting rewrite of generation 0.
+	nextTask := &summaryFlushTask{log: manager}
+	require.NoError(t, nextTask.Execute(ctx))
+	assert.True(t, finalizedB)
+	require.Len(t, manager.manifest.GetChunks(), 2)
+	assert.Equal(t, uint64(1), manager.manifest.GetChunks()[1].GetGeneration())
+	keys, _, err = storage.ListAllChunkWithPrefix(ctx, cm, buildChunkPrefix(cm, store.PChannel()), false)
+	require.NoError(t, err)
+	assert.Len(t, keys, 2, "one object per batch; the pinned generation-0 rewrite never duplicated the object")
+}
+
+// TestFlushChunkCorruptedFailsTaskWithoutRetry covers the terminal-error
+// classification: a store-corruption error from the chunk write must NOT be
+// marked ErrDelay — the task fails loudly and is dropped (done), so the
+// manager can schedule successor flushes instead of retrying the same
+// corrupted write forever. The abandoned batch keeps its handles retained, so
+// the WAL checkpoint stalls before it and recovery replays it after a restart.
+func TestFlushChunkCorruptedFailsTaskWithoutRetry(t *testing.T) {
+	ctx := context.Background()
+	cm := storage.NewLocalChunkManager(objectstorage.RootPath(t.TempDir()))
+	store := NewStore(cm, "by-dev-rootcoord-dml_0_40451v0", 1)
+	manager := newTestManager(t, store, 1, 1<<30)
+	require.NoError(t, manager.Recover(ctx))
+	view := manager.View("v1")
+	finalizedA := false
+	finalizedB := false
+
+	// A conflicting object already occupies generation 0 under this term:
+	// WriteChunk detects the same-generation different-payload as corruption.
+	require.NoError(t, cm.Write(ctx, store.ChunkKey(0), []byte("conflicting payload")))
+	observeDelete(t, view, 100, &finalizedA)
+
+	task := &summaryFlushTask{log: manager}
+	err := task.Execute(ctx)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrStoreCorrupted), "the conflict surfaces as store corruption")
+	assert.False(t, errors.Is(err, nodescheduler.ErrDelay), "a terminal error must not be retried")
+	assert.True(t, task.Done(), "the task is dropped so successor flushes can proceed")
+	assert.False(t, finalizedA, "the corrupted batch is abandoned with handles retained; recovery replays it")
+
+	// The manager is not stuck: a successor flush collects newer staging into
+	// a fresh generation.
+	observeDelete(t, view, 200, &finalizedB)
+	nextTask := &summaryFlushTask{log: manager}
+	require.NoError(t, nextTask.Execute(ctx))
+	assert.True(t, finalizedB)
+	require.Len(t, manager.manifest.GetChunks(), 1)
+	assert.Equal(t, uint64(1), manager.manifest.GetChunks()[0].GetGeneration())
+	assert.False(t, finalizedA)
+}
+
 // TestGCOnceRemovesAllPendingCovers the snapshot iteration of the pending GC
 // queue: removePendingGC compacts the live slice in place, and a naive range
 // over the live slice would skip entries once the indexes shift.
@@ -567,20 +676,37 @@ func TestGCOnceRemovesAllPending(t *testing.T) {
 	}
 }
 
-// TestRestoreStagingAfterViewRemovedReleasesHandles covers the failure path of
-// a flush racing a vchannel cleanup: restoring a batch into a view that was
-// already removed must release the handles, never leak them.
-func TestRestoreStagingAfterViewRemovedReleasesHandles(t *testing.T) {
-	manager, _ := newTestManagerWithStore(t)
+// TestPinnedBatchCompletesAfterViewRemovedReleasesHandles covers a flush
+// racing a vchannel cleanup: a chunk-write failure pins the batch on the task,
+// the view is removed during the retry window, and the retry's completeBatch
+// must still release the retained handles — the removed view's records are
+// dropped with the vchannel, never leaked.
+func TestPinnedBatchCompletesAfterViewRemovedReleasesHandles(t *testing.T) {
+	ctx := context.Background()
+	cm := &failInjectingChunkManager{
+		ChunkManager: storage.NewLocalChunkManager(objectstorage.RootPath(t.TempDir())),
+	}
+	store := NewStore(cm, "by-dev-rootcoord-dml_0_40451v0", 1)
+	manager := newTestManager(t, store, 1, 1<<30)
+	require.NoError(t, manager.Recover(ctx))
 	view := manager.View("v1")
 	finalized := false
 	observeDelete(t, view, 100, &finalized)
 
-	batch := manager.collectStaging()
-	require.Len(t, batch.recordsByVChannel["v1"], 1)
+	cm.failChunk.Store(true)
+	task := &summaryFlushTask{log: manager}
+	require.Error(t, task.Execute(ctx))
+	require.NotNil(t, task.pendingChunk)
+	assert.False(t, finalized)
+
+	// The view is removed while the batch is pinned for the retry.
 	manager.RemoveView("v1")
-	manager.restoreStaging(batch)
-	assert.True(t, finalized, "restoring into a removed view releases the handles")
+
+	// The retry completes: completeBatch releases the handles even though the
+	// view is gone.
+	cm.failChunk.Store(false)
+	require.NoError(t, task.Execute(ctx))
+	assert.True(t, finalized, "the retry's completeBatch releases the retained handles")
 }
 
 // TestConcurrentFlushAndGCRelease exercises the manifest publish paths
