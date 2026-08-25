@@ -7,7 +7,7 @@ const (
 	DirectorySegmentAssign = "segment-assign"
 	DirectoryVChannel      = "vchannel"
 	DirectorySchema        = "schema"
-	DirectorySummaryStore  = "summary-store"
+	DirectorySummaryStore  = "summary"
 
 	KeyConsumeCheckpoint = "consume-checkpoint"
 	KeyRecoveryControl   = "recovery-control"

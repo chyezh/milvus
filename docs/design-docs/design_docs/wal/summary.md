@@ -35,7 +35,7 @@ materialization and WALSummary persistence; recovery reconciles them (below).
 Chunk: one flush of one or more vchannels.
 
 ```text
-<root>/streamingnode/summary-store/<pchannel>/chunks/chunk.<gen>.term<term>.psc
+<root>/streamingnode/summary/<pchannel>/chunks/chunk.<gen>.term<term>.psc
 ```
 
 The key carries the term, so a fenced owner can never collide with the

@@ -70,7 +70,7 @@ const (
 
 	// summaryObjectDir is the object storage directory of the summary store,
 	// mirrored by the etcd DirectorySummaryStore constant of the metastore.
-	summaryObjectDir = "summary-store"
+	summaryObjectDir = "summary"
 )
 
 var (
