@@ -93,9 +93,6 @@ func initResourceForTest(t *testing.T) {
 	catalog.EXPECT().ListVChannel(mock.Anything, mock.Anything).Return(nil, nil)
 	catalog.EXPECT().GetSalvageCheckpoint(mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	catalog.EXPECT().SaveRecoverySnapshot(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-	catalog.EXPECT().ListPendingL0Segments(mock.Anything, mock.Anything).Return(nil, nil).Maybe()
-	catalog.EXPECT().SavePendingL0Segment(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-	catalog.EXPECT().RemovePendingL0Segments(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	fMixCoordClient := syncutil.NewFuture[internaltypes.MixCoordClient]()
 	fMixCoordClient.Set(rc)
 	resource.InitForTest(

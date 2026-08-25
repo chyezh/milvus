@@ -40,12 +40,7 @@ type ModuleConfig struct {
 	// transform consumer: the durable records after the restored
 	// transform_materialized_time_tick, loaded once by recovery. Runtime
 	// observation appends to it directly.
-	PendingTransformEntries []*streamingpb.TransformLogEntry
-	// L0MaterializedTimeTick is the newest checkpoint a registered L0 segment
-	// of this vchannel reached before recovery. The transform frontier is
-	// lifted past it so crash-window records already materialized into an L0
-	// segment are not re-materialized into duplicate L0 segments.
-	L0MaterializedTimeTick    uint64
+	PendingTransformEntries   []*streamingpb.TransformLogEntry
 	TransformLogMaterializer  transformlog.Materializer
 	TransformLogMaterialRows  uint64
 	TransformLogMaterialBytes uint64
@@ -147,12 +142,12 @@ func newModule(config ModuleConfig, adoptVChannelMeta bool) (*VChannelRecoveryMo
 	}
 	module.transformLog = transformlog.New(transformlog.Config{
 		VChannel: config.VChannel,
-		// The frontier starts at the persisted value and is lifted past any
-		// registered L0 segment: records at or below the L0 checkpoint were
-		// already materialized into a segment by a previous run (see
-		// recoverL0SegmentCheckpoints), so replaying them would duplicate the
-		// L0 data.
-		MaterializedTimeTick: max(config.VChannelMeta.GetTransformMaterializedTimeTick(), config.L0MaterializedTimeTick),
+		// The frontier starts at the persisted value: every record at or below
+		// it was already committed before the crash. Records above it are
+		// re-materialized on recovery; duplicate L0 output is idempotent, and
+		// unregistered output is re-registered, so the persisted frontier alone
+		// guarantees no delete data is lost.
+		MaterializedTimeTick: config.VChannelMeta.GetTransformMaterializedTimeTick(),
 		PendingEntries:       config.PendingTransformEntries,
 		MaterializeMaxRows:   config.TransformLogMaterialRows,
 		MaterializeMaxBytes:  config.TransformLogMaterialBytes,

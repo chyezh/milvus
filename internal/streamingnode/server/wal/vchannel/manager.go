@@ -39,12 +39,6 @@ type PChannelManagerConfig struct {
 	// transform_materialized_time_tick. Runtime flushes replace it through
 	// the summary's flush listener.
 	PendingTransformEntries map[string][]*streamingpb.TransformLogEntry
-	// L0MaterializedTimeTicks is the newest checkpoint per vchannel that a
-	// registered L0 segment (registered by a previous run) reached. Recovery
-	// lifts the transform frontier past it so crash-window records that were
-	// already materialized into an L0 segment are not re-materialized into
-	// duplicate L0 segments.
-	L0MaterializedTimeTicks map[string]uint64
 	// TransformLogMaterializer writes the L0 segments of the transform
 	// consumer.
 	TransformLogMaterializer  transformlog.Materializer
@@ -340,7 +334,6 @@ func (m *PChannelRecoveryManager) newModule(vchannel string) (*VChannelRecoveryM
 		SegmentLifecycle:          m.config.SegmentLifecycle,
 		SegmentPackWriter:         m.config.SegmentPackWriter,
 		PendingTransformEntries:   m.config.PendingTransformEntries[vchannel],
-		L0MaterializedTimeTick:    m.config.L0MaterializedTimeTicks[vchannel],
 		TransformLogMaterializer:  m.config.TransformLogMaterializer,
 		TransformLogMaterialRows:  m.config.TransformLogMaterialRows,
 		TransformLogMaterialBytes: m.config.TransformLogMaterialBytes,

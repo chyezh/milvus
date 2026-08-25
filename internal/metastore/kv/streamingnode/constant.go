@@ -8,7 +8,6 @@ const (
 	DirectoryVChannel      = "vchannel"
 	DirectorySchema        = "schema"
 	DirectorySummaryStore  = "summary-store"
-	DirectoryPendingL0     = "pending-l0"
 
 	KeyConsumeCheckpoint = "consume-checkpoint"
 	KeyRecoveryControl   = "recovery-control"
