@@ -85,16 +85,14 @@ func (n StreamingNodeInfo) String() string {
 // StreamingNodeInfoWithResourceGroup extends StreamingNodeInfo with resource group information.
 type StreamingNodeInfoWithResourceGroup struct {
 	StreamingNodeInfo
-	ResourceGroup          string                 // Resource group label from session's ServerLabels, if empty, it means the streaming node doesn't have a resource group.
-	RecoveryStorageVersion RecoveryStorageVersion // Maximum RecoveryStorage version supported by the node.
+	ResourceGroup string // Resource group label from session's ServerLabels, if empty, it means the streaming node doesn't have a resource group.
 }
 
 // StreamingNodeStatus is the information of a streaming node.
 type StreamingNodeStatus struct {
 	StreamingNodeInfo
-	RecoveryStorageVersion RecoveryStorageVersion
-	Metrics                StreamingNodeMetrics
-	Err                    error
+	Metrics StreamingNodeMetrics
+	Err     error
 }
 
 // IsHealthy returns whether the streaming node is healthy.

@@ -76,8 +76,7 @@ func (c *managerClientImpl) GetAllStreamingNodes(ctx context.Context) (map[int64
 				ServerID: serverID,
 				Address:  session.Address,
 			},
-			ResourceGroup:          rg,
-			RecoveryStorageVersion: types.RecoveryStorageVersion(session.GetStreamingNodeRecoveryStorageVersion()),
+			ResourceGroup: rg,
 		}
 	}
 	return result, nil
@@ -209,7 +208,6 @@ func (c *managerClientImpl) getAllStreamingNodeStatus(ctx context.Context, state
 	for serverID, session := range state.Sessions() {
 		serverID := serverID
 		address := session.Address
-		recoveryStorageVersion := types.RecoveryStorageVersion(session.GetStreamingNodeRecoveryStorageVersion())
 		rg := session.GetResourceGroupName()
 		if rg == "" {
 			rg = common.DefaultResourceGroupName
@@ -232,9 +230,8 @@ func (c *managerClientImpl) getAllStreamingNodeStatus(ctx context.Context, state
 					ServerID: serverID,
 					Address:  address,
 				},
-				RecoveryStorageVersion: recoveryStorageVersion,
-				Metrics:                types.NewStreamingNodeBalanceAttrsFromProto(resp.Metrics),
-				Err:                    err,
+				Metrics: types.NewStreamingNodeBalanceAttrsFromProto(resp.Metrics),
+				Err:     err,
 			}
 			mlog.Debug(ctx, "collect status success", mlog.Int64("serverID", serverID), mlog.Any("status", resp))
 			return nil

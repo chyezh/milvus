@@ -146,9 +146,8 @@ func TestManager(t *testing.T) {
 }
 
 type serverInfo struct {
-	stopping               bool
-	resourceGroup          string
-	recoveryStorageVersion int32
+	stopping      bool
+	resourceGroup string
 }
 
 func newVersionedState(version int64, serverIDs map[uint64]bool) discoverer.VersionedState {
@@ -169,9 +168,8 @@ func newVersionedStateWithRG(version int64, servers map[uint64]serverInfo) disco
 
 	for serverID, info := range servers {
 		session := &sessionutil.SessionRaw{
-			ServerID:                            int64(serverID),
-			Stopping:                            info.stopping,
-			StreamingNodeRecoveryStorageVersion: info.recoveryStorageVersion,
+			ServerID: int64(serverID),
+			Stopping: info.stopping,
 		}
 		if info.resourceGroup != "" {
 			session.ServerLabels = map[string]string{
@@ -201,7 +199,7 @@ func TestGetAllStreamingNodesWithResourceGroup(t *testing.T) {
 	// Return sessions with resource group labels
 	r.EXPECT().GetLatestState(mock.Anything).RunAndReturn(func(ctx context.Context) (discoverer.VersionedState, error) {
 		return newVersionedStateWithRG(1, map[uint64]serverInfo{
-			1: {resourceGroup: "rg_a", recoveryStorageVersion: sessionutil.RecoveryStorageVersionV2},
+			1: {resourceGroup: "rg_a"},
 			2: {resourceGroup: "rg_b"},
 			3: {resourceGroup: ""}, // empty RG should default to __default_resource_group
 		}), nil
@@ -211,9 +209,7 @@ func TestGetAllStreamingNodesWithResourceGroup(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, nodes, 3)
 	assert.Equal(t, "rg_a", nodes[1].ResourceGroup)
-	assert.Equal(t, types.RecoveryStorageVersionV2, nodes[1].RecoveryStorageVersion)
 	assert.Equal(t, "rg_b", nodes[2].ResourceGroup)
-	assert.Equal(t, types.RecoveryStorageVersionLegacy, nodes[2].RecoveryStorageVersion)
 	assert.Equal(t, "__default_resource_group", nodes[3].ResourceGroup)
 
 	managerService.EXPECT().Close().Return()
@@ -246,7 +242,7 @@ func TestCollectAllStatusWithResourceGroupFilter(t *testing.T) {
 	r.EXPECT().GetLatestState(mock.Anything).RunAndReturn(func(ctx context.Context) (discoverer.VersionedState, error) {
 		callCount++
 		return newVersionedStateWithRG(int64(callCount), map[uint64]serverInfo{
-			1: {resourceGroup: "rg_a", recoveryStorageVersion: sessionutil.RecoveryStorageVersionV2},
+			1: {resourceGroup: "rg_a"},
 			2: {resourceGroup: "rg_a"},
 			3: {resourceGroup: "rg_b"},
 			4: {resourceGroup: ""}, // defaults to __default_resource_group
@@ -259,8 +255,6 @@ func TestCollectAllStatusWithResourceGroupFilter(t *testing.T) {
 	assert.Len(t, nodes, 2)
 	assert.Contains(t, nodes, int64(1))
 	assert.Contains(t, nodes, int64(2))
-	assert.Equal(t, types.RecoveryStorageVersionV2, nodes[1].RecoveryStorageVersion)
-	assert.Equal(t, types.RecoveryStorageVersionLegacy, nodes[2].RecoveryStorageVersion)
 	assert.NotContains(t, nodes, int64(3))
 	assert.NotContains(t, nodes, int64(4))
 

@@ -9,12 +9,7 @@ import (
 )
 
 func TestPChannelInfo(t *testing.T) {
-	info := PChannelInfo{
-		Name:                           "pchannel",
-		Term:                           1,
-		AccessMode:                     AccessModeRO,
-		RequiredRecoveryStorageVersion: RecoveryStorageVersionV2,
-	}
+	info := PChannelInfo{Name: "pchannel", Term: 1, AccessMode: AccessModeRO}
 	assert.False(t, info.ChannelID().IsZero())
 	assert.True(t, ChannelID{}.IsZero())
 	pbInfo := NewProtoFromPChannelInfo(info)
@@ -23,11 +18,6 @@ func TestPChannelInfo(t *testing.T) {
 	assert.Equal(t, info.Name, info2.Name)
 	assert.Equal(t, info.Term, info2.Term)
 	assert.Equal(t, info.AccessMode, info2.AccessMode)
-	assert.Equal(t, info.RequiredRecoveryStorageVersion, info2.RequiredRecoveryStorageVersion)
-	assert.Equal(t, RecoveryStorageVersionLegacy, NewPChannelInfoFromProto(&streamingpb.PChannelInfo{
-		Name: "legacy",
-		Term: 1,
-	}).RequiredRecoveryStorageVersion)
 
 	assert.Panics(t, func() {
 		NewProtoFromPChannelInfo(PChannelInfo{Name: "", Term: 1})

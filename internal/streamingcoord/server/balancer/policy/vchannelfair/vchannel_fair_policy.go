@@ -37,16 +37,13 @@ func (p *policy) Balance(currentLayout balancer.CurrentLayout) (layout balancer.
 
 	// Create new expected layout to help balance the load.
 	expectedLayout := newExpectedLayoutForVChannelFairPolicy(currentLayout, p.cfg)
-	blockedChannels := make(map[types.ChannelID]types.RecoveryStorageVersion)
 
 	// 1. Keep the current layout first to make the balance result more stable.
 	newIncomingChannel := make(map[types.ChannelID]struct{}, len(currentLayout.Channels))
 	for channelID := range currentLayout.Channels {
 		if serverID, ok := currentLayout.ChannelsToNodes[channelID]; ok {
-			if currentLayout.CanAssign(channelID, serverID) {
-				expectedLayout.Assign(channelID, serverID)
-				continue
-			}
+			expectedLayout.Assign(channelID, serverID)
+			continue
 		}
 		newIncomingChannel[channelID] = struct{}{}
 	}
@@ -60,9 +57,6 @@ func (p *policy) Balance(currentLayout balancer.CurrentLayout) (layout balancer.
 			var targetNodeID int64
 			minScore := math.MaxFloat64
 			for _, nodeID := range serverIDs {
-				if !currentLayout.CanAssign(channelID, nodeID) {
-					continue
-				}
 				score := expectedLayout.TryAssignGlobalUnbalancedScore(channelID, nodeID)
 				if score < minScore || (score == minScore && nodeID < targetNodeID) {
 					minScore = score
@@ -70,8 +64,7 @@ func (p *policy) Balance(currentLayout balancer.CurrentLayout) (layout balancer.
 				}
 			}
 			if targetNodeID == 0 {
-				blockedChannels[channelID] = currentLayout.Channels[channelID].RequiredRecoveryStorageVersion
-				continue
+				panic("target node should never be zero")
 			}
 			expectedLayout.Assign(channelID, targetNodeID)
 		}
@@ -81,7 +74,6 @@ func (p *policy) Balance(currentLayout balancer.CurrentLayout) (layout balancer.
 	if !currentLayout.Config.AllowRebalance {
 		return balancer.ExpectedLayout{
 			ChannelAssignment: snapshot.Assignments,
-			BlockedChannels:   blockedChannels,
 		}, nil
 	}
 
@@ -117,7 +109,6 @@ func (p *policy) Balance(currentLayout balancer.CurrentLayout) (layout balancer.
 		}
 		return balancer.ExpectedLayout{
 			ChannelAssignment: greatestSnapshot.Assignments,
-			BlockedChannels:   blockedChannels,
 		}, nil
 	}
 	if p.Logger().Level().Enabled(mlog.DebugLevel) {
@@ -132,7 +123,6 @@ func (p *policy) Balance(currentLayout balancer.CurrentLayout) (layout balancer.
 	}
 	return balancer.ExpectedLayout{
 		ChannelAssignment: snapshot.Assignments,
-		BlockedChannels:   blockedChannels,
 	}, nil
 }
 
@@ -160,9 +150,6 @@ func (p *policy) assignChannels(expectedLayout *expectedLayoutForVChannelFairPol
 	}
 	for nodeID := range expectedLayout.CurrentLayout.AllNodesInfo {
 		channelID := channelIDs[0]
-		if !expectedLayout.CurrentLayout.CanAssign(channelID, nodeID) {
-			continue
-		}
 		expectedLayout.Assign(channelID, nodeID)
 		p.assignChannels(expectedLayout, channelIDs[1:], greatestSnapshot)
 		expectedLayout.Unassign(channelID)

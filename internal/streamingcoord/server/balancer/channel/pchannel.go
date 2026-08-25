@@ -75,12 +75,6 @@ func (c *PChannelMeta) CurrentTerm() int64 {
 	return c.inner.GetChannel().GetTerm()
 }
 
-// RequiredRecoveryStorageVersion returns the minimum RecoveryStorage version
-// required by the pchannel. The value is monotonic for the pchannel lifetime.
-func (c *PChannelMeta) RequiredRecoveryStorageVersion() types.RecoveryStorageVersion {
-	return types.RecoveryStorageVersion(c.inner.GetChannel().GetRequiredRecoveryStorageVersion())
-}
-
 // CurrentServerID returns the server id of the channel.
 // If the channel is not assigned to any server, return -1.
 func (c *PChannelMeta) CurrentServerID() int64 {
@@ -148,24 +142,9 @@ type mutablePChannel struct {
 	*PChannelMeta
 }
 
-// PromoteRecoveryStorageVersion monotonically promotes the minimum
-// RecoveryStorage version required by the pchannel.
-func (m *mutablePChannel) PromoteRecoveryStorageVersion(version types.RecoveryStorageVersion) bool {
-	if version <= m.RequiredRecoveryStorageVersion() {
-		return false
-	}
-	m.inner.Channel.RequiredRecoveryStorageVersion = streamingpb.RecoveryStorageVersion(version)
-	return true
-}
-
-// TryAssignToServerID assigns the channel to a server. The RecoveryStorage
-// requirement is updated monotonically and can never be downgraded.
-func (m *mutablePChannel) TryAssignToServerID(channel types.PChannelInfo, streamingNode types.StreamingNodeInfo) bool {
-	requiredVersion := max(m.RequiredRecoveryStorageVersion(), channel.RequiredRecoveryStorageVersion)
-	if m.ChannelInfo().AccessMode == channel.AccessMode &&
-		m.RequiredRecoveryStorageVersion() == requiredVersion &&
-		m.CurrentServerID() == streamingNode.ServerID &&
-		m.inner.State == streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED {
+// TryAssignToServerID assigns the channel to a server.
+func (m *mutablePChannel) TryAssignToServerID(accessMode types.AccessMode, streamingNode types.StreamingNodeInfo) bool {
+	if m.ChannelInfo().AccessMode == accessMode && m.CurrentServerID() == streamingNode.ServerID && m.inner.State == streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED {
 		// if the channel is already assigned to the server, return false.
 		return false
 	}
@@ -174,8 +153,7 @@ func (m *mutablePChannel) TryAssignToServerID(channel types.PChannelInfo, stream
 	}
 
 	// otherwise update the channel into assgining state.
-	m.inner.Channel.AccessMode = streamingpb.PChannelAccessMode(channel.AccessMode)
-	m.inner.Channel.RequiredRecoveryStorageVersion = streamingpb.RecoveryStorageVersion(requiredVersion)
+	m.inner.Channel.AccessMode = streamingpb.PChannelAccessMode(accessMode)
 	m.inner.Channel.Term++
 	m.inner.Node = types.NewProtoFromStreamingNodeInfo(streamingNode)
 	m.inner.State = streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNING
@@ -220,7 +198,7 @@ func (m *mutablePChannel) AssignToServerDone() {
 
 // MarkAsUnavailable marks the channel as unavailable.
 func (m *mutablePChannel) MarkAsUnavailable(term int64) {
-	if m.IsAssignedOrAssigning() && m.CurrentTerm() == term {
+	if m.inner.State == streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED && m.CurrentTerm() == term {
 		m.inner.State = streamingpb.PChannelMetaState_PCHANNEL_META_STATE_UNAVAILABLE
 	}
 }
