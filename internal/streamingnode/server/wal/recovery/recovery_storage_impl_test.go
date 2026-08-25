@@ -80,6 +80,72 @@ func TestConsumeDirtySnapshotUsesLastPersistedPhysicalCheckpointsForCleanup(t *t
 	assert.Equal(t, uint64(10), cleanup.PhysicalTimeTick)
 }
 
+func TestConsumeDirtySnapshotRewritesCheckpointOnControlChange(t *testing.T) {
+	storage := newTestRecoveryStorage(t, &utility.WALCheckpoint{
+		MessageID: walimplstest.NewTestMessageID(10),
+		TimeTick:  10,
+		Magic:     utility.RecoveryMagicRecoveryStorageV2,
+	})
+	// The checkpoint position is already published; only the in-memory control
+	// state changes. The control fields advance atomically with the checkpoint,
+	// so a control-only change must rewrite the checkpoint.
+	storage.mu.Lock()
+	storage.checkpoint = &utility.WALCheckpoint{
+		MessageID: walimplstest.NewTestMessageID(10),
+		TimeTick:  10,
+		Magic:     utility.RecoveryMagicRecoveryStorageV2,
+	}
+	storage.pchannelControl.AlterWalState = &streamingpb.AlterWALState{
+		TargetWalName: commonpb.WALName_Kafka,
+		TimeTick:      10,
+		Stage:         streamingpb.AlterWALStage_FLUSHING,
+	}
+	storage.mu.Unlock()
+
+	snapshot := storage.consumeDirtySnapshot()
+	require.NotNil(t, snapshot)
+	require.True(t, snapshot.CheckpointDirty)
+	require.NotNil(t, snapshot.Checkpoint.AlterWalState)
+	require.Equal(t, streamingpb.AlterWALStage_FLUSHING, snapshot.Checkpoint.AlterWalState.GetStage())
+
+	// Consuming again without any further change is a no-op: the position and
+	// the control state both match the last frozen checkpoint.
+	storage.mu.Lock()
+	storage.checkpoint = snapshot.Checkpoint.Clone()
+	storage.mu.Unlock()
+	assert.Nil(t, storage.consumeDirtySnapshot())
+}
+
+func TestConsumeCheckpointEqualComparesControlFields(t *testing.T) {
+	base := &utility.WALCheckpoint{
+		MessageID: walimplstest.NewTestMessageID(10),
+		TimeTick:  10,
+		Magic:     utility.RecoveryMagicRecoveryStorageV2,
+	}
+	assert.True(t, consumeCheckpointEqual(base, base.Clone()))
+
+	withAlter := base.Clone()
+	withAlter.AlterWalState = &streamingpb.AlterWALState{Stage: streamingpb.AlterWALStage_FLUSHING}
+	assert.False(t, consumeCheckpointEqual(base, withAlter))
+	assert.True(t, consumeCheckpointEqual(withAlter, withAlter.Clone()))
+
+	withCP := &utility.WALCheckpoint{
+		MessageID:           walimplstest.NewTestMessageID(10),
+		TimeTick:            10,
+		ReplicateCheckpoint: &commonpb.ReplicateCheckpoint{ClusterId: "cluster-a"},
+	}
+	withOtherCP := withCP.Clone()
+	withOtherCP.ReplicateCheckpoint = &commonpb.ReplicateCheckpoint{ClusterId: "cluster-b"}
+	assert.False(t, consumeCheckpointEqual(withCP, withOtherCP))
+
+	withConfig := &utility.WALCheckpoint{
+		MessageID:       walimplstest.NewTestMessageID(10),
+		TimeTick:        10,
+		ReplicateConfig: &commonpb.ReplicateConfiguration{},
+	}
+	assert.False(t, consumeCheckpointEqual(base, withConfig))
+}
+
 func TestRecoveryStorageCloseDoesNotPersist(t *testing.T) {
 	storage := newTestRecoveryStorage(t, &utility.WALCheckpoint{
 		MessageID: walimplstest.NewTestMessageID(10),

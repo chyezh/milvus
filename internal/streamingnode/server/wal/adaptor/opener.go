@@ -389,6 +389,11 @@ func (o *openerAdaptorImpl) handleAlterWALFlushingStage(ctx context.Context, opt
 		)
 	}
 	snapshot.Checkpoint.AlterWalState.Stage = streamingpb.AlterWALStage_ADVANCE_CHECKPOINT
+	// Keep the in-memory snapshot control in sync with the published
+	// checkpoint: handleAlterWAL's advance-stage gate and the advance stage
+	// itself read snapshot.PChannelControl, so it must expose
+	// ADVANCE_CHECKPOINT for both stages to run in the same open call.
+	snapshot.PChannelControl.AlterWalState.Stage = streamingpb.AlterWALStage_ADVANCE_CHECKPOINT
 	catalog := resource.Resource().StreamingNodeCatalog()
 	if err := catalog.SaveRecoverySnapshot(ctx, opt.Channel.Name, &metastore.WALRecoverySnapshot{
 		ConsumeCheckpoint: snapshot.Checkpoint.IntoProto(),
