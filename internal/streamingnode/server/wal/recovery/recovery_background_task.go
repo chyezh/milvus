@@ -102,12 +102,6 @@ func (rs *recoveryStorageImpl) persistDirtySnapshot(ctx context.Context, lvl mlo
 			}
 		}
 	}
-	// The materialization frontiers are durable: recycle the pending L0
-	// segment records whose checkpoint the persisted frontiers already cover.
-	// A record is kept while its frontier is not persisted — recovery replays
-	// it to re-register the segment, so the outbox guarantee (no lost, no
-	// duplicate delete materialization) holds across the crash window.
-	rs.recyclePendingL0Segments(ctx, recoverySnapshot.VChannels)
 	for _, dirtySnapshot := range snapshot.ModuleDirtySnaps {
 		dirtySnapshot.MarkPersisted()
 	}
@@ -304,46 +298,4 @@ func newBackoff() *backoff.ExponentialBackOff {
 	backoff.MaxElapsedTime = 0
 	backoff.Reset()
 	return backoff
-}
-
-// recyclePendingL0Segments removes the pending L0 segment records whose
-// checkpoint the just-persisted materialization frontiers already cover. The
-// frontiers in vchannels are the durable values of this snapshot; a record is
-// kept (and replayed on recovery) until its covering frontier is persisted,
-// which is exactly the outbox guarantee window.
-func (rs *recoveryStorageImpl) recyclePendingL0Segments(ctx context.Context, vchannels map[string]*streamingpb.VChannelMeta) {
-	if len(vchannels) == 0 {
-		return
-	}
-	catalog := resource.Resource().StreamingNodeCatalog()
-	pendings, err := catalog.ListPendingL0Segments(ctx, rs.channel.Name)
-	if err != nil {
-		rs.Logger().Warn(context.TODO(), "failed to list pending l0 segments for recycle", mlog.Err(err))
-		return
-	}
-	if len(pendings) == 0 {
-		return
-	}
-	removed := make([]int64, 0, len(pendings))
-	for _, pending := range pendings {
-		meta, ok := vchannels[pending.GetChannel()]
-		if !ok {
-			// The vchannel is not part of this persisted snapshot: its
-			// frontier was not durable now, keep the record.
-			continue
-		}
-		cps := pending.GetCheckPoints()
-		if len(cps) == 0 || cps[0].GetPosition() == nil {
-			continue
-		}
-		if cps[0].GetPosition().GetTimestamp() <= meta.GetTransformMaterializedTimeTick() {
-			removed = append(removed, pending.GetSegmentID())
-		}
-	}
-	if len(removed) == 0 {
-		return
-	}
-	if err := catalog.RemovePendingL0Segments(ctx, rs.channel.Name, removed); err != nil {
-		rs.Logger().Warn(context.TODO(), "failed to recycle pending l0 segments", mlog.Err(err))
-	}
 }
