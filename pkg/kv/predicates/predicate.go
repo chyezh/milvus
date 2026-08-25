@@ -6,11 +6,6 @@ type PredicateTarget int32
 const (
 	// PredTargetValue is predicate target for key-value perid
 	PredTargetValue PredicateTarget = iota + 1
-	// PredTargetNotExist is the predicate target for an absent key: satisfied
-	// only when the key is not present in the store. Backends translate it to
-	// a native atomic condition (etcd version==0) or an explicit read check
-	// (TiKV ErrNotExist).
-	PredTargetNotExist
 )
 
 type PredicateType int32
@@ -75,39 +70,4 @@ func ValueEqual(k, v string) Predicate {
 		v:  v,
 		pt: PredTypeEqual,
 	}
-}
-
-type predNotExist struct {
-	k string
-}
-
-func (p *predNotExist) Target() PredicateTarget {
-	return PredTargetNotExist
-}
-
-func (p *predNotExist) Type() PredicateType {
-	return PredTypeEqual
-}
-
-// IsTrue is satisfied only by the not-found signal (nil): a caller that read
-// the key and found it absent passes nil, any actual value fails the check.
-func (p *predNotExist) IsTrue(target any) bool {
-	return target == nil
-}
-
-func (p *predNotExist) Key() string {
-	return p.k
-}
-
-func (p *predNotExist) TargetValue() any {
-	return nil
-}
-
-// NotExist is satisfied when the key is absent from the store. It backs the
-// atomic create-if-absent of a key (e.g. the first consume-checkpoint write):
-// a backend applies it as a native txn condition (etcd version==0) or as a
-// same-transaction read+write guarded by write-conflict detection (TiKV), so
-// two concurrent creators cannot both succeed.
-func NotExist(k string) Predicate {
-	return &predNotExist{k: k}
 }

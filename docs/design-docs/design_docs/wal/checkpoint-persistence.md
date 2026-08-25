@@ -141,22 +141,29 @@ Crash behavior:
 The protocol provides logical exactly-once recovery state, not physical
 exactly-once object creation. Orphan object collection belongs to GC/Defrag.
 
-### 5.1 Checkpoint advancement is fenced across terms
+### 5.1 Checkpoint advancement is NOT fenced (TODO)
 
-The checkpoint records the term of the publisher that advanced it
-(`WALCheckpoint.term`). Its advancement is a compare-and-swap: the commit
-applies only while the recorded term is not newer than the publisher's own
-term (an atomically checked value equality on the serialized checkpoint — etcd
-cannot compare proto fields), followed by a read-back verification because the
-etcd txn reports success even when the guard fails.
+The consume checkpoint is the **commit point** of the snapshot: it is staged
+with `CommitSave` so it is the last write to become visible, after every other
+part of the snapshot has landed. It is currently a plain last-write commit
+marker, **not** a compare-and-swap.
 
-On a term handoff, the successor stamps the checkpoint with its own term
-right after its summary recovery sealed the inherited manifest coverage. From
-then on, any surviving publisher of an older term fails its checkpoint
-advancement — and with it its truncation — so the WAL can never be truncated
-past the successor's inherited coverage. A lost stamping CAS (the superseded
-owner advanced the checkpoint mid-recovery) aborts the open; the retry
-re-runs recovery and re-inherits the newer coverage.
+TODO(#52542 follow-up): concurrent publishers are not fenced. A superseded
+publisher of an older term that survived a takeover can still overwrite both
+the consume checkpoint and the component state of the current publisher, and
+WAL truncation then follows the last writer's checkpoint. The intended design —
+fence the whole commit on the recorded term (`WALCheckpoint.term`) via a
+guarded commit: an atomic create-if-absent for the first write, an atomically
+checked value equality on the serialized checkpoint afterwards (etcd cannot
+compare proto fields), followed by a read-back verification because the etcd
+txn reports success even when the guard fails — is deliberately not implemented
+in this PR: it requires backend compare-and-swap support that TiKV does not
+provide yet (`CompareVersionAndSwap` is a stub returning
+`ErrServiceUnimplemented`).
+
+Risk: two concurrent RecoveryStorage instances writing the same pchannel can
+interleave component state and checkpoint from different terms. Do not rely on
+takeover racing without landing the fenced commit.
 
 ## 6. Dirty Snapshot Stability
 

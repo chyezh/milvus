@@ -20,6 +20,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -30,18 +31,7 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/pkg/v3/kv/predicates"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
-	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
-
-// expectCheckpointFirstCreation mocks the first-creation path of the consume
-// checkpoint: the pre-commit Load reports not-found (the commit is guarded by
-// a NotExist predicate inside the component txn), and the post-commit
-// verification Load returns the written checkpoint value.
-func expectCheckpointFirstCreation(kv *mocks.MetaKv, pchannel, checkpointValue string) {
-	key := buildConsumeCheckpointKey(pchannel)
-	kv.EXPECT().Load(mock.Anything, key).Return("", merr.ErrIoKeyNotFound).Once()
-	kv.EXPECT().Load(mock.Anything, key).Return(checkpointValue, nil).Once()
-}
 
 // TestCatalog_SaveRecoverySnapshot_Nil proves a nil snapshot issues no KV
 // call (mocks.NewMetaKv with no EXPECT: any KV call fails the test).
@@ -54,61 +44,33 @@ func TestCatalog_SaveRecoverySnapshot_Nil(t *testing.T) {
 
 func TestCatalog_SaveRecoverySnapshot_CheckpointOnly(t *testing.T) {
 	checkpoint := &streamingpb.WALCheckpoint{TimeTick: 42}
-	checkpointValue, err := proto.Marshal(checkpoint)
-	require.NoError(t, err)
-	checkpointKey := buildConsumeCheckpointKey("p1")
 
-	t.Run("first creation", func(t *testing.T) {
-		kv := mocks.NewMetaKv(t)
-		kv.EXPECT().MaxTxnOps().Return(128).Maybe()
-		expectCheckpointFirstCreation(kv, "p1", string(checkpointValue))
-		var saves map[string]string
-		kv.EXPECT().MultiSaveAndRemove(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-			RunAndReturn(func(_ context.Context, s map[string]string, _ []string, preds ...predicates.Predicate) error {
-				saves = s
-				require.Len(t, preds, 1)
-				assert.Equal(t, checkpointKey, preds[0].Key())
-				assert.Equal(t, predicates.PredTargetNotExist, preds[0].Target())
-				return nil
-			}).Once()
-		err := NewCataLog(kv).SaveRecoverySnapshot(context.Background(), "p1", &metastore.WALRecoverySnapshot{
-			ConsumeCheckpoint: checkpoint,
-		})
-		assert.NoError(t, err)
-		assert.Equal(t, string(checkpointValue), saves[checkpointKey])
-	})
+	for _, tc := range []struct {
+		name      string
+		commitErr error
+	}{
+		{name: "success"},
+		{name: "failure", commitErr: errors.New("commit failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			kv := mocks.NewMetaKv(t)
+			kv.EXPECT().MaxTxnOps().Return(128)
+			kv.EXPECT().MultiSaveAndRemove(mock.Anything, mock.MatchedBy(func(saves map[string]string) bool {
+				require.Len(t, saves, 1)
+				value, ok := saves[buildConsumeCheckpointKey("p1")]
+				if !ok {
+					return false
+				}
+				persisted := &streamingpb.WALCheckpoint{}
+				return proto.Unmarshal([]byte(value), persisted) == nil && proto.Equal(checkpoint, persisted)
+			}), mock.Anything).Return(tc.commitErr)
 
-	t.Run("concurrent first creation loses the guard", func(t *testing.T) {
-		kv := mocks.NewMetaKv(t)
-		kv.EXPECT().MaxTxnOps().Return(128).Maybe()
-		kv.EXPECT().Load(mock.Anything, checkpointKey).
-			Return("", merr.ErrIoKeyNotFound).Once()
-		// The backend refuses the commit (etcd Succeeded=false, or TiKV
-		// predicate-not-met): the whole component write is refused.
-		kv.EXPECT().MultiSaveAndRemove(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-			Return(merr.WrapErrIoFailedReason("failed to execute transaction")).Once()
-		err := NewCataLog(kv).SaveRecoverySnapshot(context.Background(), "p1", &metastore.WALRecoverySnapshot{
-			ConsumeCheckpoint: checkpoint,
+			err := NewCataLog(kv).SaveRecoverySnapshot(context.Background(), "p1", &metastore.WALRecoverySnapshot{
+				ConsumeCheckpoint: checkpoint,
+			})
+			assert.ErrorIs(t, err, tc.commitErr)
 		})
-		assert.Error(t, err)
-	})
-
-	t.Run("post-commit verification catches concurrent creation", func(t *testing.T) {
-		kv := mocks.NewMetaKv(t)
-		kv.EXPECT().MaxTxnOps().Return(128).Maybe()
-		kv.EXPECT().Load(mock.Anything, checkpointKey).
-			Return("", merr.ErrIoKeyNotFound).Once()
-		kv.EXPECT().MultiSaveAndRemove(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-			Return(nil).Once()
-		// The commit reported success but a concurrent creator's checkpoint
-		// landed instead of ours (the etcd Succeeded=false case).
-		kv.EXPECT().Load(mock.Anything, checkpointKey).
-			Return(string(checkpointValue)+"-other", nil).Once()
-		err := NewCataLog(kv).SaveRecoverySnapshot(context.Background(), "p1", &metastore.WALRecoverySnapshot{
-			ConsumeCheckpoint: checkpoint,
-		})
-		assert.Error(t, err)
-	})
+	}
 }
 
 // TestCatalog_SaveRecoverySnapshot_Atomic proves a full snapshot that fits
@@ -119,17 +81,12 @@ func TestCatalog_SaveRecoverySnapshot_Atomic(t *testing.T) {
 	kv.EXPECT().MaxTxnOps().Return(128).Maybe()
 	var saves map[string]string
 	var removals []string
-	var preds []predicates.Predicate
-	kv.EXPECT().MultiSaveAndRemove(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		RunAndReturn(func(_ context.Context, s map[string]string, dels []string, p ...predicates.Predicate) error {
+	kv.EXPECT().MultiSaveAndRemove(mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, s map[string]string, dels []string, _ ...predicates.Predicate) error {
 			saves = s
 			removals = dels
-			preds = p
 			return nil
 		}).Once()
-	checkpointValue, err := proto.Marshal(&streamingpb.WALCheckpoint{TimeTick: 42})
-	require.NoError(t, err)
-	expectCheckpointFirstCreation(kv, "p1", string(checkpointValue))
 	catalog := NewCataLog(kv)
 
 	snapshot := &metastore.WALRecoverySnapshot{
@@ -158,20 +115,15 @@ func TestCatalog_SaveRecoverySnapshot_Atomic(t *testing.T) {
 		SalvageCheckpoint: &commonpb.ReplicateCheckpoint{ClusterId: "cluster1"},
 		ConsumeCheckpoint: &streamingpb.WALCheckpoint{TimeTick: 42},
 	}
-	err = catalog.SaveRecoverySnapshot(context.Background(), "p1", snapshot)
+	err := catalog.SaveRecoverySnapshot(context.Background(), "p1", snapshot)
 	assert.NoError(t, err)
 
 	assert.Contains(t, saves, buildSegmentAssignmentKey("p1", 1))
 	assert.Contains(t, saves, buildVChannelKey("p1", "vch1"))
 	assert.Contains(t, saves, buildVChannelKey("p1", "vch2"))
 	assert.Contains(t, saves, buildSalvageCheckpointPath("p1", "cluster1"))
-	// The checkpoint is created by the NotExist-guarded commit inside the same
-	// component txn, so it lands together with every other part.
 	assert.Contains(t, saves, buildConsumeCheckpointKey("p1"))
 	assert.Len(t, saves, 5)
-	require.Len(t, preds, 1)
-	assert.Equal(t, buildConsumeCheckpointKey("p1"), preds[0].Key())
-	assert.Equal(t, predicates.PredTargetNotExist, preds[0].Target())
 	assert.ElementsMatch(t, []string{
 		buildSegmentAssignmentKey("p1", 2),
 		buildVChannelKey("p1", "vch3"),
@@ -185,11 +137,8 @@ func TestCatalog_SaveRecoverySnapshot_Atomic(t *testing.T) {
 func TestCatalog_SaveRecoverySnapshot_EmptyPartsSkipped(t *testing.T) {
 	kv := mocks.NewMetaKv(t)
 	kv.EXPECT().MaxTxnOps().Return(128).Maybe()
-	checkpointValue, err := proto.Marshal(&streamingpb.WALCheckpoint{TimeTick: 1})
-	require.NoError(t, err)
-	expectCheckpointFirstCreation(kv, "p1", string(checkpointValue))
 	var saves map[string]string
-	kv.EXPECT().MultiSaveAndRemove(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	kv.EXPECT().MultiSaveAndRemove(mock.Anything, mock.Anything, mock.Anything).
 		RunAndReturn(func(_ context.Context, s map[string]string, dels []string, _ ...predicates.Predicate) error {
 			saves = s
 			assert.Empty(t, dels)
@@ -197,15 +146,13 @@ func TestCatalog_SaveRecoverySnapshot_EmptyPartsSkipped(t *testing.T) {
 		}).Once()
 	catalog := NewCataLog(kv)
 
-	err = catalog.SaveRecoverySnapshot(context.Background(), "p1", &metastore.WALRecoverySnapshot{
+	err := catalog.SaveRecoverySnapshot(context.Background(), "p1", &metastore.WALRecoverySnapshot{
 		VChannels: map[string]*streamingpb.VChannelMeta{
 			"vch1": {Vchannel: "vch1", CollectionInfo: &streamingpb.CollectionInfoOfVChannel{}},
 		},
 		ConsumeCheckpoint: &streamingpb.WALCheckpoint{TimeTick: 1},
 	})
 	assert.NoError(t, err)
-	// The checkpoint is created by the NotExist-guarded commit inside the same
-	// component txn.
 	assert.Len(t, saves, 2)
 	assert.Contains(t, saves, buildVChannelKey("p1", "vch1"))
 	assert.Contains(t, saves, buildConsumeCheckpointKey("p1"))
@@ -218,7 +165,7 @@ func TestCatalog_SaveRecoverySnapshot_FlushedSegmentIsRetained(t *testing.T) {
 	kv.EXPECT().MaxTxnOps().Return(128).Maybe()
 	var saves map[string]string
 	var removals []string
-	kv.EXPECT().MultiSaveAndRemove(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	kv.EXPECT().MultiSaveAndRemove(mock.Anything, mock.Anything, mock.Anything).
 		RunAndReturn(func(_ context.Context, s map[string]string, dels []string, _ ...predicates.Predicate) error {
 			saves = s
 			removals = dels
@@ -243,7 +190,7 @@ func TestCatalog_SaveRecoverySnapshot_DroppedVChannelIsRetained(t *testing.T) {
 	kv.EXPECT().MaxTxnOps().Return(128).Maybe()
 	var saves map[string]string
 	var removals []string
-	kv.EXPECT().MultiSaveAndRemove(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	kv.EXPECT().MultiSaveAndRemove(mock.Anything, mock.Anything, mock.Anything).
 		RunAndReturn(func(_ context.Context, s map[string]string, dels []string, _ ...predicates.Predicate) error {
 			saves = s
 			removals = dels
@@ -296,7 +243,7 @@ func TestCatalog_SaveRecoverySnapshot_VChannelEncodingMatchesEncoder(t *testing.
 	var compositeSaves map[string]string
 	kv2 := mocks.NewMetaKv(t)
 	kv2.EXPECT().MaxTxnOps().Return(128).Maybe()
-	kv2.EXPECT().MultiSaveAndRemove(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	kv2.EXPECT().MultiSaveAndRemove(mock.Anything, mock.Anything, mock.Anything).
 		RunAndReturn(func(_ context.Context, s map[string]string, dels []string, _ ...predicates.Predicate) error {
 			compositeSaves = s
 			assert.Empty(t, dels)
@@ -324,21 +271,13 @@ func TestCatalog_SaveRecoverySnapshot_ConsumeCheckpointLastOnFallback(t *testing
 		}
 		return nil
 	}).Twice()
-	// The consume checkpoint is created by the NotExist-guarded commit txn,
-	// issued after the component flush: components land first, checkpoint last.
-	checkpointValue, err := proto.Marshal(&streamingpb.WALCheckpoint{TimeTick: 42})
-	require.NoError(t, err)
-	kv.EXPECT().Load(mock.Anything, buildConsumeCheckpointKey("p1")).
-		Return("", merr.ErrIoKeyNotFound).Once()
-	kv.EXPECT().MultiSaveAndRemove(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		RunAndReturn(func(_ context.Context, saves map[string]string, _ []string, _ ...predicates.Predicate) error {
-			for k := range saves {
+	kv.EXPECT().MultiSaveAndRemove(mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, s map[string]string, dels []string, _ ...predicates.Predicate) error {
+			for k := range s {
 				calls = append(calls, "commit:"+k)
 			}
 			return nil
 		}).Once()
-	kv.EXPECT().Load(mock.Anything, buildConsumeCheckpointKey("p1")).
-		Return(string(checkpointValue), nil).Once()
 
 	catalog := NewCataLog(kv)
 	snapshot := &metastore.WALRecoverySnapshot{
@@ -348,7 +287,7 @@ func TestCatalog_SaveRecoverySnapshot_ConsumeCheckpointLastOnFallback(t *testing
 		SalvageCheckpoint: &commonpb.ReplicateCheckpoint{ClusterId: "cluster1"},
 		ConsumeCheckpoint: &streamingpb.WALCheckpoint{TimeTick: 42},
 	}
-	err = catalog.SaveRecoverySnapshot(context.Background(), "p1", snapshot)
+	err := catalog.SaveRecoverySnapshot(context.Background(), "p1", snapshot)
 	assert.NoError(t, err)
 
 	assert.Equal(t, []string{

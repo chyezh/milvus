@@ -99,16 +99,6 @@ func (r *recoveryStorageImpl) recoverRecoveryInfoFromMeta(ctx context.Context, c
 	if err := summaryManager.Recover(ctx); err != nil {
 		return merr.Wrap(err, "recover pchannel summary")
 	}
-	// Take over the consume checkpoint: stamp it with this term via a
-	// compare-and-swap, so a superseded publisher of an older term can never
-	// advance the checkpoint past this term's inherited manifest coverage
-	// (WAL truncation would then outrun un-materialized transform records). A
-	// lost CAS means the superseded publisher advanced the checkpoint while
-	// this open was recovering: abort — the retry re-runs recovery,
-	// re-inherits the newer coverage, and fences again.
-	if err := r.fenceConsumeCheckpoint(ctx); err != nil {
-		return merr.Wrap(err, "fence consume checkpoint with own term")
-	}
 	if _, err := r.migrateLegacyRecoveryInfo(ctx, vchannelMetas, segmentMetas); err != nil {
 		return err
 	}
@@ -121,35 +111,6 @@ func (r *recoveryStorageImpl) recoverRecoveryInfoFromMeta(ctx context.Context, c
 	}
 	r.Logger().Info(context.TODO(), "recover segment info done", mlog.Int("segments", len(segmentMetas)))
 	return r.initRecoveryModules(ctx, vchannelMetas, segmentMetas, summaryManager)
-}
-
-// fenceConsumeCheckpoint stamps the published consume checkpoint with this
-// recovery's term through the checkpoint compare-and-swap of
-// SaveRecoverySnapshot. After it succeeds, any surviving publisher of an
-// older term fails its own checkpoint advancement (the recorded term is newer
-// than its own), so WAL truncation can never outrun this term's inherited
-// manifest coverage. A lost CAS (the superseded publisher advanced the
-// checkpoint while recovery was running) is returned as an error to abort the
-// open.
-func (r *recoveryStorageImpl) fenceConsumeCheckpoint(ctx context.Context) error {
-	if r.checkpoint == nil || r.checkpoint.MessageID == nil {
-		// No published checkpoint yet: this term starts the checkpoint chain
-		// on its first persistence; there is nothing to fence.
-		return nil
-	}
-	stamped := r.checkpoint.Clone()
-	stamped.Term = r.channel.Term
-	if err := resource.Resource().StreamingNodeCatalog().SaveRecoverySnapshot(ctx, r.channel.Name, &metastore.WALRecoverySnapshot{
-		ConsumeCheckpoint: stamped.IntoProto(),
-	}); err != nil {
-		return err
-	}
-	// Mirror the stamped term back into the in-memory checkpoint: the
-	// background persistence path re-submits r.checkpoint on every interval,
-	// and it must present the same term the fence just won, or the term
-	// pre-check of SaveRecoverySnapshot refuses it as fenced.
-	r.checkpoint.Term = r.channel.Term
-	return nil
 }
 
 func vchannelMetaMap(vchannels []*streamingpb.VChannelMeta) (map[string]*streamingpb.VChannelMeta, error) {

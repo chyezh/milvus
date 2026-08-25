@@ -49,10 +49,10 @@ is split between two other mechanisms:
 
 - the object keys are term-scoped (`chunk.<gen>.term<term>`, `<pchannel>.manifest.<term>`),
   so a superseded owner can never collide with the successor's chunks;
-- the consume-checkpoint advancement is fenced by a compare-and-swap on the
-  checkpoint's term (see checkpoint-persistence.md): an older-term publisher
-  can never advance it past the successor's inherited manifest coverage, so
-  WAL truncation can never outrun un-materialized records.
+- the consume-checkpoint advancement is NOT yet fenced: the checkpoint is the
+  last-write commit point of the snapshot, and a superseded older-term
+  publisher can still overwrite it (see checkpoint-persistence.md §5.1 for the
+  TODO and the intended compare-and-swap design).
 
 ### 2.3 Protos
 

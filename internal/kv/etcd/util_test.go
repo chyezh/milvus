@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/suite"
-	"go.etcd.io/etcd/api/v3/etcdserverpb"
 	"google.golang.org/grpc/metadata"
 
 	"github.com/milvus-io/milvus/pkg/v3/kv/predicates"
@@ -56,7 +55,6 @@ func (s *EtcdKVUtilSuite) TestParsePredicates() {
 
 	cases := []testCase{
 		{tag: "normal_value_equal", input: []predicates.Predicate{predicates.ValueEqual("a", "b")}, expectSucceed: true},
-		{tag: "not_exist", input: []predicates.Predicate{predicates.NotExist("a")}, expectSucceed: true},
 		{tag: "empty_input", input: nil, expectSucceed: true},
 		{tag: "bad_predicates", input: []predicates.Predicate{badPredicate}, expectSucceed: false},
 	}
@@ -72,16 +70,6 @@ func (s *EtcdKVUtilSuite) TestParsePredicates() {
 			}
 		})
 	}
-
-	s.Run("not_exist_translates_to_version_zero", func() {
-		result, err := parsePredicates("", predicates.NotExist("a"))
-		s.NoError(err)
-		s.Len(result, 1)
-		// An absent key has etcd version 0; the txn condition must compare the
-		// version, not the value.
-		s.Equal(etcdserverpb.Compare_VERSION, result[0].Target)
-		s.Equal([]byte("a"), result[0].Key)
-	})
 }
 
 func (s *EtcdKVUtilSuite) TestGetContextWithTimeout() {
