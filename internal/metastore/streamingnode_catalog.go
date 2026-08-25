@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 )
 
@@ -50,6 +51,24 @@ type StreamingNodeCataLog interface {
 	// single-point commit (see the recovery background-task TODO) is the
 	// durable fix.
 	SaveRecoverySnapshot(ctx context.Context, pChannelName string, snapshot *WALRecoverySnapshot) error
+
+	// SavePendingL0Segment records a pending L0 segment registration of the
+	// pchannel: the segment's binlog objects are durable and its DataCoord
+	// registration is still in flight. The payload is the exact
+	// SaveBinlogPathsRequest that registers the segment; re-sending it after a
+	// crash is idempotent because DataCoord applies it as a full replacement
+	// (WithFullBinlogs). Recovery replays every pending record before it can
+	// advance the materialization frontier, and the record is removed only
+	// after the vchannel meta carrying that frontier is persisted.
+	SavePendingL0Segment(ctx context.Context, pChannelName string, pending *datapb.SaveBinlogPathsRequest) error
+
+	// ListPendingL0Segments lists the pending L0 segment registrations of the
+	// pchannel. Returns an empty slice when none exist.
+	ListPendingL0Segments(ctx context.Context, pChannelName string) ([]*datapb.SaveBinlogPathsRequest, error)
+
+	// RemovePendingL0Segments removes the pending L0 segment registrations of
+	// the given segment IDs. Removing an absent record is a no-op.
+	RemovePendingL0Segments(ctx context.Context, pChannelName string, segmentIDs []int64) error
 }
 
 // WALRecoverySnapshot is the compound payload of

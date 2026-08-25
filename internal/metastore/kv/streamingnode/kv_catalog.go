@@ -12,6 +12,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/pkg/v3/kv"
+	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
@@ -229,6 +230,50 @@ func (c *catalog) GetSalvageCheckpoint(ctx context.Context, pchannelName string)
 	return checkpoints, nil
 }
 
+// SavePendingL0Segment records a pending L0 segment registration. The key is
+// the segment ID; re-saving the same segment overwrites the record.
+func (c *catalog) SavePendingL0Segment(ctx context.Context, pChannelName string, pending *datapb.SaveBinlogPathsRequest) error {
+	if pending == nil || pending.GetSegmentID() <= 0 {
+		return merr.WrapErrServiceInternalMsg("invalid pending l0 segment registration")
+	}
+	data, err := proto.Marshal(pending)
+	if err != nil {
+		return merr.WrapErrSerializationFailed(err, "marshal pending l0 segment %d at pchannel %s", pending.GetSegmentID(), pChannelName)
+	}
+	return c.metaKV.Save(ctx, buildPendingL0SegmentKey(pChannelName, pending.GetSegmentID()), string(data))
+}
+
+// ListPendingL0Segments lists the pending L0 segment registrations of the pchannel.
+func (c *catalog) ListPendingL0Segments(ctx context.Context, pChannelName string) ([]*datapb.SaveBinlogPathsRequest, error) {
+	prefix := buildPendingL0SegmentPrefix(pChannelName)
+	keys, values, err := c.metaKV.LoadWithPrefix(ctx, prefix)
+	if err != nil {
+		return nil, err
+	}
+	pendings := make([]*datapb.SaveBinlogPathsRequest, 0, len(values))
+	for k, value := range values {
+		pending := &datapb.SaveBinlogPathsRequest{}
+		if err = proto.Unmarshal([]byte(value), pending); err != nil {
+			return nil, errors.Wrapf(err, "unmarshal pending l0 segment at %s failed", keys[k])
+		}
+		pendings = append(pendings, pending)
+	}
+	return pendings, nil
+}
+
+// RemovePendingL0Segments removes the pending L0 segment registrations of the
+// given segment IDs.
+func (c *catalog) RemovePendingL0Segments(ctx context.Context, pChannelName string, segmentIDs []int64) error {
+	if len(segmentIDs) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(segmentIDs))
+	for _, segmentID := range segmentIDs {
+		keys = append(keys, buildPendingL0SegmentKey(pChannelName, segmentID))
+	}
+	return c.metaKV.MultiRemove(ctx, keys)
+}
+
 // Prefix functions: return paths ending with "/" for LoadWithPrefix queries.
 
 // buildWALPrefix returns the prefix for all WAL metadata under a pchannel.
@@ -246,6 +291,12 @@ func buildSegmentAssignmentPrefix(pChannelName string) string {
 	return buildWALPrefix(pChannelName) + DirectorySegmentAssign + "/"
 }
 
+// buildPendingL0SegmentPrefix returns the prefix for the pending L0 segment
+// registrations under a pchannel.
+func buildPendingL0SegmentPrefix(pChannelName string) string {
+	return buildWALPrefix(pChannelName) + DirectoryPendingL0 + "/"
+}
+
 // Key functions: return exact keys for individual records.
 
 // buildVChannelKey returns the key for a specific vchannel's metadata.
@@ -261,6 +312,12 @@ func buildVChannelSchemaKey(pChannelName string, vchannelName string, version ui
 // buildSegmentAssignmentKey returns the key for a specific segment assignment.
 func buildSegmentAssignmentKey(pChannelName string, segmentID int64) string {
 	return buildSegmentAssignmentPrefix(pChannelName) + strconv.FormatInt(segmentID, 10)
+}
+
+// buildPendingL0SegmentKey returns the key for a specific pending L0 segment
+// registration.
+func buildPendingL0SegmentKey(pChannelName string, segmentID int64) string {
+	return buildPendingL0SegmentPrefix(pChannelName) + strconv.FormatInt(segmentID, 10)
 }
 
 // buildConsumeCheckpointKey returns the key for the consume checkpoint of a pchannel.
