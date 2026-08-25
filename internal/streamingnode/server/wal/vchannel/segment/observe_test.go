@@ -129,7 +129,9 @@ func TestSegmentSnapshotContainsOnlyDurableInsertEffects(t *testing.T) {
 	assert.Equal(t, uint64(9), live.GetStat().GetModifiedRows())
 	assert.Equal(t, uint64(12), live.GetStat().GetModifiedBinarySize())
 	view.MarkSnapshotPersisted(snapshot)
-	assert.False(t, view.HasDirty())
+	view.mu.Lock()
+	assert.False(t, view.dirty)
+	view.mu.Unlock()
 
 	view.mu.Lock()
 	pending := view.pending.takeAll()
