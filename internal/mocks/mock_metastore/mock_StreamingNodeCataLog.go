@@ -368,7 +368,6 @@ func (_c *MockStreamingNodeCataLog_SaveRecoverySnapshot_Call) RunAndReturn(run f
 	return _c
 }
 
-
 // ListPendingL0Segments provides a mock function with given fields: ctx, pChannelName
 func (_m *MockStreamingNodeCataLog) ListPendingL0Segments(ctx context.Context, pChannelName string) ([]*datapb.SaveBinlogPathsRequest, error) {
 	ret := _m.Called(ctx, pChannelName)

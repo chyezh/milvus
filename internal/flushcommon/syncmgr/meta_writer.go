@@ -17,6 +17,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/retry"
 )
+
 // MetaWriter is the interface for SyncManager to write segment sync meta.
 type MetaWriter interface {
 	UpdateSync(context.Context, *SyncTask) error
