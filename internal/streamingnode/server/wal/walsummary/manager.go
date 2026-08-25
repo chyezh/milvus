@@ -77,6 +77,14 @@ type Manager struct {
 	// predecessor graph a single chain instead of growing one task per
 	// observation.
 	flushTasks []*summaryFlushTask
+	// stagingBytes is the pchannel-wide estimate of the staging records not
+	// yet written to a chunk, summed across every vchannel view. It is the
+	// input to the autonomous flush decision: a chunk is written when the
+	// total reaches FlushMaxBytes, so chunk size tracks the configured
+	// threshold instead of per-vchannel bursts. It is maintained by
+	// onStagingGrown (observation path) and recomputed from the views after
+	// every collect.
+	stagingBytes uint64
 }
 
 // ManagerConfig carries the wiring of one pchannel's summary manager.
@@ -87,7 +95,10 @@ type ManagerConfig struct {
 	Store *Store
 	// Runtime provides the scheduler and the module notifier.
 	Runtime moduleapi.Runtime
-	// FlushMaxBytes is the staging size that triggers an autonomous flush.
+	// FlushMaxBytes is the pchannel-wide staging size that triggers an
+	// autonomous flush: the manager accumulates every vchannel view's staging
+	// bytes and writes a chunk once the total reaches the threshold, so the
+	// chunk size tracks the configured value instead of per-vchannel bursts.
 	FlushMaxBytes uint64
 	// RetentionMaxBytes is the soft budget of the retained chunk objects. GC
 	// releases chunks above the budget, bounded below by the per-vchannel
@@ -104,10 +115,6 @@ func NewManager(config ManagerConfig) *Manager {
 		manifest:              &streamingpb.PChannelSummaryManifest{},
 		materializedFrontiers: make(map[string]uint64),
 	}
-}
-
-func (m *Manager) config() ManagerConfig {
-	return m.cfg
 }
 
 // View returns the summary view of a vchannel, creating it on first use. A
@@ -205,6 +212,40 @@ func (m *Manager) SetMaterializedTimeTick(vchannel string, timetick uint64) {
 	if m.materializedFrontiers[vchannel] < timetick {
 		m.materializedFrontiers[vchannel] = timetick
 	}
+}
+
+// onStagingGrown accounts one view's staging growth toward the pchannel-wide
+// flush threshold. It is called from the WAL observation path after the view
+// appended a record; it must not block.
+//
+// The cached total can transiently over-count right after a collect (a grow
+// whose record was already taken by the flush), so a suspected threshold hit
+// is confirmed by recomputing the total from the views before scheduling.
+func (m *Manager) onStagingGrown(delta uint64) {
+	m.mu.Lock()
+	m.stagingBytes += delta
+	if m.stagingBytes >= m.cfg.FlushMaxBytes {
+		total := m.totalStagingLocked()
+		m.stagingBytes = total
+		m.mu.Unlock()
+		if total >= m.cfg.FlushMaxBytes {
+			m.requestFlush()
+		}
+		return
+	}
+	m.mu.Unlock()
+}
+
+// totalStagingLocked recomputes the pchannel-wide staging bytes from the
+// views. Caller holds m.mu.
+func (m *Manager) totalStagingLocked() uint64 {
+	var total uint64
+	for _, view := range m.views {
+		view.mu.Lock()
+		total += view.stagingBytes
+		view.mu.Unlock()
+	}
+	return total
 }
 
 // requestFlush schedules one flush task. It is called from the WAL
@@ -370,6 +411,12 @@ func (m *Manager) flushOnce(ctx context.Context, task *summaryFlushTask) error {
 	// Collect the staging under the view locks. The records stay logically
 	// owned by the views until the chunk and manifest are durable.
 	batch := m.collectStaging()
+	// Re-sync the pchannel staging total: the collect emptied every view, and
+	// a grow whose notification is still in flight must not leave the cached
+	// total over-counting.
+	m.mu.Lock()
+	m.stagingBytes = m.totalStagingLocked()
+	m.mu.Unlock()
 	if len(batch.recordsByVChannel) == 0 {
 		return nil
 	}

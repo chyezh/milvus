@@ -44,8 +44,10 @@ type SummaryView struct {
 	// staging holds the records observed but not yet written to a chunk, in
 	// observation order (which is WAL order for a single observer).
 	staging []*stagedRecord
-	// stagingBytes is the estimated on-disk size of the staging records. It is
-	// the input to the autonomous flush decision.
+	// stagingBytes is this view's share of the pchannel-wide staging size.
+	// The manager sums it across views (onStagingGrown / totalStagingLocked)
+	// to decide the autonomous flush; it is reset by takeStagingLocked when
+	// the flush collects the records.
 	stagingBytes uint64
 	// durableTimeTick is the newest record timetick already covered by a
 	// durable chunk. Records with timetick > durableTimeTick are only in
@@ -104,20 +106,19 @@ func (v *SummaryView) ObserveMessage(ctx context.Context, retained message.Retai
 		return
 	}
 	handle := retained.Clone()
+	recordSize := uint64(proto.Size(entry))
 	v.staging = append(v.staging, &stagedRecord{
 		timeTick: entry.GetTimeTick(),
 		entry:    entry,
 		handle:   handle,
 	})
-	v.stagingBytes += uint64(proto.Size(entry))
-	// Capture the threshold decision under the lock: takeStagingLocked (the
-	// flush worker) resets this field concurrently, so reading it unlocked
-	// could both miss and double-trigger a flush.
-	overThreshold := v.stagingBytes >= v.manager.config().FlushMaxBytes
+	v.stagingBytes += recordSize
 	v.mu.Unlock()
-	if overThreshold {
-		v.manager.requestFlush()
-	}
+	// The flush decision is pchannel-wide: the manager accumulates every
+	// view's staging bytes and writes a chunk once the total reaches
+	// FlushMaxBytes, so chunk size tracks the configured threshold instead of
+	// per-vchannel bursts.
+	v.manager.onStagingGrown(recordSize)
 }
 
 // Manager returns the owning summary manager.
