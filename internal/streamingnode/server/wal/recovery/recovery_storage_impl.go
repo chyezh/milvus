@@ -19,12 +19,16 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/segment"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/transformlog"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walsummary"
+	internaltypes "github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/idalloc"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
+	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls"
+	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v3/util/replicateutil"
@@ -197,7 +201,10 @@ func (r *recoveryStorageImpl) installCheckpoint(checkpoint *WALCheckpoint) {
 			r.tailController.UpdateTrackerFrontiers(observed, completed)
 		}
 		r.notifyPersist()
-	}, r.vchannelManager)
+	}, composedPersistRequester{
+		vchannelManager: r.vchannelManager,
+		summaryManager:  r.summaryManager,
+	})
 	r.ackTracker = tracker
 	if r.tailController != nil {
 		r.tailController.Reset()
@@ -232,6 +239,16 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 		idalloc.NewMAllocator(resource.Resource().IDAllocator()),
 		syncmgr.BrokerMetaWriter(broker.NewCoordBroker(coord, paramtable.GetNodeID()), paramtable.GetNodeID()),
 	)
+	// Lift the transform frontier of every vchannel past the L0 segments a
+	// previous run already registered. A registered L0 segment means its
+	// delete records were materialized before the crash but the frontier was
+	// not persisted yet (the crash window between segment registration and
+	// the vchannel meta flush): without this lift, recovery replay would
+	// re-materialize those records into duplicate L0 segments.
+	l0MaterializedTimeTicks, err := recoverL0SegmentCheckpoints(ctx, coord, vchannels)
+	if err != nil {
+		return err
+	}
 	// Load the initial materialization window of every vchannel: the durable
 	// records after the restored transform_materialized_time_tick. This is
 	// the only read of the summary store the transform consumer relies on; at
@@ -252,6 +269,13 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 		// already covers, and the view must skip them to avoid rewriting the
 		// same records into new chunks.
 		summaryManager.SetDurableTimeTick(vchannel, summaryManager.DurableTimeTick(vchannel))
+		// Restore the materialization frontier (the last durable
+		// transform_materialized_time_tick) into the summary retention
+		// computation. Only persisted frontiers may release summary records,
+		// so the value restored from the catalog is used verbatim; without
+		// this, GC would keep every chunk until the first post-recovery
+		// materialization flush.
+		summaryManager.SetMaterializedTimeTick(vchannel, meta.GetTransformMaterializedTimeTick())
 	}
 	// Deprecated: the manager periodically reports the pchannel recovery
 	// checkpoint to DataCoord (DataCoord.UpdateChannelCheckpoint) so that
@@ -274,6 +298,7 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 		),
 		SummaryManager:            summaryManager,
 		PendingTransformEntries:   pendingTransformEntries,
+		L0MaterializedTimeTicks:   l0MaterializedTimeTicks,
 		TransformLogMaterializer:  transformLogMaterializer,
 		TransformLogMaterialRows:  uint64(paramtable.Get().StreamingCfg.FlushL0MaxRowNum.GetAsInt()),
 		TransformLogMaterialBytes: uint64(paramtable.Get().StreamingCfg.FlushL0MaxSize.GetAsSize()),
@@ -288,6 +313,71 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 	r.summaryManager = summaryManager
 	r.installCheckpoint(r.checkpoint)
 	return nil
+}
+
+// recoverL0SegmentCheckpoints queries DataCoord for the L0 segments a
+// previous run already registered and returns, per vchannel, the newest
+// checkpoint they reached. A registered L0 segment means its delete records
+// were materialized before the crash while the transform frontier was not
+// persisted yet (the crash window between segment registration and the
+// vchannel meta flush). Lifting the frontier past these checkpoints on
+// recovery prevents the same records from being re-materialized into
+// duplicate L0 segments. A vchannel without any registered L0 segment has no
+// entry in the result.
+func recoverL0SegmentCheckpoints(
+	ctx context.Context,
+	coord internaltypes.MixCoordClient,
+	vchannels map[string]*streamingpb.VChannelMeta,
+) (map[string]uint64, error) {
+	if len(vchannels) == 0 {
+		return nil, nil
+	}
+	// Every vchannel of one pchannel belongs to the same collection; group
+	// defensively by collection anyway.
+	byCollection := make(map[int64][]string)
+	for vchannel := range vchannels {
+		collectionID := funcutil.GetCollectionIDFromVChannel(vchannel)
+		byCollection[collectionID] = append(byCollection[collectionID], vchannel)
+	}
+	checkpoints := make(map[string]uint64)
+	for collectionID, vchannelList := range byCollection {
+		resp, err := coord.GetSegmentsByStates(ctx, &datapb.GetSegmentsByStatesRequest{
+			CollectionID: collectionID,
+			States:       []commonpb.SegmentState{commonpb.SegmentState_Growing, commonpb.SegmentState_Sealed},
+		})
+		if err = merr.CheckRPCCall(resp, err); err != nil {
+			return nil, err
+		}
+		if len(resp.GetSegments()) == 0 {
+			continue
+		}
+		infoResp, err := coord.GetSegmentInfo(ctx, &datapb.GetSegmentInfoRequest{
+			SegmentIDs:       resp.GetSegments(),
+			IncludeUnHealthy: true,
+		})
+		if err = merr.CheckRPCCall(infoResp, err); err != nil {
+			return nil, err
+		}
+		vchannelSet := make(map[string]struct{}, len(vchannelList))
+		for _, vchannel := range vchannelList {
+			vchannelSet[vchannel] = struct{}{}
+		}
+		for _, info := range infoResp.GetInfos() {
+			if info.GetLevel() != datapb.SegmentLevel_L0 {
+				continue
+			}
+			if _, ok := vchannelSet[info.GetInsertChannel()]; !ok {
+				continue
+			}
+			// The segment's DML position is the newest position its data
+			// covers: every delete record at or below it was materialized.
+			if dmlPosition := info.GetDmlPosition(); dmlPosition != nil &&
+				dmlPosition.GetTimestamp() > checkpoints[info.GetInsertChannel()] {
+				checkpoints[info.GetInsertChannel()] = dmlPosition.GetTimestamp()
+			}
+		}
+	}
+	return checkpoints, nil
 }
 
 // newSummaryManager creates the pchannel-scoped WALSummary manager and wires
@@ -508,6 +598,29 @@ func (r *recoveryStorageImpl) observeModulesMessage(
 		panic("recovery modules are not initialized")
 	}
 	r.vchannelManager.ObserveMessage(ctx, retained)
+	// The summary observes the same message stream independently of the
+	// vchannel modules: its pchannel-level statistics (staging bytes, flush
+	// threshold) are maintained by the summary manager itself.
+	if r.summaryManager != nil {
+		r.summaryManager.ObserveMessage(ctx, retained)
+	}
+}
+
+// composedPersistRequester fans a tracker stall / under-pressure request out
+// to both the vchannel segments and the pchannel summary: the WAL checkpoint
+// must not advance until the buffered data of the stalled vchannel is durable
+// on every write path. The summary handles the request at the pchannel level
+// (a chunk is pchannel-scoped, see walsummary.Manager.RequestPersistThrough).
+type composedPersistRequester struct {
+	vchannelManager *vchannel.PChannelRecoveryManager
+	summaryManager  *walsummary.Manager
+}
+
+func (r composedPersistRequester) RequestPersistThrough(vchannelName string, targetTimeTick uint64) {
+	r.vchannelManager.RequestPersistThrough(vchannelName, targetTimeTick)
+	if r.summaryManager != nil {
+		r.summaryManager.RequestPersistThrough(vchannelName, targetTimeTick)
+	}
 }
 
 func (r *recoveryStorageImpl) startLiveScanner(

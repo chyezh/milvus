@@ -133,26 +133,6 @@ func (v *SummaryView) LatestTimeTick() uint64 {
 	return v.latestTimeTick
 }
 
-// RequestPersistThrough schedules persistence when the view holds staging
-// records whose timetick is not greater than targetTimeTick. It is the forced
-// persist path driven by the tracker (stall / under pressure): the caller
-// needs the records through targetTimeTick durable before the checkpoint may
-// advance.
-func (v *SummaryView) RequestPersistThrough(targetTimeTick uint64) {
-	v.mu.Lock()
-	hasStagingThrough := false
-	for _, record := range v.staging {
-		if record.timeTick <= targetTimeTick {
-			hasStagingThrough = true
-			break
-		}
-	}
-	v.mu.Unlock()
-	if hasStagingThrough {
-		v.manager.requestFlush()
-	}
-}
-
 // takeStagingLocked moves every staged record out of the view. The records
 // remain logically owned by the view until markDurable is called: the handles
 // are only released then, so a flush failure loses nothing.
