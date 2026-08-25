@@ -47,6 +47,23 @@ type Materializer interface {
 	Materialize(context.Context, MaterializeRequest) error
 }
 
+// PendingL0Recorder durably records a materialized L0 segment whose DataCoord
+// registration is still in flight (outbox pattern). The binlog objects are
+// already durable when Record is called; a crash before the registration
+// completes is recovered by replaying the recorded registration, so the
+// delete data is neither lost nor duplicated. The record must be removed only
+// after the vchannel meta carrying the materialization frontier is persisted;
+// the recovery flow removes it after the (idempotent) re-registration.
+type PendingL0Recorder interface {
+	// Record persists the registration request of the materialized segment.
+	Record(ctx context.Context, req *datapb.SaveBinlogPathsRequest) error
+	// Remove drops the pending registration of the segment. It is used to
+	// roll back the outbox record of a failed registration whose retry
+	// re-materializes the batch into a fresh segment; a leaked record only
+	// re-registers a fully written segment on recovery (idempotent).
+	Remove(ctx context.Context, segmentID int64) error
+}
+
 type MaterializeRequest struct {
 	VChannel       string
 	TargetTimeTick uint64
@@ -59,18 +76,31 @@ type SyncMaterializer struct {
 	chunkManager storage.ChunkManager
 	allocator    allocator.Interface
 	metaWriter   syncmgr.MetaWriter
+	nodeID       int64
+	// pendingL0Recorder records the outbox entries between the object write
+	// and the DataCoord registration; nil disables the outbox.
+	pendingL0Recorder PendingL0Recorder
 }
 
 func NewSyncMaterializer(
 	chunkManager storage.ChunkManager,
 	allocator allocator.Interface,
 	metaWriter syncmgr.MetaWriter,
+	nodeID int64,
 ) *SyncMaterializer {
 	return &SyncMaterializer{
 		chunkManager: chunkManager,
 		allocator:    allocator,
 		metaWriter:   metaWriter,
+		nodeID:       nodeID,
 	}
+}
+
+// WithPendingL0Recorder installs the outbox recorder used between the object
+// write and the DataCoord registration of every materialized L0 segment.
+func (m *SyncMaterializer) WithPendingL0Recorder(recorder PendingL0Recorder) *SyncMaterializer {
+	m.pendingL0Recorder = recorder
+	return m
 }
 
 func (m *SyncMaterializer) Materialize(ctx context.Context, req MaterializeRequest) error {
@@ -158,7 +188,38 @@ func (m *SyncMaterializer) materializeGroup(
 		mlog.Int64("rows", int64(len(group.pks))),
 		mlog.Uint64("bytes", group.bytes),
 	)
-	return task.Run(ctx)
+
+	// Step 1: write the binlog objects. The delete data becomes durable here.
+	if err := task.Write(ctx); err != nil {
+		return err
+	}
+	// Step 2: durably record the pending registration (outbox) before the
+	// DataCoord registration. A crash between step 2 and step 3 leaves the
+	// record behind; recovery replays it (DataCoord applies the request as a
+	// full replacement, so the replay is idempotent), which guarantees the
+	// delete data is neither lost nor duplicated across the crash window.
+	if m.pendingL0Recorder != nil {
+		req := task.SaveBinlogPathsRequest(m.nodeID)
+		if req == nil {
+			return merr.WrapErrSegmentNotFound(segmentID)
+		}
+		if err := m.pendingL0Recorder.Record(ctx, req); err != nil {
+			return err
+		}
+	}
+	// Step 3: register the segment at DataCoord. The registration is a full
+	// replacement, so re-running it (recovery replay) is idempotent.
+	if err := task.WriteMeta(ctx); err != nil {
+		// The registration did not complete; roll the outbox record back so
+		// the retry's fresh segment does not resurrect this one on recovery.
+		// Best-effort: a leaked record only re-registers a fully written
+		// segment (idempotent, no data loss).
+		if m.pendingL0Recorder != nil {
+			_ = m.pendingL0Recorder.Remove(ctx, segmentID)
+		}
+		return err
+	}
+	return nil
 }
 
 type materializeGroup struct {
