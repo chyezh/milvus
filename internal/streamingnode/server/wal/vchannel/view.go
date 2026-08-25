@@ -8,7 +8,6 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
-	"github.com/milvus-io/milvus/pkg/v3/common"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message/messageutil"
@@ -138,12 +137,6 @@ func (info *VChannelView) Name() string {
 	return info.meta.GetVchannel()
 }
 
-func (info *VChannelView) HasDirty() bool {
-	info.mu.Lock()
-	defer info.mu.Unlock()
-	return info.dirty
-}
-
 func (info *VChannelView) markMetaPersistedLocked(timetick uint64) {
 	if timetick > info.persistedMetaTimeTick {
 		info.persistedMetaTimeTick = timetick
@@ -192,20 +185,6 @@ func (info *VChannelView) TryFinalizeTombstone(checkpointTimeTick uint64) bool {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	return info.maybeMarkTombstonedLocked(checkpointTimeTick)
-}
-
-func (info *VChannelView) HasReadyTombstoneFinalize(checkpointTimeTick uint64) bool {
-	info.mu.Lock()
-	defer info.mu.Unlock()
-	if info.vchannelTombstoneFinalizeReadyLocked(checkpointTimeTick) {
-		return true
-	}
-	for _, partition := range info.meta.GetCollectionInfo().GetPartitions() {
-		if info.partitionTombstoneFinalizeReadyLocked(partition, checkpointTimeTick) {
-			return true
-		}
-	}
-	return false
 }
 
 // HasCleanupCandidate reports whether the retained replay fence may need a
@@ -270,20 +249,6 @@ func (info *VChannelView) canReplayAtLocked(timetick uint64) bool {
 		return true
 	}
 	return timetick <= info.meta.GetCheckpointTimeTick()
-}
-
-func (info *VChannelView) CanObserveActiveAt(timetick uint64) bool {
-	info.mu.Lock()
-	defer info.mu.Unlock()
-	return info.canReplayAtLocked(timetick) &&
-		info.meta.GetState() == streamingpb.VChannelState_VCHANNEL_STATE_NORMAL
-}
-
-func (info *VChannelView) canReplayExistingPartitionAtLocked(partitionID int64, timetick uint64) bool {
-	if partitionID == common.AllPartitionsID {
-		return true
-	}
-	return info.canReplayPartitionAtLocked(partitionID, timetick) && info.hasPartitionMetaLocked(partitionID)
 }
 
 func (info *VChannelView) canReplayPartitionAtLocked(partitionID int64, timetick uint64) bool {

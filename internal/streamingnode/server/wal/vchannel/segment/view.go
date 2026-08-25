@@ -9,7 +9,6 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
-	"github.com/milvus-io/milvus/pkg/v3/common"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
@@ -177,12 +176,6 @@ func (s *SegmentView) ID() int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.meta.GetSegmentId()
-}
-
-func (s *SegmentView) HasDirty() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.dirty
 }
 
 func (s *SegmentView) ObserveCreateSegmentMessageV2(
@@ -360,26 +353,6 @@ func (info *SegmentView) PartitionID() int64 {
 	return info.meta.GetPartitionId()
 }
 
-func (info *SegmentView) hasPendingDataWorkLocked() bool {
-	if info.durableMeta.GetCheckpointTimeTick() > info.persistedCheckpointTimeTick {
-		return true
-	}
-	if info.meta.GetState() == streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_FLUSHED {
-		if !info.finalCommitDone.Load() || info.durableMeta.GetState() != streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_FLUSHED {
-			return true
-		}
-	}
-	if len(info.pending.entries) > 0 || len(info.pendingFlushChunks) > 0 {
-		return true
-	}
-	for _, task := range info.pendingTasks {
-		if task != nil && !task.Done() {
-			return true
-		}
-	}
-	return false
-}
-
 func (info *SegmentView) CreateTimeTick() uint64 {
 	info.mu.Lock()
 	defer info.mu.Unlock()
@@ -439,12 +412,6 @@ func (info *SegmentView) TryFinalizeTombstone() bool {
 	return info.maybeMarkTombstonedLocked()
 }
 
-func (info *SegmentView) HasReadyTombstoneFinalize() bool {
-	info.mu.Lock()
-	defer info.mu.Unlock()
-	return info.tombstoneFinalizeReadyLocked()
-}
-
 // EnsureFinalCommit reports whether a flushed segment has completed its durable
 // DataCoord commit. Otherwise it schedules or reuses the segment final task.
 func (info *SegmentView) EnsureFinalCommit() bool {
@@ -476,15 +443,6 @@ func (info *SegmentView) ResumePendingRecovery() {
 	if task != nil {
 		scheduler.Submit(task)
 	}
-}
-
-func (info *SegmentView) SetSchema(schema *schemapb.CollectionSchema) {
-	if schema == nil {
-		return
-	}
-	info.mu.Lock()
-	defer info.mu.Unlock()
-	info.schema = schema
 }
 
 func (info *SegmentView) IsGrowing() bool {
@@ -526,19 +484,6 @@ func (info *SegmentView) TombstonePersisted() bool {
 		tombstoneTimeTick > 0 &&
 		!info.dirty &&
 		info.persistedCheckpointTimeTick >= tombstoneTimeTick
-}
-
-func (info *SegmentView) CoveredByTombstone(vchannel string, partitionID int64, timetick uint64) bool {
-	info.mu.Lock()
-	defer info.mu.Unlock()
-	if info.meta.GetVchannel() != vchannel {
-		return false
-	}
-	if partitionID != common.AllPartitionsID && info.meta.GetPartitionId() != partitionID {
-		return false
-	}
-	createTimeTick := info.meta.GetStat().GetCreateSegmentTimeTick()
-	return createTimeTick < timetick
 }
 
 func (info *SegmentView) TombstonedCleanupReady(physicalTimeTick uint64) bool {

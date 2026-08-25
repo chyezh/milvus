@@ -652,20 +652,6 @@ func closedPartitionState(partition *streamingpb.PartitionInfoOfVChannel) (strin
 	}
 }
 
-func segmentCoveredByVChannelTombstone(segment *streamingpb.SegmentAssignmentMeta, vchannel *streamingpb.VChannelMeta) bool {
-	return segmentInVChannel(segment, vchannel) &&
-		segment.GetStat().GetCreateSegmentTimeTick() < vchannel.GetTombstoneTimeTick()
-}
-
-func segmentCoveredByPartitionTombstone(
-	segment *streamingpb.SegmentAssignmentMeta,
-	vchannel *streamingpb.VChannelMeta,
-	partition *streamingpb.PartitionInfoOfVChannel,
-) bool {
-	return segmentInPartition(segment, vchannel, partition) &&
-		segment.GetStat().GetCreateSegmentTimeTick() < partition.GetTombstoneTimeTick()
-}
-
 func segmentInVChannel(segment *streamingpb.SegmentAssignmentMeta, vchannel *streamingpb.VChannelMeta) bool {
 	return segment.GetVchannel() == vchannel.GetVchannel() &&
 		segment.GetCollectionId() == vchannel.GetCollectionInfo().GetCollectionId()

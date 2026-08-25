@@ -52,7 +52,9 @@ func TestFinalCommitPersistsStorageOwnedCompletionMarker(t *testing.T) {
 	require.NoError(t, task.Execute(context.Background()))
 	require.Equal(t, 1, lifecycle.calls)
 	require.True(t, view.AssignmentMeta().GetL1CommitDone())
-	require.True(t, view.HasDirty())
+	view.mu.Lock()
+	require.True(t, view.dirty)
+	view.mu.Unlock()
 
 	recovered := NewSegmentViewFromMeta(view.AssignmentMeta(), nil)
 	require.True(t, recovered.finalCommitDone.Load())
