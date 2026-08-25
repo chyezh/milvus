@@ -22,7 +22,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"github.com/stretchr/testify/require"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus/internal/kv/mocks"
@@ -116,12 +115,8 @@ func TestCatalog_SaveRecoverySnapshot_Atomic(t *testing.T) {
 				}},
 			},
 		},
-		TransformLogMetas: map[string]*streamingpb.VChannelTransformLogMeta{
-			"p1_100v2": {CheckpointTimeTick: 8},
-		},
-		RemovedTransformLogs: []string{"p1_200v3"},
-		SalvageCheckpoint:    &commonpb.ReplicateCheckpoint{ClusterId: "cluster1"},
-		ConsumeCheckpoint:    &streamingpb.WALCheckpoint{TimeTick: 42},
+		SalvageCheckpoint: &commonpb.ReplicateCheckpoint{ClusterId: "cluster1"},
+		ConsumeCheckpoint: &streamingpb.WALCheckpoint{TimeTick: 42},
 	}
 	err := catalog.SaveRecoverySnapshot(context.Background(), "p1", snapshot)
 	assert.NoError(t, err)
@@ -129,20 +124,14 @@ func TestCatalog_SaveRecoverySnapshot_Atomic(t *testing.T) {
 	assert.Contains(t, saves, buildSegmentAssignmentKey("p1", 1))
 	assert.Contains(t, saves, buildVChannelKey("p1", "vch1"))
 	assert.Contains(t, saves, buildVChannelKey("p1", "vch2"))
-	transformSaveKey, err := buildTransformLogKey("p1", "p1_100v2")
-	require.NoError(t, err)
-	assert.Contains(t, saves, transformSaveKey)
 	assert.Contains(t, saves, buildSalvageCheckpointPath("p1", "cluster1"))
 	// The checkpoint is created by the first-creation CAS (see
 	// expectCheckpointFirstCreation), not staged into the component txn.
-	assert.Len(t, saves, 5)
-	transformRemoveKey, err := buildTransformLogKey("p1", "p1_200v3")
-	require.NoError(t, err)
+	assert.Len(t, saves, 4)
 	assert.ElementsMatch(t, []string{
 		buildSegmentAssignmentKey("p1", 2),
 		buildVChannelKey("p1", "vch3"),
 		buildVChannelSchemaKey("p1", "vch3", 7),
-		transformRemoveKey,
 	}, removals)
 }
 

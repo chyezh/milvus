@@ -260,65 +260,6 @@ func (_c *MockStreamingNodeCataLog_ListSegmentAssignment_Call) RunAndReturn(run 
 	return _c
 }
 
-// ListTransformLogMeta provides a mock function with given fields: ctx, pchannelName
-func (_m *MockStreamingNodeCataLog) ListTransformLogMeta(ctx context.Context, pchannelName string) (map[string]*streamingpb.VChannelTransformLogMeta, error) {
-	ret := _m.Called(ctx, pchannelName)
-
-	if len(ret) == 0 {
-		panic("no return value specified for ListTransformLogMeta")
-	}
-
-	var r0 map[string]*streamingpb.VChannelTransformLogMeta
-	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, string) (map[string]*streamingpb.VChannelTransformLogMeta, error)); ok {
-		return rf(ctx, pchannelName)
-	}
-	if rf, ok := ret.Get(0).(func(context.Context, string) map[string]*streamingpb.VChannelTransformLogMeta); ok {
-		r0 = rf(ctx, pchannelName)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(map[string]*streamingpb.VChannelTransformLogMeta)
-		}
-	}
-
-	if rf, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = rf(ctx, pchannelName)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// MockStreamingNodeCataLog_ListTransformLogMeta_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListTransformLogMeta'
-type MockStreamingNodeCataLog_ListTransformLogMeta_Call struct {
-	*mock.Call
-}
-
-// ListTransformLogMeta is a helper method to define mock.On call
-//   - ctx context.Context
-//   - pchannelName string
-func (_e *MockStreamingNodeCataLog_Expecter) ListTransformLogMeta(ctx interface{}, pchannelName interface{}) *MockStreamingNodeCataLog_ListTransformLogMeta_Call {
-	return &MockStreamingNodeCataLog_ListTransformLogMeta_Call{Call: _e.mock.On("ListTransformLogMeta", ctx, pchannelName)}
-}
-
-func (_c *MockStreamingNodeCataLog_ListTransformLogMeta_Call) Run(run func(ctx context.Context, pchannelName string)) *MockStreamingNodeCataLog_ListTransformLogMeta_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string))
-	})
-	return _c
-}
-
-func (_c *MockStreamingNodeCataLog_ListTransformLogMeta_Call) Return(_a0 map[string]*streamingpb.VChannelTransformLogMeta, _a1 error) *MockStreamingNodeCataLog_ListTransformLogMeta_Call {
-	_c.Call.Return(_a0, _a1)
-	return _c
-}
-
-func (_c *MockStreamingNodeCataLog_ListTransformLogMeta_Call) RunAndReturn(run func(context.Context, string) (map[string]*streamingpb.VChannelTransformLogMeta, error)) *MockStreamingNodeCataLog_ListTransformLogMeta_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // ListVChannel provides a mock function with given fields: ctx, pchannelName
 func (_m *MockStreamingNodeCataLog) ListVChannel(ctx context.Context, pchannelName string) ([]*streamingpb.VChannelMeta, error) {
 	ret := _m.Called(ctx, pchannelName)

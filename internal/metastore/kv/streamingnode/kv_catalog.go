@@ -2,7 +2,6 @@ package streamingnode
 
 import (
 	"context"
-	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,7 +13,6 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/pkg/v3/kv"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
-	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
@@ -115,28 +113,6 @@ func (c *catalog) newVChannelMetaFromKV(prefix string, keys []string, values []s
 		vchannelsWithSchemas = append(vchannelsWithSchemas, vchannel)
 	}
 	return vchannelsWithSchemas, nil
-}
-
-// ListTransformLogMeta lists transform log metas of the pchannel.
-func (c *catalog) ListTransformLogMeta(ctx context.Context, pchannelName string) (map[string]*streamingpb.VChannelTransformLogMeta, error) {
-	prefix := buildTransformLogPrefix(pchannelName)
-	keys, values, err := c.metaKV.LoadWithPrefix(ctx, prefix)
-	if err != nil {
-		return nil, err
-	}
-	metas := make(map[string]*streamingpb.VChannelTransformLogMeta, len(values))
-	for idx, value := range values {
-		vchannel, err := parseCompactVChannelKey(keys[idx], prefix, pchannelName)
-		if err != nil {
-			return nil, err
-		}
-		meta := &streamingpb.VChannelTransformLogMeta{}
-		if err := proto.Unmarshal([]byte(value), meta); err != nil {
-			return nil, errors.Wrapf(err, "unmarshal transform log meta %s failed", keys[idx])
-		}
-		metas[vchannel] = meta
-	}
-	return metas, nil
 }
 
 // getRemovalAndSaveForVChannel gets the removal and save for vchannel.
@@ -270,11 +246,6 @@ func buildSegmentAssignmentPrefix(pChannelName string) string {
 	return buildWALPrefix(pChannelName) + DirectorySegmentAssign + "/"
 }
 
-// buildTransformLogPrefix returns the prefix for transform log metadata under a pchannel.
-func buildTransformLogPrefix(pChannelName string) string {
-	return buildWALPrefix(pChannelName) + DirectoryTransformLog + "/"
-}
-
 // Key functions: return exact keys for individual records.
 
 // buildVChannelKey returns the key for a specific vchannel's metadata.
@@ -290,43 +261,6 @@ func buildVChannelSchemaKey(pChannelName string, vchannelName string, version ui
 // buildSegmentAssignmentKey returns the key for a specific segment assignment.
 func buildSegmentAssignmentKey(pChannelName string, segmentID int64) string {
 	return buildSegmentAssignmentPrefix(pChannelName) + strconv.FormatInt(segmentID, 10)
-}
-
-// buildTransformLogKey returns the key for a specific transform log's metadata.
-func buildTransformLogKey(pChannelName string, vchannelName string) (string, error) {
-	return buildCompactVChannelKey(buildTransformLogPrefix(pChannelName), pChannelName, vchannelName)
-}
-
-func buildCompactVChannelKey(prefix string, pchannelName string, vchannelName string) (string, error) {
-	pchannel, collectionID, vchannelIndex, err := funcutil.ParseVChannel(vchannelName)
-	if err != nil {
-		return "", merr.WrapErrServiceInternalErr(err, "parse recovery vchannel %s", vchannelName)
-	}
-	if pchannel != pchannelName {
-		return "", merr.WrapErrServiceInternalMsg(
-			"vchannel %s pchannel %s mismatches catalog pchannel %s",
-			vchannelName,
-			pchannel,
-			pchannelName,
-		)
-	}
-	return fmt.Sprintf("%s%d/%d", prefix, collectionID, vchannelIndex), nil
-}
-
-func parseCompactVChannelKey(key string, prefix string, pchannelName string) (string, error) {
-	components := strings.Split(typeutil.After(key, prefix), "/")
-	if len(components) != 2 || components[0] == "" || components[1] == "" {
-		return "", merr.WrapErrDataIntegrityMsg("malformed compact vchannel metadata key %s", key)
-	}
-	collectionID, err := strconv.ParseInt(components[0], 10, 64)
-	if err != nil || collectionID < 0 || strconv.FormatInt(collectionID, 10) != components[0] {
-		return "", merr.WrapErrDataIntegrityMsg("malformed compact vchannel metadata key %s", key)
-	}
-	vchannelIndex, err := strconv.ParseInt(components[1], 10, strconv.IntSize)
-	if err != nil || vchannelIndex < 0 || strconv.FormatInt(vchannelIndex, 10) != components[1] {
-		return "", merr.WrapErrDataIntegrityMsg("malformed compact vchannel metadata key %s", key)
-	}
-	return funcutil.GetVirtualChannel(pchannelName, collectionID, int(vchannelIndex)), nil
 }
 
 // buildConsumeCheckpointKey returns the key for the consume checkpoint of a pchannel.

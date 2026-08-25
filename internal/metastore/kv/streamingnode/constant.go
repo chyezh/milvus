@@ -5,7 +5,6 @@ const (
 
 	DirectoryWAL           = "wal"
 	DirectorySegmentAssign = "segment-assign"
-	DirectoryTransformLog  = "tl"
 	DirectoryVChannel      = "vchannel"
 	DirectorySchema        = "schema"
 	DirectorySummaryStore  = "summary-store"

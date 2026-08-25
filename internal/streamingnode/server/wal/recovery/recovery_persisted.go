@@ -13,7 +13,6 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walsummary"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
@@ -75,17 +74,6 @@ func (r *recoveryStorageImpl) recoverRecoveryInfoFromMeta(ctx context.Context, c
 		return struct{}{}, nil
 	})
 
-	var transformLogMetas map[string]*streamingpb.VChannelTransformLogMeta
-	fTransformLog := conc.Go(func() (struct{}, error) {
-		metas, err := catalog.ListTransformLogMeta(ctx, channelInfo.Name)
-		if err != nil {
-			return struct{}{}, merr.Wrap(err, "failed to get transform log meta from catalog")
-		}
-		transformLogMetas = metas
-		r.Logger().Info(context.TODO(), "recover transform log meta done", mlog.Int("transformLogs", len(transformLogMetas)))
-		return struct{}{}, nil
-	})
-
 	var pchannelControl *streamingpb.PChannelRecoveryControlMeta
 	fControl := conc.Go(func() (struct{}, error) {
 		control, err := catalog.GetPChannelRecoveryControlMeta(ctx, channelInfo.Name)
@@ -96,7 +84,7 @@ func (r *recoveryStorageImpl) recoverRecoveryInfoFromMeta(ctx context.Context, c
 		return struct{}{}, nil
 	})
 
-	if err := conc.BlockOnAll(fVChannel, fSegment, fTransformLog, fControl); err != nil {
+	if err := conc.BlockOnAll(fVChannel, fSegment, fControl); err != nil {
 		return err
 	}
 	if pchannelControl != nil {
@@ -121,13 +109,7 @@ func (r *recoveryStorageImpl) recoverRecoveryInfoFromMeta(ctx context.Context, c
 	if err := r.fenceConsumeCheckpoint(ctx); err != nil {
 		return merr.Wrap(err, "fence consume checkpoint with own term")
 	}
-	if _, err := r.migrateLegacyRecoveryInfo(ctx, vchannelMetas, segmentMetas, transformLogMetas); err != nil {
-		return err
-	}
-	// Fold any pre-summary transform log data into the summary and drop the
-	// legacy catalog metas. Idempotent: a store that already owns chunks (or
-	// a previous partial migration recovered by probing) is left untouched.
-	if err := r.migrateLegacyTransformLogsToSummary(ctx, summaryManager, vchannelMetas, transformLogMetas); err != nil {
+	if _, err := r.migrateLegacyRecoveryInfo(ctx, vchannelMetas, segmentMetas); err != nil {
 		return err
 	}
 	if err := validateRecoveredViewMeta(
@@ -170,60 +152,6 @@ func (r *recoveryStorageImpl) fenceConsumeCheckpoint(ctx context.Context) error 
 	return nil
 }
 
-// migrateLegacyTransformLogsToSummary migrates the pre-summary per-vchannel
-// transform log data into the pchannel summary. It is a one-way, idempotent
-// migration: the legacy chunks are read and folded into the first summary
-// chunk, the materialization frontier is mirrored into the vchannel meta
-// (persisted with the next catalog checkpoint), and the legacy catalog metas
-// are removed. The summary manifest publish is the commit point: once the
-// store owns chunks, later runs skip the data migration and only retry the
-// catalog cleanup.
-func (r *recoveryStorageImpl) migrateLegacyTransformLogsToSummary(
-	ctx context.Context,
-	summaryManager *walsummary.Manager,
-	vchannels map[string]*streamingpb.VChannelMeta,
-	legacyMetas map[string]*streamingpb.VChannelTransformLogMeta,
-) error {
-	if len(legacyMetas) == 0 {
-		return nil
-	}
-	chunkManager := resource.Resource().ChunkManager()
-	recordsByVChannel := make(map[string][]*streamingpb.TransformLogEntry, len(legacyMetas))
-	for vchannel, meta := range legacyMetas {
-		if meta == nil {
-			continue
-		}
-		entries, err := readLegacyTransformLogChunks(ctx, chunkManager, r.channel.Name, vchannel, meta.GetFirstChunkId())
-		if err != nil {
-			return merr.Wrapf(err, "read legacy transform log of vchannel %s", vchannel)
-		}
-		if len(entries) > 0 {
-			recordsByVChannel[vchannel] = entries
-		}
-		if vchannelMeta, ok := vchannels[vchannel]; ok {
-			if materialized := meta.GetMaterializedTimeTick(); materialized > vchannelMeta.GetTransformMaterializedTimeTick() {
-				vchannelMeta.TransformMaterializedTimeTick = materialized
-			}
-		}
-	}
-	if len(recordsByVChannel) > 0 {
-		if err := summaryManager.MigrateLegacyTransformLogs(ctx, recordsByVChannel); err != nil {
-			return merr.Wrap(err, "migrate legacy transform logs to summary")
-		}
-	}
-	removed := make([]string, 0, len(legacyMetas))
-	for vchannel := range legacyMetas {
-		removed = append(removed, vchannel)
-	}
-	sort.Strings(removed)
-	if err := resource.Resource().StreamingNodeCatalog().SaveRecoverySnapshot(ctx, r.channel.Name, &metastore.WALRecoverySnapshot{
-		RemovedTransformLogs: removed,
-	}); err != nil {
-		return merr.Wrap(err, "remove legacy transform log metas")
-	}
-	return nil
-}
-
 func vchannelMetaMap(vchannels []*streamingpb.VChannelMeta) (map[string]*streamingpb.VChannelMeta, error) {
 	metas := make(map[string]*streamingpb.VChannelMeta, len(vchannels))
 	for _, meta := range vchannels {
@@ -250,7 +178,6 @@ func (r *recoveryStorageImpl) migrateLegacyRecoveryInfo(
 	ctx context.Context,
 	vchannels map[string]*streamingpb.VChannelMeta,
 	segments map[int64]*streamingpb.SegmentAssignmentMeta,
-	transformLogs map[string]*streamingpb.VChannelTransformLogMeta,
 ) (bool, error) {
 	if r.checkpoint == nil {
 		return false, merr.WrapErrDataIntegrityMsg("missing recovery checkpoint")
@@ -302,23 +229,14 @@ func (r *recoveryStorageImpl) migrateLegacyRecoveryInfo(
 		return false, err
 	}
 	replaceSegmentSnapshots(segments, normalizedSegments)
-	// The pre-summary format had no transform log: nothing to migrate. Any
-	// stale transform log metas are dropped together with the checkpoint
-	// migration below.
-	removedTransformLogs := make([]string, 0, len(transformLogs))
-	for vchannel := range transformLogs {
-		removedTransformLogs = append(removedTransformLogs, vchannel)
-	}
-	sort.Strings(removedTransformLogs)
 
 	migratedCheckpoint := checkpoint.Clone()
 	migratedCheckpoint.Magic = utility.RecoveryMagicRecoveryStorageV2
 	if err := r.persistLegacyRecoveryMigration(ctx, &legacyRecoveryMigration{
-		vchannels:            vchannels,
-		segments:             normalizedSegments,
-		removedSegmentIDs:    removedSegmentIDs,
-		removedTransformLogs: removedTransformLogs,
-		checkpoint:           migratedCheckpoint,
+		vchannels:         vchannels,
+		segments:          normalizedSegments,
+		removedSegmentIDs: removedSegmentIDs,
+		checkpoint:        migratedCheckpoint,
 	}); err != nil {
 		return false, merr.Wrap(err, "persist legacy recovery migration")
 	}
@@ -332,11 +250,10 @@ func (r *recoveryStorageImpl) migrateLegacyRecoveryInfo(
 }
 
 type legacyRecoveryMigration struct {
-	vchannels            map[string]*streamingpb.VChannelMeta
-	segments             map[int64]*streamingpb.SegmentAssignmentMeta
-	removedSegmentIDs    []int64
-	removedTransformLogs []string
-	checkpoint           *utility.WALCheckpoint
+	vchannels         map[string]*streamingpb.VChannelMeta
+	segments          map[int64]*streamingpb.SegmentAssignmentMeta
+	removedSegmentIDs []int64
+	checkpoint        *utility.WALCheckpoint
 }
 
 func (r *recoveryStorageImpl) rebuildLegacySegmentSnapshots(
@@ -587,12 +504,11 @@ func (r *recoveryStorageImpl) persistLegacyRecoveryMigration(
 	migration *legacyRecoveryMigration,
 ) error {
 	return resource.Resource().StreamingNodeCatalog().SaveRecoverySnapshot(ctx, r.channel.Name, &metastore.WALRecoverySnapshot{
-		PChannelControlMeta:  clonePChannelControl(r.pchannelControl),
-		VChannels:            migration.vchannels,
-		SegmentAssignments:   migration.segments,
-		RemovedSegmentIDs:    migration.removedSegmentIDs,
-		RemovedTransformLogs: migration.removedTransformLogs,
-		ConsumeCheckpoint:    migration.checkpoint.IntoProto(),
+		PChannelControlMeta: clonePChannelControl(r.pchannelControl),
+		VChannels:           migration.vchannels,
+		SegmentAssignments:  migration.segments,
+		RemovedSegmentIDs:   migration.removedSegmentIDs,
+		ConsumeCheckpoint:   migration.checkpoint.IntoProto(),
 	})
 }
 

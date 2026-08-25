@@ -555,8 +555,7 @@ func TestMigrateLegacyRecoveryInfoUsesSafeCheckpoint(t *testing.T) {
 	}).Build()
 	defer persistMock.UnPatch()
 
-	transformLogs := make(map[string]*streamingpb.VChannelTransformLogMeta)
-	migrated, err := storage.migrateLegacyRecoveryInfo(context.Background(), vchannels, nil, transformLogs)
+	migrated, err := storage.migrateLegacyRecoveryInfo(context.Background(), vchannels, nil)
 
 	require.NoError(t, err)
 	require.True(t, migrated)
@@ -573,9 +572,6 @@ func TestMigrateLegacyRecoveryInfoUsesSafeCheckpoint(t *testing.T) {
 	assert.Equal(t, uint64(100), vchannels["v1"].GetCheckpointTimeTick())
 	assert.Equal(t, streamingpb.PartitionState_PARTITION_STATE_NORMAL, vchannels["v1"].CollectionInfo.Partitions[0].GetState())
 	assert.Equal(t, uint64(0), vchannels["v1"].CollectionInfo.Schemas[0].GetCheckpointTimeTick())
-	// The pre-summary format had no transform log: the migration must not
-	// manufacture per-vchannel transform metas.
-	assert.Empty(t, transformLogs)
 }
 
 func TestRebuildLegacySegmentSnapshotUsesDataCoordDurableState(t *testing.T) {
@@ -723,7 +719,7 @@ func TestMigrateLegacyRecoveryInfoCapsGlobalCheckpointAtVChannelCheckpoint(t *te
 	persistMock := mockey.Mock((*recoveryStorageImpl).persistLegacyRecoveryMigration).Return(nil).Build()
 	defer persistMock.UnPatch()
 
-	migrated, err := storage.migrateLegacyRecoveryInfo(context.Background(), vchannels, nil, make(map[string]*streamingpb.VChannelTransformLogMeta))
+	migrated, err := storage.migrateLegacyRecoveryInfo(context.Background(), vchannels, nil)
 
 	require.NoError(t, err)
 	require.True(t, migrated)
@@ -758,7 +754,7 @@ func TestMigrateLegacyRecoveryInfoFailsClosed(t *testing.T) {
 	}).Build()
 	defer persistMock.UnPatch()
 
-	migrated, err := storage.migrateLegacyRecoveryInfo(context.Background(), vchannels, nil, make(map[string]*streamingpb.VChannelTransformLogMeta))
+	migrated, err := storage.migrateLegacyRecoveryInfo(context.Background(), vchannels, nil)
 
 	require.Error(t, err)
 	assert.False(t, migrated)
@@ -789,7 +785,7 @@ func TestMigrateLegacyRecoveryInfoInstallsCheckpointOnlyAfterPersist(t *testing.
 	persistMock := mockey.Mock((*recoveryStorageImpl).persistLegacyRecoveryMigration).Return(merr.ErrServiceNotReady).Build()
 	defer persistMock.UnPatch()
 
-	migrated, err := storage.migrateLegacyRecoveryInfo(context.Background(), vchannels, nil, make(map[string]*streamingpb.VChannelTransformLogMeta))
+	migrated, err := storage.migrateLegacyRecoveryInfo(context.Background(), vchannels, nil)
 
 	require.Error(t, err)
 	assert.False(t, migrated)
@@ -819,7 +815,7 @@ func TestMigrateLegacyRecoveryInfoSkipsCompletedMigration(t *testing.T) {
 	}).Build()
 	defer getCheckpointMock.UnPatch()
 
-	migrated, err := storage.migrateLegacyRecoveryInfo(context.Background(), nil, nil, nil)
+	migrated, err := storage.migrateLegacyRecoveryInfo(context.Background(), nil, nil)
 
 	require.NoError(t, err)
 	assert.False(t, migrated)
@@ -851,7 +847,7 @@ func TestMigrateLegacyRecoveryInfoWithoutActiveVChannels(t *testing.T) {
 
 	migrated, err := storage.migrateLegacyRecoveryInfo(context.Background(), map[string]*streamingpb.VChannelMeta{
 		"v1": vchannel,
-	}, nil, make(map[string]*streamingpb.VChannelTransformLogMeta))
+	}, nil)
 
 	require.NoError(t, err)
 	require.True(t, migrated)

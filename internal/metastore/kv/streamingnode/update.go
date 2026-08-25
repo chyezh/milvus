@@ -58,10 +58,9 @@ func (c *catalog) SaveRecoverySnapshot(ctx context.Context, pChannelName string,
 	// Aggregate every module mutation before adding the checkpoint commit
 	// marker. Closed and tombstoned recovery metadata remains persisted until
 	// the growing-module cleanup task explicitly includes its removal here.
-	removes := make([]string, 0, len(snapshot.RemovedSegmentIDs)+len(snapshot.RemovedTransformLogs))
+	removes := make([]string, 0, len(snapshot.RemovedSegmentIDs))
 	vchannelSaves := make(map[string]string, len(snapshot.VChannels)+len(snapshot.VChannelBaseMetas))
 	segmentSaves := make(map[string]string, len(snapshot.SegmentAssignments))
-	transformLogSaves := make(map[string]string, len(snapshot.TransformLogMetas))
 	for _, info := range snapshot.SegmentAssignments {
 		key := buildSegmentAssignmentKey(pChannelName, info.GetSegmentId())
 		data, err := proto.Marshal(info)
@@ -90,24 +89,6 @@ func (c *catalog) SaveRecoverySnapshot(ctx context.Context, pChannelName string,
 		}
 		vchannelSaves[buildVChannelKey(pChannelName, info.GetVchannel())] = data
 	}
-	for vchannel, meta := range snapshot.TransformLogMetas {
-		key, err := buildTransformLogKey(pChannelName, vchannel)
-		if err != nil {
-			return err
-		}
-		data, err := proto.Marshal(meta)
-		if err != nil {
-			return merr.WrapErrSerializationFailed(err, "marshal transform log meta %s at pchannel %s", vchannel, pChannelName)
-		}
-		transformLogSaves[key] = string(data)
-	}
-	for _, vchannel := range snapshot.RemovedTransformLogs {
-		key, err := buildTransformLogKey(pChannelName, vchannel)
-		if err != nil {
-			return err
-		}
-		removes = append(removes, key)
-	}
 	// A vchannel cleanup also removes its transform-log meta. Keep the
 	// vchannel removal last so the chunked fallback never exposes an orphaned
 	// transform log for a vchannel that has already disappeared.
@@ -124,15 +105,12 @@ func (c *catalog) SaveRecoverySnapshot(ctx context.Context, pChannelName string,
 	for _, r := range removes {
 		b.Remove(r)
 	}
-	// Persist vchannel ownership before its dependent segment/transform-log
-	// metadata on the chunked fallback path. Atomic commits are unaffected.
+	// Persist vchannel ownership before its dependent segment metadata on the
+	// chunked fallback path. Atomic commits are unaffected.
 	for k, v := range vchannelSaves {
 		b.Save(k, v)
 	}
 	for k, v := range segmentSaves {
-		b.Save(k, v)
-	}
-	for k, v := range transformLogSaves {
 		b.Save(k, v)
 	}
 	// The salvage checkpoint must be persisted before the consume checkpoint
