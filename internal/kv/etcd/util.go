@@ -27,11 +27,6 @@ func parsePredicates(rootPath string, preds ...predicates.Predicate) ([]clientv3
 			}
 			cmp := clientv3.Compare(clientv3.Value(util.GetPath(rootPath, pred.Key())), pt, pred.TargetValue())
 			result = append(result, cmp)
-		case predicates.PredTargetNotExist:
-			// An absent key has etcd version 0: the txn condition is the
-			// native atomic check-and-create for the key.
-			cmp := clientv3.Compare(clientv3.Version(util.GetPath(rootPath, pred.Key())), "=", 0)
-			result = append(result, cmp)
 		default:
 			return nil, merr.WrapErrParameterInvalid("valid predicate target", fmt.Sprintf("%d", pred.Target()))
 		}

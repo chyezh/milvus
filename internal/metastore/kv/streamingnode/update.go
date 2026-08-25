@@ -19,12 +19,10 @@ package streamingnode
 import (
 	"context"
 
-	"github.com/cockroachdb/errors"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/metastore/kv/txn"
-	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
@@ -128,71 +126,29 @@ func (c *catalog) SaveRecoverySnapshot(ctx context.Context, pChannelName string,
 	}
 	// The consume checkpoint is the commit point of the snapshot: staging it
 	// with CommitSave makes it the last write to become visible, after every
-	// other part of the snapshot has landed. Its advancement is additionally
-	// guarded by a compare-and-swap on the recorded value: the checkpoint may
-	// only advance when the recorded term is not newer than the publisher's
-	// own term, so an older-term publisher that survived a takeover can never
-	// advance it past the successor's inherited manifest coverage (which would
-	// let WAL truncation outrun that coverage and lose un-materialized
-	// transform records).
+	// other part of the snapshot has landed.
 	//
-	// The guard is a predicate on the durable key, not a term comparison
-	// inside the txn: etcd cannot compare fields of a serialized proto. An
-	// existing checkpoint is guarded by value equality (CommitSaveIfValue); a
-	// first write (no checkpoint yet) is guarded by key absence
-	// (CommitSaveIfNotExist), so two concurrent first publishers cannot both
-	// succeed. The term pre-check below is a fast-fail (a strictly older
-	// publisher is refused without touching the store); the predicate is the
-	// authoritative fence under concurrency (a publisher that read a stale
-	// value loses the commit).
-	checkpointKey := buildConsumeCheckpointKey(pChannelName)
-	checkpointValue := ""
+	// TODO(#52542 follow-up): concurrent publishers are NOT fenced here. The
+	// checkpoint is a plain last-write commit marker, not a compare-and-swap:
+	// a superseded publisher of an older term that survived a takeover can
+	// still overwrite both the consume checkpoint and the component state of
+	// the current publisher, and WAL truncation then follows the last writer's
+	// checkpoint. The intended design — fence the whole commit on the recorded
+	// term via a guarded commit (an atomic create-if-absent for the first
+	// write, a value CAS afterwards) — is deliberately NOT implemented in this
+	// PR: it requires backend compare-and-swap support that TiKV does not
+	// provide yet (CompareVersionAndSwap is a stub returning
+	// ErrServiceUnimplemented). Risk: two concurrent RecoveryStorage instances
+	// writing this pchannel can interleave component state and checkpoint from
+	// different terms. Do not rely on takeover racing without landing the
+	// fenced commit.
 	if snapshot.ConsumeCheckpoint != nil {
+		key := buildConsumeCheckpointKey(pChannelName)
 		data, err := proto.Marshal(snapshot.ConsumeCheckpoint)
 		if err != nil {
 			return merr.WrapErrSerializationFailed(err, "marshal consume checkpoint at pchannel %s", pChannelName)
 		}
-		checkpointValue = string(data)
-		current, err := c.metaKV.Load(ctx, checkpointKey)
-		if errors.Is(err, merr.ErrIoKeyNotFound) {
-			// No checkpoint yet (first persistence of the pchannel, or a
-			// recreated one): guard the commit on the key being absent.
-			b.CommitSaveIfNotExist(checkpointKey, checkpointValue)
-		} else {
-			if err != nil {
-				return err
-			}
-			// Fast-fail on a strictly older publisher before the commit txn.
-			currentCP := &streamingpb.WALCheckpoint{}
-			if uerr := proto.Unmarshal([]byte(current), currentCP); uerr == nil &&
-				currentCP.GetTerm() > snapshot.ConsumeCheckpoint.GetTerm() {
-				return merr.WrapErrServiceInternalMsg(
-					"consume checkpoint of pchannel %s is fenced: recorded term %d is newer than publisher term %d",
-					pChannelName, currentCP.GetTerm(), snapshot.ConsumeCheckpoint.GetTerm(),
-				)
-			}
-			b.CommitSaveIfValue(checkpointKey, current, checkpointValue)
-		}
+		b.CommitSave(key, string(data))
 	}
-	if err := txn.Commit(ctx, c.metaKV, b); err != nil {
-		return err
-	}
-	// The guarded commit reports success even when the guard fails (etcd txn
-	// returns Succeeded=false without an error), so the checkpoint write is
-	// verified after the commit: a stale publisher that lost the guard must be
-	// told the write did not land, or it would keep advancing components
-	// against a checkpoint it no longer owns.
-	if snapshot.ConsumeCheckpoint != nil {
-		after, err := c.metaKV.Load(ctx, checkpointKey)
-		if err != nil {
-			return err
-		}
-		if after != checkpointValue {
-			return merr.WrapErrServiceInternalMsg(
-				"consume checkpoint of pchannel %s advanced concurrently: CAS on term %d lost",
-				pChannelName, snapshot.ConsumeCheckpoint.GetTerm(),
-			)
-		}
-	}
-	return nil
+	return txn.Commit(ctx, c.metaKV, b)
 }

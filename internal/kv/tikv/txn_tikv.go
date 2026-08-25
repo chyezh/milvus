@@ -497,13 +497,6 @@ func (kv *txnTiKV) MultiSaveAndRemove(ctx context.Context, saves map[string]stri
 			val, err := txn.Get(ctx, []byte(key))
 			if err != nil {
 				if errors.Is(err, tikverr.ErrNotExist) {
-					// An absent key satisfies a NotExist predicate (the atomic
-					// create-if-absent case): the guarded key is written by the
-					// same txn below, so a concurrent creator wins the write
-					// conflict and the retry re-reads the key as present.
-					if pred.IsTrue(nil) {
-						continue
-					}
 					return markPredicateNotMet(merr.WrapErrIoFailedReason(fmt.Sprintf("failed to read predicate target (%s:%v) for MultiSaveAndRemove", pred.Key(), pred.TargetValue()), err.Error()))
 				}
 				return merr.WrapErrIoFailedReason(fmt.Sprintf("failed to read predicate target (%s:%v) for MultiSaveAndRemove", pred.Key(), pred.TargetValue()), err.Error())
@@ -555,13 +548,6 @@ func (kv *txnTiKV) MultiSaveAndRemoveWithPrefix(ctx context.Context, saves map[s
 			val, err := txn.Get(ctx, []byte(key))
 			if err != nil {
 				if errors.Is(err, tikverr.ErrNotExist) {
-					// An absent key satisfies a NotExist predicate (the atomic
-					// create-if-absent case): the guarded key is written by the
-					// same txn below, so a concurrent creator wins the write
-					// conflict and the retry re-reads the key as present.
-					if pred.IsTrue(nil) {
-						continue
-					}
 					return markPredicateNotMet(merr.WrapErrIoFailedReason(fmt.Sprintf("failed to read predicate target (%s:%v) for MultiSaveAndRemove", pred.Key(), pred.TargetValue()), err.Error()))
 				}
 				return merr.WrapErrIoFailedReason(fmt.Sprintf("failed to read predicate target (%s:%v) for MultiSaveAndRemove", pred.Key(), pred.TargetValue()), err.Error())
