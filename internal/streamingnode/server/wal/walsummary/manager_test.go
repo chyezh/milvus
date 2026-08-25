@@ -107,6 +107,58 @@ func observeDelete(t *testing.T, view *SummaryView, timetick uint64, finalized *
 	owner.Release()
 }
 
+func TestObserveMessageLazilyCreatesView(t *testing.T) {
+	manager, _ := newTestManagerWithStore(t)
+	ctx := context.Background()
+
+	// Observe through the pchannel-level entry point without ever calling
+	// View: the per-vchannel staging buffer is created lazily.
+	finalized := false
+	msg := newTestDeleteMessage(t, "v1", 100, 10, int64(100))
+	owner := message.NewOwnedImmutableMessage(msg, func() { finalized = true })
+	retained := owner.Clone()
+	manager.ObserveMessage(ctx, retained)
+	retained.Release()
+	owner.Release()
+	assert.False(t, finalized, "message must stay alive while staging")
+
+	// The lazily created view must have staged the record and flush must
+	// persist it into a chunk with only the observed vchannel's section.
+	require.NoError(t, manager.flushOnce(ctx, &summaryFlushTask{log: manager}))
+	assert.True(t, finalized, "message handle must be released after a durable flush")
+	assert.Equal(t, uint64(100), manager.LatestCoveredTimeTick())
+	decoded, footer, err := manager.cfg.Store.ReadChunk(ctx, 0, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), footer.GetGeneration())
+	require.Len(t, decoded, 1, "chunk must carry only vchannels that had records")
+	require.Len(t, decoded["v1"], 1)
+	assert.Equal(t, uint64(100), decoded["v1"][0].GetTimeTick())
+}
+
+func TestObserveMessageIgnoresNonVChannelRecords(t *testing.T) {
+	manager, _ := newTestManagerWithStore(t)
+	ctx := context.Background()
+
+	// A control-channel message must not create a view.
+	controlMsg := newTestDeleteMessage(t, "by-dev-rootcoord-dml_0vcchan", 100, 10, int64(100))
+	controlRetained := message.NewOwnedImmutableMessage(controlMsg, func() {}).Clone()
+	manager.ObserveMessage(ctx, controlRetained)
+	controlRetained.Release()
+	_, ok := manager.views["by-dev-rootcoord-dml_0vcchan"]
+	assert.False(t, ok, "control channel must not create a view")
+
+	// A vchannel-less (pchannel-level) message must not create a view.
+	levelMsg := newTestDeleteMessage(t, "", 100, 10, int64(100))
+	levelRetained := message.NewOwnedImmutableMessage(levelMsg, func() {}).Clone()
+	manager.ObserveMessage(ctx, levelRetained)
+	levelRetained.Release()
+
+	// Nothing was staged; a flush produces no chunk.
+	require.NoError(t, manager.flushOnce(ctx, &summaryFlushTask{log: manager}))
+	_, _, err := manager.cfg.Store.ReadChunk(ctx, 0, 1)
+	assert.Error(t, err, "no chunk must be written when nothing was staged")
+}
+
 func TestViewObserveAndFlushReleasesHandles(t *testing.T) {
 	manager, _ := newTestManagerWithStore(t)
 	view := manager.View("v1")

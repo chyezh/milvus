@@ -342,14 +342,6 @@ func (m *PChannelRecoveryManager) newModule(vchannel string) (*VChannelRecoveryM
 	if err != nil {
 		return nil, err
 	}
-	// Create the pchannel summary view of this vchannel. The summary manager
-	// observes the WAL stream independently of the vchannel modules (at the
-	// recovery observation point), but the per-vchannel view must exist for
-	// staging to accumulate; it is dropped by removeModule (RemoveView) when
-	// the module is cleaned up.
-	if m.config.SummaryManager != nil {
-		m.config.SummaryManager.View(vchannel)
-	}
 	if module.HasCleanupCandidates() {
 		m.markCleanupCandidate(module)
 	}

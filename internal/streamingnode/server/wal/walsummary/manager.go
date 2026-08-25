@@ -28,6 +28,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
@@ -142,19 +143,27 @@ func (m *Manager) View(vchannel string) *SummaryView {
 // ObserveMessage observes one WAL message at the pchannel level and routes it
 // to the summary view of its vchannel. It is called on the WAL observation
 // path (recovery replay and the live scanner), independent of the vchannel
-// modules, and must not block. A vchannel without a view has no summary need
-// and is ignored.
+// modules, and must not block.
+//
+// The per-vchannel view is created lazily on the first message of a vchannel:
+// a summary view is nothing but the staging buffer of that vchannel's span of
+// the pchannel log, so it exists exactly while the vchannel has records to
+// summarize and carries no lifecycle of its own. Messages without a
+// per-vchannel record (pchannel-level broadcasts, control-channel messages)
+// are ignored.
 func (m *Manager) ObserveMessage(ctx context.Context, retained message.RetainedImmutableMessage) {
 	if retained == nil {
 		return
 	}
-	vchannel := retained.Message().VChannel()
-	m.mu.Lock()
-	view := m.views[vchannel]
-	m.mu.Unlock()
-	if view != nil {
-		view.ObserveMessage(ctx, retained)
+	msg := retained.Message()
+	vchannel := msg.VChannel()
+	// Only messages that carry a per-vchannel record are summarized:
+	// pchannel-level broadcasts have no vchannel, and the control channel is
+	// the control plane, which never produces transform records.
+	if vchannel == "" || funcutil.IsControlChannel(vchannel) {
+		return
 	}
+	m.View(vchannel).ObserveMessage(ctx, retained)
 }
 
 // SetDurableTimeTick restores the durable frontier of one vchannel into its
@@ -199,10 +208,13 @@ func (m *Manager) DurableTimeTick(vchannel string) uint64 {
 	return frontier
 }
 
-// RemoveView drops the summary view of a vchannel, discarding its staging.
-// It is called by the vchannel module after the vchannel cleanup snapshot is
-// durable: no record of a dropped vchannel may survive in memory. The staged
-// handles are released so the WAL checkpoint can advance past them.
+// RemoveView is the GC-boundary notification a dropped vchannel sends to the
+// summary: after the vchannel cleanup snapshot is durable, that vchannel's
+// span of the pchannel log no longer exists, so any still-staged records of
+// it must be discarded and their handles released for the WAL checkpoint to
+// advance past them. It is the only interaction between the vchannel
+// lifecycle and the summary — views themselves are created lazily on
+// observation and carry no lifecycle of their own.
 func (m *Manager) RemoveView(vchannel string) {
 	m.mu.Lock()
 	view, ok := m.views[vchannel]
