@@ -13,7 +13,6 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walsummary"
 	"github.com/milvus-io/milvus/pkg/v3/objectstorage"
-	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/walimplstest"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
@@ -51,36 +50,21 @@ func newTestSummaryManager(t *testing.T, scheduler nodescheduler.Scheduler) *wal
 	})
 }
 
-func TestPChannelRecoveryManagerRequestsPersistThroughSummary(t *testing.T) {
+func TestSummaryManagerRequestsPersistThroughPChannelLevel(t *testing.T) {
 	scheduler := &recordingVChannelScheduler{}
 	summaryManager := newTestSummaryManager(t, scheduler)
-	manager, err := NewPChannelRecoveryManager(PChannelManagerConfig{
-		PChannel: "p1",
-		VChannelMetas: map[string]*streamingpb.VChannelMeta{
-			"v1": {Vchannel: "v1", State: streamingpb.VChannelState_VCHANNEL_STATE_NORMAL},
-			"v2": {Vchannel: "v2", State: streamingpb.VChannelState_VCHANNEL_STATE_NORMAL},
-		},
-		SummaryManager: summaryManager,
-		Runtime:        moduleapi.Runtime{Scheduler: scheduler},
-	})
-	require.NoError(t, err)
-	t.Cleanup(manager.Close)
 
-	// No observation yet: a persist request must not schedule a flush.
-	manager.RequestPersistThrough("v1", 10)
-	require.Empty(t, scheduler.tasks)
-
-	// Observe a delete on v1: the transform consumer schedules its own
-	// materialize task (decoupled, no barrier involved); the persist request
-	// then schedules the flush task covering the staged record.
-	observeVChannelDelete(t, manager.Module("v1"), "v1", 10)
+	// A forced persist request is pchannel-level: it schedules a flush even
+	// before any observation (the flush no-ops on empty staging), and a
+	// second request merges into the pending task.
+	summaryManager.RequestPersistThrough("v1", 10)
 	require.Len(t, scheduler.tasks, 1)
-	manager.RequestPersistThrough("v1", 10)
-	require.Len(t, scheduler.tasks, 2)
-	require.NoError(t, scheduler.tasks[1].Execute(context.Background()))
+	summaryManager.RequestPersistThrough("v2", 20)
+	require.Len(t, scheduler.tasks, 1)
+	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
 
-	// The v2 view has nothing staged, so a request for v2 schedules nothing.
-	manager.RequestPersistThrough("v2", 20)
+	// After the task drains, a new request schedules a new flush.
+	summaryManager.RequestPersistThrough("v1", 30)
 	require.Len(t, scheduler.tasks, 2)
 }
 

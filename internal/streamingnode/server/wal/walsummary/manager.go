@@ -27,6 +27,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
@@ -138,6 +139,24 @@ func (m *Manager) View(vchannel string) *SummaryView {
 	return view
 }
 
+// ObserveMessage observes one WAL message at the pchannel level and routes it
+// to the summary view of its vchannel. It is called on the WAL observation
+// path (recovery replay and the live scanner), independent of the vchannel
+// modules, and must not block. A vchannel without a view has no summary need
+// and is ignored.
+func (m *Manager) ObserveMessage(ctx context.Context, retained message.RetainedImmutableMessage) {
+	if retained == nil {
+		return
+	}
+	vchannel := retained.Message().VChannel()
+	m.mu.Lock()
+	view := m.views[vchannel]
+	m.mu.Unlock()
+	if view != nil {
+		view.ObserveMessage(ctx, retained)
+	}
+}
+
 // SetDurableTimeTick restores the durable frontier of one vchannel into its
 // view. It is called by the recovery path before the vchannel modules are
 // built; the view may not exist yet, in which case the frontier is recorded
@@ -246,6 +265,14 @@ func (m *Manager) totalStagingLocked() uint64 {
 		view.mu.Unlock()
 	}
 	return total
+}
+
+// RequestPersistThrough implements VChannelPersistRequester at the pchannel
+// level. A stall or under-pressure request on any vchannel forces a flush of
+// the whole pchannel: a chunk is pchannel-scoped and the flush collects every
+// view's staging anyway, so no per-vchannel filtering is meaningful here.
+func (m *Manager) RequestPersistThrough(_ string, _ uint64) {
+	m.requestFlush()
 }
 
 // requestFlush schedules one flush task. It is called from the WAL

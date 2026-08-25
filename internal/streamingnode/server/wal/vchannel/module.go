@@ -10,7 +10,6 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/segment"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/transformlog"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walsummary"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
@@ -37,12 +36,16 @@ type ModuleConfig struct {
 	Logger            *mlog.Logger
 	SegmentLifecycle  segment.Lifecycle
 	SegmentPackWriter segment.PackWriter
-	SummaryManager    *walsummary.Manager
 	// PendingTransformEntries is the initial materialization window of the
 	// transform consumer: the durable records after the restored
 	// transform_materialized_time_tick, loaded once by recovery. Runtime
 	// observation appends to it directly.
-	PendingTransformEntries   []*streamingpb.TransformLogEntry
+	PendingTransformEntries []*streamingpb.TransformLogEntry
+	// L0MaterializedTimeTick is the newest checkpoint a registered L0 segment
+	// of this vchannel reached before recovery. The transform frontier is
+	// lifted past it so crash-window records already materialized into an L0
+	// segment are not re-materialized into duplicate L0 segments.
+	L0MaterializedTimeTick    uint64
 	TransformLogMaterializer  transformlog.Materializer
 	TransformLogMaterialRows  uint64
 	TransformLogMaterialBytes uint64
@@ -74,7 +77,6 @@ type VChannelRecoveryModule struct {
 	pendingCleanup  map[int64]*segment.SegmentView
 
 	transformLog *transformlog.TransformLog
-	summaryView  *walsummary.SummaryView
 
 	// materializeUpperBound mirrors the last bound published to the transform
 	// log, so refreshTransformMaterializeUpperBoundLocked can skip unchanged
@@ -143,12 +145,14 @@ func newModule(config ModuleConfig, adoptVChannelMeta bool) (*VChannelRecoveryMo
 			module.cleanupSegments[id] = view
 		}
 	}
-	if config.SummaryManager != nil {
-		module.summaryView = config.SummaryManager.View(config.VChannel)
-	}
 	module.transformLog = transformlog.New(transformlog.Config{
-		VChannel:             config.VChannel,
-		MaterializedTimeTick: config.VChannelMeta.GetTransformMaterializedTimeTick(),
+		VChannel: config.VChannel,
+		// The frontier starts at the persisted value and is lifted past any
+		// registered L0 segment: records at or below the L0 checkpoint were
+		// already materialized into a segment by a previous run (see
+		// recoverL0SegmentCheckpoints), so replaying them would duplicate the
+		// L0 data.
+		MaterializedTimeTick: max(config.VChannelMeta.GetTransformMaterializedTimeTick(), config.L0MaterializedTimeTick),
 		PendingEntries:       config.PendingTransformEntries,
 		MaterializeMaxRows:   config.TransformLogMaterialRows,
 		MaterializeMaxBytes:  config.TransformLogMaterialBytes,
@@ -220,13 +224,11 @@ func (m *VChannelRecoveryModule) ObserveMessage(
 	case message.MessageTypeAlterWAL:
 		m.handleAlterWALMessage(ctx, retained)
 	}
-	if m.summaryView != nil {
-		m.summaryView.ObserveMessage(ctx, retained)
-	}
 	// The transform consumer observes the same message stream directly and
 	// materializes at its own pace; the summary persists at its own pace. The
 	// two are deliberately not ordered: no barrier or external write API
-	// drives either of them.
+	// drives either of them. The summary observes the stream independently at
+	// the recovery level (see recoveryStorageImpl.observeModulesMessage).
 	m.transformLog.ObserveMessage(retained)
 	return true
 }
@@ -319,9 +321,6 @@ func (m *VChannelRecoveryModule) RequestPersistThrough(targetTimeTick uint64) {
 	}
 	for _, view := range m.segments {
 		view.RequestPersistThrough(targetTimeTick)
-	}
-	if m.summaryView != nil {
-		m.summaryView.RequestPersistThrough(targetTimeTick)
 	}
 }
 
@@ -622,32 +621,19 @@ func (m *VChannelRecoveryModule) tryFinalizeSegmentLocked(segmentID int64, view 
 // into the vchannel meta (transform_materialized_time_tick) and marks the
 // vchannel snapshot dirty, so the frontier persists with the next catalog
 // checkpoint. The transform consumer calls it after every committed batch; it
-// must not call back into the TransformLog.
+// must not call back into the TransformLog. The summary retention frontier is
+// updated by the recovery persistence flow once the vchannel meta is durable
+// (see recoveryStorageImpl.persistDirtySnapshot), so the summary only ever
+// releases records below a frontier that a crash-recovery would observe.
 func (m *VChannelRecoveryModule) markTransformMaterialized(timeTick uint64) {
 	m.mu.Lock()
 	if m.vchannelView != nil {
 		m.vchannelView.SetTransformMaterializedTimeTick(timeTick)
 	}
-	summaryManager := m.summaryManager()
 	m.mu.Unlock()
-	if summaryManager != nil {
-		// The frontier is the hard lower bound of the summary retention: no
-		// record below it may be released.
-		summaryManager.SetMaterializedTimeTick(m.vchannel, timeTick)
-	}
 	if m.runtime.Notifier != nil {
 		m.runtime.Notifier.NotifyModuleUpdated(moduleapi.ModuleNameVChannel)
 	}
-}
-
-// summaryManager returns the pchannel-scoped summary manager this module
-// observes into, or nil. It is read under m.mu; the manager itself outlives
-// the module.
-func (m *VChannelRecoveryModule) summaryManager() *walsummary.Manager {
-	if m.summaryView == nil {
-		return nil
-	}
-	return m.summaryView.Manager()
 }
 
 func (m *VChannelRecoveryModule) markSegmentSnapshotPersisted(
@@ -743,13 +729,6 @@ func (m *VChannelRecoveryModule) completeVChannelCleanup(tombstoneTimeTick uint6
 		return
 	}
 	m.removed = true
-	if m.summaryView != nil {
-		// Drop the summary view: no record of the dropped vchannel may
-		// survive in memory, and its staged handles must be released so the
-		// WAL checkpoint can advance past them.
-		m.summaryView.Manager().RemoveView(m.vchannel)
-		m.summaryView = nil
-	}
 	if m.onCleanup != nil {
 		m.onCleanup(m)
 	}

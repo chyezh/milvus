@@ -275,7 +275,7 @@ func TestManagerGCReleaseAndMaterializationFloor(t *testing.T) {
 	assert.Empty(t, manager.Manifest().GetChunks())
 }
 
-func TestViewRequestPersistThroughSchedulesFlush(t *testing.T) {
+func TestManagerRequestPersistThroughSchedulesFlush(t *testing.T) {
 	manager, _ := newTestManagerWithStore(t)
 	scheduler := &recordingScheduler{}
 	manager.cfg.Runtime.Scheduler = scheduler
@@ -286,7 +286,9 @@ func TestViewRequestPersistThroughSchedulesFlush(t *testing.T) {
 	// Observe below the byte threshold schedules nothing.
 	assert.Empty(t, scheduler.tasks)
 	observeDelete(t, view, 150, &unused)
-	view.RequestPersistThrough(160)
+	// The forced persist request is pchannel-level: it schedules a flush
+	// regardless of which vchannel stalls.
+	manager.RequestPersistThrough("v1", 160)
 	assert.Len(t, scheduler.tasks, 1)
 }
 

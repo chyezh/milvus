@@ -40,13 +40,11 @@ func (m *recordingMaterializer) Materialize(_ context.Context, req transformlog.
 // transform records at the given timeticks, ready for materialization.
 func newMaterializeBoundTestModule(t *testing.T, scheduler *recordingVChannelScheduler, segmentMetas map[int64]*streamingpb.SegmentAssignmentMeta, timeticks ...uint64) *VChannelRecoveryModule {
 	t.Helper()
-	summaryManager := newTestSummaryManager(t, scheduler)
 	module, err := NewModule(ModuleConfig{
 		PChannel:                 "p1",
 		VChannel:                 "v1",
 		VChannelMeta:             &streamingpb.VChannelMeta{Vchannel: "v1", State: streamingpb.VChannelState_VCHANNEL_STATE_NORMAL},
 		Segments:                 segmentMetas,
-		SummaryManager:           summaryManager,
 		TransformLogMaterializer: &recordingMaterializer{},
 		Runtime:                  moduleapi.Runtime{Scheduler: scheduler},
 	})
@@ -154,12 +152,11 @@ func TestVChannelMaterializeBoundRetractsOnNewBlocker(t *testing.T) {
 		1: newMaterializationBlockerMeta(1, 100, false),
 	}
 	module, err := NewModule(ModuleConfig{
-		PChannel:       "p1",
-		VChannel:       "v1",
-		VChannelMeta:   &streamingpb.VChannelMeta{Vchannel: "v1", State: streamingpb.VChannelState_VCHANNEL_STATE_NORMAL},
-		Segments:       segmentMetas,
-		SummaryManager: newTestSummaryManager(t, nil),
-		Runtime:        moduleapi.Runtime{},
+		PChannel:     "p1",
+		VChannel:     "v1",
+		VChannelMeta: &streamingpb.VChannelMeta{Vchannel: "v1", State: streamingpb.VChannelState_VCHANNEL_STATE_NORMAL},
+		Segments:     segmentMetas,
+		Runtime:      moduleapi.Runtime{},
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint64(100), module.materializeUpperBound)
@@ -183,12 +180,11 @@ func TestVChannelConcurrentDataUpdateAndBlockerScan(t *testing.T) {
 		2: newMaterializationBlockerMeta(2, 200, false),
 	}
 	module, err := NewModule(ModuleConfig{
-		PChannel:       "p1",
-		VChannel:       "v1",
-		VChannelMeta:   &streamingpb.VChannelMeta{Vchannel: "v1", State: streamingpb.VChannelState_VCHANNEL_STATE_NORMAL},
-		Segments:       segmentMetas,
-		SummaryManager: newTestSummaryManager(t, nil),
-		Runtime:        moduleapi.Runtime{},
+		PChannel:     "p1",
+		VChannel:     "v1",
+		VChannelMeta: &streamingpb.VChannelMeta{Vchannel: "v1", State: streamingpb.VChannelState_VCHANNEL_STATE_NORMAL},
+		Segments:     segmentMetas,
+		Runtime:      moduleapi.Runtime{},
 	})
 	require.NoError(t, err)
 	view := module.segments[1]
@@ -208,4 +204,32 @@ func TestVChannelConcurrentDataUpdateAndBlockerScan(t *testing.T) {
 		}
 	}()
 	wg.Wait()
+}
+
+// TestModuleTransformFrontierLiftedPastRegisteredL0 proves recovery's L0
+// checkpoint lift: when a registered L0 segment already covered records
+// beyond the persisted transform frontier, the module starts the transform
+// consumer past the L0 checkpoint so those records are not re-materialized
+// into duplicate L0 segments (see recoverL0SegmentCheckpoints).
+func TestModuleTransformFrontierLiftedPastRegisteredL0(t *testing.T) {
+	module, err := NewModule(ModuleConfig{
+		PChannel: "p1",
+		VChannel: "v1",
+		VChannelMeta: &streamingpb.VChannelMeta{
+			Vchannel:                      "v1",
+			State:                         streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
+			TransformMaterializedTimeTick: 100,
+		},
+		// A registered L0 segment reached 200 on a previous run: the frontier
+		// is lifted to 200, and pending records at or below it are trimmed.
+		L0MaterializedTimeTick: 200,
+		PendingTransformEntries: []*streamingpb.TransformLogEntry{
+			{TimeTick: 150},
+			{TimeTick: 250},
+		},
+		TransformLogMaterializer: &recordingMaterializer{},
+		Runtime:                  moduleapi.Runtime{},
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(200), module.transformLog.MaterializedTimeTick())
 }

@@ -91,6 +91,17 @@ func (rs *recoveryStorageImpl) persistDirtySnapshot(ctx context.Context, lvl mlo
 	if err := rs.saveRecoverySnapshot(ctx, recoverySnapshot); err != nil {
 		return err
 	}
+	// The vchannel metas are durable now: mirror their materialization
+	// frontiers into the summary retention computation. Only persisted
+	// frontiers may release summary records — a crash-recovery must observe
+	// them (see VChannelRecoveryModule.markTransformMaterialized).
+	if rs.summaryManager != nil {
+		for vchannel, meta := range recoverySnapshot.VChannels {
+			if frontier := meta.GetTransformMaterializedTimeTick(); frontier > 0 {
+				rs.summaryManager.SetMaterializedTimeTick(vchannel, frontier)
+			}
+		}
+	}
 	for _, dirtySnapshot := range snapshot.ModuleDirtySnaps {
 		dirtySnapshot.MarkPersisted()
 	}

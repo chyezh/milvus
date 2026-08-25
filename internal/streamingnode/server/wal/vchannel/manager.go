@@ -29,15 +29,22 @@ type PChannelManagerConfig struct {
 	Logger            *mlog.Logger
 	SegmentLifecycle  segment.Lifecycle
 	SegmentPackWriter segment.PackWriter
-	// SummaryManager is the pchannel-scoped WALSummary runtime. Each vchannel
-	// module observes messages into its summary view; the transform consumer
-	// receives the durable records through the summary's flush events.
+	// SummaryManager is the pchannel-scoped WALSummary runtime. The vchannel
+	// modules never touch it directly; this manager only notifies it of a
+	// vchannel drop (RemoveView) so its staging handles are released and no
+	// record of the dropped vchannel survives in memory.
 	SummaryManager *walsummary.Manager
 	// PendingTransformEntries is the recovery-loaded initial materialization
 	// window per vchannel: the durable records after the restored
 	// transform_materialized_time_tick. Runtime flushes replace it through
 	// the summary's flush listener.
 	PendingTransformEntries map[string][]*streamingpb.TransformLogEntry
+	// L0MaterializedTimeTicks is the newest checkpoint per vchannel that a
+	// registered L0 segment (registered by a previous run) reached. Recovery
+	// lifts the transform frontier past it so crash-window records that were
+	// already materialized into an L0 segment are not re-materialized into
+	// duplicate L0 segments.
+	L0MaterializedTimeTicks map[string]uint64
 	// TransformLogMaterializer writes the L0 segments of the transform
 	// consumer.
 	TransformLogMaterializer  transformlog.Materializer
@@ -332,8 +339,8 @@ func (m *PChannelRecoveryManager) newModule(vchannel string) (*VChannelRecoveryM
 		Logger:                    m.config.Logger,
 		SegmentLifecycle:          m.config.SegmentLifecycle,
 		SegmentPackWriter:         m.config.SegmentPackWriter,
-		SummaryManager:            m.config.SummaryManager,
 		PendingTransformEntries:   m.config.PendingTransformEntries[vchannel],
+		L0MaterializedTimeTick:    m.config.L0MaterializedTimeTicks[vchannel],
 		TransformLogMaterializer:  m.config.TransformLogMaterializer,
 		TransformLogMaterialRows:  m.config.TransformLogMaterialRows,
 		TransformLogMaterialBytes: m.config.TransformLogMaterialBytes,
@@ -365,6 +372,12 @@ func (m *PChannelRecoveryManager) removeModule(module *VChannelRecoveryModule) {
 		delete(m.cleanupModules, module.vchannel)
 	}
 	m.dirtyMu.Unlock()
+	// Drop the summary view of the removed vchannel: its staged handles must
+	// be released so the WAL checkpoint can advance past them, and no record
+	// of a dropped vchannel may survive in memory.
+	if m.config.SummaryManager != nil {
+		m.config.SummaryManager.RemoveView(module.vchannel)
+	}
 }
 
 func (m *PChannelRecoveryManager) markModuleUpdatedByVChannel(vchannel string) {
