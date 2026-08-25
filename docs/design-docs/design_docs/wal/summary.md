@@ -1,5 +1,10 @@
 # WALSummary Design
 
+- Feature DRI: @chyezh
+- Primary Approver: @czs007
+- Independent Approver: @weiliu1031
+- Design Review: 2026-07-29
+
 WALSummary is the **pchannel-scoped** summary of the transform records (Delete
 and Txn-Delete) observed on a physical WAL channel. It is the single owner of
 transform-record persistence and plays the role of a pchannel-level
@@ -39,7 +44,7 @@ successor's chunks.
 Manifest: the chunk index of the current term.
 
 ```text
-<root>/streammingnode/.../<pchannel>.manifest.<term>
+<root>/streamingnode/.../<pchannel>.manifest.<term>
 ```
 
 ### 2.2 Term arbitration
@@ -70,8 +75,8 @@ message VChannelSummaryTransformRecord { uint64 time_tick = 1; TransformDeleteEn
 ```
 
 Legacy per-vchannel formats (`VChannelTransformLogMeta`,
-`TransformLogChunk`) are deprecated and kept only for reading old data during
-migration.
+`TransformLogChunk`) are deprecated: the proto definitions are retained with
+`Deprecated` markers, but no reader or migration code remains on this branch.
 
 ## 3. Lifecycle And Persistence
 
@@ -141,11 +146,11 @@ records.
 3. the manifest is the durable chunk index for the live flush path.
 
 The takeover of the checkpoint happens in the recovery layer, after
-`Manager.Recover` seals the inherited manifest: the checkpoint is stamped with
-the own term through a compare-and-swap (a lost CAS — the superseded owner
-advanced it mid-recovery — aborts the open, and the retry re-inherits the
-newer coverage). After that, any surviving owner of an older term fails its
-own checkpoint advancement, so truncation stays behind the inherited coverage.
+`Manager.Recover` seals the inherited manifest. The consume checkpoint is
+currently a plain last-write commit point, **not** a compare-and-swap: a
+superseded older-term publisher can still overwrite it. See
+checkpoint-persistence.md §5.1 for the TODO and the intended fenced-commit
+design.
 
 After recovery the recovery path restores each vchannel's durable frontier
 (`Manager.DurableTimeTick`, the largest per-vchannel chunk index end in the
@@ -167,12 +172,3 @@ different content is corruption.
 per-vchannel materialization frontiers (`SetMaterializedTimeTick`): records
 not yet materialized must never be released. The materialization frontier
 mirrored from the transform consumer is a hard lower bound of the retention.
-
-## 7. Migration
-
-Legacy per-vchannel transform logs (etcd `tl` metas + `<root>/transform-log/...`
-chunk objects) are migrated once: the recovery path reads every legacy chunk
-of each vchannel, validates strict ascending order, writes them into one
-summary chunk (all vchannels), publishes the manifest — the commit point — and
-removes the legacy metas. The migration is idempotent: a manifest that
-already owns chunks is a no-op.

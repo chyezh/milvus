@@ -1,5 +1,10 @@
 # VChannel Recovery Module
 
+- Feature DRI: @chyezh
+- Primary Approver: @czs007
+- Independent Approver: @weiliu1031
+- Design Review: 2026-07-29
+
 `VChannelRecoveryModule` owns all recovery state for one VChannel and is
 indexed by `PChannelRecoveryManager`.
 
@@ -14,8 +19,6 @@ PChannelRecoveryManager
        +-- VChannelView
        +-- SegmentView*
        +-- TransformLog
-       +-- DataView recovery state
-       +-- QueryRuntime bridge
 ```
 
 The module owns:
@@ -23,9 +26,9 @@ The module owns:
 - collection, partition, schema, lifecycle, and tombstone state;
 - one continuous VChannel metadata `checkpoint_time_tick`;
 - SegmentView creation, lookup, routing, and snapshot aggregation;
-- the VChannel TransformLog and stream registration;
-- DataView recovery state and segment DataVersion summaries;
-- QueryRuntime snapshot construction and live-event forwarding.
+- the VChannel TransformLog;
+- DataView recovery state and QueryRuntime live-event forwarding (design
+  intent, pending the qviews feature — not yet wired in the current code).
 
 It does not own the PChannel global checkpoint, AckTracker, Coordinator
 broadcast acknowledgement, or QueryView state transitions.
@@ -77,8 +80,7 @@ Rules include:
 
 - VChannelView;
 - dirty SegmentViews;
-- TransformLog;
-- owned DataView recovery state.
+- TransformLog.
 
 Every snapshot has one `checkpoint_time_tick` and an exact `MarkPersisted`
 callback. The callback advances only through the captured snapshot and cannot
@@ -112,8 +114,8 @@ source-message ownership.
 ## 6. Recovery
 
 `PChannelRecoveryManager` creates VChannel modules from the union of persisted
-VChannel, Segment, TransformLog, and DataView records. This allows tombstoned
-base state to coexist with retained child state.
+VChannel, Segment, and TransformLog records. This allows tombstoned base state
+to coexist with retained child state.
 
 After construction:
 
@@ -143,7 +145,7 @@ wait for a second global recovery checkpoint.
 Cleanup is logical before physical:
 
 1. persist a VChannel or child tombstone;
-2. retain state while serving, recovery, or DataVersion rules require it;
+2. retain state while serving, recovery, or QueryView rules require it;
 3. persist removal from recovery metadata;
 4. remove object data asynchronously afterward.
 

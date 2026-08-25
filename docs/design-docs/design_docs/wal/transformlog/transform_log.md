@@ -1,5 +1,10 @@
 # TransformLog Design
 
+- Feature DRI: @chyezh
+- Primary Approver: @czs007
+- Independent Approver: @weiliu1031
+- Design Review: 2026-07-29
+
 TransformLog is the VChannel-level transform **consumer**: it turns the
 transform records of the pchannel-scoped WALSummary into DataCoord-managed L0
 segments. Delete is the initial transform payload. QueryNode and StreamingNode
@@ -149,18 +154,16 @@ protocol and requires lifecycle idempotency or reconciliation.
 
 1. the summary recovers its manifest (and fences the term via the catalog
    meta);
-2. legacy per-vchannel transform logs are migrated into the summary (see
-   Recovery Storage);
-3. for every vchannel, recovery loads the initial materialization window once:
+2. for every vchannel, recovery loads the initial materialization window once:
    `summaryManager.ReadTransformEntries(vchannel, materializedTimeTick, +inf)`
    — the only read of the summary store in the whole consumer path; the
    coverage of the load becomes `loadedThrough`;
-4. the module restores `materialized_time_tick` from
+3. the module restores `materialized_time_tick` from
    `VChannelMeta.transform_materialized_time_tick` and seeds the window;
-5. the summary view's durable frontier is restored from the manifest
+4. the summary view's durable frontier is restored from the manifest
    (`Manager.DurableTimeTick` / `SetDurableTimeTick`), so replay does not
    re-stage already-durable records;
-6. live operation continues from the restored frontier.
+5. live operation continues from the restored frontier.
 
 Consistency argument (no ordering between materialization and persistence):
 

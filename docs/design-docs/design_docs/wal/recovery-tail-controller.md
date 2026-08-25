@@ -1,5 +1,10 @@
 # Recovery Tail Controller
 
+- Feature DRI: @chyezh
+- Primary Approver: @czs007
+- Independent Approver: @weiliu1031
+- Design Review: 2026-07-29
+
 The Recovery Tail Controller keeps the replayable WAL suffix within a target
 size. It does not decide how SegmentView or TransformLog batches data and it
 does not solve object fragmentation.

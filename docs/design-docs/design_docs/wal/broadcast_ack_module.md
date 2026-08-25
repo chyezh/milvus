@@ -1,5 +1,10 @@
 # Broadcast Ack Module
 
+- Feature DRI: @chyezh
+- Primary Approver: @czs007
+- Independent Approver: @weiliu1031
+- Design Review: 2026-07-29
+
 `BroadcastAck` sends consuming-side acknowledgements for broadcast WAL messages
 to StreamingCoord. It is a dedicated RecoveryStorage sink, not a data
 persistence component.

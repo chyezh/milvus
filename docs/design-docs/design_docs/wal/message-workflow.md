@@ -1,5 +1,10 @@
 # Message Workflow
 
+- Feature DRI: @chyezh
+- Primary Approver: @czs007
+- Independent Approver: @weiliu1031
+- Design Review: 2026-07-29
+
 This document describes how one WAL observation stream routes messages into
 VChannel-owned persistence components. Handle lifetime and checkpoint gating
 are defined by [WAL Message Ack Design](message_ack.md).

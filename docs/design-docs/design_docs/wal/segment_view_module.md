@@ -1,5 +1,10 @@
 # Segment View Component
 
+- Feature DRI: @chyezh
+- Primary Approver: @czs007
+- Independent Approver: @weiliu1031
+- Design Review: 2026-07-29
+
 `SegmentView` owns growing-segment assignment, Insert buffering, object-storage
 persistence, lifecycle side effects, and recovery metadata for one segment. It
 is an internal component of `VChannelRecoveryModule`.

@@ -1,5 +1,10 @@
 # WAL Recovery Architecture
 
+- Feature DRI: @chyezh
+- Primary Approver: @czs007
+- Independent Approver: @weiliu1031
+- Design Review: 2026-07-29
+
 RecoveryStorage restores and persists the WAL-derived state owned by one
 StreamingNode PChannel. Its persistence scope is object storage plus recovery
 metadata in etcd. QueryView and QueryRuntime consume recovered state, but do not
@@ -34,11 +39,10 @@ those objects without changing the recovery checkpoint protocol.
 
 ```text
 RecoveryStorage
-  +-- CheckpointPublisher
+  +-- background persistence task (publishes the global checkpoint)
   +-- messageack.Tracker
   +-- RecoveryTailController
   +-- PChannelRecoveryManager
-  |     +-- PChannelControlView
   |     +-- VChannelRecoveryModule*
   |           +-- VChannelView
   |           +-- SegmentView*

@@ -1,5 +1,10 @@
 # Checkpoint And Snapshot Persistence
 
+- Feature DRI: @chyezh
+- Primary Approver: @czs007
+- Independent Approver: @weiliu1031
+- Design Review: 2026-07-29
+
 This document defines the single global checkpoint and the catalog publication
 protocol. Message lifetime is defined in
 [WAL Message Ack Design](message_ack.md).
@@ -10,6 +15,8 @@ protocol. Message lifetime is defined in
 type WALCheckpoint struct {
     MessageID message.MessageID
     TimeTick  uint64
+    Magic     int64  // recovery format marker (hint)
+    Term      int64  // owning publisher term (fencing metadata)
 }
 ```
 

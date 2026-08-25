@@ -1,5 +1,10 @@
 # TransformLog View Design Index
 
+- Feature DRI: @chyezh
+- Primary Approver: @czs007
+- Independent Approver: @weiliu1031
+- Design Review: 2026-07-29
+
 TransformLog is a VChannel-owned component, not an independent top-level
 RecoveryStorage module.
 

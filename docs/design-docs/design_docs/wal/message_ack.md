@@ -1,5 +1,10 @@
 # WAL Message Ack Design
 
+- Feature DRI: @chyezh
+- Primary Approver: @czs007
+- Independent Approver: @weiliu1031
+- Design Review: 2026-07-29
+
 This document defines how RecoveryStorage tracks one WAL message until all
 required persistence consumers and Coordinator broadcast acknowledgement have
 finished. The resulting continuous completed prefix is the sole candidate for
@@ -50,11 +55,11 @@ iteration never creates independent ownership.
 
 ```go
 type trackedEntry struct {
-    point             WALCheckpoint
+    point            WALCheckpoint
     logicalEndOffset  uint64
-    firstObservedAt   time.Time
-    affectedVChannels []string
+    vchannel          string
     message           ImmutableMessage
+    trackedAt         time.Time
     completed         bool
 }
 ```
@@ -114,9 +119,9 @@ materialization does not participate in source-message Ack.
 
 ### Metadata Components
 
-PChannelControlView and VChannelView apply their state, advance their continuous
-component `checkpoint_time_tick`, mark themselves dirty, and then return. They
-do not retain a handle when no asynchronous work is needed.
+The VChannel metadata views (VChannelView) apply their state, advance their
+continuous component `checkpoint_time_tick`, mark themselves dirty, and then
+return. They do not retain a handle when no asynchronous work is needed.
 
 ### QueryRuntime
 

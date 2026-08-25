@@ -1,8 +1,20 @@
 # StreamingNode VChannel WAL Input View
 
+- Feature DRI: @chyezh
+- Primary Approver: @czs007
+- Independent Approver: @weiliu1031
+- Design Review: 2026-07-29
+
 `VChannelWALView` is an internal preparation DTO built by
 `VChannelRecoveryModule` for QueryRuntime. It is not a RecoveryStorage API and
 does not participate in the global checkpoint protocol.
+
+> Status: design intent. `VChannelWALView` and the QueryRuntime integration
+> chain (`QueryViewStateMachine.Acquire` → `PChannelRecoveryManager.Acquire` →
+> `VChannelRecoveryModule.queryWALViewLocked` → `QueryRuntime.Initialize`) are
+> **not yet implemented** in the current code; they are pending the qviews
+> feature (#51887). The RecoveryStorage components and checkpoint protocol are
+> final; only the view-construction and live-forwarding chain is unwired.
 
 ## 1. Ownership
 
