@@ -68,3 +68,11 @@ func storeFencedf(format string, args ...any) error {
 		target: ErrStoreFenced,
 	}
 }
+
+// isTerminalSummaryFlushError reports whether a flush error is terminal: a
+// corrupted or fenced summary store cannot be repaired by rewriting the same
+// chunk, so the flush task must fail loudly (and be dropped) instead of being
+// retried forever.
+func isTerminalSummaryFlushError(err error) bool {
+	return errors.IsAny(err, ErrStoreCorrupted, ErrStoreFenced)
+}

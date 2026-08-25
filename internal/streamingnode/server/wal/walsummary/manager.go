@@ -327,15 +327,34 @@ func (m *Manager) LatestCoveredTimeTick() uint64 {
 // chunk, publish the manifest, then release the message handles. It is the
 // execution body of summaryFlushTask.
 //
-// persistChunk failure is clean: nothing was written, so the generation is
-// handed back and the staging restored — the retry rewrites the same
-// generation. A publishManifest failure is different: the chunk object is
-// already durable, so the batch is pinned on the task and the retry publishes
-// only the manifest with the same generation. Restoring the staging instead
-// would let the retry re-collect newer records into the batch, and the
-// enlarged batch would then collide with the durable chunk object
-// (storeCorrupted), livelocking the flush.
+// flushOnce is the execution body of summaryFlushTask. Every failure path pins
+// the batch on the task so a retry rewrites the exact same bytes under the
+// same generation: a chunk-write failure (pendingChunk) and a manifest-publish
+// failure (pendingPublish) both retry with the pinned batch, never a
+// re-collection of the grown staging set. A grown batch under the same
+// generation would collide with an already-durable (or partially written)
+// chunk object (storeCorrupted) and livelock the flush forever. Staging that
+// arrives during the retry window stays in the views and is collected by the
+// next flush task into a fresh generation.
 func (m *Manager) flushOnce(ctx context.Context, task *summaryFlushTask) error {
+	// A chunk write failed on a previous attempt: the object may or may not be
+	// durable (a dropped ack after a successful write). Retry the SAME
+	// generation with the SAME pinned batch; new staging is never folded into
+	// this batch, so the rewrite is byte-identical and idempotent.
+	if task.pendingChunk != nil {
+		generation := task.pendingChunk.generation
+		batch := task.pendingChunk.batch
+		if err := m.persistChunk(ctx, generation, batch); err != nil {
+			return err
+		}
+		task.pendingChunk = nil
+		if err := m.publishManifest(ctx, generation, batch); err != nil {
+			task.pendingPublish = &pendingPublishState{generation: generation, batch: batch}
+			return err
+		}
+		m.completeBatch(generation, batch)
+		return nil
+	}
 	// A chunk durably written by a previous attempt whose manifest publish
 	// failed: retry only the publish with the pinned batch. New staging stays
 	// in the views and is collected by the next flush task into a fresh
@@ -356,17 +375,12 @@ func (m *Manager) flushOnce(ctx context.Context, task *summaryFlushTask) error {
 	}
 	generation := m.claimGenerationLocked()
 	if err := m.persistChunk(ctx, generation, batch); err != nil {
-		// The generation was never written; hand it back so the retry rewrites
-		// it instead of skipping numbers.
-		m.rollbackGenerationLocked(generation)
-		m.restoreStaging(batch)
+		// The generation stays claimed: the pinned retry writes it. Never
+		// restore the staging — the retry must rewrite the identical bytes, and
+		// newer records go to a later generation, not into this batch.
+		task.pendingChunk = &pendingChunkState{generation: generation, batch: batch}
 		return err
 	}
-	// Chunk durable: record it in the manifest and publish. The manifest write
-	// must follow the chunk write; a crash between them is repaired by
-	// recovery probing forward. On failure the batch is pinned for the retry
-	// (see the pendingPublish path above) — never re-collected into a grown
-	// batch that would collide with the durable chunk object.
 	if err := m.publishManifest(ctx, generation, batch); err != nil {
 		task.pendingPublish = &pendingPublishState{generation: generation, batch: batch}
 		return err
@@ -375,49 +389,6 @@ func (m *Manager) flushOnce(ctx context.Context, task *summaryFlushTask) error {
 	// advance past every record of this batch.
 	m.completeBatch(generation, batch)
 	return nil
-}
-
-// rollbackGenerationLocked hands a claimed generation back to the allocator.
-// It is only safe when the generation's chunk was not durably recorded (a
-// failed chunk write, or a failed publish that also rolled the manifest
-// amendment back): the retry then rewrites the same generation, so no object
-// is orphaned and no batch is duplicated.
-func (m *Manager) rollbackGenerationLocked(generation uint64) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.nextGeneration > generation {
-		m.nextGeneration = generation
-	}
-}
-
-// restoreStaging puts a failed batch's records back into their views, in the
-// original order. The handles were never released, so the records remain
-// valid; only the staging bookkeeping needs rebuilding.
-//
-// The whole pass runs under m.mu, so a concurrent RemoveView cannot interleave
-// between the membership check and the append: the view either still exists
-// (the append lands in its staging and the later RemoveView drains and
-// releases it) or is already gone (the records are released here).
-func (m *Manager) restoreStaging(batch *flushBatch) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for vchannel, records := range batch.recordsByVChannel {
-		view, ok := m.views[vchannel]
-		if !ok {
-			// The view was dropped while the flush failed; its records are
-			// discarded together with the vchannel.
-			for _, record := range records {
-				record.handle.Release()
-			}
-			continue
-		}
-		view.mu.Lock()
-		view.staging = append(records, view.staging...)
-		for _, record := range records {
-			view.stagingBytes += uint64(proto.Size(record.entry))
-		}
-		view.mu.Unlock()
-	}
 }
 
 // collectStaging takes the staging of every view.
@@ -452,8 +423,9 @@ func (m *Manager) claimGenerationLocked() uint64 {
 }
 
 // persistChunk writes the chunk object for one batch and derives the manifest
-// entry from the returned footer. The generation is not consumed on failure:
-// a chunk durable but unrecorded is found by recovery probing forward.
+// entry from the returned footer. The generation stays claimed by the pinned
+// retry on failure (see flushOnce); a chunk durable but unrecorded is found by
+// recovery probing forward.
 func (m *Manager) persistChunk(ctx context.Context, generation uint64, batch *flushBatch) error {
 	records := make(map[string][]*streamingpb.VChannelSummaryTransformRecord, len(batch.recordsByVChannel))
 	maxTimeTick := uint64(0)
@@ -557,10 +529,23 @@ type flushBatch struct {
 type summaryFlushTask struct {
 	log  *Manager
 	done atomic.Bool
+	// pendingChunk pins the batch of a chunk whose write failed: the retry
+	// rewrites the SAME generation with the SAME batch instead of re-collecting
+	// staging (see flushOnce), so a grown batch can never collide with a
+	// partially written chunk object.
+	pendingChunk *pendingChunkState
 	// pendingPublish pins the batch of a chunk that was durably written but
 	// whose manifest publish failed: the retry publishes the same generation
 	// instead of re-collecting staging (see flushOnce).
 	pendingPublish *pendingPublishState
+}
+
+// pendingChunkState is the pinned state of a batch whose chunk write failed.
+// The chunk key may already hold this payload (a dropped ack after a
+// successful write), so the retry must rewrite the identical bytes.
+type pendingChunkState struct {
+	generation uint64
+	batch      *flushBatch
 }
 
 // pendingPublishState is the pinned state of a chunk written but not yet
@@ -575,11 +560,22 @@ func (t *summaryFlushTask) Done() bool {
 	return t.done.Load()
 }
 
-// Execute runs the flush. A failure is marked ErrDelay so the scheduler
-// retries it; flushOnce pinned the failed batch (or restored it for a chunk
-// write failure), so the retry never re-collects a grown staging set.
+// Execute runs the flush. Transient failures are marked ErrDelay so the
+// scheduler retries the task with backoff; flushOnce pinned the failed batch
+// (pendingChunk for a chunk write, pendingPublish for a manifest publish), so
+// a retry never re-collects a grown staging set into the same chunk key. A
+// terminal failure (corrupted or fenced store) drops the task instead: the
+// pinned batch is abandoned with its handles retained, so the WAL checkpoint
+// stalls before it and recovery replays it after a restart.
 func (t *summaryFlushTask) Execute(ctx context.Context) error {
 	if err := t.log.flushOnce(ctx, t); err != nil {
+		if isTerminalSummaryFlushError(err) {
+			t.done.Store(true)
+			if logger := t.log.cfg.Logger; logger != nil {
+				logger.Error(ctx, "summary flush failed terminally, abandoning pinned batch", mlog.Err(err))
+			}
+			return err
+		}
 		return errors.Mark(err, nodescheduler.ErrDelay)
 	}
 	t.done.Store(true)
