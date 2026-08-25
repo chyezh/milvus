@@ -10,6 +10,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus/internal/flushcommon/broker"
 	"github.com/milvus-io/milvus/internal/flushcommon/syncmgr"
+	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/storagev2/packed"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/messageack"
@@ -31,6 +32,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v3/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/replicateutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/syncutil"
 )
@@ -238,7 +240,11 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 		resource.Resource().ChunkManager(),
 		idalloc.NewMAllocator(resource.Resource().IDAllocator()),
 		syncmgr.BrokerMetaWriter(broker.NewCoordBroker(coord, paramtable.GetNodeID()), paramtable.GetNodeID()),
-	)
+		paramtable.GetNodeID(),
+	).WithPendingL0Recorder(&catalogPendingL0Recorder{
+		catalog:  resource.Resource().StreamingNodeCatalog(),
+		pchannel: r.channel.Name,
+	})
 	// Lift the transform frontier of every vchannel past the L0 segments a
 	// previous run already registered. A registered L0 segment means its
 	// delete records were materialized before the crash but the frontier was
@@ -248,6 +254,21 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 	l0MaterializedTimeTicks, err := recoverL0SegmentCheckpoints(ctx, coord, vchannels)
 	if err != nil {
 		return err
+	}
+	// Replay the pending L0 segment registrations recorded before the crash
+	// (the outbox of the materializer): their binlog objects are durable but
+	// their DataCoord registration may not have completed. Re-sending the
+	// recorded request is idempotent (full replacement), and the frontier is
+	// lifted past their checkpoints, so the delete data is neither lost nor
+	// re-materialized. The records are removed once re-registered.
+	pendingL0Checkpoints, err := recoverPendingL0Segments(ctx, coord, resource.Resource().StreamingNodeCatalog(), r.channel.Name)
+	if err != nil {
+		return err
+	}
+	for vchannel, timeTick := range pendingL0Checkpoints {
+		if timeTick > l0MaterializedTimeTicks[vchannel] {
+			l0MaterializedTimeTicks[vchannel] = timeTick
+		}
 	}
 	// Load the initial materialization window of every vchannel: the durable
 	// records after the restored transform_materialized_time_tick. This is
@@ -768,4 +789,70 @@ func (r *recoveryStorageImpl) getCompletedCheckpoint() *WALCheckpoint {
 		TimeTick:  point.TimeTick,
 		Magic:     utility.RecoveryMagicRecoveryStorageV2,
 	}
+}
+
+// catalogPendingL0Recorder implements transformlog.PendingL0Recorder against
+// the streaming-node catalog: it records the materialized L0 segments whose
+// DataCoord registration is still in flight, keyed per pchannel.
+type catalogPendingL0Recorder struct {
+	catalog  metastore.StreamingNodeCataLog
+	pchannel string
+}
+
+func (r *catalogPendingL0Recorder) Record(ctx context.Context, req *datapb.SaveBinlogPathsRequest) error {
+	return r.catalog.SavePendingL0Segment(ctx, r.pchannel, req)
+}
+
+func (r *catalogPendingL0Recorder) Remove(ctx context.Context, segmentID int64) error {
+	return r.catalog.RemovePendingL0Segments(ctx, r.pchannel, []int64{segmentID})
+}
+
+// recoverPendingL0Segments replays the pending L0 segment registrations of
+// the pchannel recorded before a crash (the materializer outbox). Every
+// pending record's binlog objects are durable but its DataCoord registration
+// may not have completed; re-sending the recorded SaveBinlogPathsRequest is
+// idempotent because DataCoord applies it as a full replacement. The returned
+// map carries, per vchannel, the newest checkpoint among the re-registered
+// segments: recovery lifts the transform frontier past it so the already
+// materialized delete records are not re-materialized. The records are
+// removed once re-registered.
+func recoverPendingL0Segments(
+	ctx context.Context,
+	coord internaltypes.MixCoordClient,
+	catalog metastore.StreamingNodeCataLog,
+	pchannel string,
+) (map[string]uint64, error) {
+	pendings, err := catalog.ListPendingL0Segments(ctx, pchannel)
+	if err != nil {
+		return nil, merr.Wrap(err, "failed to list pending l0 segments")
+	}
+	if len(pendings) == 0 {
+		return nil, nil
+	}
+	checkpoints := make(map[string]uint64, len(pendings))
+	removed := make([]int64, 0, len(pendings))
+	for _, pending := range pendings {
+		req := proto.Clone(pending).(*datapb.SaveBinlogPathsRequest)
+		// The recorded request was built by the previous owner node; the
+		// channel now belongs to this node, so re-send with our source id.
+		req.Base = commonpbutil.NewMsgBase(
+			commonpbutil.WithMsgType(0),
+			commonpbutil.WithMsgID(0),
+			commonpbutil.WithSourceID(paramtable.GetNodeID()),
+		)
+		resp, err := coord.SaveBinlogPaths(ctx, req)
+		if err = merr.CheckRPCCall(resp, err); err != nil {
+			return nil, merr.Wrapf(err, "failed to re-register pending l0 segment %d", pending.GetSegmentID())
+		}
+		if cps := pending.GetCheckPoints(); len(cps) > 0 && cps[0].GetPosition() != nil {
+			if ts := cps[0].GetPosition().GetTimestamp(); ts > checkpoints[pending.GetChannel()] {
+				checkpoints[pending.GetChannel()] = ts
+			}
+		}
+		removed = append(removed, pending.GetSegmentID())
+	}
+	if err := catalog.RemovePendingL0Segments(ctx, pchannel, removed); err != nil {
+		return nil, merr.Wrap(err, "failed to remove pending l0 segments")
+	}
+	return checkpoints, nil
 }
