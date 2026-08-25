@@ -49,10 +49,12 @@ type Builder struct {
 }
 
 // valueCond is the guard of a conditional commit: every op of the commit
-// applies only when the current value of key equals oldValue at commit time.
+// applies only when the guard holds at commit time — either the current value
+// of key equals oldValue, or (notExist) the key is absent.
 type valueCond struct {
 	key      string
 	oldValue string
+	notExist bool
 }
 
 // New returns an empty Builder.
@@ -100,12 +102,29 @@ func (b *Builder) CommitSave(key, value string) {
 //
 // Precondition: at most one conditional commit op per builder (a second call
 // panics); the guarded key must already exist (an absent key fails the value
-// comparison — use a version-based CAS to create it).
+// comparison — use CommitSaveIfNotExist to create it).
 func (b *Builder) CommitSaveIfValue(key, oldValue, newValue string) {
 	if b.cond != nil {
 		panic("txn: at most one conditional commit op per builder")
 	}
 	b.cond = &valueCond{key: key, oldValue: oldValue}
+	b.CommitSave(key, newValue)
+}
+
+// CommitSaveIfNotExist records a CommitSave that is also guarded: the whole
+// commit applies only when the key is absent at commit time — an atomic
+// create-if-absent. It backs the first consume-checkpoint write of a pchannel,
+// so two concurrent first publishers cannot both succeed (the loser's commit
+// is refused by the backend guard).
+//
+// Precondition: at most one conditional commit op per builder (a second call
+// panics); the guarded key must be absent (an existing key fails the
+// not-exist comparison — use CommitSaveIfValue to update it).
+func (b *Builder) CommitSaveIfNotExist(key, newValue string) {
+	if b.cond != nil {
+		panic("txn: at most one conditional commit op per builder")
+	}
+	b.cond = &valueCond{key: key, notExist: true}
 	b.CommitSave(key, newValue)
 }
 

@@ -634,6 +634,8 @@ func TestTxnWithPredicates(t *testing.T) {
 	}{
 		{"predicate_ok", map[string]string{"a": "b"}, []predicates.Predicate{predicates.ValueEqual("lease1", "1")}, true},
 		{"predicate_fail", map[string]string{"a": "b"}, []predicates.Predicate{predicates.ValueEqual("lease1", "2")}, false},
+		{"not_exist_ok", map[string]string{"a": "b"}, []predicates.Predicate{predicates.NotExist("missing")}, true},
+		{"not_exist_fail", map[string]string{"a": "b"}, []predicates.Predicate{predicates.NotExist("lease1")}, false},
 	}
 
 	for _, test := range multiSaveAndRemovePredTests {
