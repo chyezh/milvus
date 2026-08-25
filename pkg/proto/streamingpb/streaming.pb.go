@@ -6472,8 +6472,10 @@ type WALCheckpoint struct {
 	TimeTick  uint64              `protobuf:"varint,2,opt,name=time_tick,json=timeTick,proto3" json:"time_tick,omitempty"`   // The timetick of checkpoint, keep consistecy with message_id.
 	// It's a hint for easier debugging.
 	RecoveryMagic int64 `protobuf:"varint,3,opt,name=recovery_magic,json=recoveryMagic,proto3" json:"recovery_magic,omitempty"` // The recovery version of the checkpoint, it's used to hint the future recovery info upgrading.
-	// Legacy embedded control fields are read only for migration. New writers
-	// persist them in PChannelRecoveryControlMeta.
+	// Pchannel-scoped recovery control state (replication config/checkpoint
+	// and AlterWAL state). It advances atomically with the checkpoint: the
+	// checkpoint is the single source of truth for the control state after a
+	// crash.
 	ReplicateConfig     *commonpb.ReplicateConfiguration `protobuf:"bytes,4,opt,name=replicate_config,json=replicateConfig,proto3" json:"replicate_config,omitempty"`
 	ReplicateCheckpoint *commonpb.ReplicateCheckpoint    `protobuf:"bytes,5,opt,name=replicate_checkpoint,json=replicateCheckpoint,proto3" json:"replicate_checkpoint,omitempty"`
 	AlterWalState       *AlterWALState                   `protobuf:"bytes,6,opt,name=alter_wal_state,json=alterWalState,proto3" json:"alter_wal_state,omitempty"`

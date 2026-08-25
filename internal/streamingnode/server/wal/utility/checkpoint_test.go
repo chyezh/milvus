@@ -39,30 +39,42 @@ func TestNewWALCheckpointFromProto(t *testing.T) {
 	assert.Equal(t, timeTick, checkpoint3.TimeTick)
 	assert.Equal(t, recoveryMagic, checkpoint3.Magic)
 
+	// The control fields advance atomically with the checkpoint: they round
+	// trip through the proto and survive Clone.
 	protoCheckpoint.ReplicateConfig = &commonpb.ReplicateConfiguration{}
 	protoCheckpoint.ReplicateCheckpoint = &commonpb.ReplicateCheckpoint{
 		ClusterId: "by-dev",
 		Pchannel:  "p1",
-		MessageId: nil,
-		TimeTick:  0,
+		MessageId: rmq.NewRmqID(2).IntoProto(),
+		TimeTick:  123456,
 	}
-	newCheckpoint := NewWALCheckpointFromProto(protoCheckpoint)
-	assert.True(t, messageID.EQ(newCheckpoint.MessageID))
-	control := PChannelRecoveryControlMetaFromLegacyCheckpoint(protoCheckpoint)
+	withControl := NewWALCheckpointFromProto(protoCheckpoint)
+	assert.True(t, messageID.EQ(withControl.MessageID))
+	assert.NotNil(t, withControl.ReplicateConfig)
+	assert.Equal(t, "by-dev", withControl.ReplicateCheckpoint.GetClusterId())
+	assert.Equal(t, uint64(123456), withControl.ReplicateCheckpoint.GetTimeTick())
+
+	roundtrip := NewWALCheckpointFromProto(withControl.IntoProto())
+	assert.Equal(t, "by-dev", roundtrip.ReplicateCheckpoint.GetClusterId())
+	assert.Equal(t, rmq.NewRmqID(2).IntoProto(), roundtrip.ReplicateCheckpoint.GetMessageId())
+	assert.Equal(t, uint64(123456), roundtrip.ReplicateCheckpoint.GetTimeTick())
+
+	cloned := withControl.Clone()
+	assert.Equal(t, "by-dev", cloned.ReplicateCheckpoint.GetClusterId())
+
+	// PChannelControlFromCheckpoint decodes the embedded control state with the
+	// checkpoint position as its frontier.
+	control := PChannelControlFromCheckpoint(withControl)
 	assert.Equal(t, timeTick, control.GetCheckpointTimeTick())
 	assert.Equal(t, "by-dev", control.GetReplicateCheckpoint().GetClusterId())
 	assert.Equal(t, "p1", control.GetReplicateCheckpoint().GetPchannel())
 	assert.NotNil(t, control.GetReplicateConfig())
 
-	protoCheckpoint.ReplicateCheckpoint.MessageId = rmq.NewRmqID(2).IntoProto()
-	protoCheckpoint.ReplicateCheckpoint.TimeTick = 123456
-
-	control = PChannelRecoveryControlMetaFromLegacyCheckpoint(protoCheckpoint)
-	assert.Equal(t, uint64(123456), control.GetReplicateCheckpoint().GetTimeTick())
-	assert.Equal(t, rmq.NewRmqID(2).IntoProto(), control.GetReplicateCheckpoint().GetMessageId())
-
-	// New checkpoints intentionally contain only the global WAL position.
-	proto = newCheckpoint.IntoProto()
-	assert.Nil(t, proto.GetReplicateConfig())
-	assert.Nil(t, proto.GetReplicateCheckpoint())
+	// ApplyControl freezes control state into a checkpoint.
+	applyTarget := withControl.Clone()
+	applyTarget.AlterWalState = nil
+	applyTarget.ReplicateCheckpoint = nil
+	applyTarget.ApplyControl(control)
+	assert.Equal(t, uint64(123456), applyTarget.ReplicateCheckpoint.GetTimeTick())
+	assert.Equal(t, rmq.NewRmqID(2).IntoProto(), applyTarget.ReplicateCheckpoint.GetMessageId())
 }

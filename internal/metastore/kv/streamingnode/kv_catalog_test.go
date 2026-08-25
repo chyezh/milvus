@@ -57,43 +57,29 @@ func TestCatalogConsumeCheckpoint(t *testing.T) {
 	assert.Nil(t, err)
 }
 
-func TestCatalogPChannelRecoveryControlMeta(t *testing.T) {
+func TestCatalogConsumeCheckpointControlFields(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("round_trip", func(t *testing.T) {
-		catalog := newTestEtcdCatalog(t, "testCatalogRecoveryControl")
-		control, err := catalog.GetPChannelRecoveryControlMeta(ctx, "p1")
+		catalog := newTestEtcdCatalog(t, "testCatalogCheckpointControl")
+		checkpoint, err := catalog.GetConsumeCheckpoint(ctx, "p1")
 		require.NoError(t, err)
-		require.Nil(t, control)
+		require.Nil(t, checkpoint)
 
-		expected := &streamingpb.PChannelRecoveryControlMeta{
-			CheckpointTimeTick: 42,
-			ReplicateConfig:    &commonpb.ReplicateConfiguration{Clusters: []*commonpb.MilvusCluster{{ClusterId: "cluster-a"}}},
-			AlterWalState:      &streamingpb.AlterWALState{Stage: streamingpb.AlterWALStage_FLUSHING},
+		expected := &streamingpb.WALCheckpoint{
+			TimeTick: 42,
+			ReplicateConfig: &commonpb.ReplicateConfiguration{
+				Clusters: []*commonpb.MilvusCluster{{ClusterId: "cluster-a"}},
+			},
+			AlterWalState: &streamingpb.AlterWALState{Stage: streamingpb.AlterWALStage_FLUSHING},
 		}
 		require.NoError(t, catalog.SaveRecoverySnapshot(ctx, "p1", &metastore.WALRecoverySnapshot{
-			PChannelControlMeta: expected,
+			ConsumeCheckpoint: expected,
 		}))
 
-		control, err = catalog.GetPChannelRecoveryControlMeta(ctx, "p1")
+		checkpoint, err = catalog.GetConsumeCheckpoint(ctx, "p1")
 		require.NoError(t, err)
-		require.True(t, proto.Equal(expected, control))
-	})
-
-	t.Run("load_error", func(t *testing.T) {
-		kv := mocks.NewMetaKv(t)
-		kv.EXPECT().Load(mock.Anything, mock.Anything).Return("", errors.New("load failed"))
-		control, err := NewCataLog(kv).GetPChannelRecoveryControlMeta(ctx, "p1")
-		require.Error(t, err)
-		require.Nil(t, control)
-	})
-
-	t.Run("invalid_payload", func(t *testing.T) {
-		kv := mocks.NewMetaKv(t)
-		kv.EXPECT().Load(mock.Anything, mock.Anything).Return("invalid", nil)
-		control, err := NewCataLog(kv).GetPChannelRecoveryControlMeta(ctx, "p1")
-		require.Error(t, err)
-		require.Nil(t, control)
+		require.True(t, proto.Equal(expected, checkpoint))
 	})
 }
 
@@ -711,7 +697,6 @@ func TestCatalogSaveRecoverySnapshotRoundTrip(t *testing.T) {
 	pchannel := "p1"
 
 	err := catalog.SaveRecoverySnapshot(ctx, pchannel, &metastore.WALRecoverySnapshot{
-		PChannelControlMeta: &streamingpb.PChannelRecoveryControlMeta{CheckpointTimeTick: 41},
 		SegmentAssignments: map[int64]*streamingpb.SegmentAssignmentMeta{
 			1: {SegmentId: 1, State: streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING},
 		},
@@ -732,7 +717,11 @@ func TestCatalogSaveRecoverySnapshotRoundTrip(t *testing.T) {
 			},
 		},
 		SalvageCheckpoint: &commonpb.ReplicateCheckpoint{ClusterId: "cluster-a", Pchannel: "p1-rootcoord-dml_0"},
-		ConsumeCheckpoint: &streamingpb.WALCheckpoint{TimeTick: 42},
+		ConsumeCheckpoint: &streamingpb.WALCheckpoint{
+			TimeTick: 42,
+			// The pchannel control state advances atomically with the checkpoint.
+			AlterWalState: &streamingpb.AlterWALState{Stage: streamingpb.AlterWALStage_FLUSHING},
+		},
 	})
 	assert.NoError(t, err)
 
@@ -756,11 +745,7 @@ func TestCatalogSaveRecoverySnapshotRoundTrip(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, checkpoint)
 	assert.Equal(t, uint64(42), checkpoint.GetTimeTick())
-
-	control, err := catalog.GetPChannelRecoveryControlMeta(ctx, pchannel)
-	assert.NoError(t, err)
-	assert.NotNil(t, control)
-	assert.Equal(t, uint64(41), control.GetCheckpointTimeTick())
+	assert.Equal(t, streamingpb.AlterWALStage_FLUSHING, checkpoint.GetAlterWalState().GetStage())
 }
 
 func TestBuildPrefixAndKey(t *testing.T) {
@@ -788,8 +773,6 @@ func TestBuildPrefixAndKey(t *testing.T) {
 
 	assert.Equal(t, "streamingnode-meta/wal/p1/consume-checkpoint", buildConsumeCheckpointKey("p1"))
 	assert.Equal(t, "streamingnode-meta/wal/p2/consume-checkpoint", buildConsumeCheckpointKey("p2"))
-	assert.Equal(t, "streamingnode-meta/wal/p1/recovery-control", buildRecoveryControlKey("p1"))
-	assert.Equal(t, "streamingnode-meta/wal/p2/recovery-control", buildRecoveryControlKey("p2"))
 
 	assert.Equal(t, "streamingnode-meta/wal/p1/salvage-checkpoint/cluster-a", buildSalvageCheckpointPath("p1", "cluster-a"))
 	assert.Equal(t, "streamingnode-meta/wal/p2/salvage-checkpoint/cluster-b", buildSalvageCheckpointPath("p2", "cluster-b"))

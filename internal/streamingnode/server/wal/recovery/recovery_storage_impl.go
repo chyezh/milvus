@@ -93,14 +93,6 @@ func WithRecoveryTailRateLimiter(rateLimiter RecoveryTailRateLimiter) RecoverySt
 	}
 }
 
-// WithInitialPChannelControl seeds control state decoded from a legacy
-// WALCheckpoint. A standalone catalog snapshot, when present, supersedes it.
-func WithInitialPChannelControl(control *streamingpb.PChannelRecoveryControlMeta) RecoveryStorageOption {
-	return func(r *recoveryStorageImpl) {
-		r.installPChannelControl(control)
-	}
-}
-
 func initialCheckpointFromLastTimeTickMessage(lastTimeTickMessage message.ImmutableMessage) *utility.WALCheckpoint {
 	return &utility.WALCheckpoint{
 		MessageID: lastTimeTickMessage.LastConfirmedMessageID(),
@@ -126,6 +118,10 @@ func newRecoveryStorage(channel types.PChannelInfo, cp *utility.WALCheckpoint, o
 	if cp != nil {
 		rs.installCheckpoint(cp)
 	}
+	// The pchannel control state is embedded in the checkpoint: it advances
+	// atomically with it, so the checkpoint is the single source of truth for
+	// the control state after a crash (see utility.WALCheckpoint).
+	rs.installPChannelControl(utility.PChannelControlFromCheckpoint(cp))
 	for _, opt := range opts {
 		opt(rs)
 	}
@@ -153,7 +149,6 @@ type recoveryStorageImpl struct {
 	channel                 types.PChannelInfo
 	checkpoint              *WALCheckpoint
 	pchannelControl         *streamingpb.PChannelRecoveryControlMeta
-	persistedControl        *streamingpb.PChannelRecoveryControlMeta
 	ackTracker              *messageack.Tracker
 	tailController          *recoveryTailController
 	recoveryTailRateLimiter RecoveryTailRateLimiter
@@ -213,7 +208,6 @@ func (r *recoveryStorageImpl) installPChannelControl(control *streamingpb.PChann
 		control = &streamingpb.PChannelRecoveryControlMeta{}
 	}
 	r.pchannelControl = proto.Clone(control).(*streamingpb.PChannelRecoveryControlMeta)
-	r.persistedControl = proto.Clone(control).(*streamingpb.PChannelRecoveryControlMeta)
 }
 
 func (r *recoveryStorageImpl) initRecoveryModules(
@@ -428,10 +422,12 @@ func (r *recoveryStorageImpl) consumeDirtySnapshot() *dirtyPersistSnapshot {
 		TimeTick:  completedPoint.TimeTick,
 		Magic:     utility.RecoveryMagicRecoveryStorageV2,
 	}
+	// The control state advances atomically with the checkpoint: freeze the
+	// current in-memory control into the checkpoint so a control-only change
+	// rewrites the checkpoint and is never lost on crash.
+	frozenCheckpoint.ApplyControl(r.pchannelControl)
 	checkpointDirty := checkpoint == nil ||
 		!consumeCheckpointEqual(checkpoint, frozenCheckpoint)
-	control := proto.Clone(r.pchannelControl).(*streamingpb.PChannelRecoveryControlMeta)
-	controlDirty := r.persistedControl == nil || !proto.Equal(r.persistedControl, control)
 	salvageCP := r.pendingSalvageCheckpoint
 	r.pendingSalvageCheckpoint = nil
 	r.dirtyCounter = 0
@@ -446,15 +442,13 @@ func (r *recoveryStorageImpl) consumeDirtySnapshot() *dirtyPersistSnapshot {
 		moduleSnapshots = append(moduleSnapshots, r.vchannelManager.ConsumeCleanupSnapshots(cleanup)...)
 		moduleSnapshots = append(moduleSnapshots, r.vchannelManager.ConsumeDirtySnapshots()...)
 	}
-	if !checkpointDirty && !controlDirty && salvageCP == nil && len(moduleSnapshots) == 0 {
+	if !checkpointDirty && salvageCP == nil && len(moduleSnapshots) == 0 {
 		return nil
 	}
 	return &dirtyPersistSnapshot{
 		Checkpoint:        frozenCheckpoint,
 		LogicalEndOffset:  completedLogicalOffset,
 		CheckpointDirty:   checkpointDirty,
-		PChannelControl:   control,
-		ControlDirty:      controlDirty,
 		SalvageCheckpoint: salvageCP,
 		ModuleDirtySnaps:  moduleSnapshots,
 	}
@@ -468,6 +462,11 @@ func consumeCheckpointEqual(left, right *utility.WALCheckpoint) bool {
 		return false
 	}
 	if left.Magic != right.Magic {
+		return false
+	}
+	if !proto.Equal(left.ReplicateConfig, right.ReplicateConfig) ||
+		!proto.Equal(left.ReplicateCheckpoint, right.ReplicateCheckpoint) ||
+		!proto.Equal(left.AlterWalState, right.AlterWalState) {
 		return false
 	}
 	if left.MessageID == nil || right.MessageID == nil {

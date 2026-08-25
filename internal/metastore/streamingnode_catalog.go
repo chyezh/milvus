@@ -22,10 +22,6 @@ type StreamingNodeCataLog interface {
 	// Return nil, nil if the checkpoint is not exist.
 	GetConsumeCheckpoint(ctx context.Context, pChannelName string) (*streamingpb.WALCheckpoint, error)
 
-	// GetPChannelRecoveryControlMeta gets the pchannel-scoped recovery control
-	// state. Return nil, nil if the state does not exist.
-	GetPChannelRecoveryControlMeta(ctx context.Context, pChannelName string) (*streamingpb.PChannelRecoveryControlMeta, error)
-
 	// GetSalvageCheckpoint gets all salvage checkpoints for a channel.
 	// Returns an empty slice if none exist. One checkpoint per source cluster.
 	GetSalvageCheckpoint(ctx context.Context, pChannelName string) ([]*commonpb.ReplicateCheckpoint, error)
@@ -57,8 +53,6 @@ type StreamingNodeCataLog interface {
 // snapshot: absent sections mean "unchanged", and deletion is carried by
 // explicit Removed* sections, not by omission. See SaveRecoverySnapshot.
 type WALRecoverySnapshot struct {
-	// PChannelControlMeta is the pchannel-scoped control state to save; skipped if nil.
-	PChannelControlMeta *streamingpb.PChannelRecoveryControlMeta
 	// SegmentAssignments are the segment assignments to save; skipped if empty.
 	SegmentAssignments map[int64]*streamingpb.SegmentAssignmentMeta
 	// RemovedSegmentIDs are the segment assignments to remove; skipped if empty.

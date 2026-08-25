@@ -47,12 +47,15 @@ publish a component checkpoint with a gap.
 
 The following state is represented as component snapshots:
 
-- PChannel replication and AlterWAL control state;
 - VChannel collection, partition, schema, and lifecycle state;
 - Segment assignment, object references, row statistics, and lifecycle state;
 - the VChannel transform materialization frontier
   (`VChannelMeta.transform_materialized_time_tick`);
 - salvage and cleanup metadata that must precede checkpoint publication.
+
+The PChannel replication and AlterWAL control state is **not** a component
+snapshot: it is embedded in `WALCheckpoint` itself and advances atomically with
+it (see [§7](#7-pchannel-control-state)).
 
 Transform records themselves are not a component snapshot: their durability is
 owned by the pchannel-scoped WALSummary (chunk + manifest on object storage,
@@ -65,7 +68,6 @@ The persisted component fields use one uniform name:
 
 | Snapshot | Component checkpoint field |
 |---|---|
-| `PChannelRecoveryControlMeta` | `checkpoint_time_tick` |
 | `VChannelMeta` | `checkpoint_time_tick` (+ `transform_materialized_time_tick` for the L0 frontier) |
 | `SegmentAssignmentMeta` | `checkpoint_time_tick` |
 
@@ -185,22 +187,31 @@ replay.
 
 ## 7. PChannel Control State
 
-Replication configuration, replication progress, and AlterWAL state are not
-fields with independent progression inside `WALCheckpoint`. They form a
-`PChannelRecoveryControlMeta` with one `checkpoint_time_tick` and follow the
-same publication rules as every other component:
+Replication configuration, replication progress, and AlterWAL state are
+embedded directly in `WALCheckpoint` (fields `replicate_config`,
+`replicate_checkpoint`, `alter_wal_state`). They advance **atomically with the
+checkpoint**: the checkpoint is the single source of truth for the control
+state after a crash, and a control-only change rewrites the checkpoint (the
+dirty check compares the control fields). There is no separate catalog key for
+the control state.
 
 ```proto
-message PChannelRecoveryControlMeta {
-    uint64 checkpoint_time_tick = 1;
-    common.ReplicateConfiguration replicate_config = 2;
-    common.ReplicateCheckpoint replicate_checkpoint = 3;
-    AlterWALState alter_wal_state = 4;
+message WALCheckpoint {
+    common.MessageID message_id = 1;
+    uint64 time_tick = 2;
+    int64 recovery_magic = 3;
+    common.ReplicateConfiguration replicate_config = 4;
+    common.ReplicateCheckpoint replicate_checkpoint = 5;
+    AlterWALState alter_wal_state = 6;
+    int64 term = 7;
 }
 ```
 
-This avoids maintaining a second in-checkpoint metadata point or a list of
-checkpoint-aligned control deltas.
+This keeps a single metadata point: the durable control state has no
+independent `checkpoint_time_tick` — its frontier is the checkpoint position.
+The in-memory control state is still tracked separately for deduplication and
+stage transitions (AlterWAL FLUSHING → ADVANCE_CHECKPOINT), and recovery
+decodes it from the checkpoint, then replays control messages after it.
 
 ## 8. Close
 

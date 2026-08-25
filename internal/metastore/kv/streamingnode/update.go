@@ -46,13 +46,6 @@ func (c *catalog) SaveRecoverySnapshot(ctx context.Context, pChannelName string,
 		return nil
 	}
 	b := txn.New()
-	if snapshot.PChannelControlMeta != nil {
-		data, err := proto.Marshal(snapshot.PChannelControlMeta)
-		if err != nil {
-			return merr.WrapErrSerializationFailed(err, "marshal recovery control meta at pchannel %s", pChannelName)
-		}
-		b.Save(buildRecoveryControlKey(pChannelName), string(data))
-	}
 	// Aggregate every module mutation before adding the checkpoint commit
 	// marker. Closed and tombstoned recovery metadata remains persisted until
 	// the growing-module cleanup task explicitly includes its removal here.

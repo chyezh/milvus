@@ -10,6 +10,5 @@ const (
 	DirectorySummaryStore  = "summary"
 
 	KeyConsumeCheckpoint = "consume-checkpoint"
-	KeyRecoveryControl   = "recovery-control"
 	KeySalvageCheckpoint = "salvage-checkpoint"
 )

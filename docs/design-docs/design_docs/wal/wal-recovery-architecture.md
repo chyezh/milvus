@@ -68,9 +68,11 @@ The checkpoint contains only the WAL position:
 - `MessageID`, using the message's `LastConfirmedMessageID`;
 - `TimeTick`, using the message's unique PChannel-order TimeTick.
 
-PChannel control state such as replication configuration and AlterWAL state is
-stored in a component snapshot with its own `checkpoint_time_tick`. It is not
-embedded as an independently advancing field in the global checkpoint.
+PChannel control state such as replication configuration and AlterWAL state
+is embedded in the checkpoint itself (fields `replicate_config`,
+`replicate_checkpoint`, `alter_wal_state`) and advances atomically with it:
+the checkpoint is the single source of truth for the control state after a
+crash, and a control-only change rewrites the checkpoint.
 
 The checkpoint is the only:
 

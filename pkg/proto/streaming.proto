@@ -911,8 +911,10 @@ message WALCheckpoint {
     uint64 time_tick = 2; // The timetick of checkpoint, keep consistecy with message_id.
     // It's a hint for easier debugging.
     int64 recovery_magic = 3; // The recovery version of the checkpoint, it's used to hint the future recovery info upgrading.
-    // Legacy embedded control fields are read only for migration. New writers
-    // persist them in PChannelRecoveryControlMeta.
+    // Pchannel-scoped recovery control state (replication config/checkpoint
+    // and AlterWAL state). It advances atomically with the checkpoint: the
+    // checkpoint is the single source of truth for the control state after a
+    // crash.
     common.ReplicateConfiguration replicate_config = 4;
     common.ReplicateCheckpoint replicate_checkpoint = 5;
     AlterWALState alter_wal_state = 6;

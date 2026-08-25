@@ -74,23 +74,8 @@ func (r *recoveryStorageImpl) recoverRecoveryInfoFromMeta(ctx context.Context, c
 		return struct{}{}, nil
 	})
 
-	var pchannelControl *streamingpb.PChannelRecoveryControlMeta
-	fControl := conc.Go(func() (struct{}, error) {
-		control, err := catalog.GetPChannelRecoveryControlMeta(ctx, channelInfo.Name)
-		if err != nil {
-			return struct{}{}, merr.Wrap(err, "failed to get pchannel recovery control from catalog")
-		}
-		pchannelControl = control
-		return struct{}{}, nil
-	})
-
-	if err := conc.BlockOnAll(fVChannel, fSegment, fControl); err != nil {
+	if err := conc.BlockOnAll(fVChannel, fSegment); err != nil {
 		return err
-	}
-	if pchannelControl != nil {
-		r.installPChannelControl(pchannelControl)
-	} else if r.pchannelControl == nil {
-		r.installPChannelControl(nil)
 	}
 	summaryManager := r.newSummaryManager(moduleapi.Runtime{
 		Scheduler: r.taskScheduler,
@@ -464,12 +449,16 @@ func (r *recoveryStorageImpl) persistLegacyRecoveryMigration(
 	ctx context.Context,
 	migration *legacyRecoveryMigration,
 ) error {
+	checkpoint := migration.checkpoint
+	// The control state advances atomically with the checkpoint: freeze it
+	// into the migrated checkpoint so the migration keeps the control effects
+	// that were covered by the old checkpoint.
+	checkpoint.ApplyControl(r.pchannelControl)
 	return resource.Resource().StreamingNodeCatalog().SaveRecoverySnapshot(ctx, r.channel.Name, &metastore.WALRecoverySnapshot{
-		PChannelControlMeta: clonePChannelControl(r.pchannelControl),
-		VChannels:           migration.vchannels,
-		SegmentAssignments:  migration.segments,
-		RemovedSegmentIDs:   migration.removedSegmentIDs,
-		ConsumeCheckpoint:   migration.checkpoint.IntoProto(),
+		VChannels:          migration.vchannels,
+		SegmentAssignments: migration.segments,
+		RemovedSegmentIDs:  migration.removedSegmentIDs,
+		ConsumeCheckpoint:  checkpoint.IntoProto(),
 	})
 }
 

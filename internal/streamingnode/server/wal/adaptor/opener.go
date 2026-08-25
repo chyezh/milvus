@@ -210,7 +210,6 @@ func (o *openerAdaptorImpl) openRWWAL(ctx context.Context, l walimpls.WALImpls, 
 		newRecoveryStreamBuilder(roWAL),
 		cp,
 		param.LastTimeTickMessage,
-		recovery.WithInitialPChannelControl(utility.PChannelRecoveryControlMetaFromLegacyCheckpoint(cpProto)),
 		recovery.WithRecoveryTailRateLimiter(roWAL.RecoveryStorage),
 	)
 	if err != nil {
@@ -378,25 +377,21 @@ func (o *openerAdaptorImpl) handleAlterWALFlushingStage(ctx context.Context, opt
 		)
 	}
 
-	// Update checkpoint stage to ADVANCE_CHECKPOINT and persist to catalog
+	// Update checkpoint stage to ADVANCE_CHECKPOINT and persist to catalog.
+	// The control state advances atomically with the checkpoint, so the
+	// published checkpoint is the source of truth for the flushing stage.
 	snapshot.Checkpoint = checkpoint.Clone()
 	snapshot.Checkpoint.Magic = utility.RecoveryMagicRecoveryStorageV2
-	catalog := resource.Resource().StreamingNodeCatalog()
-	publishedControl, err := catalog.GetPChannelRecoveryControlMeta(ctx, opt.Channel.Name)
-	if err != nil {
-		return errors.Wrap(err, "failed to reload published pchannel recovery control")
-	}
-	if publishedControl.GetAlterWalState().GetStage() != streamingpb.AlterWALStage_FLUSHING {
+	if snapshot.Checkpoint.AlterWalState.GetStage() != streamingpb.AlterWALStage_FLUSHING {
 		return merr.WrapErrDataIntegrityMsg(
 			"published pchannel recovery control is not in flushing stage for channel %s",
 			opt.Channel.Name,
 		)
 	}
-	publishedControl.AlterWalState.Stage = streamingpb.AlterWALStage_ADVANCE_CHECKPOINT
-	snapshot.PChannelControl = publishedControl
+	snapshot.Checkpoint.AlterWalState.Stage = streamingpb.AlterWALStage_ADVANCE_CHECKPOINT
+	catalog := resource.Resource().StreamingNodeCatalog()
 	if err := catalog.SaveRecoverySnapshot(ctx, opt.Channel.Name, &metastore.WALRecoverySnapshot{
-		PChannelControlMeta: publishedControl,
-		ConsumeCheckpoint:   snapshot.Checkpoint.IntoProto(),
+		ConsumeCheckpoint: snapshot.Checkpoint.IntoProto(),
 	}); err != nil {
 		mlog.Warn(ctx, "failed to persist checkpoint after flushing stage", mlog.String("channel", opt.Channel.Name), mlog.Err(err))
 		return errors.Wrap(err, "failed to persist checkpoint after flushing stage")
@@ -487,11 +482,13 @@ func (o *openerAdaptorImpl) handleAlterWALAdvanceCheckpointsStage(ctx context.Co
 	if finalControl.ReplicateCheckpoint != nil {
 		finalControl.ReplicateCheckpoint.MessageId = message.MustMarshalMessageID(finalCheckpoint.MessageID)
 	}
+	// Freeze the final control state into the checkpoint: it advances
+	// atomically with the checkpoint, so there is no separate control write.
+	finalCheckpoint.ApplyControl(finalControl)
 
 	// Persist final checkpoint to catalog
 	if err := catalog.SaveRecoverySnapshot(ctx, opt.Channel.Name, &metastore.WALRecoverySnapshot{
-		PChannelControlMeta: finalControl,
-		ConsumeCheckpoint:   finalCheckpoint.IntoProto(),
+		ConsumeCheckpoint: finalCheckpoint.IntoProto(),
 	}); err != nil {
 		mlog.Warn(ctx, "failed to persist checkpoint after advance checkpoint stage", mlog.String("channel", opt.Channel.Name), mlog.Err(err))
 		return errors.Wrap(err, "failed to persist checkpoint after advance checkpoint stage")

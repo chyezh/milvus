@@ -105,11 +105,6 @@ func (rs *recoveryStorageImpl) persistDirtySnapshot(ctx context.Context, lvl mlo
 	for _, dirtySnapshot := range snapshot.ModuleDirtySnaps {
 		dirtySnapshot.MarkPersisted()
 	}
-	if snapshot.ControlDirty {
-		rs.mu.Lock()
-		rs.persistedControl = clonePChannelControl(snapshot.PChannelControl)
-		rs.mu.Unlock()
-	}
 	if snapshot.CheckpointDirty {
 		rs.mu.Lock()
 		rs.checkpoint = snapshot.Checkpoint.Clone()
@@ -224,9 +219,6 @@ func (rs *recoveryStorageImpl) buildRecoverySnapshot(snapshot *dirtyPersistSnaps
 	}
 	if snapshot.SalvageCheckpoint != nil {
 		recoverySnapshot.SalvageCheckpoint = snapshot.SalvageCheckpoint.IntoProto()
-	}
-	if snapshot.ControlDirty {
-		recoverySnapshot.PChannelControlMeta = clonePChannelControl(snapshot.PChannelControl)
 	}
 	if snapshot.CheckpointDirty {
 		recoverySnapshot.ConsumeCheckpoint = snapshot.Checkpoint.IntoProto()

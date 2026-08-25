@@ -32,8 +32,6 @@ type dirtyPersistSnapshot struct {
 	Checkpoint        *WALCheckpoint
 	LogicalEndOffset  uint64
 	CheckpointDirty   bool
-	PChannelControl   *streamingpb.PChannelRecoveryControlMeta
-	ControlDirty      bool
 	ModuleDirtySnaps  []moduleapi.DirtySnapshot
 	SalvageCheckpoint *utility.ReplicateCheckpoint
 }
