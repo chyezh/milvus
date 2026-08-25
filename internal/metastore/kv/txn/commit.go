@@ -145,11 +145,14 @@ func commitFallback(ctx context.Context, txn kv.TxnKV, limit int, b *Builder) er
 }
 
 // commitPredicates translates the builder's conditional-commit guard (see
-// CommitSaveIfValue) into a value-equality predicate. An empty slice when the
-// commit is unconditional.
+// CommitSaveIfValue / CommitSaveIfNotExist) into a value-equality or
+// not-exist predicate. An empty slice when the commit is unconditional.
 func (b *Builder) commitPredicates() []predicates.Predicate {
 	if b.cond == nil {
 		return nil
+	}
+	if b.cond.notExist {
+		return []predicates.Predicate{predicates.NotExist(b.cond.key)}
 	}
 	return []predicates.Predicate{predicates.ValueEqual(b.cond.key, b.cond.oldValue)}
 }

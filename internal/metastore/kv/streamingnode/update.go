@@ -129,21 +129,24 @@ func (c *catalog) SaveRecoverySnapshot(ctx context.Context, pChannelName string,
 	// The consume checkpoint is the commit point of the snapshot: staging it
 	// with CommitSave makes it the last write to become visible, after every
 	// other part of the snapshot has landed. Its advancement is additionally
-	// guarded by a value compare-and-swap (CommitSaveIfValue): the checkpoint
-	// may only advance when the recorded term is not newer than the
-	// publisher's own term, so an older-term publisher that survived a
-	// takeover can never advance it past the successor's inherited manifest
-	// coverage (which would let WAL truncation outrun that coverage and lose
-	// un-materialized transform records).
+	// guarded by a compare-and-swap on the recorded value: the checkpoint may
+	// only advance when the recorded term is not newer than the publisher's
+	// own term, so an older-term publisher that survived a takeover can never
+	// advance it past the successor's inherited manifest coverage (which would
+	// let WAL truncation outrun that coverage and lose un-materialized
+	// transform records).
 	//
-	// The guard is a plain value CAS, not a term comparison inside the txn:
-	// etcd cannot compare fields of a serialized proto. The term pre-check
-	// below is a fast-fail (a strictly older publisher is refused without
-	// touching the store); the CAS is the authoritative fence under
-	// concurrency (a publisher that read a stale value loses the commit).
+	// The guard is a predicate on the durable key, not a term comparison
+	// inside the txn: etcd cannot compare fields of a serialized proto. An
+	// existing checkpoint is guarded by value equality (CommitSaveIfValue); a
+	// first write (no checkpoint yet) is guarded by key absence
+	// (CommitSaveIfNotExist), so two concurrent first publishers cannot both
+	// succeed. The term pre-check below is a fast-fail (a strictly older
+	// publisher is refused without touching the store); the predicate is the
+	// authoritative fence under concurrency (a publisher that read a stale
+	// value loses the commit).
 	checkpointKey := buildConsumeCheckpointKey(pChannelName)
 	checkpointValue := ""
-	checkpointFirstCreation := false
 	if snapshot.ConsumeCheckpoint != nil {
 		data, err := proto.Marshal(snapshot.ConsumeCheckpoint)
 		if err != nil {
@@ -151,16 +154,14 @@ func (c *catalog) SaveRecoverySnapshot(ctx context.Context, pChannelName string,
 		}
 		checkpointValue = string(data)
 		current, err := c.metaKV.Load(ctx, checkpointKey)
-		if err != nil && !errors.Is(err, merr.ErrIoKeyNotFound) {
-			return err
-		}
 		if errors.Is(err, merr.ErrIoKeyNotFound) {
 			// No checkpoint yet (first persistence of the pchannel, or a
-			// recreated one): create it after the component commit with a
-			// version CAS on the absent key, so two concurrent first
-			// publishers cannot both succeed.
-			checkpointFirstCreation = true
+			// recreated one): guard the commit on the key being absent.
+			b.CommitSaveIfNotExist(checkpointKey, checkpointValue)
 		} else {
+			if err != nil {
+				return err
+			}
 			// Fast-fail on a strictly older publisher before the commit txn.
 			currentCP := &streamingpb.WALCheckpoint{}
 			if uerr := proto.Unmarshal([]byte(current), currentCP); uerr == nil &&
@@ -178,20 +179,10 @@ func (c *catalog) SaveRecoverySnapshot(ctx context.Context, pChannelName string,
 	}
 	// The guarded commit reports success even when the guard fails (etcd txn
 	// returns Succeeded=false without an error), so the checkpoint write is
-	// verified after the commit: a stale publisher that lost the CAS must be
+	// verified after the commit: a stale publisher that lost the guard must be
 	// told the write did not land, or it would keep advancing components
 	// against a checkpoint it no longer owns.
 	if snapshot.ConsumeCheckpoint != nil {
-		if checkpointFirstCreation {
-			ok, err := c.metaKV.CompareVersionAndSwap(ctx, checkpointKey, 0, checkpointValue)
-			if err != nil {
-				return err
-			}
-			if !ok {
-				return merr.WrapErrIoKeyNotFound("consume checkpoint of pchannel %s was created concurrently", pChannelName)
-			}
-			return nil
-		}
 		after, err := c.metaKV.Load(ctx, checkpointKey)
 		if err != nil {
 			return err
