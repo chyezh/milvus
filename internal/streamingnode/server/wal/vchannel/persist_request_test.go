@@ -50,22 +50,55 @@ func newTestSummaryManager(t *testing.T, scheduler nodescheduler.Scheduler) *wal
 	})
 }
 
-func TestSummaryManagerRequestsPersistThroughPChannelLevel(t *testing.T) {
+func TestSummaryManagerRequestsFlushThroughPChannelLevel(t *testing.T) {
 	scheduler := &recordingVChannelScheduler{}
 	summaryManager := newTestSummaryManager(t, scheduler)
 
-	// A forced persist request is pchannel-level: it schedules a flush even
-	// before any observation (the flush no-ops on empty staging), and a
-	// second request merges into the pending task.
-	summaryManager.RequestPersistThrough("v1", 10)
+	// An empty pending span is a no-op: nothing is scheduled.
+	summaryManager.RequestFlushThrough(10)
+	require.Empty(t, scheduler.tasks)
+
+	// Observe a record; a forced flush request schedules the write task, and
+	// a second request at or below the pending flush merges into it.
+	finalized := false
+	observeSummaryDelete(t, summaryManager, "v1", 10, &finalized)
+	summaryManager.RequestFlushThrough(10)
 	require.Len(t, scheduler.tasks, 1)
-	summaryManager.RequestPersistThrough("v2", 20)
-	require.Len(t, scheduler.tasks, 1)
+	summaryManager.RequestFlushThrough(20)
+	require.Len(t, scheduler.tasks, 1, "the pending flush already covers the request")
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
 
 	// After the task drains, a new request schedules a new flush.
-	summaryManager.RequestPersistThrough("v1", 30)
+	observeSummaryDelete(t, summaryManager, "v1", 30, &finalized)
+	summaryManager.RequestFlushThrough(30)
 	require.Len(t, scheduler.tasks, 2)
+}
+
+// observeSummaryDelete observes one delete message through the summary
+// manager's pchannel-level entry point and releases the owner.
+func observeSummaryDelete(t *testing.T, manager *walsummary.Manager, vchannel string, timetick uint64, finalized *bool) {
+	t.Helper()
+	mutable := message.NewDeleteMessageBuilderV1().
+		WithVChannel(vchannel).
+		WithHeader(&message.DeleteMessageHeader{CollectionId: 1, Rows: 1}).
+		WithBody(&msgpb.DeleteRequest{
+			Base:         &commonpb.MsgBase{MsgType: commonpb.MsgType_Delete},
+			CollectionID: 1,
+			PartitionID:  10,
+			PrimaryKeys: &schemapb.IDs{IdField: &schemapb.IDs_IntId{
+				IntId: &schemapb.LongArray{Data: []int64{1}},
+			}},
+			Timestamps: []uint64{timetick},
+		}).
+		MustBuildMutable()
+	raw := mutable.WithTimeTick(timetick).
+		WithLastConfirmed(walimplstest.NewTestMessageID(int64(timetick))).
+		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick + 1)))
+	owner := message.NewOwnedImmutableMessage(raw, func() { *finalized = true })
+	retained := owner.Clone()
+	manager.ObserveMessage(context.Background(), retained)
+	retained.Release()
+	owner.Release()
 }
 
 func observeVChannelDelete(t *testing.T, module *VChannelRecoveryModule, vchannel string, timetick uint64) {

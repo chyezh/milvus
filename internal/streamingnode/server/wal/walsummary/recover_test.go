@@ -27,29 +27,28 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/objectstorage"
 )
 
-// TestRecoverInheritsPreviousTermChunks covers the term-handoff path: a chunk
+// TestRestoreInheritsPreviousTermChunks covers the term-handoff path: a chunk
 // the previous term persisted (its handles released, the WAL checkpoint may
 // have passed it) but whose records were never materialized must stay visible
 // to the next term. Without the inheritance the new term's empty manifest
 // would hide the delete records forever, resurrecting deleted data.
-func TestRecoverInheritsPreviousTermChunks(t *testing.T) {
+func TestRestoreInheritsPreviousTermChunks(t *testing.T) {
 	ctx := context.Background()
 	cm := storage.NewLocalChunkManager(objectstorage.RootPath(t.TempDir()))
 
 	// Term 1 flushes one delete into chunk 0 and publishes its manifest.
 	store1 := NewStore(cm, "by-dev-rootcoord-dml_0_40451v0", 1)
 	manager1 := newTestManager(t, store1, 1, 1<<30)
-	require.NoError(t, manager1.Recover(ctx))
+	require.NoError(t, manager1.Restore(ctx, nil))
 	var unused bool
-	observeDelete(t, manager1.View("v1"), 100, &unused)
-	require.NoError(t, manager1.flushOnce(ctx, &summaryFlushTask{log: manager1}))
+	flushObserved(t, manager1, "v1", 100, &unused)
 	assert.Len(t, manager1.manifest.GetChunks(), 1)
 
-	// Term 2 takes over the pchannel (term handoff) and recovers. It must see
+	// Term 2 takes over the pchannel (term handoff) and restores. It must see
 	// term 1's chunk through its own manifest.
 	store2 := NewStore(cm, "by-dev-rootcoord-dml_0_40451v0", 2)
 	manager2 := newTestManager(t, store2, 1, 1<<30)
-	require.NoError(t, manager2.Recover(ctx))
+	require.NoError(t, manager2.Restore(ctx, nil))
 	require.Len(t, manager2.manifest.GetChunks(), 1)
 	assert.Equal(t, uint64(0), manager2.manifest.GetChunks()[0].GetGeneration())
 	assert.Equal(t, int64(1), manager2.manifest.GetChunks()[0].GetTerm())
@@ -63,7 +62,7 @@ func TestRecoverInheritsPreviousTermChunks(t *testing.T) {
 	assert.Equal(t, uint64(100), entries[0].GetTimeTick())
 
 	// Term 2 sealed the inheritance into its own manifest, so the chain never
-	// grows beyond one hop: a term 3 recovery reads term 2's manifest.
+	// grows beyond one hop: a term 3 restore reads term 2's manifest.
 	loaded, found, err := store2.ReadManifest(ctx)
 	require.NoError(t, err)
 	require.True(t, found)
@@ -71,11 +70,11 @@ func TestRecoverInheritsPreviousTermChunks(t *testing.T) {
 	assert.Equal(t, int64(1), loaded.GetChunks()[0].GetTerm())
 }
 
-// TestRecoverInheritsPreviousTermProbedTail covers the crash window of the
+// TestRestoreInheritsPreviousTermProbedTail covers the crash window of the
 // previous term: a chunk written but not yet recorded in the manifest before
-// the handoff. The new term's recovery must probe the previous term's objects
+// the handoff. The new term's restore must probe the previous term's objects
 // and seal them, exactly as it probes its own.
-func TestRecoverInheritsPreviousTermProbedTail(t *testing.T) {
+func TestRestoreInheritsPreviousTermProbedTail(t *testing.T) {
 	ctx := context.Background()
 	cm := storage.NewLocalChunkManager(objectstorage.RootPath(t.TempDir()))
 
@@ -83,49 +82,47 @@ func TestRecoverInheritsPreviousTermProbedTail(t *testing.T) {
 	// not publish).
 	store1 := NewStore(cm, "by-dev-rootcoord-dml_0_40451v0", 1)
 	manager1 := newTestManager(t, store1, 1, 1<<30)
-	require.NoError(t, manager1.Recover(ctx))
+	require.NoError(t, manager1.Restore(ctx, nil))
 	var unused bool
-	observeDelete(t, manager1.View("v1"), 100, &unused)
-	require.NoError(t, manager1.flushOnce(ctx, &summaryFlushTask{log: manager1}))
+	flushObserved(t, manager1, "v1", 100, &unused)
 	require.Len(t, manager1.manifest.GetChunks(), 1)
 
-	// Term 2 recovers: it finds no manifest of its own, then probes term 1.
+	// Term 2 restores: it finds no manifest of its own, then probes term 1.
 	store2 := NewStore(cm, "by-dev-rootcoord-dml_0_40451v0", 2)
 	manager2 := newTestManager(t, store2, 1, 1<<30)
-	require.NoError(t, manager2.Recover(ctx))
+	require.NoError(t, manager2.Restore(ctx, nil))
 	require.Len(t, manager2.manifest.GetChunks(), 1)
 	assert.Equal(t, int64(1), manager2.manifest.GetChunks()[0].GetTerm())
 }
 
-// TestRecoverInheritsSkipsBurnedIntermediateTerm covers chained handoffs: a
+// TestRestoreInheritsSkipsBurnedIntermediateTerm covers chained handoffs: a
 // term that was assigned (TryAssignToServerID burns a term on every
 // assignment attempt) but died before ever sealing a manifest leaves an empty
-// manifest at term-1. Recovery must keep walking back until it finds the most
+// manifest at term-1. Restore must keep walking back until it finds the most
 // recent term that actually holds chunks — otherwise the records of an older
 // term vanish from the manifest chain, their deletes silently resurrect, and
 // the orphaned chunk objects become unreachable to GC.
-func TestRecoverInheritsSkipsBurnedIntermediateTerm(t *testing.T) {
+func TestRestoreInheritsSkipsBurnedIntermediateTerm(t *testing.T) {
 	ctx := context.Background()
 	cm := storage.NewLocalChunkManager(objectstorage.RootPath(t.TempDir()))
 
 	// Term 1 flushes one delete into chunk 0 and publishes its manifest.
 	store1 := NewStore(cm, "by-dev-rootcoord-dml_0_40451v0", 1)
 	manager1 := newTestManager(t, store1, 1, 1<<30)
-	require.NoError(t, manager1.Recover(ctx))
+	require.NoError(t, manager1.Restore(ctx, nil))
 	var unused bool
-	observeDelete(t, manager1.View("v1"), 100, &unused)
-	require.NoError(t, manager1.flushOnce(ctx, &summaryFlushTask{log: manager1}))
+	flushObserved(t, manager1, "v1", 100, &unused)
 	require.Len(t, manager1.manifest.GetChunks(), 1)
 
-	// Term 2 was assigned and burned without ever recovering (a failed open):
-	// no manifest and no chunk of it exist. A term-3 recovery must walk past
+	// Term 2 was assigned and burned without ever restoring (a failed open):
+	// no manifest and no chunk of it exist. A term-3 restore must walk past
 	// the empty term 2 down to term 1.
 
-	// Term 3 recovers: term 2 left no trace, so the inheritance walk must keep
+	// Term 3 restores: term 2 left no trace, so the inheritance walk must keep
 	// going back to term 1 and adopt its chunk.
 	store3 := NewStore(cm, "by-dev-rootcoord-dml_0_40451v0", 3)
 	manager3 := newTestManager(t, store3, 1, 1<<30)
-	require.NoError(t, manager3.Recover(ctx))
+	require.NoError(t, manager3.Restore(ctx, nil))
 	require.Len(t, manager3.manifest.GetChunks(), 1)
 	assert.Equal(t, uint64(0), manager3.manifest.GetChunks()[0].GetGeneration())
 	assert.Equal(t, int64(1), manager3.manifest.GetChunks()[0].GetTerm())

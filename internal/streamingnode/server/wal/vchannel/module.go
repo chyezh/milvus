@@ -53,10 +53,10 @@ type VChannelRecoveryModule struct {
 	// particular, segments may grow when CreateSegment is observed while the
 	// recovery background task is collecting dirty snapshots.
 	//
-	// Lock order is m.mu -> SegmentView.mu -> SummaryView.mu. Never take a
-	// SegmentView lock (directly or via a Locked helper) while holding another
-	// module's mu, and never call SegmentView.NotifyDataUpdated with a view
-	// lock held (it re-enters the module).
+	// Lock order is m.mu -> SegmentView.mu. Never take a SegmentView lock
+	// (directly or via a Locked helper) while holding another module's mu, and
+	// never call SegmentView.NotifyDataUpdated with a view lock held (it
+	// re-enters the module).
 	mu       sync.Mutex
 	pchannel string
 	vchannel string

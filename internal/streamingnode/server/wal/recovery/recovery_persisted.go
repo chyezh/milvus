@@ -81,8 +81,8 @@ func (r *recoveryStorageImpl) recoverRecoveryInfoFromMeta(ctx context.Context, c
 		Scheduler: r.taskScheduler,
 		Notifier:  r,
 	})
-	if err := summaryManager.Recover(ctx); err != nil {
-		return merr.Wrap(err, "recover pchannel summary")
+	if err := summaryManager.Restore(ctx, vchannelMetas); err != nil {
+		return merr.Wrap(err, "restore pchannel summary")
 	}
 	if _, err := r.migrateLegacyRecoveryInfo(ctx, vchannelMetas, segmentMetas); err != nil {
 		return err

@@ -28,8 +28,12 @@ import (
 // object storage without end.
 const probeLimit = 1 << 16
 
-// Recover rebuilds the in-memory state from the durable store, before WAL
-// replay. It must be called once before any view observes messages.
+// Restore rebuilds the in-memory state from the durable store, before WAL
+// replay. It must be called once before any message is observed. The vchannel
+// metas (already read from the catalog by the recovery caller) restore the
+// GC positions; the manifest restores the chunk index and the durable
+// frontiers. All recovery logic lives here, kept out of the recovery storage
+// wiring.
 //
 // The sequence is fixed, and every step exists to close a specific way data
 // could otherwise be lost:
@@ -48,32 +52,14 @@ const probeLimit = 1 << 16
 //  5. only now may this owner write chunks (generations start past the
 //     inherited set).
 //
-// Recover is read-only with respect to the catalog: the summary store owns no
+// Restore is read-only with respect to the catalog: the summary store owns no
 // fencing marker of its own. Term arbitration lives in two other places — the
 // object keys are term-scoped (a fenced owner can never collide with the
 // successor's chunks), and the consume-checkpoint advancement is fenced by a
 // compare-and-swap on the checkpoint's term (an older-term publisher can never
 // advance it past the successor's inherited manifest coverage). See the
 // checkpoint persistence design for the takeover protocol.
-func (m *Manager) Recover(ctx context.Context) error {
-	// Recover this term's own manifest first; a term that never wrote one
-	// (fresh owner after a term handoff) inherits the previous term's chunks
-	// below. Every step below closes a specific way data could otherwise be
-	// lost:
-	//
-	//  1. read this term's manifest (missing is fine: a term that never wrote one);
-	//  2. probe chunks forward from the manifest's newest generation — this
-	//     recovers everything written after the last manifest publish (the crash
-	//     window between chunk write and manifest write);
-	//  3. on a term handoff, inherit the previous term's manifest and probed
-	//     tail: chunks the previous owner published (handles released, the WAL
-	//     checkpoint may have passed them) but that were not yet materialized
-	//     must stay visible to this term, or the records are lost forever;
-	//  4. publish this term's manifest, sealing the inherited and probed sets
-	//     into it — without this the tail is invisible to the NEXT recovery
-	//     and is lost silently;
-	//  5. only now may this owner write chunks (generations start past the
-	//     inherited set).
+func (m *Manager) Restore(ctx context.Context, vchannels map[string]*streamingpb.VChannelMeta) error {
 	manifest, needsPublish, err := m.recoverManifestOfTerm(ctx, m.cfg.Term)
 	if err != nil {
 		return err
@@ -113,15 +99,51 @@ func (m *Manager) Recover(ctx context.Context) error {
 	}
 	m.mu.Lock()
 	m.manifest = manifest
+	m.manifestVersion++
 	if latest, ok := manifestNewest(manifest); ok {
 		m.nextGeneration = latest.GetGeneration() + 1
 		m.latestCoveredTimeTick = latest.GetEndTimetick()
 	} else {
 		m.nextGeneration = 0
 	}
+	// The durable frontier per vchannel is the newest chunk end covering it:
+	// WAL replay re-observes records the manifest already covers, and
+	// ObserveMessage skips them.
+	for _, chunk := range manifest.GetChunks() {
+		for _, index := range chunk.GetVchannels() {
+			if end := index.GetEndTimetick(); end > m.durableFrontiers[index.GetVchannel()] {
+				m.durableFrontiers[index.GetVchannel()] = end
+			}
+		}
+	}
+	// The GC positions come from the catalog: a dropped or tombstoned vchannel
+	// may release everything (the GC boundary), any other vchannel releases up
+	// to its persisted materialization frontier.
+	for vchannel, meta := range vchannels {
+		switch meta.GetState() {
+		case streamingpb.VChannelState_VCHANNEL_STATE_DROPPED,
+			streamingpb.VChannelState_VCHANNEL_STATE_TOMBSTONED:
+			m.gcFrontiers[vchannel] = DroppedVChannelTimeTick
+		default:
+			if frontier := meta.GetTransformMaterializedTimeTick(); frontier > m.gcFrontiers[vchannel] {
+				m.gcFrontiers[vchannel] = frontier
+			}
+		}
+	}
+	// Defensive GC boundary: a chunked vchannel absent from the catalog at all
+	// (its meta was cleaned up after the drop) has no materialization frontier
+	// to make its chunks releasable; mark it dropped so retention GC can
+	// release them.
+	for _, chunk := range manifest.GetChunks() {
+		for _, index := range chunk.GetVchannels() {
+			if _, ok := vchannels[index.GetVchannel()]; !ok {
+				m.gcFrontiers[index.GetVchannel()] = DroppedVChannelTimeTick
+			}
+		}
+	}
 	m.mu.Unlock()
 	if logger := m.cfg.Logger; logger != nil {
-		logger.Info(ctx, "walsummary recovered",
+		logger.Info(ctx, "walsummary restored",
 			mlog.String("pchannel", m.cfg.PChannel),
 			mlog.Int64("term", m.cfg.Term),
 			mlog.Int("chunks", len(manifest.GetChunks())),

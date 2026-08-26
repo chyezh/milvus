@@ -18,6 +18,7 @@ package walsummary
 
 import (
 	"context"
+	"math"
 	"sync"
 
 	"github.com/cockroachdb/errors"
@@ -28,73 +29,73 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message/messageutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
-// Manager is the pchannel-scoped WALSummary runtime. It owns the chunk
-// generations and the manifest, collects the staging of every vchannel view,
-// persists chunks asynchronously, and runs the retention GC.
+// DroppedVChannelTimeTick is the special GC position a caller reports through
+// AdvanceGCTimeTick to tell the summary that a vchannel has been dropped: its
+// cleanup snapshot is durable, so every record of it — staged, sealed or
+// already chunked — may be released by retention GC regardless of
+// materialization.
+const DroppedVChannelTimeTick = math.MaxUint64
+
+// Manager is the pchannel-scoped WALSummary runtime. A summary is one
+// contiguous dense span of the pchannel log kept in two forms:
 //
-// Persistence model: the summary is persisted to object storage independently
-// of the catalog checkpoint. A chunk is only ever released from memory (the
-// message handles) after the chunk object AND the manifest record of it are
-// durable, so the global WAL checkpoint — which advances past a message only
-// when every retained handle is released — can never outrun the summary.
+//   - in memory: the retained WAL messages of the span not yet sealed into a
+//     chunk. ObserveMessage only keeps the messages (plus a byte estimate);
+//     the transform records are organized when the chunk is sealed.
+//   - in object storage: sealed chunks, an append-only time-ordered log of
+//     per-vchannel transform records, indexed by the manifest.
+//
+// A single manager-level lock guards every piece of state: the pending
+// messages, the sealed-but-unwritten chunks, the manifest and its version
+// (used as a compare-and-swap token so the object-storage write can happen
+// outside the lock), and the per-vchannel GC positions.
 type Manager struct {
 	mu  sync.Mutex
 	cfg ManagerConfig
-	// manifestMu serializes manifest edits and publishes. Every path that
-	// amends the in-memory manifest and writes it out (flush publish, GC
-	// release, pending-GC removal) must take manifestMu first: the publish
-	// marshals a clone taken under mu, and a concurrent edit of the same
-	// backing arrays (recordChunk's sort, removeChunkEntry, removePendingGC)
-	// would otherwise publish a torn view.
-	manifestMu sync.Mutex
-	// views holds one summary view per vchannel. A view is nothing but the
-	// in-memory staging buffer of one vchannel's span of the pchannel log,
-	// aligned to the flush chunk cycle: it accumulates observed records and
-	// is emptied by every flush. It carries no lifecycle of its own and is
-	// never removed — a dropped vchannel simply stops producing records.
-	views map[string]*SummaryView
 
-	// nextGeneration is the generation the next flush writes.
-	nextGeneration uint64
-	// manifest is the in-memory manifest: the chunk index recovery may read,
-	// plus the pending GC queue. It is published by every flush.
-	manifest *streamingpb.PChannelSummaryManifest
+	// pending holds the retained messages of the current (unsealed) chunk
+	// span, in WAL order. The lifecycle of this buffer is exactly one
+	// FlushChunk: it accumulates from the first observed message until the
+	// chunk is sealed, then starts over.
+	pending      []message.RetainedImmutableMessage
+	pendingBytes uint64
+
+	// pendingSealed holds the chunks sealed but not yet durable end to end,
+	// in generation order. The single write task drains this queue; a chunk
+	// is popped only after its object AND its manifest record are durable.
+	pendingSealed []*SealedChunk
+	// pendingFlushTimeTick is the newest timetick covered by a sealed chunk.
+	// RequestFlushThrough is a no-op while it already covers the request.
+	pendingFlushTimeTick uint64
+	// flushTasks holds the in-flight / queued write tasks. At most one task
+	// exists at a time; it drains the whole pendingSealed queue.
+	flushTasks []*summaryWriteTask
+
+	// manifest is the in-memory chunk index (the persistent form's index).
+	// It is only ever replaced via publishManifest, which writes the edited
+	// clone outside the lock and installs it back under the lock unless the
+	// manifestVersion moved in between (CAS).
+	manifest        *streamingpb.PChannelSummaryManifest
+	manifestVersion uint64
+	nextGeneration  uint64
 	// latestCoveredTimeTick is the newest timetick covered by a durable chunk.
 	latestCoveredTimeTick uint64
-	// materializedFrontiers holds the transform materialization frontier per
-	// vchannel, mirrored from VChannelMeta. It is the hard lower bound of the
-	// retention: records not yet materialized must not be released.
-	materializedFrontiers map[string]uint64
-	// droppedVChannels marks vchannels whose cleanup snapshot is durable. It
-	// is the GC boundary reported by the vchannel lifecycle: a dropped
-	// vchannel's records — staged or already chunked — may be released by GC
-	// regardless of materialization. Kept separate from the summary index and
-	// the staging views on purpose.
-	droppedVChannels map[string]struct{}
-	// pendingDurableFrontiers records the restored durable frontier of a
-	// vchannel whose view does not exist yet. Recovery sets it before the
-	// vchannel modules are built; View applies it when the view is created,
-	// so replay does not re-stage records the manifest already covers.
-	pendingDurableFrontiers map[string]uint64
+	// durableFrontiers holds the newest durable record timetick per vchannel,
+	// restored from the manifest and advanced by every completed write. It is
+	// the replay filter of ObserveMessage: recovery re-observes records the
+	// manifest already covers, and they must not be staged again.
+	durableFrontiers map[string]uint64
 
-	// flushTasks are the in-flight / queued flush tasks. At most one task is
-	// scheduled at a time: a request while one is pending is a no-op, because
-	// the executing task collects every view's staging. This keeps the
-	// predecessor graph a single chain instead of growing one task per
-	// observation.
-	flushTasks []*summaryFlushTask
-	// stagingBytes is the pchannel-wide estimate of the staging records not
-	// yet written to a chunk, summed across every vchannel view. It is the
-	// input to the autonomous flush decision: a chunk is written when the
-	// total reaches FlushMaxBytes, so chunk size tracks the configured
-	// threshold instead of per-vchannel bursts. It is maintained by
-	// onStagingGrown (observation path) and recomputed from the views after
-	// every collect.
-	stagingBytes uint64
+	// gcFrontiers holds the GC position per vchannel: records with timetick
+	// at or below the position (or everything, when DroppedVChannelTimeTick)
+	// may be released. It is advanced by AdvanceGCTimeTick and restored from
+	// the VChannelMeta by Restore.
+	gcFrontiers map[string]uint64
 }
 
 // ManagerConfig carries the wiring of one pchannel's summary manager.
@@ -105,14 +106,14 @@ type ManagerConfig struct {
 	Store *Store
 	// Runtime provides the scheduler and the module notifier.
 	Runtime moduleapi.Runtime
-	// FlushMaxBytes is the pchannel-wide staging size that triggers an
-	// autonomous flush: the manager accumulates every vchannel view's staging
-	// bytes and writes a chunk once the total reaches the threshold, so the
-	// chunk size tracks the configured value instead of per-vchannel bursts.
+	// FlushMaxBytes is the pchannel-wide pending size that seals a chunk:
+	// the manager accumulates the estimated size of the retained messages
+	// and seals once the total reaches the threshold, so chunk size tracks
+	// the configured value.
 	FlushMaxBytes uint64
 	// RetentionMaxBytes is the soft budget of the retained chunk objects. GC
-	// releases chunks above the budget, bounded below by the per-vchannel
-	// materialization frontiers.
+	// releases chunks above the budget, bounded below by the per-vchannel GC
+	// positions.
 	RetentionMaxBytes uint64
 	Logger            *mlog.Logger
 }
@@ -120,46 +121,23 @@ type ManagerConfig struct {
 // NewManager creates the summary manager of one pchannel.
 func NewManager(config ManagerConfig) *Manager {
 	return &Manager{
-		cfg:                    config,
-		views:                  make(map[string]*SummaryView),
-		manifest:               &streamingpb.PChannelSummaryManifest{},
-		materializedFrontiers:  make(map[string]uint64),
-		droppedVChannels:       make(map[string]struct{}),
+		cfg:              config,
+		manifest:         &streamingpb.PChannelSummaryManifest{},
+		durableFrontiers: make(map[string]uint64),
+		gcFrontiers:      make(map[string]uint64),
 	}
 }
 
-// View returns the summary view of a vchannel, creating it on first use. A
-// pchannel has one view per vchannel for the whole lifetime of the manager.
-// A view created after recovery inherits the durable frontier the recovery
-// path recorded via SetDurableTimeTick, so replay skips already-durable
-// records.
-func (m *Manager) View(vchannel string) *SummaryView {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	view, ok := m.views[vchannel]
-	if !ok {
-		view = NewSummaryView(m, vchannel)
-		if frontier := m.pendingDurableFrontiers[vchannel]; frontier > 0 {
-			view.mu.Lock()
-			view.durableTimeTick = frontier
-			view.mu.Unlock()
-		}
-		m.views[vchannel] = view
-	}
-	return view
-}
-
-// ObserveMessage observes one WAL message at the pchannel level and routes it
-// to the summary view of its vchannel. It is called on the WAL observation
-// path (recovery replay and the live scanner), independent of the vchannel
-// modules, and must not block.
+// ObserveMessage observes one WAL message at the pchannel level. It is called
+// on the WAL observation path (recovery replay and the live scanner),
+// independent of the vchannel modules, and must not block.
 //
-// The per-vchannel view is created lazily on the first message of a vchannel:
-// a summary view is nothing but the staging buffer of that vchannel's span of
-// the pchannel log, so it exists exactly while the vchannel has records to
-// summarize and carries no lifecycle of its own. Messages without a
-// per-vchannel record (pchannel-level broadcasts, control-channel messages)
-// are ignored.
+// Only the message itself is retained here — the transform record is built
+// when the chunk is sealed, so the hot path stays a cheap append plus a byte
+// estimate. When the pending total reaches FlushMaxBytes, the pending span is
+// sealed into a chunk and an asynchronous write task is submitted. Messages
+// without a per-vchannel record (pchannel-level broadcasts, control-channel
+// messages) and records the manifest already covers are not retained.
 func (m *Manager) ObserveMessage(ctx context.Context, retained message.RetainedImmutableMessage) {
 	if retained == nil {
 		return
@@ -172,162 +150,235 @@ func (m *Manager) ObserveMessage(ctx context.Context, retained message.RetainedI
 	if vchannel == "" || funcutil.IsControlChannel(vchannel) {
 		return
 	}
-	m.View(vchannel).ObserveMessage(ctx, retained)
-}
-
-// SetDurableTimeTick restores the durable frontier of one vchannel into its
-// view. It is called by the recovery path before the vchannel modules are
-// built; the view may not exist yet, in which case the frontier is recorded
-// and applied by View. Existing staging with timetick at or below the frontier
-// is discarded and its handles released — recovery runs before any
-// observation, so there is none, but a repeated call stays correct.
-func (m *Manager) SetDurableTimeTick(vchannel string, timetick uint64) {
 	m.mu.Lock()
-	view, ok := m.views[vchannel]
-	if !ok {
-		if m.pendingDurableFrontiers == nil {
-			m.pendingDurableFrontiers = make(map[string]uint64)
-		}
-		if timetick > m.pendingDurableFrontiers[vchannel] {
-			m.pendingDurableFrontiers[vchannel] = timetick
-		}
+	if msg.TimeTick() <= m.durableFrontiers[vchannel] {
 		m.mu.Unlock()
 		return
 	}
+	m.pending = append(m.pending, retained.Clone())
+	m.pendingBytes += uint64(msg.EstimateSize())
+	overThreshold := m.pendingBytes >= m.cfg.FlushMaxBytes
 	m.mu.Unlock()
-	view.mu.Lock()
-	if timetick > view.durableTimeTick {
-		view.durableTimeTick = timetick
+	if overThreshold {
+		m.requestSeal()
 	}
-	view.mu.Unlock()
 }
 
-// DurableTimeTick returns the newest durable record timetick of one vchannel,
-// derived from the recovered manifest: the largest per-vchannel chunk index
-// end across all recorded chunks.
-func (m *Manager) DurableTimeTick(vchannel string) uint64 {
+// RequestFlushThrough triggers one FlushChunk: the pending span is sealed and
+// an asynchronous write task is submitted, so the WAL checkpoint can advance
+// past the records once the chunk is durable. It is a no-op when the pending
+// flush already covers the requested timetick (or there is nothing to seal).
+func (m *Manager) RequestFlushThrough(timetick uint64) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	var frontier uint64
-	for _, chunk := range m.manifest.GetChunks() {
-		if index := vchannelChunkIndex(chunk, vchannel); index != nil && index.GetEndTimetick() > frontier {
-			frontier = index.GetEndTimetick()
-		}
+	noop := timetick <= m.pendingFlushTimeTick || len(m.pending) == 0
+	m.mu.Unlock()
+	if noop {
+		return
 	}
-	return frontier
+	m.requestSeal()
 }
 
-// NotifyVChannelDropped is the GC-boundary notification a dropped vchannel
-// sends to the summary once its cleanup snapshot is durable: the vchannel's
-// span of the pchannel log no longer exists, so GC may release records of it
-// — staged or already chunked — regardless of materialization. It is the
-// only interaction between the vchannel lifecycle and the summary, and it
-// touches nothing but the GC-retention state: views are lazily created
-// staging buffers with no lifecycle, and a flush honestly persists whatever
-// records the log carried, dropped vchannel or not.
-func (m *Manager) NotifyVChannelDropped(vchannel string) {
+// AdvanceGCTimeTick reports the GC position of one vchannel: records with
+// timetick at or below the position may be released by retention GC. It is
+// called by the vchannel lifecycle as transform materialization advances, and
+// with DroppedVChannelTimeTick when the vchannel's cleanup snapshot is
+// durable (its records may be released regardless of materialization).
+func (m *Manager) AdvanceGCTimeTick(vchannel string, timetick uint64) {
 	m.mu.Lock()
-	m.droppedVChannels[vchannel] = struct{}{}
+	if timetick > m.gcFrontiers[vchannel] {
+		m.gcFrontiers[vchannel] = timetick
+	}
 	m.mu.Unlock()
 }
 
-// SetMaterializedTimeTick mirrors the transform materialization frontier of a
-// vchannel into the retention computation. It is updated by the transform
-// consumer as it emits L0 output; records below the frontier are eligible for
-// release.
-func (m *Manager) SetMaterializedTimeTick(vchannel string, timetick uint64) {
+// requestSeal seals the pending span into one chunk and submits the write
+// task. It is a no-op when there is nothing pending.
+func (m *Manager) requestSeal() {
+	m.seal()
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.materializedFrontiers[vchannel] < timetick {
-		m.materializedFrontiers[vchannel] = timetick
+	task := m.newWriteTaskLocked()
+	m.mu.Unlock()
+	if task != nil {
+		m.submitWriteTask(task)
 	}
 }
 
-// onStagingGrown accounts one view's staging growth toward the pchannel-wide
-// flush threshold. It is called from the WAL observation path after the view
-// appended a record; it must not block.
-//
-// The cached total can transiently over-count right after a collect (a grow
-// whose record was already taken by the flush), so a suspected threshold hit
-// is confirmed by recomputing the total from the views before scheduling.
-func (m *Manager) onStagingGrown(delta uint64) {
+// seal takes the pending span out under the lock, then organizes the
+// transform records outside it (the entry construction is the one place the
+// records are built), and enqueues the sealed chunk.
+func (m *Manager) seal() *SealedChunk {
 	m.mu.Lock()
-	m.stagingBytes += delta
-	if m.stagingBytes >= m.cfg.FlushMaxBytes {
-		total := m.totalStagingLocked()
-		m.stagingBytes = total
+	if len(m.pending) == 0 {
 		m.mu.Unlock()
-		if total >= m.cfg.FlushMaxBytes {
-			m.requestFlush()
-		}
-		return
+		return nil
 	}
+	pending := m.pending
+	m.pending = nil
+	m.pendingBytes = 0
+	generation := m.nextGeneration
+	m.nextGeneration++
 	m.mu.Unlock()
-}
 
-// totalStagingLocked recomputes the pchannel-wide staging bytes from the
-// views. Caller holds m.mu.
-func (m *Manager) totalStagingLocked() uint64 {
-	var total uint64
-	for _, view := range m.views {
-		view.mu.Lock()
-		total += view.stagingBytes
-		view.mu.Unlock()
+	sc := buildSealedChunk(generation, pending)
+	if len(sc.RecordsByVChannel) == 0 {
+		// Every retained message carried no transform record; the handles are
+		// already released and there is nothing to persist. The generation was
+		// claimed but is simply skipped.
+		return nil
 	}
-	return total
-}
 
-// RequestPersistThrough implements VChannelPersistRequester at the pchannel
-// level. A stall or under-pressure request on any vchannel forces a flush of
-// the whole pchannel: a chunk is pchannel-scoped and the flush collects every
-// view's staging anyway, so no per-vchannel filtering is meaningful here.
-func (m *Manager) RequestPersistThrough(_ string, _ uint64) {
-	m.requestFlush()
-}
-
-// requestFlush schedules one flush task. It is called from the WAL
-// observation path; it must not block.
-func (m *Manager) requestFlush() {
 	m.mu.Lock()
-	task := m.newFlushTaskLocked()
-	m.mu.Unlock()
-	if task == nil {
-		return
+	m.pendingSealed = append(m.pendingSealed, sc)
+	if sc.MaxTimeTick > m.pendingFlushTimeTick {
+		m.pendingFlushTimeTick = sc.MaxTimeTick
 	}
+	m.mu.Unlock()
+	return sc
+}
+
+// buildSealedChunk organizes one chunk span: it builds the transform record
+// of every retained message, groups the records by vchannel and releases the
+// handles of messages that carry no record. Called without the lock.
+func buildSealedChunk(generation uint64, pending []message.RetainedImmutableMessage) *SealedChunk {
+	recordsByVChannel := make(map[string][]*stagedRecord)
+	var maxTimeTick uint64
+	for _, retained := range pending {
+		entry := messageutil.BuildTransformLogEntry(retained.Message(), messageutil.TransformEntryOption{})
+		if entry == nil {
+			retained.Release()
+			continue
+		}
+		vchannel := retained.Message().VChannel()
+		tt := entry.GetTimeTick()
+		recordsByVChannel[vchannel] = append(recordsByVChannel[vchannel], &stagedRecord{
+			timeTick: tt,
+			entry:    entry,
+			handle:   retained,
+		})
+		if tt > maxTimeTick {
+			maxTimeTick = tt
+		}
+	}
+	return &SealedChunk{
+		Generation:        generation,
+		RecordsByVChannel: recordsByVChannel,
+		MaxTimeTick:       maxTimeTick,
+	}
+}
+
+// writeOnce makes one sealed chunk durable end to end: write the chunk
+// object, publish the manifest record, then release the message handles and
+// advance the durable state. It reports whether the queue is drained. The
+// generation is written idempotently, so a retry after a failure rewrites the
+// exact same object.
+func (m *Manager) writeOnce(ctx context.Context) (bool, error) {
+	m.mu.Lock()
+	if len(m.pendingSealed) == 0 {
+		m.mu.Unlock()
+		return true, nil
+	}
+	sc := m.pendingSealed[0]
+	m.mu.Unlock()
+
+	records := make(map[string][]*streamingpb.VChannelSummaryTransformRecord, len(sc.RecordsByVChannel))
+	for vchannel, staged := range sc.RecordsByVChannel {
+		rs := make([]*streamingpb.VChannelSummaryTransformRecord, 0, len(staged))
+		for _, record := range staged {
+			rs = append(rs, &streamingpb.VChannelSummaryTransformRecord{
+				TimeTick: record.timeTick,
+				Delete:   record.entry.GetDelete(),
+			})
+		}
+		records[vchannel] = rs
+	}
+	footer, objectSize, err := m.cfg.Store.WriteChunk(ctx, sc.Generation, records)
+	if err != nil {
+		return false, err
+	}
+	if err := m.publishManifest(ctx, func(next *streamingpb.PChannelSummaryManifest) {
+		recordChunk(next, chunkIndexEntryFromFooter(footer, objectSize))
+	}); err != nil {
+		return false, err
+	}
+
+	m.mu.Lock()
+	for _, staged := range sc.RecordsByVChannel {
+		for _, record := range staged {
+			record.handle.Release()
+		}
+	}
+	for vchannel, staged := range sc.RecordsByVChannel {
+		var end uint64
+		for _, record := range staged {
+			if record.timeTick > end {
+				end = record.timeTick
+			}
+		}
+		if end > m.durableFrontiers[vchannel] {
+			m.durableFrontiers[vchannel] = end
+		}
+	}
+	if sc.MaxTimeTick > m.latestCoveredTimeTick {
+		m.latestCoveredTimeTick = sc.MaxTimeTick
+	}
+	m.pendingSealed = m.pendingSealed[1:]
+	finished := len(m.pendingSealed) == 0
+	m.mu.Unlock()
+	return finished, nil
+}
+
+// publishManifest edits the manifest, writes the edited clone to object
+// storage outside the lock, and installs it back only if the manifest did not
+// move in between (the CAS token is manifestVersion). This serializes
+// concurrent publishers — the write task and retention GC — without a second
+// lock.
+func (m *Manager) publishManifest(ctx context.Context, edit func(*streamingpb.PChannelSummaryManifest)) error {
+	for {
+		m.mu.Lock()
+		next := proto.Clone(m.manifest).(*streamingpb.PChannelSummaryManifest)
+		edit(next)
+		version := m.manifestVersion
+		m.mu.Unlock()
+		if err := m.cfg.Store.WriteManifest(ctx, next); err != nil {
+			return err
+		}
+		m.mu.Lock()
+		if m.manifestVersion == version {
+			m.manifest = next
+			m.manifestVersion++
+			m.mu.Unlock()
+			return nil
+		}
+		m.mu.Unlock()
+	}
+}
+
+// newWriteTaskLocked returns a write task, or nil when one is already
+// scheduled or in flight. Caller holds m.mu.
+func (m *Manager) newWriteTaskLocked() *summaryWriteTask {
+	m.flushTasks = compactWriteTasks(m.flushTasks)
+	if len(m.flushTasks) > 0 {
+		return nil
+	}
+	task := &summaryWriteTask{log: m}
+	m.flushTasks = append(m.flushTasks, task)
+	return task
+}
+
+func (m *Manager) submitWriteTask(task *summaryWriteTask) {
 	if scheduler := m.cfg.Runtime.Scheduler; scheduler != nil {
 		scheduler.Submit(task)
 	}
 }
 
-// newFlushTaskLocked returns a flush task, or nil when one is already
-// scheduled or in flight. Caller holds m.mu.
-//
-// At most one flush task exists at a time: the executing task collects every
-// view's staging (see collectStaging), so a request while one is pending would
-// only duplicate the same work. The task is compacted away once done, and the
-// next request then schedules the successor — flushes stay strictly
-// sequential, and the task set stays O(1) instead of growing one task per
-// observation.
-func (m *Manager) newFlushTaskLocked() *summaryFlushTask {
-	m.flushTasks = compactFlushTasks(m.flushTasks)
-	if len(m.flushTasks) > 0 {
-		return nil
-	}
-	task := &summaryFlushTask{
-		log: m,
-	}
-	m.flushTasks = append(m.flushTasks, task)
-	return task
-}
-
-// HasPendingWork reports whether a flush is scheduled or in flight, or a view
-// still holds staging. Recovery uses it to decide whether a drop cleanup may
-// tear the summary down.
+// HasPendingWork reports whether a write is scheduled or in flight, or a
+// sealed chunk is still waiting to be written. Recovery uses it to decide
+// whether a drop cleanup may tear the summary down.
 func (m *Manager) HasPendingWork() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.flushTasks = compactFlushTasks(m.flushTasks)
-	return len(m.flushTasks) > 0
+	m.flushTasks = compactWriteTasks(m.flushTasks)
+	return len(m.flushTasks) > 0 || len(m.pendingSealed) > 0
 }
 
 // ReadTransformEntries returns the durable transform entries of one vchannel
@@ -346,9 +397,6 @@ func (m *Manager) ReadTransformEntries(
 	from, to uint64,
 ) ([]*streamingpb.TransformLogEntry, error) {
 	m.mu.Lock()
-	// Snapshot the chunk index under the lock: publishManifest appends to and
-	// sorts the live slice's backing array in place, so iterating the live
-	// slice unlocked could skip or duplicate entries under a concurrent flush.
 	chunks := append([]*streamingpb.PChannelSummaryChunkIndexEntry(nil), m.manifest.GetChunks()...)
 	m.mu.Unlock()
 	out := make([]*streamingpb.TransformLogEntry, 0)
@@ -383,14 +431,19 @@ func (m *Manager) ReadTransformEntries(
 	return out, nil
 }
 
-// vchannelChunkIndex returns a chunk's index entry of one vchannel, or nil.
-func vchannelChunkIndex(chunk *streamingpb.PChannelSummaryChunkIndexEntry, vchannel string) *streamingpb.VChannelSummaryChunkIndex {
-	for _, index := range chunk.GetVchannels() {
-		if index.GetVchannel() == vchannel {
-			return index
+// DurableTimeTick returns the newest durable record timetick of one vchannel,
+// derived from the manifest: the largest per-vchannel chunk index end across
+// all recorded chunks.
+func (m *Manager) DurableTimeTick(vchannel string) uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var frontier uint64
+	for _, chunk := range m.manifest.GetChunks() {
+		if index := vchannelChunkIndex(chunk, vchannel); index != nil && index.GetEndTimetick() > frontier {
+			frontier = index.GetEndTimetick()
 		}
 	}
-	return nil
+	return frontier
 }
 
 // LatestCoveredTimeTick returns the newest timetick covered by a durable
@@ -401,272 +454,88 @@ func (m *Manager) LatestCoveredTimeTick() uint64 {
 	return m.latestCoveredTimeTick
 }
 
-// flushOnce executes one flush: collect the staging of every view, write one
-// chunk, publish the manifest, then release the message handles. It is the
-// execution body of summaryFlushTask.
-//
-// flushOnce is the execution body of summaryFlushTask. Every failure path pins
-// the batch on the task so a retry rewrites the exact same bytes under the
-// same generation: a chunk-write failure (pendingChunk) and a manifest-publish
-// failure (pendingPublish) both retry with the pinned batch, never a
-// re-collection of the grown staging set. A grown batch under the same
-// generation would collide with an already-durable (or partially written)
-// chunk object (storeCorrupted) and livelock the flush forever. Staging that
-// arrives during the retry window stays in the views and is collected by the
-// next flush task into a fresh generation.
-func (m *Manager) flushOnce(ctx context.Context, task *summaryFlushTask) error {
-	// A chunk write failed on a previous attempt: the object may or may not be
-	// durable (a dropped ack after a successful write). Retry the SAME
-	// generation with the SAME pinned batch; new staging is never folded into
-	// this batch, so the rewrite is byte-identical and idempotent.
-	if task.pendingChunk != nil {
-		generation := task.pendingChunk.generation
-		batch := task.pendingChunk.batch
-		if err := m.persistChunk(ctx, generation, batch); err != nil {
-			return err
+// vchannelChunkIndex returns a chunk's index entry of one vchannel, or nil.
+func vchannelChunkIndex(chunk *streamingpb.PChannelSummaryChunkIndexEntry, vchannel string) *streamingpb.VChannelSummaryChunkIndex {
+	for _, index := range chunk.GetVchannels() {
+		if index.GetVchannel() == vchannel {
+			return index
 		}
-		task.pendingChunk = nil
-		if err := m.publishManifest(ctx, generation, batch); err != nil {
-			task.pendingPublish = &pendingPublishState{generation: generation, batch: batch}
-			return err
-		}
-		m.completeBatch(generation, batch)
-		return nil
 	}
-	// A chunk durably written by a previous attempt whose manifest publish
-	// failed: retry only the publish with the pinned batch. New staging stays
-	// in the views and is collected by the next flush task into a fresh
-	// generation after this publish succeeds.
-	if task.pendingPublish != nil {
-		if err := m.publishManifest(ctx, task.pendingPublish.generation, task.pendingPublish.batch); err != nil {
-			return err
-		}
-		m.completeBatch(task.pendingPublish.generation, task.pendingPublish.batch)
-		task.pendingPublish = nil
-		return nil
-	}
-	// Collect the staging under the view locks. The records stay logically
-	// owned by the views until the chunk and manifest are durable.
-	batch := m.collectStaging()
-	// Re-sync the pchannel staging total: the collect emptied every view, and
-	// a grow whose notification is still in flight must not leave the cached
-	// total over-counting.
-	m.mu.Lock()
-	m.stagingBytes = m.totalStagingLocked()
-	m.mu.Unlock()
-	if len(batch.recordsByVChannel) == 0 {
-		return nil
-	}
-	generation := m.claimGenerationLocked()
-	if err := m.persistChunk(ctx, generation, batch); err != nil {
-		// The generation stays claimed: the pinned retry writes it. Never
-		// restore the staging — the retry must rewrite the identical bytes, and
-		// newer records go to a later generation, not into this batch.
-		task.pendingChunk = &pendingChunkState{generation: generation, batch: batch}
-		return err
-	}
-	if err := m.publishManifest(ctx, generation, batch); err != nil {
-		task.pendingPublish = &pendingPublishState{generation: generation, batch: batch}
-		return err
-	}
-	// Durable end to end: release the handles, which lets the WAL checkpoint
-	// advance past every record of this batch.
-	m.completeBatch(generation, batch)
 	return nil
 }
 
-// collectStaging takes the staging of every view.
-func (m *Manager) collectStaging() *flushBatch {
-	m.mu.Lock()
-	views := make([]*SummaryView, 0, len(m.views))
-	for _, view := range m.views {
-		views = append(views, view)
-	}
-	m.mu.Unlock()
-	batch := &flushBatch{
-		recordsByVChannel: make(map[string][]*stagedRecord),
-	}
-	for _, view := range views {
-		view.mu.Lock()
-		records := view.takeStagingLocked()
-		view.mu.Unlock()
-		if len(records) > 0 {
-			batch.recordsByVChannel[view.vchannel] = records
-		}
-	}
-	return batch
+// stagedRecord is one retained WAL message and the transform record it yields.
+type stagedRecord struct {
+	timeTick uint64
+	entry    *streamingpb.TransformLogEntry
+	// handle keeps the WAL message alive until the record is durable.
+	handle message.RetainedImmutableMessage
 }
 
-// claimGenerationLocked consumes the next generation for one flush.
-func (m *Manager) claimGenerationLocked() uint64 {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	generation := m.nextGeneration
-	m.nextGeneration++
-	return generation
+// SealedChunk is one chunk span taken out of the pending buffer: the records
+// are immutable once sealed, so the write task may build and rewrite the
+// object without touching the manager state.
+type SealedChunk struct {
+	Generation        uint64
+	RecordsByVChannel map[string][]*stagedRecord
+	MaxTimeTick       uint64
 }
 
-// persistChunk writes the chunk object for one batch and derives the manifest
-// entry from the returned footer. The generation stays claimed by the pinned
-// retry on failure (see flushOnce); a chunk durable but unrecorded is found by
-// recovery probing forward.
-func (m *Manager) persistChunk(ctx context.Context, generation uint64, batch *flushBatch) error {
-	records := make(map[string][]*streamingpb.VChannelSummaryTransformRecord, len(batch.recordsByVChannel))
-	maxTimeTick := uint64(0)
-	for vchannel, staged := range batch.recordsByVChannel {
-		records[vchannel] = make([]*streamingpb.VChannelSummaryTransformRecord, 0, len(staged))
-		for _, record := range staged {
-			records[vchannel] = append(records[vchannel], &streamingpb.VChannelSummaryTransformRecord{
-				TimeTick: record.timeTick,
-				Delete:   record.entry.GetDelete(),
-			})
-			if record.timeTick > maxTimeTick {
-				maxTimeTick = record.timeTick
-			}
-		}
-	}
-	footer, objectSize, err := m.cfg.Store.WriteChunk(ctx, generation, records)
-	if err != nil {
-		return err
-	}
-	batch.footer = footer
-	batch.objectSize = objectSize
-	batch.maxTimeTick = maxTimeTick
-	return nil
-}
-
-// publishManifest amends the in-memory manifest with the new chunk and writes
-// it. Caller must have already made the chunk durable.
-//
-// The publish is serialized with the GC publish through manifestMu: the
-// manifest is amended under mu, marshalled from a clone taken under the same
-// lock, and only installed on success. A concurrent GC edit of the same
-// backing arrays can therefore never be marshalled in a torn state, and a
-// failed write leaves the on-disk state unchanged.
-//
-// On write failure the amendment and the claimed generation are rolled back,
-// so the flush retry rewrites the same generation: the batch is never
-// duplicated into two chunk objects.
-func (m *Manager) publishManifest(ctx context.Context, generation uint64, batch *flushBatch) error {
-	m.manifestMu.Lock()
-	defer m.manifestMu.Unlock()
-	m.mu.Lock()
-	recordChunk(m.manifest, chunkIndexEntryFromFooter(batch.footer, batch.objectSize))
-	next := proto.Clone(m.manifest).(*streamingpb.PChannelSummaryManifest)
-	m.mu.Unlock()
-	if err := m.cfg.Store.WriteManifest(ctx, next); err != nil {
-		m.mu.Lock()
-		m.manifest.Chunks = removeChunkEntry(m.manifest.Chunks, generation)
-		if m.nextGeneration > generation {
-			m.nextGeneration = generation
-		}
-		m.mu.Unlock()
-		return err
-	}
-	m.mu.Lock()
-	m.manifest = next
-	m.mu.Unlock()
-	return nil
-}
-
-// completeBatch installs the durable state and releases the handles.
-func (m *Manager) completeBatch(generation uint64, batch *flushBatch) {
-	m.mu.Lock()
-	// A publish failure rolls the claimed generation back; a pinned-batch
-	// retry that then succeeds must advance past it, or the next flush would
-	// claim the generation again and collide with the durable chunk object.
-	if m.nextGeneration <= generation {
-		m.nextGeneration = generation + 1
-	}
-	if batch.maxTimeTick > m.latestCoveredTimeTick {
-		m.latestCoveredTimeTick = batch.maxTimeTick
-	}
-	views := make([]*SummaryView, 0, len(batch.recordsByVChannel))
-	for vchannel := range batch.recordsByVChannel {
-		// A view is never removed (a dropped vchannel only raises its GC
-		// boundary), so it is always present to mark durable.
-		if view, ok := m.views[vchannel]; ok {
-			views = append(views, view)
-		}
-	}
-	m.mu.Unlock()
-	for _, view := range views {
-		view.markDurable(batch.maxTimeTick)
-	}
-	for _, records := range batch.recordsByVChannel {
-		for _, record := range records {
-			record.handle.Release()
-		}
-	}
-}
-
-// flushBatch is one flush's collected staging.
-type flushBatch struct {
-	recordsByVChannel map[string][]*stagedRecord
-	footer            *streamingpb.PChannelSummaryChunkFooter
-	objectSize        uint64
-	maxTimeTick       uint64
-}
-
-// summaryFlushTask is a nodescheduler task running one flush. At most one task
-// exists at a time (see newFlushTaskLocked), so there is no predecessor graph.
-type summaryFlushTask struct {
+// summaryWriteTask is a nodescheduler task draining the sealed chunk queue.
+// At most one task exists at a time (see newWriteTaskLocked), so there is no
+// predecessor graph.
+type summaryWriteTask struct {
 	log  *Manager
 	done atomic.Bool
-	// pendingChunk pins the batch of a chunk whose write failed: the retry
-	// rewrites the SAME generation with the SAME batch instead of re-collecting
-	// staging (see flushOnce), so a grown batch can never collide with a
-	// partially written chunk object.
-	pendingChunk *pendingChunkState
-	// pendingPublish pins the batch of a chunk that was durably written but
-	// whose manifest publish failed: the retry publishes the same generation
-	// instead of re-collecting staging (see flushOnce).
-	pendingPublish *pendingPublishState
-}
-
-// pendingChunkState is the pinned state of a batch whose chunk write failed.
-// The chunk key may already hold this payload (a dropped ack after a
-// successful write), so the retry must rewrite the identical bytes.
-type pendingChunkState struct {
-	generation uint64
-	batch      *flushBatch
-}
-
-// pendingPublishState is the pinned state of a chunk written but not yet
-// recorded in a published manifest.
-type pendingPublishState struct {
-	generation uint64
-	batch      *flushBatch
 }
 
 // Done reports whether the task finished.
-func (t *summaryFlushTask) Done() bool {
+func (t *summaryWriteTask) Done() bool {
 	return t.done.Load()
 }
 
-// Execute runs the flush. Transient failures are marked ErrDelay so the
-// scheduler retries the task with backoff; flushOnce pinned the failed batch
-// (pendingChunk for a chunk write, pendingPublish for a manifest publish), so
-// a retry never re-collects a grown staging set into the same chunk key. A
-// terminal failure (corrupted or fenced store) drops the task instead: the
-// pinned batch is abandoned with its handles retained, so the WAL checkpoint
-// stalls before it and recovery replays it after a restart.
-func (t *summaryFlushTask) Execute(ctx context.Context) error {
-	if err := t.log.flushOnce(ctx, t); err != nil {
-		if isTerminalSummaryFlushError(err) {
-			t.done.Store(true)
-			if logger := t.log.cfg.Logger; logger != nil {
-				logger.Error(ctx, "summary flush failed terminally, abandoning pinned batch", mlog.Err(err))
+// Execute drains the sealed chunk queue. Transient failures are marked
+// ErrDelay so the scheduler retries with backoff; the failed chunk stays at
+// the queue head and is rewritten idempotently. A terminal failure (corrupted
+// or fenced store) abandons the failing chunk instead: it is popped from the
+// queue — a successor task would only hit the same corruption — while its
+// handles stay retained, so the WAL checkpoint stalls before it and recovery
+// replays after a restart. The rest of the queue is written by the next task.
+func (t *summaryWriteTask) Execute(ctx context.Context) error {
+	for {
+		finished, err := t.log.writeOnce(ctx)
+		if err != nil {
+			if isTerminalSummaryFlushError(err) {
+				t.log.abandonHead(ctx)
+				t.done.Store(true)
+				if logger := t.log.cfg.Logger; logger != nil {
+					logger.Error(ctx, "summary flush failed terminally, abandoning the chunk", mlog.Err(err))
+				}
+				return err
 			}
-			return err
+			return errors.Mark(err, nodescheduler.ErrDelay)
 		}
-		return errors.Mark(err, nodescheduler.ErrDelay)
+		if finished {
+			break
+		}
 	}
 	t.done.Store(true)
 	return nil
 }
 
-func compactFlushTasks(tasks []*summaryFlushTask) []*summaryFlushTask {
+// abandonHead pops the failing chunk off the sealed queue without releasing
+// its handles. The chunk is not durable and will never become durable under
+// this term; recovery replays it after a restart, so the handles must keep
+// the WAL checkpoint from advancing past it.
+func (m *Manager) abandonHead(ctx context.Context) {
+	m.mu.Lock()
+	if len(m.pendingSealed) > 0 {
+		m.pendingSealed = m.pendingSealed[1:]
+	}
+	m.mu.Unlock()
+}
+
+func compactWriteTasks(tasks []*summaryWriteTask) []*summaryWriteTask {
 	pending := tasks[:0]
 	for _, task := range tasks {
 		if task == nil || task.Done() {
@@ -678,4 +547,4 @@ func compactFlushTasks(tasks []*summaryFlushTask) []*summaryFlushTask {
 	return pending
 }
 
-var _ nodescheduler.Task = (*summaryFlushTask)(nil)
+var _ nodescheduler.Task = (*summaryWriteTask)(nil)

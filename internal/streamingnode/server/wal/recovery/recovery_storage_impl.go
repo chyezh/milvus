@@ -240,13 +240,23 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 	// records because the frontier advances only after registration succeeds.
 	pendingTransformEntries := make(map[string][]*streamingpb.TransformLogEntry, len(vchannels))
 	for vchannel, meta := range vchannels {
-		// A dropped/tombstoned vchannel has its cleanup snapshot durable: its
-		// records — staged or already chunked — may be released by retention
-		// GC regardless of materialization. Report the GC boundary instead of
-		// loading a materialization window the vchannel will never consume.
+		// The summary was already restored (chunk index, durable frontiers and
+		// GC positions) by Restore; only the transform consumer's recovery
+		// window is loaded here: the durable records after the restored
+		// materialization frontier. This is the only read of the summary store
+		// the transform consumer relies on; at runtime it observes the
+		// vchannel's messages directly instead.
+		//
+		// The persisted frontier is the single source of truth for recovery: a
+		// crash only loses in-flight registrations, whose records are still in
+		// the summary window below and are re-materialized (duplicate L0
+		// output is idempotent), and a crash never loses
+		// materialized-but-unregistered records because the frontier advances
+		// only after registration succeeds.
 		if state := meta.GetState(); state == streamingpb.VChannelState_VCHANNEL_STATE_DROPPED ||
 			state == streamingpb.VChannelState_VCHANNEL_STATE_TOMBSTONED {
-			summaryManager.NotifyVChannelDropped(vchannel)
+			// A dropped vchannel consumes nothing after its cleanup; it needs
+			// no materialization window.
 			continue
 		}
 		entries, err := summaryManager.ReadTransformEntries(
@@ -257,33 +267,6 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 		}
 		if len(entries) > 0 {
 			pendingTransformEntries[vchannel] = entries
-		}
-		// Restore the durable frontier into the summary view before the
-		// module builds it: WAL replay re-observes records the manifest
-		// already covers, and the view must skip them to avoid rewriting the
-		// same records into new chunks.
-		summaryManager.SetDurableTimeTick(vchannel, summaryManager.DurableTimeTick(vchannel))
-		// Restore the materialization frontier (the last durable
-		// transform_materialized_time_tick) into the summary retention
-		// computation. Only persisted frontiers may release summary records,
-		// so the value restored from the catalog is used verbatim; without
-		// this, GC would keep every chunk until the first post-recovery
-		// materialization flush.
-		summaryManager.SetMaterializedTimeTick(vchannel, meta.GetTransformMaterializedTimeTick())
-	}
-	// Defensive GC boundary: a chunked vchannel that no longer exists in the
-	// catalog at all (its meta was cleaned up after the drop) has no
-	// materialization frontier to make its chunks releasable. Mark it dropped
-	// so retention GC can release them.
-	alive := make(map[string]struct{}, len(vchannels))
-	for vchannel := range vchannels {
-		alive[vchannel] = struct{}{}
-	}
-	for _, chunk := range summaryManager.Manifest().GetChunks() {
-		for _, index := range chunk.GetVchannels() {
-			if _, ok := alive[index.GetVchannel()]; !ok {
-				summaryManager.NotifyVChannelDropped(index.GetVchannel())
-			}
 		}
 	}
 	// Deprecated: the manager periodically reports the pchannel recovery
@@ -558,7 +541,7 @@ func (r *recoveryStorageImpl) observeModulesMessage(
 // to both the vchannel segments and the pchannel summary: the WAL checkpoint
 // must not advance until the buffered data of the stalled vchannel is durable
 // on every write path. The summary handles the request at the pchannel level
-// (a chunk is pchannel-scoped, see walsummary.Manager.RequestPersistThrough).
+// (a chunk is pchannel-scoped, see walsummary.Manager.RequestFlushThrough).
 type composedPersistRequester struct {
 	vchannelManager *vchannel.PChannelRecoveryManager
 	summaryManager  *walsummary.Manager
@@ -567,7 +550,7 @@ type composedPersistRequester struct {
 func (r composedPersistRequester) RequestPersistThrough(vchannelName string, targetTimeTick uint64) {
 	r.vchannelManager.RequestPersistThrough(vchannelName, targetTimeTick)
 	if r.summaryManager != nil {
-		r.summaryManager.RequestPersistThrough(vchannelName, targetTimeTick)
+		r.summaryManager.RequestFlushThrough(targetTimeTick)
 	}
 }
 
