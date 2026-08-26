@@ -19,6 +19,7 @@ package walsummary
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,6 +33,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/pkg/v3/objectstorage"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
@@ -97,7 +99,8 @@ func newTestDeleteMessage(t *testing.T, vchannel string, timetick uint64, partit
 
 // observeDelete observes one delete message through the pchannel-level entry
 // point and releases the owner, setting *finalized when the message is fully
-// released (no retained handle survives).
+// released. The summary never retains the message, so *finalized is true as
+// soon as the observation returns.
 func observeDelete(t *testing.T, manager *Manager, vchannel string, timetick uint64, finalized *bool) {
 	t.Helper()
 	msg := newTestDeleteMessage(t, vchannel, timetick, 10, int64(timetick))
@@ -134,21 +137,26 @@ func flushObserved(t *testing.T, manager *Manager, vchannel string, timetick uin
 	drainTasks(t, manager)
 }
 
-func TestObserveMessageRetainsUntilDurable(t *testing.T) {
+// TestObserveMessageCopiesRecordWithoutRetaining verifies the summary never
+// retains the WAL message: the record is built and copied at observation, the
+// message is released immediately, and a later flush persists the copied
+// record.
+func TestObserveMessageCopiesRecordWithoutRetaining(t *testing.T) {
 	manager, _ := newTestManagerWithStore(t)
 	ctx := context.Background()
 
 	finalized := false
 	observeDelete(t, manager, "v1", 100, &finalized)
-	assert.False(t, finalized, "message must stay alive while pending")
+	assert.True(t, finalized, "the message must be released at observation — the summary holds no reference")
 	manager.mu.Lock()
 	require.Len(t, manager.pending, 1)
+	assert.Equal(t, uint64(100), manager.pending[0].timeTick)
+	assert.NotNil(t, manager.pending[0].entry, "the record is built at observation")
 	manager.mu.Unlock()
 
 	manager.RequestFlushThrough(100)
 	assert.True(t, manager.HasPendingWork())
 	drainTasks(t, manager)
-	assert.True(t, finalized, "message handle must be released after a durable flush")
 	assert.Equal(t, uint64(100), manager.LatestCoveredTimeTick())
 
 	decoded, footer, err := manager.cfg.Store.ReadChunk(ctx, 0, 1)
@@ -218,15 +226,15 @@ func TestObserveMessageSkipsRecordsAtOrBelowDurableFrontier(t *testing.T) {
 	// the same records into a new chunk.
 	finalizedA := false
 	observeDelete(t, manager2, "v1", 100, &finalizedA)
-	assert.True(t, finalizedA, "a skipped record releases its handle immediately")
+	assert.True(t, finalizedA, "a skipped record is never staged")
 	assert.False(t, manager2.HasPendingWork())
 
-	// A record past the frontier is retained and flushed as usual.
+	// A record past the frontier is staged and flushed as usual (the byte
+	// threshold is 1, so the observation seals it immediately).
 	finalizedB := false
 	observeDelete(t, manager2, "v1", 200, &finalizedB)
-	assert.False(t, finalizedB)
+	assert.True(t, finalizedB, "the message is released at observation")
 	drainTasks(t, manager2)
-	assert.True(t, finalizedB)
 	entries, err := manager2.ReadTransformEntries(ctx, "v1", 150, 1000)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
@@ -470,14 +478,34 @@ func TestWriteTaskMergesConcurrentRequests(t *testing.T) {
 	require.Len(t, manager.Manifest().GetChunks(), 3, "each sealed span becomes one chunk")
 }
 
-func TestManagerFlushReleasesHandles(t *testing.T) {
+// TestManagerFlushAdvancesLastAcked verifies the confirmation frontier
+// advances to the record once its chunk is durable end to end.
+func TestManagerFlushAdvancesLastAcked(t *testing.T) {
 	ctx := context.Background()
 	manager, _ := newTestManagerWithStore(t)
 	require.NoError(t, manager.Restore(ctx, nil))
 
-	finalized := false
-	flushObserved(t, manager, "v1", 100, &finalized)
-	assert.True(t, finalized, "handles released after the flush is durable end to end")
+	var unused bool
+	observeDelete(t, manager, "v1", 100, &unused)
+	// While the record is staged, the frontier stays at the record's
+	// last-confirmed position (the delete message is not yet durable).
+	acked := manager.LastAcked()
+	require.NotNil(t, acked)
+	assert.Equal(t, int64(100), messageIDInt(acked.MessageID), "frontier pinned at the message before the staged record")
+	manager.RequestFlushThrough(100)
+	drainTasks(t, manager)
+	acked = manager.LastAcked()
+	require.NotNil(t, acked)
+	assert.Equal(t, int64(101), messageIDInt(acked.MessageID), "frontier advances to the durable record")
+}
+
+// messageIDInt converts the test message ID back to its int64 value.
+func messageIDInt(id message.MessageID) int64 {
+	v, err := strconv.ParseInt(id.Marshal(), 10, 64)
+	if err != nil {
+		panic(err)
+	}
+	return v
 }
 
 func TestManagerReadTransformEntriesAcrossChunks(t *testing.T) {
@@ -541,12 +569,14 @@ func TestFlushPublishFailureRetriesSameGeneration(t *testing.T) {
 	// Chunk write succeeds, manifest publish fails.
 	require.Error(t, task.Execute(ctx))
 	// The amendment is not installed; the generation stays claimed and the
-	// failed chunk stays at the queue head for the retry; the handles stay
-	// retained because the batch is not durable end to end. The chunk object
-	// itself is already durable.
+	// failed chunk stays at the queue head for the retry. The batch is not
+	// durable end to end, so the confirmation frontier stays behind it. The
+	// chunk object itself is already durable.
 	assert.Len(t, manager.manifest.GetChunks(), 0)
 	assert.Equal(t, uint64(1), manager.nextGeneration)
-	assert.False(t, finalized)
+	acked := manager.LastAcked()
+	require.NotNil(t, acked)
+	assert.Equal(t, int64(100), messageIDInt(acked.MessageID), "frontier stays at the message before the record while the batch is not durable")
 	assert.True(t, manager.HasPendingWork(), "the failed chunk waits for the retry")
 	keys, _, err := storage.ListAllChunkWithPrefix(ctx, cm, buildChunkPrefix(cm, store.PChannel()), false)
 	require.NoError(t, err)
@@ -556,7 +586,9 @@ func TestFlushPublishFailureRetriesSameGeneration(t *testing.T) {
 	// generation — exactly one chunk object and one manifest entry.
 	cm.failManifest.Store(false)
 	require.NoError(t, task.Execute(ctx))
-	assert.True(t, finalized)
+	acked = manager.LastAcked()
+	require.NotNil(t, acked)
+	assert.Equal(t, int64(101), messageIDInt(acked.MessageID), "frontier advances once the batch is durable end to end")
 	require.Len(t, manager.manifest.GetChunks(), 1)
 	assert.Equal(t, uint64(0), manager.manifest.GetChunks()[0].GetGeneration())
 	keys, _, err = storage.ListAllChunkWithPrefix(ctx, cm, buildChunkPrefix(cm, store.PChannel()), false)
@@ -591,7 +623,6 @@ func TestFlushChunkFailureRetriesSameGeneration(t *testing.T) {
 	task := manager.flushTasks[0]
 	manager.mu.Unlock()
 	require.Error(t, task.Execute(ctx))
-	assert.False(t, finalizedA)
 	keys, _, err := storage.ListAllChunkWithPrefix(ctx, cm, buildChunkPrefix(cm, store.PChannel()), false)
 	require.NoError(t, err)
 	assert.Empty(t, keys, "the failed chunk write left no durable object")
@@ -604,8 +635,6 @@ func TestFlushChunkFailureRetriesSameGeneration(t *testing.T) {
 	// generation 1 — one object per batch, never a conflicting rewrite.
 	cm.failChunk.Store(false)
 	require.NoError(t, task.Execute(ctx))
-	assert.True(t, finalizedA, "the sealed [A] batch completes")
-	assert.True(t, finalizedB, "the same task drains the newer span too")
 	require.Len(t, manager.manifest.GetChunks(), 2)
 	assert.Equal(t, uint64(0), manager.manifest.GetChunks()[0].GetGeneration())
 	assert.Equal(t, uint64(1), manager.manifest.GetChunks()[1].GetGeneration())
@@ -618,8 +647,9 @@ func TestFlushChunkFailureRetriesSameGeneration(t *testing.T) {
 // classification: a store-corruption error from the chunk write must NOT be
 // marked ErrDelay — the task fails loudly and is dropped (done), so the
 // manager can schedule successor flushes instead of retrying the same
-// corrupted write forever. The abandoned chunk keeps its handles retained, so
-// the WAL checkpoint stalls before it and recovery replays it after a restart.
+// corrupted write forever. The abandoned chunk pins the confirmation frontier
+// before it, so the WAL checkpoint stalls and recovery replays it after a
+// restart.
 func TestFlushChunkCorruptedFailsTaskWithoutRetry(t *testing.T) {
 	ctx := context.Background()
 	cm := storage.NewLocalChunkManager(objectstorage.RootPath(t.TempDir()))
@@ -643,7 +673,12 @@ func TestFlushChunkCorruptedFailsTaskWithoutRetry(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrStoreCorrupted), "the conflict surfaces as store corruption")
 	assert.False(t, errors.Is(err, nodescheduler.ErrDelay), "a terminal error must not be retried")
 	assert.True(t, task.Done(), "the task is dropped so successor flushes can proceed")
-	assert.False(t, finalizedA, "the corrupted chunk is abandoned with handles retained; recovery replays it")
+
+	// The abandoned record pins the frontier at its last-confirmed message;
+	// recovery replays it after a restart.
+	acked := manager.LastAcked()
+	require.NotNil(t, acked)
+	assert.Equal(t, int64(100), messageIDInt(acked.MessageID), "frontier stays at the message before the abandoned record")
 
 	// The manager is not stuck: a successor flush collects newer staging into
 	// a fresh generation.
@@ -654,10 +689,13 @@ func TestFlushChunkCorruptedFailsTaskWithoutRetry(t *testing.T) {
 	nextTask := manager.flushTasks[0]
 	manager.mu.Unlock()
 	require.NoError(t, nextTask.Execute(ctx))
-	assert.True(t, finalizedB)
 	require.Len(t, manager.manifest.GetChunks(), 1)
 	assert.Equal(t, uint64(1), manager.manifest.GetChunks()[0].GetGeneration())
-	assert.False(t, finalizedA)
+	// The abandoned record still pins the frontier: the successor's durable
+	// chunk (record at 201) must not advance the frontier past it.
+	acked = manager.LastAcked()
+	require.NotNil(t, acked)
+	assert.Equal(t, int64(100), messageIDInt(acked.MessageID), "frontier stays behind the abandoned record")
 }
 
 // TestGCOnceRemovesAllPending covers the snapshot iteration of the pending GC
@@ -696,13 +734,13 @@ func TestGCOnceRemovesAllPending(t *testing.T) {
 	}
 }
 
-// TestAdvanceGCTimeTickDuringRetryReleasesHandles covers a write racing a
+// TestAdvanceGCTimeTickDuringRetryAdvancesFrontier covers a write racing a
 // vchannel cleanup: a chunk-write failure keeps the sealed chunk at the queue
 // head, the vchannel is dropped (GC boundary) during the retry window, and the
-// retry's write must still release the retained handles. The GC boundary
+// retry's write must still advance the confirmation frontier. The GC boundary
 // touches only retention state, never the pending buffer, so the honest flush
 // of the records goes through unchanged.
-func TestAdvanceGCTimeTickDuringRetryReleasesHandles(t *testing.T) {
+func TestAdvanceGCTimeTickDuringRetryAdvancesFrontier(t *testing.T) {
 	ctx := context.Background()
 	cm := &failInjectingChunkManager{
 		ChunkManager: storage.NewLocalChunkManager(objectstorage.RootPath(t.TempDir())),
@@ -710,7 +748,7 @@ func TestAdvanceGCTimeTickDuringRetryReleasesHandles(t *testing.T) {
 	store := NewStore(cm, "by-dev-rootcoord-dml_0_40451v0", 1)
 	manager := newTestManager(t, store, 1, 1<<30)
 	require.NoError(t, manager.Restore(ctx, nil))
-	finalized := false
+	var finalized bool
 	observeDelete(t, manager, "v1", 100, &finalized)
 
 	cm.failChunk.Store(true)
@@ -719,15 +757,19 @@ func TestAdvanceGCTimeTickDuringRetryReleasesHandles(t *testing.T) {
 	task := manager.flushTasks[0]
 	manager.mu.Unlock()
 	require.Error(t, task.Execute(ctx))
-	assert.False(t, finalized)
+	acked := manager.LastAcked()
+	require.NotNil(t, acked)
+	assert.Equal(t, int64(100), messageIDInt(acked.MessageID), "frontier pinned while the batch is not durable")
 
 	// The vchannel is dropped while the chunk waits for the retry.
 	manager.AdvanceGCTimeTick("v1", DroppedVChannelTimeTick)
 
-	// The retry completes: the write releases the handles.
+	// The retry completes: the durable write advances the frontier.
 	cm.failChunk.Store(false)
 	require.NoError(t, task.Execute(ctx))
-	assert.True(t, finalized, "the retry's write releases the retained handles")
+	acked = manager.LastAcked()
+	require.NotNil(t, acked)
+	assert.Equal(t, int64(101), messageIDInt(acked.MessageID), "frontier advances once the retry's write is durable")
 }
 
 // TestConcurrentFlushAndGCRelease exercises the manifest publish paths
@@ -770,4 +812,114 @@ func TestConcurrentFlushAndGCRelease(t *testing.T) {
 		}
 	}()
 	wg.Wait()
+}
+
+// newTestBarrierMessage builds a CreateCollection (barrier-class) message of
+// the given vchannel: it never produces a transform record, so observing it
+// only moves the confirmation frontier.
+func newTestBarrierMessage(t *testing.T, vchannel string, timetick uint64) message.ImmutableMessage {
+	t.Helper()
+	mutableMsg := message.NewCreateCollectionMessageBuilderV1().
+		WithVChannel(vchannel).
+		WithHeader(&message.CreateCollectionMessageHeader{CollectionId: 1, PartitionIds: []int64{10}}).
+		WithBody(&msgpb.CreateCollectionRequest{}).
+		MustBuildMutable()
+	return mutableMsg.WithTimeTick(timetick).
+		WithLastConfirmed(walimplstest.NewTestMessageID(int64(timetick))).
+		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick + 1)))
+}
+
+// TestObserveDeletePinsLastAckedUntilDurable verifies the confirmation
+// frontier is pinned before a staged delete record and advances only after
+// the record's chunk is durable.
+func TestObserveDeletePinsLastAckedUntilDurable(t *testing.T) {
+	manager, _ := newTestManagerWithStore(t)
+	ctx := context.Background()
+	require.NoError(t, manager.Restore(ctx, nil))
+
+	var unused bool
+	observeDelete(t, manager, "v1", 100, &unused)
+	require.Len(t, manager.pending, 1)
+	acked := manager.LastAcked()
+	require.NotNil(t, acked)
+	assert.Equal(t, int64(100), messageIDInt(acked.MessageID), "frontier pinned at the record's last-confirmed message")
+	assert.Equal(t, uint64(99), acked.TimeTick, "timetick pinned one tick before the record")
+
+	manager.RequestFlushThrough(100)
+	drainTasks(t, manager)
+	acked = manager.LastAcked()
+	require.NotNil(t, acked)
+	assert.Equal(t, int64(101), messageIDInt(acked.MessageID), "frontier advances to the durable record")
+	assert.Equal(t, uint64(100), acked.TimeTick)
+}
+
+// TestObserveNonDeleteAdvancesLastAcked verifies a DDL/flush/barrier message
+// (no record) advances the confirmation frontier when nothing is staged.
+func TestObserveNonDeleteAdvancesLastAcked(t *testing.T) {
+	manager, _ := newTestManagerWithStore(t)
+	ctx := context.Background()
+	require.NoError(t, manager.Restore(ctx, nil))
+
+	msg := newTestBarrierMessage(t, "v1", 150)
+	owner := message.NewOwnedImmutableMessage(msg, func() {})
+	retained := owner.Clone()
+	manager.ObserveMessage(ctx, retained)
+	retained.Release()
+	owner.Release()
+
+	require.Empty(t, manager.pending)
+	acked := manager.LastAcked()
+	require.NotNil(t, acked)
+	assert.Equal(t, int64(151), messageIDInt(acked.MessageID))
+	assert.Equal(t, uint64(150), acked.TimeTick)
+}
+
+// TestObserveNonDeletePinnedByPending verifies a DDL message observed while a
+// delete record is staged does not advance the frontier past the record.
+func TestObserveNonDeletePinnedByPending(t *testing.T) {
+	manager, _ := newTestManagerWithStore(t)
+	ctx := context.Background()
+	require.NoError(t, manager.Restore(ctx, nil))
+
+	var unused bool
+	observeDelete(t, manager, "v1", 100, &unused)
+	msg := newTestBarrierMessage(t, "v2", 150)
+	owner := message.NewOwnedImmutableMessage(msg, func() {})
+	retained := owner.Clone()
+	manager.ObserveMessage(ctx, retained)
+	retained.Release()
+	owner.Release()
+
+	acked := manager.LastAcked()
+	require.NotNil(t, acked)
+	assert.Equal(t, int64(100), messageIDInt(acked.MessageID), "frontier stays pinned while a record is staged")
+}
+
+// TestInitLastAckedSeedsFromCheckpoint verifies the restored checkpoint seeds
+// the frontier, and that observation never regresses it.
+func TestInitLastAckedSeedsFromCheckpoint(t *testing.T) {
+	manager, _ := newTestManagerWithStore(t)
+	ctx := context.Background()
+	require.NoError(t, manager.Restore(ctx, nil))
+
+	cp := &utility.WALCheckpoint{
+		MessageID: walimplstest.NewTestMessageID(500),
+		TimeTick:  499,
+		Magic:     utility.RecoveryMagicRecoveryStorageV2,
+	}
+	manager.InitLastAcked(cp)
+	acked := manager.LastAcked()
+	require.NotNil(t, acked)
+	assert.Equal(t, int64(500), messageIDInt(acked.MessageID))
+
+	// A barrier observed behind the seeded frontier does not regress it.
+	msg := newTestBarrierMessage(t, "v1", 300)
+	owner := message.NewOwnedImmutableMessage(msg, func() {})
+	retained := owner.Clone()
+	manager.ObserveMessage(ctx, retained)
+	retained.Release()
+	owner.Release()
+	acked = manager.LastAcked()
+	require.NotNil(t, acked)
+	assert.Equal(t, int64(500), messageIDInt(acked.MessageID), "frontier never regresses")
 }

@@ -303,6 +303,12 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 	r.vchannelManager = manager
 	r.summaryManager = summaryManager
 	r.installCheckpoint(r.checkpoint)
+	// Seed the summary's confirmation frontier from the restored checkpoint so
+	// the frontier never starts behind a checkpoint that was already
+	// persisted; the WAL replay re-observes messages right after.
+	if summaryManager != nil {
+		summaryManager.InitLastAcked(r.checkpoint)
+	}
 	return nil
 }
 
@@ -418,6 +424,20 @@ func (r *recoveryStorageImpl) consumeDirtySnapshot() *dirtyPersistSnapshot {
 		checkpoint = r.checkpoint.Clone()
 	}
 	completedPoint, completedLogicalOffset := r.ackTracker.Completed()
+	// The summary consumes the WAL without retaining message references, so
+	// the tracker's completed point does not include it. Merge the summary's
+	// own confirmation frontier: the persisted checkpoint must never advance
+	// past a staged-but-not-yet-durable delete record (the WAL truncation
+	// would delete it and recovery would never replay it). Both points are
+	// WAL positions, so the comparison is on the message ID, which orders
+	// strictly with the timetick on a single WAL.
+	if r.summaryManager != nil {
+		if summaryAcked := r.summaryManager.LastAcked(); summaryAcked != nil {
+			if completedPoint.MessageID == nil || summaryAcked.MessageID.LT(completedPoint.MessageID) {
+				completedPoint = *summaryAcked
+			}
+		}
+	}
 	if checkpoint != nil && !shouldAdvanceConsumePoint(*checkpoint, completedPoint) {
 		completedPoint = *checkpoint.Clone()
 		if r.tailController != nil {

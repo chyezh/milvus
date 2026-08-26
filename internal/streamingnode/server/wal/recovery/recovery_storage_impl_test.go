@@ -3,6 +3,7 @@ package recovery
 import (
 	"context"
 	"errors"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -15,10 +16,13 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walsummary"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
+	"github.com/milvus-io/milvus/pkg/v3/objectstorage"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
@@ -1108,4 +1112,167 @@ func TestRecoverRecoveryStorageFailureReleasesResources(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, storage)
 	assert.Nil(t, snapshot)
+}
+
+// immediateTaskScheduler runs every submitted task synchronously, so a
+// RequestFlushThrough completes the write before it returns.
+type immediateTaskScheduler struct{}
+
+func (immediateTaskScheduler) Submit(task nodescheduler.Task) nodescheduler.TaskHandle {
+	_ = task.Execute(context.Background())
+	return immediateTaskHandle{}
+}
+
+type immediateTaskHandle struct{}
+
+func (immediateTaskHandle) Cancel() {}
+
+func (immediateTaskHandle) Wait(context.Context) error { return nil }
+
+// newRecoveryTestDeleteMessage builds a delete message of the given vchannel
+// with MessageID = timetick+1 and LastConfirmedMessageID = timetick.
+func newRecoveryTestDeleteMessage(t *testing.T, vchannel string, timetick uint64) message.ImmutableMessage {
+	t.Helper()
+	mutableMsg := message.NewDeleteMessageBuilderV1().
+		WithVChannel(vchannel).
+		WithHeader(&message.DeleteMessageHeader{CollectionId: 1, Rows: 1}).
+		WithBody(&msgpb.DeleteRequest{
+			Base:         &commonpb.MsgBase{MsgType: commonpb.MsgType_Delete},
+			CollectionID: 1,
+			PartitionID:  10,
+			PrimaryKeys:  &schemapb.IDs{IdField: &schemapb.IDs_IntId{IntId: &schemapb.LongArray{Data: []int64{100}}}},
+			Timestamps:   []uint64{timetick},
+		}).
+		MustBuildMutable()
+	return mutableMsg.WithTimeTick(timetick).
+		WithLastConfirmed(walimplstest.NewTestMessageID(int64(timetick))).
+		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick + 1)))
+}
+
+// newSummaryManagerWithStagedDelete builds a summary manager with one staged
+// (not yet durable) delete record: the record pins the summary's confirmation
+// frontier at its last-confirmed message.
+func newSummaryManagerWithStagedDelete(t *testing.T, vchannel string, timetick uint64) *walsummary.Manager {
+	t.Helper()
+	cm := storage.NewLocalChunkManager(objectstorage.RootPath(t.TempDir()))
+	store := walsummary.NewStore(cm, "test-pchannel-summary", 1)
+	manager := walsummary.NewManager(walsummary.ManagerConfig{
+		PChannel:          "test-pchannel-summary",
+		Term:              1,
+		Store:             store,
+		Runtime:           moduleapi.Runtime{Scheduler: immediateTaskScheduler{}},
+		FlushMaxBytes:     1 << 20,
+		RetentionMaxBytes: 1 << 30,
+	})
+	require.NoError(t, manager.Restore(context.Background(), nil))
+	msg := newRecoveryTestDeleteMessage(t, vchannel, timetick)
+	owner := message.NewOwnedImmutableMessage(msg, func() {})
+	retained := owner.Clone()
+	manager.ObserveMessage(context.Background(), retained)
+	retained.Release()
+	owner.Release()
+	require.NotNil(t, manager.LastAcked())
+	return manager
+}
+
+// TestConsumeDirtySnapshotMergesSummaryLastAcked verifies the persisted
+// checkpoint never advances past the summary's confirmation frontier: the ack
+// tracker has confirmed a newer message, but a delete record staged in the
+// summary is not durable yet, so the checkpoint must stay at the summary's
+// frontier.
+func TestConsumeDirtySnapshotMergesSummaryLastAcked(t *testing.T) {
+	storage := newTestRecoveryStorage(t, &utility.WALCheckpoint{
+		MessageID: walimplstest.NewTestMessageID(1),
+		TimeTick:  10,
+		Magic:     utility.RecoveryMagicRecoveryStorageV2,
+	})
+	summary := newSummaryManagerWithStagedDelete(t, "test-vchannel", 50)
+	storage.summaryManager = summary
+	// The summary's frontier is pinned at the record's last-confirmed message
+	// 50 (the staged record itself has MessageID 51).
+
+	// The ack tracker confirms a newer message (TimeTick 100, last-confirmed
+	// 99): without the summary merge the checkpoint would advance to 99.
+	msg := newAckTestTimeTickMessage(t, 100, 99)
+	retained := storage.ackTracker.Track(msg)
+	retained.Release()
+	completed := storage.ackTracker.CompletedPoint()
+	require.Equal(t, int64(99), messageIDIntForRecoveryTest(completed.MessageID))
+
+	snapshot := storage.consumeDirtySnapshot()
+	require.NotNil(t, snapshot)
+	require.True(t, snapshot.CheckpointDirty)
+	require.NotNil(t, snapshot.Checkpoint)
+	assert.Equal(t, int64(50), messageIDIntForRecoveryTest(snapshot.Checkpoint.MessageID),
+		"checkpoint must stay at the summary frontier while a record is staged")
+	assert.Equal(t, uint64(49), snapshot.Checkpoint.TimeTick)
+
+	// Once the staged record is durable, the summary frontier advances to the
+	// record (51). It is still behind the tracker point (99), so the merged
+	// checkpoint follows the summary: the checkpoint must never exceed the
+	// summary's own confirmation.
+	summary.RequestFlushThrough(50)
+	assert.Equal(t, int64(51), messageIDIntForRecoveryTest(summary.LastAcked().MessageID))
+	snapshot = storage.consumeDirtySnapshot()
+	require.NotNil(t, snapshot)
+	require.True(t, snapshot.CheckpointDirty)
+	assert.Equal(t, int64(51), messageIDIntForRecoveryTest(snapshot.Checkpoint.MessageID),
+		"checkpoint follows the summary's confirmation while it is behind the tracker")
+
+	// The summary observes and durably flushes a newer delete record (201):
+	// its frontier now passes the tracker point, and the merge no longer caps
+	// the checkpoint — it follows the tracker.
+	msg2 := newRecoveryTestDeleteMessage(t, "test-vchannel", 200)
+	owner2 := message.NewOwnedImmutableMessage(msg2, func() {})
+	retained2 := owner2.Clone()
+	summary.ObserveMessage(context.Background(), retained2)
+	retained2.Release()
+	owner2.Release()
+	summary.RequestFlushThrough(200)
+	assert.Equal(t, int64(201), messageIDIntForRecoveryTest(summary.LastAcked().MessageID))
+	snapshot = storage.consumeDirtySnapshot()
+	require.NotNil(t, snapshot)
+	require.True(t, snapshot.CheckpointDirty)
+	assert.Equal(t, int64(99), messageIDIntForRecoveryTest(snapshot.Checkpoint.MessageID),
+		"checkpoint follows the tracker once the summary has caught up")
+}
+
+// TestConsumeDirtySnapshotIgnoresSummaryWhenNoRecordStaged verifies the merge
+// is a no-op when the summary has no confirmation frontier (nothing observed).
+func TestConsumeDirtySnapshotIgnoresSummaryWhenNoRecordStaged(t *testing.T) {
+	rs := newTestRecoveryStorage(t, &utility.WALCheckpoint{
+		MessageID: walimplstest.NewTestMessageID(1),
+		TimeTick:  10,
+		Magic:     utility.RecoveryMagicRecoveryStorageV2,
+	})
+	cm := storage.NewLocalChunkManager(objectstorage.RootPath(t.TempDir()))
+	store := walsummary.NewStore(cm, "test-pchannel-summary", 1)
+	summary := walsummary.NewManager(walsummary.ManagerConfig{
+		PChannel:          "test-pchannel-summary",
+		Term:              1,
+		Store:             store,
+		Runtime:           moduleapi.Runtime{},
+		FlushMaxBytes:     1 << 20,
+		RetentionMaxBytes: 1 << 30,
+	})
+	require.NoError(t, summary.Restore(context.Background(), nil))
+	rs.summaryManager = summary
+	assert.Nil(t, summary.LastAcked())
+
+	msg := newAckTestTimeTickMessage(t, 100, 99)
+	retained := rs.ackTracker.Track(msg)
+	retained.Release()
+	snapshot := rs.consumeDirtySnapshot()
+	require.NotNil(t, snapshot)
+	require.True(t, snapshot.CheckpointDirty)
+	assert.Equal(t, int64(99), messageIDIntForRecoveryTest(snapshot.Checkpoint.MessageID),
+		"no summary frontier: the tracker point is used as-is")
+}
+
+func messageIDIntForRecoveryTest(id message.MessageID) int64 {
+	v, err := strconv.ParseInt(id.Marshal(), 10, 64)
+	if err != nil {
+		panic(err)
+	}
+	return v
 }

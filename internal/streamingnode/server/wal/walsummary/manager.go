@@ -26,6 +26,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
@@ -44,25 +45,35 @@ const DroppedVChannelTimeTick = math.MaxUint64
 // Manager is the pchannel-scoped WALSummary runtime. A summary is one
 // contiguous dense span of the pchannel log kept in two forms:
 //
-//   - in memory: the retained WAL messages of the span not yet sealed into a
-//     chunk. ObserveMessage only keeps the messages (plus a byte estimate);
-//     the transform records are organized when the chunk is sealed.
+//   - in memory: the transform records of the span not yet sealed into a
+//     chunk. ObserveMessage builds the record of every delete-carrying
+//     message immediately and copies it into the pending buffer; the WAL
+//     message itself is never retained.
 //   - in object storage: sealed chunks, an append-only time-ordered log of
 //     per-vchannel transform records, indexed by the manifest.
 //
+// The summary consumes the WAL continuously: a record is durable exactly when
+// every earlier record is durable, so no message reference is needed to bound
+// the WAL checkpoint. Instead the manager exposes its own confirmation
+// frontier (lastAcked), and the recovery storage merges it with the ack
+// tracker's completed point so the persisted checkpoint never outruns an
+// unflushed record (see recoveryStorageImpl.consumeDirtySnapshot).
+//
 // A single manager-level lock guards every piece of state: the pending
-// messages, the sealed-but-unwritten chunks, the manifest and its version
+// records, the sealed-but-unwritten chunks, the manifest and its version
 // (used as a compare-and-swap token so the object-storage write can happen
 // outside the lock), and the per-vchannel GC positions.
 type Manager struct {
 	mu  sync.Mutex
 	cfg ManagerConfig
 
-	// pending holds the retained messages of the current (unsealed) chunk
-	// span, in WAL order. The lifecycle of this buffer is exactly one
-	// FlushChunk: it accumulates from the first observed message until the
-	// chunk is sealed, then starts over.
-	pending      []message.RetainedImmutableMessage
+	// pending holds the transform records of the current (unsealed) chunk
+	// span, in WAL order. Each record carries the built entry and the message
+	// ID; the WAL message itself is NOT retained — the summary never holds a
+	// reference, so message acknowledgement is fully decoupled from it. The
+	// lifecycle of this buffer is exactly one FlushChunk: it accumulates from
+	// the first observed message until the chunk is sealed, then starts over.
+	pending      []stagedRecord
 	pendingBytes uint64
 
 	// pendingSealed holds the chunks sealed but not yet durable end to end,
@@ -90,6 +101,21 @@ type Manager struct {
 	// the replay filter of ObserveMessage: recovery re-observes records the
 	// manifest already covers, and they must not be staged again.
 	durableFrontiers map[string]uint64
+
+	// lastAcked is the newest WAL message the summary has confirmed: a message
+	// that either produces no record (DDL/flush/barrier, confirmed at
+	// observation) or whose record is durable. The recovery checkpoint never
+	// advances past it, so a staged-but-not-yet-durable delete record is always
+	// covered by the WAL truncation. nil means no message is confirmed yet (a
+	// fresh pchannel); the first staged record initializes it.
+	lastAcked *utility.WALCheckpoint
+
+	// abandonedFrontier is the message ID of the oldest record whose chunk was
+	// abandoned (never durable under this term). The confirmation frontier
+	// must stay strictly before it — the abandoned record will only be
+	// replayed after a restart, so the WAL checkpoint must not truncate it in
+	// the meantime. nil when no record was abandoned.
+	abandonedFrontier message.MessageID
 
 	// gcFrontiers holds the GC position per vchannel: records with timetick
 	// at or below the position (or everything, when DroppedVChannelTimeTick)
@@ -132,12 +158,15 @@ func NewManager(config ManagerConfig) *Manager {
 // on the WAL observation path (recovery replay and the live scanner),
 // independent of the vchannel modules, and must not block.
 //
-// Only the message itself is retained here — the transform record is built
-// when the chunk is sealed, so the hot path stays a cheap append plus a byte
-// estimate. When the pending total reaches FlushMaxBytes, the pending span is
-// sealed into a chunk and an asynchronous write task is submitted. Messages
-// without a per-vchannel record (pchannel-level broadcasts, control-channel
-// messages) and records the manifest already covers are not retained.
+// Only delete-carrying messages produce a transform record (see
+// BuildTransformLogEntry); DDL, flush and barrier messages never do. The
+// record of a delete message is built here and copied into the pending
+// buffer — the message handle is not retained, so its acknowledgement never
+// depends on the summary. When the pending total reaches FlushMaxBytes, the
+// pending span is sealed into a chunk and an asynchronous write task is
+// submitted. Messages without a per-vchannel record (pchannel-level
+// broadcasts, control-channel messages) and records the manifest already
+// covers are not staged.
 func (m *Manager) ObserveMessage(ctx context.Context, retained message.RetainedImmutableMessage) {
 	if retained == nil {
 		return
@@ -150,14 +179,15 @@ func (m *Manager) ObserveMessage(ctx context.Context, retained message.RetainedI
 	if vchannel == "" || funcutil.IsControlChannel(vchannel) {
 		return
 	}
-	// Only delete-carrying messages produce a transform record (see
-	// BuildTransformLogEntry); DDL, flush and barrier messages never do.
-	// They must not be retained: their handles are released immediately so
-	// the WAL checkpoint can advance without waiting for an unrelated future
-	// flush. A dropped collection never flushes again, and pinning its drop
-	// message here would block the broadcast ack (and thus the drop itself)
-	// forever.
 	if messageutil.ClassifyTransformLogMessage(msg) != messageutil.TransformLogKindDelete {
+		// No record is ever produced: the message is confirmed at observation.
+		// The summary's own frontier may advance past it, unless an unflushed
+		// delete record pins the frontier behind it.
+		m.mu.Lock()
+		if len(m.pending) == 0 && len(m.pendingSealed) == 0 {
+			m.advanceLastAcked(msg.MessageID(), msg.TimeTick())
+		}
+		m.mu.Unlock()
 		return
 	}
 	m.mu.Lock()
@@ -165,12 +195,54 @@ func (m *Manager) ObserveMessage(ctx context.Context, retained message.RetainedI
 		m.mu.Unlock()
 		return
 	}
-	m.pending = append(m.pending, retained.Clone())
-	m.pendingBytes += uint64(msg.EstimateSize())
+	m.stageDeleteLocked(msg)
 	overThreshold := m.pendingBytes >= m.cfg.FlushMaxBytes
 	m.mu.Unlock()
 	if overThreshold {
 		m.requestSeal()
+	}
+}
+
+// stageDeleteLocked appends one delete record to the pending span. Caller
+// holds m.mu. The entry is built here — the message payload is not retained,
+// so it must be copied before the message is released.
+func (m *Manager) stageDeleteLocked(msg message.ImmutableMessage) {
+	if m.lastAcked == nil {
+		// No restored checkpoint and no earlier message confirmed yet (a fresh
+		// pchannel whose first message is a delete): pin the frontier to the
+		// last confirmed message before this record. The message carries its
+		// own last-confirmed pointer; when even that is missing, pin at the
+		// record's own position minus one tick — truncation is strictly before
+		// the checkpoint position, so the record itself survives.
+		tt := msg.TimeTick()
+		if tt > 0 {
+			tt--
+		}
+		m.lastAcked = newSummaryCheckpoint(msg.LastConfirmedMessageID(), tt)
+	}
+	m.pending = append(m.pending, stagedRecord{
+		vchannel:  msg.VChannel(),
+		timeTick:  msg.TimeTick(),
+		entry:     messageutil.BuildTransformLogEntry(msg, messageutil.TransformEntryOption{}),
+		messageID: msg.MessageID(),
+	})
+	m.pendingBytes += uint64(msg.EstimateSize())
+}
+
+// advanceLastAcked moves the summary's confirmation frontier to the message
+// (id, tt) when it is newer and does not outrun an abandoned record. Caller
+// holds m.mu.
+func (m *Manager) advanceLastAcked(id message.MessageID, tt uint64) {
+	if cp := newSummaryCheckpoint(id, tt); cp != nil {
+		if m.abandonedFrontier != nil && !cp.MessageID.LT(m.abandonedFrontier) {
+			// A record before this message was abandoned and is not durable:
+			// the frontier stays behind it so the WAL truncation never deletes
+			// it before recovery replays it.
+			return
+		}
+		if m.lastAcked == nil || m.lastAcked.MessageID == nil || m.lastAcked.MessageID.LT(cp.MessageID) {
+			m.lastAcked = cp
+		}
 	}
 }
 
@@ -213,9 +285,9 @@ func (m *Manager) requestSeal() {
 	}
 }
 
-// seal takes the pending span out under the lock, then organizes the
-// transform records outside it (the entry construction is the one place the
-// records are built), and enqueues the sealed chunk.
+// seal takes the pending span out under the lock, organizes the records by
+// vchannel, and enqueues the sealed chunk. The records are already built (see
+// ObserveMessage); the vchannel grouping is the only organization left.
 func (m *Manager) seal() *SealedChunk {
 	m.mu.Lock()
 	if len(m.pending) == 0 {
@@ -231,9 +303,9 @@ func (m *Manager) seal() *SealedChunk {
 
 	sc := buildSealedChunk(generation, pending)
 	if len(sc.RecordsByVChannel) == 0 {
-		// Every retained message carried no transform record; the handles are
-		// already released and there is nothing to persist. The generation was
-		// claimed but is simply skipped.
+		// No record was staged (defensive: only delete-carrying messages are
+		// appended, so this cannot happen). The generation was claimed but is
+		// simply skipped.
 		return nil
 	}
 
@@ -246,27 +318,16 @@ func (m *Manager) seal() *SealedChunk {
 	return sc
 }
 
-// buildSealedChunk organizes one chunk span: it builds the transform record
-// of every retained message, groups the records by vchannel and releases the
-// handles of messages that carry no record. Called without the lock.
-func buildSealedChunk(generation uint64, pending []message.RetainedImmutableMessage) *SealedChunk {
+// buildSealedChunk organizes one chunk span: it groups the already-built
+// records by vchannel. Called without the lock.
+func buildSealedChunk(generation uint64, pending []stagedRecord) *SealedChunk {
 	recordsByVChannel := make(map[string][]*stagedRecord)
 	var maxTimeTick uint64
-	for _, retained := range pending {
-		entry := messageutil.BuildTransformLogEntry(retained.Message(), messageutil.TransformEntryOption{})
-		if entry == nil {
-			retained.Release()
-			continue
-		}
-		vchannel := retained.Message().VChannel()
-		tt := entry.GetTimeTick()
-		recordsByVChannel[vchannel] = append(recordsByVChannel[vchannel], &stagedRecord{
-			timeTick: tt,
-			entry:    entry,
-			handle:   retained,
-		})
-		if tt > maxTimeTick {
-			maxTimeTick = tt
+	for i := range pending {
+		record := &pending[i]
+		recordsByVChannel[record.vchannel] = append(recordsByVChannel[record.vchannel], record)
+		if record.timeTick > maxTimeTick {
+			maxTimeTick = record.timeTick
 		}
 	}
 	return &SealedChunk{
@@ -277,10 +338,9 @@ func buildSealedChunk(generation uint64, pending []message.RetainedImmutableMess
 }
 
 // writeOnce makes one sealed chunk durable end to end: write the chunk
-// object, publish the manifest record, then release the message handles and
-// advance the durable state. It reports whether the queue is drained. The
-// generation is written idempotently, so a retry after a failure rewrites the
-// exact same object.
+// object, publish the manifest record, then advance the durable state. It
+// reports whether the queue is drained. The generation is written
+// idempotently, so a retry after a failure rewrites the exact same object.
 func (m *Manager) writeOnce(ctx context.Context) (bool, error) {
 	m.mu.Lock()
 	if len(m.pendingSealed) == 0 {
@@ -312,11 +372,6 @@ func (m *Manager) writeOnce(ctx context.Context) (bool, error) {
 	}
 
 	m.mu.Lock()
-	for _, staged := range sc.RecordsByVChannel {
-		for _, record := range staged {
-			record.handle.Release()
-		}
-	}
 	for vchannel, staged := range sc.RecordsByVChannel {
 		var end uint64
 		for _, record := range staged {
@@ -331,10 +386,55 @@ func (m *Manager) writeOnce(ctx context.Context) (bool, error) {
 	if sc.MaxTimeTick > m.latestCoveredTimeTick {
 		m.latestCoveredTimeTick = sc.MaxTimeTick
 	}
+	// The chunk is now durable: every record it holds is confirmed. Advance
+	// the frontier to the chunk's newest record, unless an abandoned record
+	// still precedes it — then the frontier stays behind the abandoned record,
+	// so the WAL checkpoint never truncates it before recovery replays it.
+	if lastID := chunkNewestRecordID(sc); lastID != nil {
+		if m.abandonedFrontier == nil || lastID.LT(m.abandonedFrontier) {
+			if m.lastAcked == nil || m.lastAcked.MessageID == nil || m.lastAcked.MessageID.LT(lastID) {
+				m.lastAcked = newSummaryCheckpoint(lastID, sc.MaxTimeTick)
+			}
+		}
+	}
 	m.pendingSealed = m.pendingSealed[1:]
 	finished := len(m.pendingSealed) == 0
 	m.mu.Unlock()
 	return finished, nil
+}
+
+// chunkNewestRecordID returns the message ID of the record with the newest
+// timetick in the chunk, or nil when the chunk holds no record.
+func chunkNewestRecordID(sc *SealedChunk) message.MessageID {
+	var newestID message.MessageID
+	var newestTT uint64
+	for _, staged := range sc.RecordsByVChannel {
+		for _, record := range staged {
+			if record.timeTick >= newestTT {
+				newestTT = record.timeTick
+				newestID = record.messageID
+			}
+		}
+	}
+	return newestID
+}
+
+// chunkEarliestRecordID returns the message ID of the record with the oldest
+// timetick in the chunk, or nil when the chunk holds no record.
+func chunkEarliestRecordID(sc *SealedChunk) message.MessageID {
+	var earliestID message.MessageID
+	var earliestTT uint64
+	first := true
+	for _, staged := range sc.RecordsByVChannel {
+		for _, record := range staged {
+			if first || record.timeTick < earliestTT {
+				earliestTT = record.timeTick
+				earliestID = record.messageID
+				first = false
+			}
+		}
+	}
+	return earliestID
 }
 
 // publishManifest edits the manifest, writes the edited clone to object
@@ -474,12 +574,57 @@ func vchannelChunkIndex(chunk *streamingpb.PChannelSummaryChunkIndexEntry, vchan
 	return nil
 }
 
-// stagedRecord is one retained WAL message and the transform record it yields.
+// stagedRecord is one staged delete record: the built transform entry plus
+// the WAL position it came from. The message itself is not retained; the
+// message ID is kept so the confirmation frontier can advance to the record
+// once its chunk is durable.
 type stagedRecord struct {
-	timeTick uint64
-	entry    *streamingpb.TransformLogEntry
-	// handle keeps the WAL message alive until the record is durable.
-	handle message.RetainedImmutableMessage
+	vchannel  string
+	timeTick  uint64
+	entry     *streamingpb.TransformLogEntry
+	messageID message.MessageID
+}
+
+// newSummaryCheckpoint builds the summary's confirmation frontier at (id,
+// timetick). A nil message ID yields nil: without a WAL position the frontier
+// cannot bound the truncation and stays unset.
+func newSummaryCheckpoint(id message.MessageID, timetick uint64) *utility.WALCheckpoint {
+	if id == nil {
+		return nil
+	}
+	return &utility.WALCheckpoint{
+		MessageID: id,
+		TimeTick:  timetick,
+		Magic:     utility.RecoveryMagicRecoveryStorageV2,
+	}
+}
+
+// InitLastAcked seeds the summary's confirmation frontier from the restored
+// recovery checkpoint, so the frontier never starts behind the checkpoint
+// that was already persisted. It is called once after Restore, before the WAL
+// replay re-observes messages.
+func (m *Manager) InitLastAcked(checkpoint *utility.WALCheckpoint) {
+	if checkpoint == nil || checkpoint.MessageID == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.lastAcked == nil || m.lastAcked.MessageID == nil || m.lastAcked.MessageID.LT(checkpoint.MessageID) {
+		m.lastAcked = checkpoint.Clone()
+	}
+}
+
+// LastAcked returns the newest WAL message the summary has confirmed, or nil
+// when no message is confirmed yet. The recovery checkpoint must never
+// advance past it: the recovery storage merges it with the ack tracker's
+// completed point before persisting a snapshot.
+func (m *Manager) LastAcked() *utility.WALCheckpoint {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.lastAcked == nil {
+		return nil
+	}
+	return m.lastAcked.Clone()
 }
 
 // SealedChunk is one chunk span taken out of the pending buffer: the records
@@ -508,9 +653,10 @@ func (t *summaryWriteTask) Done() bool {
 // ErrDelay so the scheduler retries with backoff; the failed chunk stays at
 // the queue head and is rewritten idempotently. A terminal failure (corrupted
 // or fenced store) abandons the failing chunk instead: it is popped from the
-// queue — a successor task would only hit the same corruption — while its
-// handles stay retained, so the WAL checkpoint stalls before it and recovery
-// replays after a restart. The rest of the queue is written by the next task.
+// queue — a successor task would only hit the same corruption — while the
+// confirmation frontier stays behind it, so the WAL checkpoint stalls before
+// it and recovery replays after a restart. The rest of the queue is written
+// by the next task.
 func (t *summaryWriteTask) Execute(ctx context.Context) error {
 	for {
 		finished, err := t.log.writeOnce(ctx)
@@ -533,14 +679,21 @@ func (t *summaryWriteTask) Execute(ctx context.Context) error {
 	return nil
 }
 
-// abandonHead pops the failing chunk off the sealed queue without releasing
-// its handles. The chunk is not durable and will never become durable under
-// this term; recovery replays it after a restart, so the handles must keep
-// the WAL checkpoint from advancing past it.
+// abandonHead pops the failing chunk off the sealed queue. The chunk is not
+// durable and will never become durable under this term; recovery replays it
+// after a restart. Its oldest record becomes the abandoned frontier, which
+// pins the confirmation frontier (and thus the WAL checkpoint) strictly
+// before it until the restart.
 func (m *Manager) abandonHead(ctx context.Context) {
 	m.mu.Lock()
 	if len(m.pendingSealed) > 0 {
+		sc := m.pendingSealed[0]
 		m.pendingSealed = m.pendingSealed[1:]
+		if id := chunkEarliestRecordID(sc); id != nil {
+			if m.abandonedFrontier == nil || id.LT(m.abandonedFrontier) {
+				m.abandonedFrontier = id
+			}
+		}
 	}
 	m.mu.Unlock()
 }
