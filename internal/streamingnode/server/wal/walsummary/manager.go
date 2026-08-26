@@ -150,6 +150,16 @@ func (m *Manager) ObserveMessage(ctx context.Context, retained message.RetainedI
 	if vchannel == "" || funcutil.IsControlChannel(vchannel) {
 		return
 	}
+	// Only delete-carrying messages produce a transform record (see
+	// BuildTransformLogEntry); DDL, flush and barrier messages never do.
+	// They must not be retained: their handles are released immediately so
+	// the WAL checkpoint can advance without waiting for an unrelated future
+	// flush. A dropped collection never flushes again, and pinning its drop
+	// message here would block the broadcast ack (and thus the drop itself)
+	// forever.
+	if messageutil.ClassifyTransformLogMessage(msg) != messageutil.TransformLogKindDelete {
+		return
+	}
 	m.mu.Lock()
 	if msg.TimeTick() <= m.durableFrontiers[vchannel] {
 		m.mu.Unlock()
