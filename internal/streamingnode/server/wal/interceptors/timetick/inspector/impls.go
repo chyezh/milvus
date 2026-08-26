@@ -86,10 +86,16 @@ func (s *timeTickSyncInspectorImpl) background() {
 			// dataNode.segment.syncPeriod so an idle pchannel still refreshes
 			// the persisted recovery checkpoint on a bounded cadence (the
 			// recovery storage skips non-persisted heartbeats entirely).
+			// The persisted sync must be requested before the heartbeat: the
+			// working set allows only one in-flight sync per pchannel, and the
+			// heartbeat goroutine would otherwise win the slot on every tick.
+			// A requested persisted sync is itself a full sync carrying the
+			// freshest ack info, so the heartbeat of the same tick is skipped.
 			now := time.Now()
 			s.operators.Range(func(name string, _ TimeTickSyncOperator) bool {
-				s.asyncSync(name, false)
-				s.maybeForcePersistedSync(name, now)
+				if !s.maybeForcePersistedSync(name, now) {
+					s.asyncSync(name, false)
+				}
 				return true
 			})
 		case <-s.syncNotifier.WaitChan():
@@ -102,24 +108,27 @@ func (s *timeTickSyncInspectorImpl) background() {
 }
 
 // maybeForcePersistedSync emits a persisted time tick sync for a pchannel if
-// it has not had one within dataNode.segment.syncPeriod. The recorded time is
-// the trigger time; a failed sync is retried on the next tick after the
-// interval elapses again. The interval is read from the (refreshable) config on
-// every call so a config change takes effect without a restart.
-func (s *timeTickSyncInspectorImpl) maybeForcePersistedSync(name string, now time.Time) {
+// it has not had one within dataNode.segment.syncPeriod, and reports whether a
+// sync was actually launched. The recorded time is the trigger time; a sync
+// skipped by the working set is retried on the next tick after the interval
+// elapses again. The interval is read from the (refreshable) config on every
+// call so a config change takes effect without a restart.
+func (s *timeTickSyncInspectorImpl) maybeForcePersistedSync(name string, now time.Time) bool {
 	interval := paramtable.Get().DataNodeCfg.SyncPeriod.GetAsDuration(time.Second)
 	if last, ok := s.lastPersistedSync.Get(name); ok && now.Sub(last) < interval {
-		return
+		return false
 	}
 	s.lastPersistedSync.Insert(name, now)
-	s.asyncSync(name, true)
+	return s.asyncSync(name, true)
 }
 
-// asyncSync syncs the pchannel in a goroutine.
-func (s *timeTickSyncInspectorImpl) asyncSync(pchannelName string, persisted bool) {
+// asyncSync syncs the pchannel in a goroutine. It reports whether the sync was
+// actually launched: the working set allows only one in-flight sync per
+// pchannel, and a second request within the same window is skipped.
+func (s *timeTickSyncInspectorImpl) asyncSync(pchannelName string, persisted bool) bool {
 	if !s.working.Insert(pchannelName) {
 		// Check if the sync operation of pchannel is working, if so, skip it.
-		return
+		return false
 	}
 
 	s.wg.Add(1)
@@ -132,6 +141,7 @@ func (s *timeTickSyncInspectorImpl) asyncSync(pchannelName string, persisted boo
 			operator.Sync(s.taskNotifier.Context(), persisted)
 		}
 	}()
+	return true
 }
 
 func (s *timeTickSyncInspectorImpl) Close() {

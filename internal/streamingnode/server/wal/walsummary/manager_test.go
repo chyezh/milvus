@@ -197,6 +197,65 @@ func TestObserveMessageIgnoresNonVChannelRecords(t *testing.T) {
 	assert.Error(t, err, "no chunk must be written when nothing was staged")
 }
 
+// TestObserveAllChannelMessageAdvancesLastAcked verifies that all-channel
+// messages (e.g. persisted time ticks, whose VChannel() is "") advance the
+// summary confirmation frontier: the recovery storage merges that frontier
+// into the persisted checkpoint, so an idle pchannel refreshes its checkpoint
+// TimeTick on every persisted time tick. An unflushed staged delete record
+// must still pin the frontier behind it.
+func TestObserveAllChannelMessageAdvancesLastAcked(t *testing.T) {
+	manager, _ := newTestManagerWithStore(t)
+	ctx := context.Background()
+
+	// The first all-channel message initializes the frontier from scratch.
+	msgID := walimplstest.NewTestMessageID(100)
+	ttMsg := message.CreateTestTimeTickSyncMessage(t, 1, 100, msgID).IntoImmutableMessage(msgID)
+	owner := message.NewOwnedImmutableMessage(ttMsg, func() {})
+	retained := owner.Clone()
+	manager.ObserveMessage(ctx, retained)
+	retained.Release()
+	owner.Release()
+
+	acked := manager.LastAcked()
+	require.NotNil(t, acked, "all-channel message must advance the frontier")
+	assert.Equal(t, uint64(100), acked.TimeTick)
+	assert.True(t, acked.MessageID.EQ(msgID), "frontier must carry the all-channel message id")
+
+	// An unflushed staged delete pins the frontier: the all-channel message
+	// observed after it must not advance past the staged record.
+	var finalized bool
+	observeDelete(t, manager, "v1", 150, &finalized)
+	manager.mu.Lock()
+	require.NotEmpty(t, manager.pending, "delete record must be staged")
+	manager.mu.Unlock()
+
+	msgID2 := walimplstest.NewTestMessageID(200)
+	ttMsg2 := message.CreateTestTimeTickSyncMessage(t, 1, 200, msgID2).IntoImmutableMessage(msgID2)
+	owner2 := message.NewOwnedImmutableMessage(ttMsg2, func() {})
+	retained2 := owner2.Clone()
+	manager.ObserveMessage(ctx, retained2)
+	retained2.Release()
+	owner2.Release()
+
+	acked = manager.LastAcked()
+	require.NotNil(t, acked)
+	assert.Equal(t, uint64(100), acked.TimeTick,
+		"pending delete record must pin the frontier behind it")
+	assert.True(t, acked.MessageID.EQ(msgID))
+
+	// A vchannel-less non-time-tick message (e.g. a pchannel-level broadcast)
+	// must not move the frontier either: only all-channel time ticks do.
+	broadcastMsg := newTestDeleteMessage(t, "", 300, 10, int64(300))
+	broadcastRetained := message.NewOwnedImmutableMessage(broadcastMsg, func() {}).Clone()
+	manager.ObserveMessage(ctx, broadcastRetained)
+	broadcastRetained.Release()
+	acked = manager.LastAcked()
+	require.NotNil(t, acked)
+	assert.Equal(t, uint64(100), acked.TimeTick,
+		"non-time-tick vchannel-less message must not advance the frontier")
+	assert.True(t, acked.MessageID.EQ(msgID))
+}
+
 func TestObserveMessageSealsAtThreshold(t *testing.T) {
 	manager, _ := newTestManagerWithStore(t)
 	scheduler := &recordingScheduler{}

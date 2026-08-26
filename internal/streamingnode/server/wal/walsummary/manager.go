@@ -164,19 +164,37 @@ func NewManager(config ManagerConfig) *Manager {
 // buffer — the message handle is not retained, so its acknowledgement never
 // depends on the summary. When the pending total reaches FlushMaxBytes, the
 // pending span is sealed into a chunk and an asynchronous write task is
-// submitted. Messages without a per-vchannel record (pchannel-level
-// broadcasts, control-channel messages) and records the manifest already
-// covers are not staged.
+// submitted. Messages without a per-vchannel record (all-channel time ticks,
+// pchannel-level broadcasts, control-channel messages) and records the
+// manifest already covers are not staged; all-channel time ticks still
+// advance the confirmation frontier so an idle pchannel refreshes its
+// persisted checkpoint TimeTick (see lastAcked).
 func (m *Manager) ObserveMessage(ctx context.Context, retained message.RetainedImmutableMessage) {
 	if retained == nil {
 		return
 	}
 	msg := retained.Message()
 	vchannel := msg.VChannel()
-	// Only messages that carry a per-vchannel record are summarized:
-	// pchannel-level broadcasts have no vchannel, and the control channel is
-	// the control plane, which never produces transform records.
-	if vchannel == "" || funcutil.IsControlChannel(vchannel) {
+	if funcutil.IsControlChannel(vchannel) {
+		// The control channel is the control plane: it never produces
+		// transform records and its progress is not summarized.
+		return
+	}
+	if vchannel == "" {
+		// All-channel messages carry no per-vchannel record. Only time ticks
+		// advance the confirmation frontier: they carry the freshest WAL
+		// position on an idle pchannel, and the recovery storage merges this
+		// frontier into the persisted checkpoint — without it, an idle
+		// pchannel would never refresh its checkpoint TimeTick. Other
+		// vchannel-less messages (e.g. pchannel-level broadcasts) must not
+		// move the frontier.
+		if msg.MessageType() == message.MessageTypeTimeTick {
+			m.mu.Lock()
+			if len(m.pending) == 0 && len(m.pendingSealed) == 0 {
+				m.advanceLastAcked(msg.MessageID(), msg.TimeTick())
+			}
+			m.mu.Unlock()
+		}
 		return
 	}
 	if messageutil.ClassifyTransformLogMessage(msg) != messageutil.TransformLogKindDelete {
