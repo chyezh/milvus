@@ -15,9 +15,10 @@ import (
 // NewTimeTickSyncInspector creates a new time tick sync inspector.
 func NewTimeTickSyncInspector() TimeTickSyncInspector {
 	inspector := &timeTickSyncInspectorImpl{
-		taskNotifier: syncutil.NewAsyncTaskNotifier[struct{}](),
-		syncNotifier: newSyncNotifier(),
-		operators:    typeutil.NewConcurrentMap[string, TimeTickSyncOperator](),
+		taskNotifier:      syncutil.NewAsyncTaskNotifier[struct{}](),
+		syncNotifier:      newSyncNotifier(),
+		operators:         typeutil.NewConcurrentMap[string, TimeTickSyncOperator](),
+		lastPersistedSync: typeutil.NewConcurrentMap[string, time.Time](),
 	}
 	go inspector.background()
 	return inspector
@@ -29,6 +30,9 @@ type timeTickSyncInspectorImpl struct {
 	operators    *typeutil.ConcurrentMap[string, TimeTickSyncOperator]
 	wg           sync.WaitGroup
 	working      typeutil.ConcurrentSet[string]
+	// lastPersistedSync records the last time a persisted time tick sync was
+	// triggered for each pchannel.
+	lastPersistedSync *typeutil.ConcurrentMap[string, time.Time]
 }
 
 func (s *timeTickSyncInspectorImpl) TriggerSync(pChannelInfo types.PChannelInfo, persisted bool) {
@@ -77,8 +81,15 @@ func (s *timeTickSyncInspectorImpl) background() {
 		case <-s.taskNotifier.Context().Done():
 			return
 		case <-ticker.C:
+			// Sync a non-persisted heartbeat for every pchannel on each tick;
+			// on top of that, emit a persisted time tick at least every
+			// dataNode.segment.syncPeriod so an idle pchannel still refreshes
+			// the persisted recovery checkpoint on a bounded cadence (the
+			// recovery storage skips non-persisted heartbeats entirely).
+			now := time.Now()
 			s.operators.Range(func(name string, _ TimeTickSyncOperator) bool {
 				s.asyncSync(name, false)
+				s.maybeForcePersistedSync(name, now)
 				return true
 			})
 		case <-s.syncNotifier.WaitChan():
@@ -88,6 +99,20 @@ func (s *timeTickSyncInspectorImpl) background() {
 			}
 		}
 	}
+}
+
+// maybeForcePersistedSync emits a persisted time tick sync for a pchannel if
+// it has not had one within dataNode.segment.syncPeriod. The recorded time is
+// the trigger time; a failed sync is retried on the next tick after the
+// interval elapses again. The interval is read from the (refreshable) config on
+// every call so a config change takes effect without a restart.
+func (s *timeTickSyncInspectorImpl) maybeForcePersistedSync(name string, now time.Time) {
+	interval := paramtable.Get().DataNodeCfg.SyncPeriod.GetAsDuration(time.Second)
+	if last, ok := s.lastPersistedSync.Get(name); ok && now.Sub(last) < interval {
+		return
+	}
+	s.lastPersistedSync.Insert(name, now)
+	s.asyncSync(name, true)
 }
 
 // asyncSync syncs the pchannel in a goroutine.

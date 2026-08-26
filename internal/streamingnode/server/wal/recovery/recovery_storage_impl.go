@@ -514,6 +514,15 @@ func shouldAdvanceConsumePoint(current, next utility.WALCheckpoint) bool {
 
 // observeMessage observes a message and update the recovery storage.
 func (r *recoveryStorageImpl) observeMessage(ctx context.Context, msg message.ImmutableMessage) {
+	// Non-persisted time tick heartbeats carry no data and are not written to
+	// the WAL; consuming them would advance the tracker (and thus persist a
+	// recovery snapshot) on every heartbeat even while the pchannel is fully
+	// idle. Skip them entirely: the time tick sync inspector appends a
+	// persisted time tick every forcePersistedInterval, which keeps the
+	// checkpoint fresh on a bounded cadence instead.
+	if !msg.IsPersisted() {
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	owner := r.ackTracker.Track(msg)

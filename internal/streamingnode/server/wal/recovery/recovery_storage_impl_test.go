@@ -355,6 +355,48 @@ func TestRecoveryStorageCompletesMessageWithoutConsumerRefs(t *testing.T) {
 	assert.Equal(t, uint64(2), completed.TimeTick)
 }
 
+func TestRecoveryStorageSkipsNonPersistedTimeTick(t *testing.T) {
+	checkpoint := &utility.WALCheckpoint{
+		MessageID: walimplstest.NewTestMessageID(1),
+		TimeTick:  1,
+	}
+	storage := newTestRecoveryStorage(t, checkpoint)
+	defer storage.metrics.Close()
+	defer storage.taskScheduler.Close()
+
+	// A persisted time tick advances the tracker as usual.
+	mutableMsg, err := message.NewTimeTickMessageBuilderV1().
+		WithHeader(&message.TimeTickMessageHeader{}).
+		WithVChannel("test-vchannel").
+		WithBody(&msgpb.TimeTickMsg{}).
+		BuildMutable()
+	require.NoError(t, err)
+	persistedMsg := mutableMsg.WithTimeTick(2).WithLastConfirmed(walimplstest.NewTestMessageID(2)).
+		IntoImmutableMessage(walimplstest.NewTestMessageID(3))
+	storage.observeMessage(context.Background(), persistedMsg)
+	completed := storage.ackTracker.CompletedPoint()
+	assert.True(t, walimplstest.NewTestMessageID(2).EQ(completed.MessageID))
+	assert.Equal(t, uint64(2), completed.TimeTick)
+
+	// A non-persisted heartbeat is skipped entirely: neither the tracker nor
+	// the dirty counter moves.
+	nonPersistedMsg, err := message.NewTimeTickMessageBuilderV1().
+		WithHeader(&message.TimeTickMessageHeader{}).
+		WithVChannel("test-vchannel").
+		WithBody(&msgpb.TimeTickMsg{}).
+		WithNotPersisted().
+		BuildMutable()
+	require.NoError(t, err)
+	heartbeat := nonPersistedMsg.WithTimeTick(100).WithLastConfirmed(walimplstest.NewTestMessageID(100)).
+		IntoImmutableMessage(walimplstest.NewTestMessageID(101))
+	dirtyBefore := storage.dirtyCounter
+	storage.observeMessage(context.Background(), heartbeat)
+	assert.Equal(t, dirtyBefore, storage.dirtyCounter)
+	completed = storage.ackTracker.CompletedPoint()
+	assert.True(t, walimplstest.NewTestMessageID(2).EQ(completed.MessageID))
+	assert.Equal(t, uint64(2), completed.TimeTick)
+}
+
 func TestRecoveryStorageExposesVChannelRecoveryManager(t *testing.T) {
 	checkpoint := &utility.WALCheckpoint{
 		MessageID: walimplstest.NewTestMessageID(1),
