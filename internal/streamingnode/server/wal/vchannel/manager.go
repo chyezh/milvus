@@ -30,9 +30,9 @@ type PChannelManagerConfig struct {
 	SegmentLifecycle  segment.Lifecycle
 	SegmentPackWriter segment.PackWriter
 	// SummaryManager is the pchannel-scoped WALSummary runtime. The vchannel
-	// modules never touch it directly; this manager only notifies it of a
-	// vchannel drop (RemoveView) so its staging handles are released and no
-	// record of the dropped vchannel survives in memory.
+	// modules never touch it directly; this manager only reports the GC
+	// boundary of a dropped vchannel to it (NotifyVChannelDropped), allowing
+	// the summary to release records of the dropped vchannel.
 	SummaryManager *walsummary.Manager
 	// PendingTransformEntries is the recovery-loaded initial materialization
 	// window per vchannel: the durable records after the restored
@@ -365,11 +365,11 @@ func (m *PChannelRecoveryManager) removeModule(module *VChannelRecoveryModule) {
 		delete(m.cleanupModules, module.vchannel)
 	}
 	m.dirtyMu.Unlock()
-	// Drop the summary view of the removed vchannel: its staged handles must
-	// be released so the WAL checkpoint can advance past them, and no record
-	// of a dropped vchannel may survive in memory.
+	// Report the GC boundary to the summary: the dropped vchannel's cleanup
+	// snapshot is durable, so its records — staged or already chunked — may
+	// be released by retention GC.
 	if m.config.SummaryManager != nil {
-		m.config.SummaryManager.RemoveView(module.vchannel)
+		m.config.SummaryManager.NotifyVChannelDropped(module.vchannel)
 	}
 }
 

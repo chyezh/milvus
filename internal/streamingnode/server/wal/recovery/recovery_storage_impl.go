@@ -240,6 +240,15 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 	// records because the frontier advances only after registration succeeds.
 	pendingTransformEntries := make(map[string][]*streamingpb.TransformLogEntry, len(vchannels))
 	for vchannel, meta := range vchannels {
+		// A dropped/tombstoned vchannel has its cleanup snapshot durable: its
+		// records — staged or already chunked — may be released by retention
+		// GC regardless of materialization. Report the GC boundary instead of
+		// loading a materialization window the vchannel will never consume.
+		if state := meta.GetState(); state == streamingpb.VChannelState_VCHANNEL_STATE_DROPPED ||
+			state == streamingpb.VChannelState_VCHANNEL_STATE_TOMBSTONED {
+			summaryManager.NotifyVChannelDropped(vchannel)
+			continue
+		}
 		entries, err := summaryManager.ReadTransformEntries(
 			ctx, vchannel, meta.GetTransformMaterializedTimeTick(), math.MaxUint64,
 		)
@@ -261,6 +270,21 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 		// this, GC would keep every chunk until the first post-recovery
 		// materialization flush.
 		summaryManager.SetMaterializedTimeTick(vchannel, meta.GetTransformMaterializedTimeTick())
+	}
+	// Defensive GC boundary: a chunked vchannel that no longer exists in the
+	// catalog at all (its meta was cleaned up after the drop) has no
+	// materialization frontier to make its chunks releasable. Mark it dropped
+	// so retention GC can release them.
+	alive := make(map[string]struct{}, len(vchannels))
+	for vchannel := range vchannels {
+		alive[vchannel] = struct{}{}
+	}
+	for _, chunk := range summaryManager.Manifest().GetChunks() {
+		for _, index := range chunk.GetVchannels() {
+			if _, ok := alive[index.GetVchannel()]; !ok {
+				summaryManager.NotifyVChannelDropped(index.GetVchannel())
+			}
+		}
 	}
 	// Deprecated: the manager periodically reports the pchannel recovery
 	// checkpoint to DataCoord (DataCoord.UpdateChannelCheckpoint) so that

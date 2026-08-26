@@ -141,11 +141,18 @@ func (m *Manager) computeRetention() []*streamingpb.PChannelSummaryChunkRef {
 }
 
 // chunkReleasedLocked reports whether a chunk is eligible for release: every
-// vchannel it covers has a release floor at or above the chunk's end timetick.
-// Caller holds m.mu.
+// vchannel it covers is either dropped (its cleanup durable — the GC
+// boundary) or has a materialization floor at or above the chunk's end
+// timetick. Caller holds m.mu.
 func (m *Manager) chunkReleasedLocked(chunk *streamingpb.PChannelSummaryChunkIndexEntry) bool {
 	for _, index := range chunk.GetVchannels() {
-		floor := m.materializedFrontiers[index.GetVchannel()]
+		vchannel := index.GetVchannel()
+		// A dropped vchannel's cleanup is durable: its records may be
+		// released regardless of materialization.
+		if _, dropped := m.droppedVChannels[vchannel]; dropped {
+			continue
+		}
+		floor := m.materializedFrontiers[vchannel]
 		if floor == 0 {
 			// No materialization frontier yet: nothing of this vchannel may be
 			// released.

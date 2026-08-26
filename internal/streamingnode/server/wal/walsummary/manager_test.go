@@ -327,6 +327,31 @@ func TestManagerGCReleaseAndMaterializationFloor(t *testing.T) {
 	assert.Empty(t, manager.Manifest().GetChunks())
 }
 
+func TestNotifyVChannelDroppedAllowsGCReleaseWithoutMaterialization(t *testing.T) {
+	manager, _ := newTestManagerWithStore(t)
+	view := manager.View("v1")
+	ctx := context.Background()
+
+	unused := false
+	observeDelete(t, view, 100, &unused)
+	require.NoError(t, manager.flushOnce(ctx, &summaryFlushTask{log: manager}))
+	require.Len(t, manager.Manifest().GetChunks(), 1)
+
+	// Without any materialization frontier the chunk is not releasable.
+	manager.cfg.RetentionMaxBytes = 0
+	require.NoError(t, manager.GCOnce(ctx))
+	require.Len(t, manager.Manifest().GetChunks(), 1)
+
+	// The GC boundary of a dropped vchannel makes its chunks releasable
+	// regardless of materialization. The notification touches nothing else:
+	// the view stays and its staging is untouched.
+	manager.NotifyVChannelDropped("v1")
+	require.NoError(t, manager.GCOnce(ctx))
+	assert.Empty(t, manager.Manifest().GetChunks())
+	_, _, err := manager.cfg.Store.ReadChunk(ctx, 0, 1)
+	assert.Error(t, err, "chunk object must be deleted after release")
+}
+
 func TestManagerRequestPersistThroughSchedulesFlush(t *testing.T) {
 	manager, _ := newTestManagerWithStore(t)
 	scheduler := &recordingScheduler{}
@@ -757,12 +782,13 @@ func TestGCOnceRemovesAllPending(t *testing.T) {
 	}
 }
 
-// TestPinnedBatchCompletesAfterViewRemovedReleasesHandles covers a flush
+// TestPinnedBatchCompletesAfterVChannelDroppedReleasesHandles covers a flush
 // racing a vchannel cleanup: a chunk-write failure pins the batch on the task,
-// the view is removed during the retry window, and the retry's completeBatch
-// must still release the retained handles — the removed view's records are
-// dropped with the vchannel, never leaked.
-func TestPinnedBatchCompletesAfterViewRemovedReleasesHandles(t *testing.T) {
+// the vchannel is dropped (GC boundary) during the retry window, and the
+// retry's completeBatch must still release the retained handles. The drop
+// notification touches only GC-retention state, never the staging views, so
+// the honest flush of the records goes through unchanged.
+func TestPinnedBatchCompletesAfterVChannelDroppedReleasesHandles(t *testing.T) {
 	ctx := context.Background()
 	cm := &failInjectingChunkManager{
 		ChunkManager: storage.NewLocalChunkManager(objectstorage.RootPath(t.TempDir())),
@@ -780,11 +806,11 @@ func TestPinnedBatchCompletesAfterViewRemovedReleasesHandles(t *testing.T) {
 	require.NotNil(t, task.pendingChunk)
 	assert.False(t, finalized)
 
-	// The view is removed while the batch is pinned for the retry.
-	manager.RemoveView("v1")
+	// The vchannel is dropped while the batch is pinned for the retry.
+	manager.NotifyVChannelDropped("v1")
 
-	// The retry completes: completeBatch releases the handles even though the
-	// view is gone.
+	// The retry completes: completeBatch releases the handles, and the view
+	// (untouched by the GC boundary) is marked durable.
 	cm.failChunk.Store(false)
 	require.NoError(t, task.Execute(ctx))
 	assert.True(t, finalized, "the retry's completeBatch releases the retained handles")

@@ -51,9 +51,11 @@ type Manager struct {
 	// backing arrays (recordChunk's sort, removeChunkEntry, removePendingGC)
 	// would otherwise publish a torn view.
 	manifestMu sync.Mutex
-	// views holds one summary view per vchannel. A vchannel's view lives for
-	// the whole lifetime of the manager; the vchannel module drops it on
-	// cleanup via RemoveView.
+	// views holds one summary view per vchannel. A view is nothing but the
+	// in-memory staging buffer of one vchannel's span of the pchannel log,
+	// aligned to the flush chunk cycle: it accumulates observed records and
+	// is emptied by every flush. It carries no lifecycle of its own and is
+	// never removed — a dropped vchannel simply stops producing records.
 	views map[string]*SummaryView
 
 	// nextGeneration is the generation the next flush writes.
@@ -67,6 +69,12 @@ type Manager struct {
 	// vchannel, mirrored from VChannelMeta. It is the hard lower bound of the
 	// retention: records not yet materialized must not be released.
 	materializedFrontiers map[string]uint64
+	// droppedVChannels marks vchannels whose cleanup snapshot is durable. It
+	// is the GC boundary reported by the vchannel lifecycle: a dropped
+	// vchannel's records — staged or already chunked — may be released by GC
+	// regardless of materialization. Kept separate from the summary index and
+	// the staging views on purpose.
+	droppedVChannels map[string]struct{}
 	// pendingDurableFrontiers records the restored durable frontier of a
 	// vchannel whose view does not exist yet. Recovery sets it before the
 	// vchannel modules are built; View applies it when the view is created,
@@ -112,10 +120,11 @@ type ManagerConfig struct {
 // NewManager creates the summary manager of one pchannel.
 func NewManager(config ManagerConfig) *Manager {
 	return &Manager{
-		cfg:                   config,
-		views:                 make(map[string]*SummaryView),
-		manifest:              &streamingpb.PChannelSummaryManifest{},
-		materializedFrontiers: make(map[string]uint64),
+		cfg:                    config,
+		views:                  make(map[string]*SummaryView),
+		manifest:               &streamingpb.PChannelSummaryManifest{},
+		materializedFrontiers:  make(map[string]uint64),
+		droppedVChannels:       make(map[string]struct{}),
 	}
 }
 
@@ -208,29 +217,18 @@ func (m *Manager) DurableTimeTick(vchannel string) uint64 {
 	return frontier
 }
 
-// RemoveView is the GC-boundary notification a dropped vchannel sends to the
-// summary: after the vchannel cleanup snapshot is durable, that vchannel's
-// span of the pchannel log no longer exists, so any still-staged records of
-// it must be discarded and their handles released for the WAL checkpoint to
-// advance past them. It is the only interaction between the vchannel
-// lifecycle and the summary — views themselves are created lazily on
-// observation and carry no lifecycle of their own.
-func (m *Manager) RemoveView(vchannel string) {
+// NotifyVChannelDropped is the GC-boundary notification a dropped vchannel
+// sends to the summary once its cleanup snapshot is durable: the vchannel's
+// span of the pchannel log no longer exists, so GC may release records of it
+// — staged or already chunked — regardless of materialization. It is the
+// only interaction between the vchannel lifecycle and the summary, and it
+// touches nothing but the GC-retention state: views are lazily created
+// staging buffers with no lifecycle, and a flush honestly persists whatever
+// records the log carried, dropped vchannel or not.
+func (m *Manager) NotifyVChannelDropped(vchannel string) {
 	m.mu.Lock()
-	view, ok := m.views[vchannel]
-	if ok {
-		delete(m.views, vchannel)
-	}
+	m.droppedVChannels[vchannel] = struct{}{}
 	m.mu.Unlock()
-	if !ok {
-		return
-	}
-	view.mu.Lock()
-	records := view.takeStagingLocked()
-	view.mu.Unlock()
-	for _, record := range records {
-		record.handle.Release()
-	}
 }
 
 // SetMaterializedTimeTick mirrors the transform materialization frontier of a
@@ -585,8 +583,8 @@ func (m *Manager) completeBatch(generation uint64, batch *flushBatch) {
 	}
 	views := make([]*SummaryView, 0, len(batch.recordsByVChannel))
 	for vchannel := range batch.recordsByVChannel {
-		// The view may already be gone (vchannel cleanup raced the flush);
-		// its staging was released by RemoveView, so nothing to mark durable.
+		// A view is never removed (a dropped vchannel only raises its GC
+		// boundary), so it is always present to mark durable.
 		if view, ok := m.views[vchannel]; ok {
 			views = append(views, view)
 		}
