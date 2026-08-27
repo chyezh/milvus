@@ -135,6 +135,32 @@ func TestComponentParam_StorageIopsParams(t *testing.T) {
 	}
 }
 
+func TestComponentParam_QueryViewConcurrency(t *testing.T) {
+	Init()
+	params := Get()
+	for _, test := range []struct {
+		name string
+		item *ParamItem
+	}{
+		{name: "segment catch-up", item: &params.QueryNodeCfg.QueryViewSegmentCatchupConcurrency},
+		{name: "transform log drain", item: &params.QueryNodeCfg.QueryViewTransformLogDrainConcurrency},
+		{name: "transform log stream catch-up", item: &params.StreamingCfg.TransformLogCatchupConcurrencyPerStream},
+		{name: "live event dispatch", item: &params.StreamingCfg.QueryViewLiveEventDispatchConcurrencyPerPChannel},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			key := test.item.Key
+			params.Reset(key)
+			t.Cleanup(func() { params.Reset(key) })
+
+			assert.Equal(t, 4, test.item.GetAsInt())
+			params.Save(key, "32")
+			assert.Equal(t, 32, test.item.GetAsInt())
+			params.Save(key, "0")
+			assert.Equal(t, 1, test.item.GetAsInt())
+		})
+	}
+}
+
 func TestComponentParam(t *testing.T) {
 	Init()
 	params := Get()
