@@ -116,6 +116,7 @@ type fakeGCDataViewManager struct {
 	snapshotViews      []*viewpb.DataViewOfCollection
 	segmentReferenced  bool
 	segmentRefErr      error
+	importErr          error
 }
 
 type fakeGCDataViewCall struct {
@@ -135,6 +136,9 @@ func (m *fakeGCDataViewManager) OnFlush(ctx context.Context, event FlushDataView
 }
 
 func (m *fakeGCDataViewManager) OnImport(ctx context.Context, event ImportDataViewEvent) (*viewpb.DataVersion, error) {
+	if m.importErr != nil {
+		return nil, m.importErr
+	}
 	return nil, nil
 }
 
