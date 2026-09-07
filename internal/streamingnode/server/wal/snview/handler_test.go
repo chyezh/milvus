@@ -348,6 +348,40 @@ func TestSNHandler_AcquireLatestUpViewReturnsFullTopology(t *testing.T) {
 	assert.Equal(t, int64(102), lease.View.GetQueryNode()[1].GetNodeId())
 }
 
+func TestSNHandler_AcquireLatestUpViewResolvesByVChannelWhenReplicaUnknown(t *testing.T) {
+	cat := newMockCatalog()
+	mgr := newMockResourceManager()
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
+
+	preparing := newFullSNViewWithState(1, viewpb.QueryViewState_QueryViewStatePreparing, 101)
+	h.ApplyViews([]handler.ApplyView{
+		{View: preparing},
+	})
+	acquired, ok := mgr.getAcquired(preparing.QueryViewKey())
+	require.True(t, ok)
+	acquired.OnReady()
+	h.ApplyViews([]handler.ApplyView{
+		{View: newFullSNViewWithState(1, viewpb.QueryViewState_QueryViewStateUp, 101)},
+	})
+
+	// The client resolves shards by vchannel with an unknown replica ID before
+	// Phase 1; the handler must find the view by vchannel.
+	unknownReplicaShardID := qviews.ShardID{ReplicaID: qviews.UnknownReplicaID, VChannel: testVChannel}
+	lease, err := h.AcquireLatestUpView(context.Background(), unknownReplicaShardID)
+	require.NoError(t, err)
+	defer lease.Release()
+	assert.Equal(t, testReplicaID, lease.Meta.GetReplicaId())
+	assert.Equal(t, testVChannel, lease.Meta.GetVchannel())
+
+	// A shard ID with an unknown replica ID for a vchannel the handler does not
+	// host must still be rejected.
+	_, err = h.AcquireLatestUpView(context.Background(), qviews.ShardID{
+		ReplicaID: qviews.UnknownReplicaID,
+		VChannel:  "unknown-vchannel",
+	})
+	require.Error(t, err)
+}
+
 func TestSNHandler_QueryViewLeaseDefersResourceRelease(t *testing.T) {
 	cat := newMockCatalog()
 	mgr := newMockResourceManager()

@@ -16,116 +16,73 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
-func TestShardResolverImplResolvesShardReplicas(t *testing.T) {
+func TestShardResolverImplResolvesPrimaryShard(t *testing.T) {
 	const collectionID int64 = 100
-	primaryShard := qviews.ShardID{ReplicaID: 10, VChannel: funcutil.GetVirtualChannel("p0", collectionID, 0)}
-	secondaryShard := qviews.ShardID{ReplicaID: 20, VChannel: funcutil.GetVirtualChannel("p0", collectionID, 0)}
-	otherShard := qviews.ShardID{ReplicaID: 20, VChannel: funcutil.GetVirtualChannel("p1", collectionID, 1)}
+	vchannel0 := funcutil.GetVirtualChannel("p0", collectionID, 0)
+	vchannel1 := funcutil.GetVirtualChannel("p1", collectionID, 1)
 
-	resolver := NewShardResolverImpl(&staticAssignmentWatcher{
-		assignments: []*types.VersionedStreamingNodeAssignments{
-			{
-				StreamingVersion: &streamingpb.StreamingVersion{},
-				Version:          typeutil.VersionInt64Pair{Global: 1, Local: 1},
-				Assignments: map[int64]types.StreamingNodeAssignment{
-					1: {
-						NodeInfo: types.StreamingNodeInfo{ServerID: 1, Address: "localhost:1"},
-						Channels: map[string]types.PChannelInfo{
-							"p0": {Name: "p0", Term: 1, AccessMode: types.AccessModeRW},
-						},
-						SecondaryChannels: map[string]types.PChannelInfo{},
-						ShardAssignment: types.ShardAssignmentInfo{
-							PChannelAssignments: []types.PChannelShardAssignment{
-								{
-									PChannel: "p0",
-									Entries: []types.ShardAssignmentEntry{
-										{CollectionID: collectionID, ShardIndex: 0, ReplicaID: primaryShard.ReplicaID},
-									},
-								},
-							},
-						},
-					},
-					2: {
-						NodeInfo: types.StreamingNodeInfo{ServerID: 2, Address: "localhost:2"},
-						Channels: map[string]types.PChannelInfo{
-							"p1": {Name: "p1", Term: 1, AccessMode: types.AccessModeRW},
-						},
-						SecondaryChannels: map[string]types.PChannelInfo{
-							"p0": {Name: "p0", Term: 2, AccessMode: types.AccessModeRO},
-						},
-						ShardAssignment: types.ShardAssignmentInfo{
-							PChannelAssignments: []types.PChannelShardAssignment{
-								{
-									PChannel: "p0",
-									Entries: []types.ShardAssignmentEntry{
-										{CollectionID: collectionID, ShardIndex: 0, ReplicaID: secondaryShard.ReplicaID},
-									},
-								},
-								{
-									PChannel: "p1",
-									Entries: []types.ShardAssignmentEntry{
-										{CollectionID: collectionID, ShardIndex: 1, ReplicaID: otherShard.ReplicaID},
-									},
-								},
-							},
-						},
-					},
-				},
+	resolver := NewShardResolverImpl(
+		&staticAssignmentWatcher{
+			assignments: []*types.VersionedStreamingNodeAssignments{
+				versionedAssignmentForNodes(
+					1, "localhost:1", []string{"p0"},
+					2, "localhost:2", []string{"p1"},
+				),
 			},
 		},
-	})
+		&staticVChannelProvider{vchannels: map[int64][]string{
+			collectionID: {vchannel0, vchannel1},
+		}},
+	)
 	defer resolver.Close()
 
 	ctx := context.Background()
 	vchannels, err := resolver.ResolveVChannels(ctx, collectionID)
 	require.NoError(t, err)
-	assert.Equal(t, []string{primaryShard.VChannel, otherShard.VChannel}, vchannels)
+	assert.Equal(t, []string{vchannel0, vchannel1}, vchannels)
 
-	replicas, err := resolver.ResolveShard(ctx, collectionID, primaryShard.VChannel)
+	replicas, err := resolver.ResolveShard(ctx, collectionID, vchannel0)
 	require.NoError(t, err)
-	assert.Equal(t, primaryShard.VChannel, replicas.VChannel)
-	assert.Equal(t, primaryShard, replicas.PrimaryShardID)
-	assert.ElementsMatch(t, []qviews.ShardID{primaryShard, secondaryShard}, replicas.ShardIDs)
+	assert.Equal(t, vchannel0, replicas.VChannel)
+	// The client only knows the primary replica; the real replica ID is learned
+	// from the query plan.
+	assert.Equal(t, qviews.ShardID{ReplicaID: qviews.UnknownReplicaID, VChannel: vchannel0}, replicas.PrimaryShardID)
 }
 
-func TestShardResolverImplIgnoresShardAssignmentsForUnknownPChannel(t *testing.T) {
-	resolver := NewShardResolverImpl(&staticAssignmentWatcher{
-		assignments: []*types.VersionedStreamingNodeAssignments{
-			{
-				Version: typeutil.VersionInt64Pair{Global: 1, Local: 1},
-				Assignments: map[int64]types.StreamingNodeAssignment{
-					1: {
-						NodeInfo:          types.StreamingNodeInfo{ServerID: 1, Address: "localhost:1"},
-						Channels:          map[string]types.PChannelInfo{"p0": {Name: "p0", Term: 1, AccessMode: types.AccessModeRW}},
-						SecondaryChannels: map[string]types.PChannelInfo{},
-						ShardAssignment: types.ShardAssignmentInfo{
-							PChannelAssignments: []types.PChannelShardAssignment{
-								{
-									PChannel: "missing",
-									Entries: []types.ShardAssignmentEntry{
-										{CollectionID: 100, ShardIndex: 0, ReplicaID: 10},
-									},
-								},
-							},
-						},
-					},
-				},
+func TestShardResolverImplFiltersUnassignedVChannels(t *testing.T) {
+	const collectionID int64 = 100
+	vchannel0 := funcutil.GetVirtualChannel("p0", collectionID, 0)
+	vchannel1 := funcutil.GetVirtualChannel("p1", collectionID, 1)
+
+	resolver := NewShardResolverImpl(
+		&staticAssignmentWatcher{
+			assignments: []*types.VersionedStreamingNodeAssignments{
+				versionedAssignment(1, "localhost:1", "p0"),
 			},
 		},
-	})
+		// p1 is not assigned yet; only p0 is queryable.
+		&staticVChannelProvider{vchannels: map[int64][]string{
+			collectionID: {vchannel0, vchannel1},
+		}},
+	)
 	defer resolver.Close()
 
-	vchannels, err := resolver.ResolveVChannels(context.Background(), 100)
-	require.ErrorIs(t, err, merr.ErrCollectionNotLoaded)
-	assert.Nil(t, vchannels)
+	vchannels, err := resolver.ResolveVChannels(context.Background(), collectionID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{vchannel0}, vchannels)
 }
 
 func TestShardResolverImplReturnsNotLoadedForUnassignedCollection(t *testing.T) {
-	resolver := NewShardResolverImpl(&staticAssignmentWatcher{
-		assignments: []*types.VersionedStreamingNodeAssignments{
-			versionedAssignment(1, "localhost:1", "p0", 100, 0, 10),
+	resolver := NewShardResolverImpl(
+		&staticAssignmentWatcher{
+			assignments: []*types.VersionedStreamingNodeAssignments{
+				versionedAssignment(1, "localhost:1", "p0"),
+			},
 		},
-	})
+		&staticVChannelProvider{vchannels: map[int64][]string{
+			100: {funcutil.GetVirtualChannel("p0", 100, 0)},
+		}},
+	)
 	defer resolver.Close()
 
 	vchannels, err := resolver.ResolveVChannels(context.Background(), 200)
@@ -133,16 +90,73 @@ func TestShardResolverImplReturnsNotLoadedForUnassignedCollection(t *testing.T) 
 	assert.Nil(t, vchannels)
 }
 
+func TestShardResolverImplPassesThroughProviderError(t *testing.T) {
+	const collectionID int64 = 100
+	providerErr := context.DeadlineExceeded
+	resolver := NewShardResolverImpl(
+		&staticAssignmentWatcher{
+			assignments: []*types.VersionedStreamingNodeAssignments{
+				versionedAssignment(1, "localhost:1", "p0"),
+			},
+		},
+		&staticVChannelProvider{err: providerErr},
+	)
+	defer resolver.Close()
+
+	_, err := resolver.ResolveVChannels(context.Background(), collectionID)
+	require.ErrorIs(t, err, providerErr)
+}
+
+func TestShardResolverImplReturnsNotLoadedForEmptyProviderResult(t *testing.T) {
+	const collectionID int64 = 100
+	resolver := NewShardResolverImpl(
+		&staticAssignmentWatcher{
+			assignments: []*types.VersionedStreamingNodeAssignments{
+				versionedAssignment(1, "localhost:1", "p0"),
+			},
+		},
+		&staticVChannelProvider{vchannels: map[int64][]string{}},
+	)
+	defer resolver.Close()
+
+	_, err := resolver.ResolveVChannels(context.Background(), collectionID)
+	require.ErrorIs(t, err, merr.ErrCollectionNotLoaded)
+}
+
+func TestShardResolverImplRejectsShardOfUnassignedPChannel(t *testing.T) {
+	const collectionID int64 = 100
+	vchannel0 := funcutil.GetVirtualChannel("p0", collectionID, 0)
+	resolver := NewShardResolverImpl(
+		&staticAssignmentWatcher{
+			assignments: []*types.VersionedStreamingNodeAssignments{
+				versionedAssignment(1, "localhost:1", "p0"),
+			},
+		},
+		&staticVChannelProvider{vchannels: map[int64][]string{
+			collectionID: {vchannel0},
+		}},
+	)
+	defer resolver.Close()
+
+	_, err := resolver.ResolveShard(context.Background(), collectionID, funcutil.GetVirtualChannel("p9", collectionID, 9))
+	assert.Error(t, err)
+}
+
 func TestShardResolverImplReplacesCacheOnAssignmentUpdate(t *testing.T) {
 	const collectionID int64 = 100
 	oldVChannel := funcutil.GetVirtualChannel("p0", collectionID, 0)
 	newVChannel := funcutil.GetVirtualChannel("p1", collectionID, 1)
-	resolver := NewShardResolverImpl(&staticAssignmentWatcher{
-		assignments: []*types.VersionedStreamingNodeAssignments{
-			versionedAssignment(1, "localhost:1", "p0", collectionID, 0, 10),
-			versionedAssignment(1, "localhost:1", "p1", collectionID, 1, 11),
+	resolver := NewShardResolverImpl(
+		&staticAssignmentWatcher{
+			assignments: []*types.VersionedStreamingNodeAssignments{
+				versionedAssignment(1, "localhost:1", "p0"),
+				versionedAssignment(1, "localhost:1", "p1"),
+			},
 		},
-	})
+		&staticVChannelProvider{vchannels: map[int64][]string{
+			collectionID: {oldVChannel, newVChannel},
+		}},
+	)
 	defer resolver.Close()
 
 	vchannels, err := resolver.ResolveVChannels(context.Background(), collectionID)
@@ -156,8 +170,10 @@ func TestShardResolverImplReplacesCacheOnAssignmentUpdate(t *testing.T) {
 func TestShardResolverImplBlocksUntilFirstServiceDiscoverySuccess(t *testing.T) {
 	const collectionID int64 = 100
 	vchannel := funcutil.GetVirtualChannel("p0", collectionID, 0)
-	watcher := newWaitableAssignmentWatcher(versionedAssignment(1, "localhost:1", "p0", collectionID, 0, 10))
-	resolver := NewShardResolverImpl(watcher)
+	watcher := newWaitableAssignmentWatcher(versionedAssignment(1, "localhost:1", "p0"))
+	resolver := NewShardResolverImpl(watcher, &staticVChannelProvider{vchannels: map[int64][]string{
+		collectionID: {vchannel},
+	}})
 	defer resolver.Close()
 
 	resultCh := make(chan []string, 1)
@@ -192,8 +208,8 @@ func TestShardResolverImplBlocksUntilFirstServiceDiscoverySuccess(t *testing.T) 
 }
 
 func TestShardResolverImplReturnsContextErrorWhileWaitingForReady(t *testing.T) {
-	watcher := newWaitableAssignmentWatcher(versionedAssignment(1, "localhost:1", "p0", 100, 0, 10))
-	resolver := NewShardResolverImpl(watcher)
+	watcher := newWaitableAssignmentWatcher(versionedAssignment(1, "localhost:1", "p0"))
+	resolver := NewShardResolverImpl(watcher, &staticVChannelProvider{})
 	defer resolver.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
@@ -201,6 +217,18 @@ func TestShardResolverImplReturnsContextErrorWhileWaitingForReady(t *testing.T) 
 
 	_, err := resolver.ResolveVChannels(ctx, 100)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+type staticVChannelProvider struct {
+	vchannels map[int64][]string
+	err       error
+}
+
+func (p *staticVChannelProvider) GetCollectionVChannels(_ context.Context, collectionID int64) ([]string, error) {
+	if p.err != nil {
+		return nil, p.err
+	}
+	return append([]string(nil), p.vchannels[collectionID]...), nil
 }
 
 type staticAssignmentWatcher struct {
@@ -258,30 +286,51 @@ func versionedAssignment(
 	serverID int64,
 	address string,
 	pchannel string,
-	collectionID int64,
-	shardIndex int32,
-	replicaID int64,
 ) *types.VersionedStreamingNodeAssignments {
 	return &types.VersionedStreamingNodeAssignments{
-		Version: typeutil.VersionInt64Pair{Global: serverID, Local: int64(shardIndex)},
+		StreamingVersion: &streamingpb.StreamingVersion{},
+		Version:          typeutil.VersionInt64Pair{Global: serverID, Local: 1},
 		Assignments: map[int64]types.StreamingNodeAssignment{
 			serverID: {
-				NodeInfo: types.StreamingNodeInfo{ServerID: serverID, Address: address},
-				Channels: map[string]types.PChannelInfo{
-					pchannel: {Name: pchannel, Term: 1, AccessMode: types.AccessModeRW},
-				},
+				NodeInfo:          types.StreamingNodeInfo{ServerID: serverID, Address: address},
+				Channels:          channelMap([]string{pchannel}),
 				SecondaryChannels: map[string]types.PChannelInfo{},
-				ShardAssignment: types.ShardAssignmentInfo{
-					PChannelAssignments: []types.PChannelShardAssignment{
-						{
-							PChannel: pchannel,
-							Entries: []types.ShardAssignmentEntry{
-								{CollectionID: collectionID, ShardIndex: shardIndex, ReplicaID: replicaID},
-							},
-						},
-					},
-				},
 			},
 		},
 	}
+}
+
+func versionedAssignmentForNodes(
+	serverID1 int64,
+	address1 string,
+	pchannels1 []string,
+	serverID2 int64,
+	address2 string,
+	pchannels2 []string,
+) *types.VersionedStreamingNodeAssignments {
+	assignments := map[int64]types.StreamingNodeAssignment{
+		serverID1: {
+			NodeInfo:          types.StreamingNodeInfo{ServerID: serverID1, Address: address1},
+			Channels:          channelMap(pchannels1),
+			SecondaryChannels: map[string]types.PChannelInfo{},
+		},
+		serverID2: {
+			NodeInfo:          types.StreamingNodeInfo{ServerID: serverID2, Address: address2},
+			Channels:          channelMap(pchannels2),
+			SecondaryChannels: map[string]types.PChannelInfo{},
+		},
+	}
+	return &types.VersionedStreamingNodeAssignments{
+		StreamingVersion: &streamingpb.StreamingVersion{},
+		Version:          typeutil.VersionInt64Pair{Global: serverID1, Local: 1},
+		Assignments:      assignments,
+	}
+}
+
+func channelMap(pchannels []string) map[string]types.PChannelInfo {
+	channels := make(map[string]types.PChannelInfo, len(pchannels))
+	for _, pchannel := range pchannels {
+		channels[pchannel] = types.PChannelInfo{Name: pchannel, Term: 1, AccessMode: types.AccessModeRW}
+	}
+	return channels
 }

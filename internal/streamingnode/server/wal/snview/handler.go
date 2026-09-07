@@ -186,6 +186,17 @@ func (h *SNQueryViewHandler) AcquireLatestUpView(ctx context.Context, shardID qv
 	}
 	h.mu.Lock()
 	shard := h.shards[shardID]
+	if shard == nil && shardID.ReplicaID == qviews.UnknownReplicaID {
+		// The client resolves shards by vchannel only and carries an unknown
+		// replica ID before Phase 1; fall back to a vchannel lookup.
+		// With a single replica per vchannel the lookup is unambiguous.
+		for id, s := range h.shards {
+			if id.VChannel == shardID.VChannel {
+				shard = s
+				break
+			}
+		}
+	}
 	h.mu.Unlock()
 	if shard == nil {
 		return nil, viewerror.NewViewNotFound("query view %s is not found", shardID.String())

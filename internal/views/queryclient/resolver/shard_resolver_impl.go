@@ -2,7 +2,6 @@ package resolver
 
 import (
 	"context"
-	"sort"
 	"sync"
 
 	"github.com/cockroachdb/errors"
@@ -14,17 +13,17 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/syncutil"
 )
 
-var (
-	ErrShardResolverClosed = errors.New("shard resolver is closed")
-)
+var ErrShardResolverClosed = errors.New("shard resolver is closed")
 
 var _ ShardResolver = (*ShardResolverImpl)(nil)
 
-// ShardReplicas contains all replicas of a shard (vchannel), with the primary replica identified.
+// ShardReplicas contains the primary replica of a shard (vchannel).
+// The primary replica owns the pchannel WAL (AccessModeRW). The replica ID is
+// not discovered from channel assignment anymore; it is UnknownReplicaID until
+// the real one is learned from the query plan (Phase 1 response).
 type ShardReplicas struct {
 	VChannel       string
-	PrimaryShardID qviews.ShardID   // The primary replica (owns WAL).
-	ShardIDs       []qviews.ShardID // All replicas including primary.
+	PrimaryShardID qviews.ShardID // The primary replica (owns WAL).
 }
 
 // ShardResolver resolves shard topology for a collection.
@@ -34,16 +33,26 @@ type ShardResolver interface {
 	// It blocks until the first assignment discovery snapshot is ready.
 	ResolveVChannels(ctx context.Context, collectionID int64) ([]string, error)
 
-	// ResolveShard returns the replicas of a single shard identified by vchannel.
-	// Used by the shard-level client for replica selection and consistency routing.
+	// ResolveShard returns the primary replica of a single shard identified by
+	// vchannel. Used by the shard-level client for consistency routing.
 	// It blocks until the first assignment discovery snapshot is ready.
 	ResolveShard(ctx context.Context, collectionID int64, vchannel string) (*ShardReplicas, error)
 }
 
-func NewShardResolverImpl(w types.AssignmentDiscoverWatcher) *ShardResolverImpl {
+// CollectionVChannelProvider supplies the collection → vchannel mapping.
+// It is implemented by the proxy via its GetCollection flow (metacache).
+type CollectionVChannelProvider interface {
+	// GetCollectionVChannels returns the vchannels of a collection.
+	GetCollectionVChannels(ctx context.Context, collectionID int64) ([]string, error)
+}
+
+// NewShardResolverImpl creates a ShardResolverImpl.
+// vchannels must not be nil.
+func NewShardResolverImpl(w types.AssignmentDiscoverWatcher, vchannels CollectionVChannelProvider) *ShardResolverImpl {
 	t := &ShardResolverImpl{
 		taskNotifier: syncutil.NewAsyncTaskNotifier[struct{}](),
 		w:            w,
+		vchannels:    vchannels,
 		cond:         syncutil.NewContextCond(&sync.Mutex{}),
 	}
 	go t.watch()
@@ -53,21 +62,20 @@ func NewShardResolverImpl(w types.AssignmentDiscoverWatcher) *ShardResolverImpl 
 type ShardResolverImpl struct {
 	taskNotifier *syncutil.AsyncTaskNotifier[struct{}]
 
-	w    types.AssignmentDiscoverWatcher
-	cond *syncutil.ContextCond
+	w         types.AssignmentDiscoverWatcher
+	vchannels CollectionVChannelProvider
+	cond      *syncutil.ContextCond
 
 	closed bool
 	cache  *shardResolverCache
 }
 
 type shardResolverCache struct {
-	collectionVChannels map[int64][]string
-	shardReplicas       map[collectionVChannelKey]*ShardReplicas
-}
-
-type collectionVChannelKey struct {
-	collectionID int64
-	vchannel     string
+	// assignedPChannels contains the pchannels present in the latest assignment
+	// snapshot (primary or secondary). A collection is queryable only after its
+	// pchannels appear in the assignment, so this is used to fast-fail
+	// collections that are not loaded yet.
+	assignedPChannels map[string]struct{}
 }
 
 func (t *ShardResolverImpl) ResolveVChannels(ctx context.Context, collectionID int64) ([]string, error) {
@@ -75,11 +83,21 @@ func (t *ShardResolverImpl) ResolveVChannels(ctx context.Context, collectionID i
 	if err != nil {
 		return nil, err
 	}
-	vchannels, ok := cache.collectionVChannels[collectionID]
-	if !ok || len(vchannels) == 0 {
+	vchannels, err := t.vchannels.GetCollectionVChannels(ctx, collectionID)
+	if err != nil {
+		return nil, err
+	}
+	loaded := make([]string, 0, len(vchannels))
+	for _, vchannel := range vchannels {
+		pchannel := funcutil.ToPhysicalChannel(vchannel)
+		if _, ok := cache.assignedPChannels[pchannel]; ok {
+			loaded = append(loaded, vchannel)
+		}
+	}
+	if len(loaded) == 0 {
 		return nil, merr.WrapErrCollectionNotLoaded(collectionID)
 	}
-	return append([]string(nil), vchannels...), nil
+	return loaded, nil
 }
 
 func (t *ShardResolverImpl) ResolveShard(ctx context.Context, collectionID int64, vchannel string) (*ShardReplicas, error) {
@@ -87,11 +105,17 @@ func (t *ShardResolverImpl) ResolveShard(ctx context.Context, collectionID int64
 	if err != nil {
 		return nil, err
 	}
-	replicas := cache.shardReplicas[collectionVChannelKey{collectionID: collectionID, vchannel: vchannel}]
-	if replicas == nil {
-		return nil, errors.Errorf("shard replicas not found: collection=%d, vchannel=%s", collectionID, vchannel)
+	pchannel := funcutil.ToPhysicalChannel(vchannel)
+	if _, ok := cache.assignedPChannels[pchannel]; !ok {
+		return nil, merr.WrapErrServiceInternalMsg("shard replicas not found: collection=%d, vchannel=%s", collectionID, vchannel)
 	}
-	return cloneShardReplicas(replicas), nil
+	return &ShardReplicas{
+		VChannel: vchannel,
+		PrimaryShardID: qviews.ShardID{
+			ReplicaID: qviews.UnknownReplicaID,
+			VChannel:  vchannel,
+		},
+	}, nil
 }
 
 func (t *ShardResolverImpl) Close() {
@@ -134,67 +158,15 @@ func (t *ShardResolverImpl) getCache(ctx context.Context) (shardResolverCache, e
 
 func buildShardResolverCache(assignments *types.VersionedStreamingNodeAssignments) shardResolverCache {
 	cache := shardResolverCache{
-		collectionVChannels: make(map[int64][]string),
-		shardReplicas:       make(map[collectionVChannelKey]*ShardReplicas),
+		assignedPChannels: make(map[string]struct{}),
 	}
-	vchannelSets := make(map[int64]map[string]struct{})
 	for _, assignment := range assignments.Assignments {
-		pchannelPrimary := make(map[string]bool, len(assignment.Channels)+len(assignment.SecondaryChannels))
 		for pchannel := range assignment.Channels {
-			pchannelPrimary[pchannel] = true
+			cache.assignedPChannels[pchannel] = struct{}{}
 		}
 		for pchannel := range assignment.SecondaryChannels {
-			if _, ok := pchannelPrimary[pchannel]; !ok {
-				pchannelPrimary[pchannel] = false
-			}
+			cache.assignedPChannels[pchannel] = struct{}{}
 		}
-		for _, pchannelAssignment := range assignment.ShardAssignment.PChannelAssignments {
-			primary, ok := pchannelPrimary[pchannelAssignment.PChannel]
-			if !ok {
-				continue
-			}
-			for _, entry := range pchannelAssignment.Entries {
-				vchannel := funcutil.GetVirtualChannel(pchannelAssignment.PChannel, entry.CollectionID, int(entry.ShardIndex))
-				shardID := qviews.ShardID{ReplicaID: entry.ReplicaID, VChannel: vchannel}
-				key := collectionVChannelKey{collectionID: entry.CollectionID, vchannel: vchannel}
-				replicas := cache.shardReplicas[key]
-				if replicas == nil {
-					replicas = &ShardReplicas{VChannel: vchannel}
-					cache.shardReplicas[key] = replicas
-				}
-				replicas.ShardIDs = append(replicas.ShardIDs, shardID)
-				if primary {
-					replicas.PrimaryShardID = shardID
-				}
-				if vchannelSets[entry.CollectionID] == nil {
-					vchannelSets[entry.CollectionID] = make(map[string]struct{})
-				}
-				vchannelSets[entry.CollectionID][vchannel] = struct{}{}
-			}
-		}
-	}
-	for collectionID, vchannels := range vchannelSets {
-		cache.collectionVChannels[collectionID] = make([]string, 0, len(vchannels))
-		for vchannel := range vchannels {
-			cache.collectionVChannels[collectionID] = append(cache.collectionVChannels[collectionID], vchannel)
-		}
-		sort.Strings(cache.collectionVChannels[collectionID])
-	}
-	for _, replicas := range cache.shardReplicas {
-		sort.Slice(replicas.ShardIDs, func(i, j int) bool {
-			if replicas.ShardIDs[i].VChannel != replicas.ShardIDs[j].VChannel {
-				return replicas.ShardIDs[i].VChannel < replicas.ShardIDs[j].VChannel
-			}
-			return replicas.ShardIDs[i].ReplicaID < replicas.ShardIDs[j].ReplicaID
-		})
 	}
 	return cache
-}
-
-func cloneShardReplicas(replicas *ShardReplicas) *ShardReplicas {
-	return &ShardReplicas{
-		VChannel:       replicas.VChannel,
-		PrimaryShardID: replicas.PrimaryShardID,
-		ShardIDs:       append([]qviews.ShardID(nil), replicas.ShardIDs...),
-	}
 }

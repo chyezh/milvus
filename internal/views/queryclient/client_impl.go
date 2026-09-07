@@ -45,7 +45,6 @@ func NewViewQueryClient(
 	queryPlanClient QueryPlanClient,
 	queryServiceClient ViewQueryServiceClient,
 	shardResolver resolver.ShardResolver,
-	replicaPicker ReplicaPicker,
 	fieldFetchPlanner FieldFetchPlanner,
 	rerankerBuilder reranker.Builder,
 	rendererBuilder renderer.Builder,
@@ -57,8 +56,8 @@ func NewViewQueryClient(
 		cfg.MaxRetries = defaultMaxRetries
 	}
 	return &viewQueryClientImpl{
-		shardClient:            newShardViewQueryClient(cfg.MaxRetries, queryPlanClient, queryServiceClient, shardResolver, replicaPicker),
-		legacyClient:           newLegacyClient(cfg, queryPlanClient, queryServiceClient, shardResolver, replicaPicker),
+		shardClient:            newShardViewQueryClient(cfg.MaxRetries, queryPlanClient, queryServiceClient, shardResolver),
+		legacyClient:           newLegacyClient(cfg, queryPlanClient, queryServiceClient, shardResolver),
 		shardResolver:          shardResolver,
 		fieldFetchPlanner:      fieldFetchPlanner,
 		rerankerBuilder:        rerankerBuilder,

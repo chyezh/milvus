@@ -18,9 +18,8 @@ import (
 )
 
 // shardViewQueryClient executes two-phase queries at the shard granularity.
-// It owns replica resolution, replica selection, consistency routing,
-// Phase 1 (GetQueryPlan), Phase 2 (SearchOnView/QueryOnView) dispatch,
-// and shard-level retry.
+// It owns replica resolution, consistency routing, Phase 1 (GetQueryPlan),
+// Phase 2 (SearchOnView/QueryOnView) dispatch, and shard-level retry.
 //
 // Both Search and Query share the same executeShard framework, differing only
 // in what request goes into the GetQueryPlanRequest and which Phase 2 RPC is called.
@@ -29,7 +28,6 @@ type shardViewQueryClient struct {
 	queryPlanClient    QueryPlanClient
 	queryServiceClient ViewQueryServiceClient
 	shardResolver      resolver.ShardResolver
-	replicaPicker      ReplicaPicker
 }
 
 func newShardViewQueryClient(
@@ -37,14 +35,12 @@ func newShardViewQueryClient(
 	queryPlanClient QueryPlanClient,
 	queryServiceClient ViewQueryServiceClient,
 	shardResolver resolver.ShardResolver,
-	replicaPicker ReplicaPicker,
 ) *shardViewQueryClient {
 	return &shardViewQueryClient{
 		maxRetries:         maxRetries,
 		queryPlanClient:    queryPlanClient,
 		queryServiceClient: queryServiceClient,
 		shardResolver:      shardResolver,
-		replicaPicker:      replicaPicker,
 	}
 }
 
@@ -166,27 +162,20 @@ func (s *shardViewQueryClient) executeShard(
 			return nil, ctx.Err()
 		}
 
-		// Resolve shard replicas (every attempt, including first).
+		// Resolve the primary replica (every attempt, including first).
 		// ShardResolver uses a local cache, so this is a zero-overhead lookup.
 		shardReplicas, err := s.shardResolver.ResolveShard(ctx, collectionID, vchannel)
 		if err != nil {
 			return nil, err
 		}
-
-		// Select target replica via picker.
-		pickResult, err := s.replicaPicker.Pick(ctx, ReplicaPickInfo{ShardReplicas: shardReplicas})
-		if err != nil {
-			return nil, err
-		}
-		targetShardID := pickResult.ShardID
+		// The client always targets the primary replica; the real replica ID is
+		// learned from the plan and used for Phase 2.
+		targetShardID := shardReplicas.PrimaryShardID
 
 		// Phase 1: GetQueryPlan with consistency routing.
 		planReq := params.buildPlanReq(targetShardID)
-		plan, err := s.executeGetQueryPlan(ctx, targetShardID, shardReplicas, planReq, params)
+		plan, err := s.executeGetQueryPlan(ctx, targetShardID, planReq, params)
 		if err != nil {
-			if pickResult.Done != nil {
-				pickResult.Done(ReplicaDoneInfo{Err: err})
-			}
 			if ve := viewerror.AsViewError(err); ve != nil && ve.IsRetryable() {
 				lastErr = err
 				continue
@@ -199,9 +188,6 @@ func (s *shardViewQueryClient) executeShard(
 
 		// Phase 2: Fan out to all work nodes concurrently.
 		err = s.fanOutToWorkNodes(ctx, workNodes, plan, shardID, params.dispatchNode)
-		if pickResult.Done != nil {
-			pickResult.Done(ReplicaDoneInfo{Err: err})
-		}
 		if err != nil {
 			if ve := viewerror.AsViewError(err); ve != nil && ve.IsRetryable() {
 				lastErr = err
@@ -223,35 +209,20 @@ func (s *shardViewQueryClient) executeShard(
 
 // executeGetQueryPlan handles consistency-level routing and dispatches Phase 1.
 //
-// Routing logic per consistency level:
-//   - Strong on primary: GetQueryPlan(consistency_level=Strong)
-//   - Strong cross-replica: GetMVCCTimestamp from primary → GetQueryPlan(query_plan_mvcc=mvcc)
-//   - Session: same routing as Strong; SN sees consistency_level=Strong for primary planning
+// The client always targets the primary replica, so strong consistency is
+// satisfied directly by the primary's WAL:
+//   - Strong/Session: GetQueryPlan(consistency_level=Strong)
 //   - Bounded/Eventually: GetQueryPlan(consistency_level=...) — SN generates MVCC from WAL
 func (s *shardViewQueryClient) executeGetQueryPlan(
 	ctx context.Context,
 	targetShardID qviews.ShardID,
-	shardReplicas *resolver.ShardReplicas,
 	planReq *viewpb.GetQueryPlanRequest,
 	params *shardExecParams,
 ) (*viewpb.QueryPlan, error) {
 	switch params.consistencyLevel {
 	case commonpb.ConsistencyLevel_Strong, commonpb.ConsistencyLevel_Session:
-		if targetShardID != shardReplicas.PrimaryShardID {
-			mvccResp, err := s.queryPlanClient.GetMVCCTimestamp(ctx, shardReplicas.PrimaryShardID,
-				&viewpb.GetMVCCTimestampRequest{
-					Vchannel: targetShardID.VChannel,
-				})
-			if err != nil {
-				return nil, err
-			}
-			planReq.Mvcc = &viewpb.GetQueryPlanRequest_QueryPlanMvcc{
-				QueryPlanMvcc: mvccResp.GetMvcc(),
-			}
-		} else {
-			planReq.Mvcc = &viewpb.GetQueryPlanRequest_ConsistencyLevel{
-				ConsistencyLevel: commonpb.ConsistencyLevel_Strong,
-			}
+		planReq.Mvcc = &viewpb.GetQueryPlanRequest_ConsistencyLevel{
+			ConsistencyLevel: commonpb.ConsistencyLevel_Strong,
 		}
 	default:
 		planReq.Mvcc = &viewpb.GetQueryPlanRequest_ConsistencyLevel{
