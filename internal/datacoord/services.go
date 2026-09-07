@@ -786,6 +786,8 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 					VChannel:        segment.GetInsertChannel(),
 					PartitionID:     segment.GetPartitionID(),
 					ManifestVersion: manifestVersion,
+					RowNum:          segment.GetNumOfRows(),
+					MemSize:         dataViewSegmentMemSize(segment),
 				}},
 			})
 			if err != nil {

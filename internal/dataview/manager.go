@@ -24,6 +24,8 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/milvus-io/milvus/internal/views/coord/balancer/api"
+	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
@@ -73,6 +75,18 @@ type Manager interface {
 	Latest(ctx context.Context, collectionID int64) (DataViewRef, error)
 	Get(ctx context.Context, collectionID int64, dataVersion *viewpb.DataVersion) (DataViewRef, error)
 	GarbageCollect(ctx context.Context, collectionID int64, retainLatest int) error
+
+	// DataViewSnapshot returns a native (non-proto) snapshot of the latest
+	// DataView for every Collection tracked by the Manager. The snapshot is
+	// immutable and decoupled from the viewpb wire format; per-segment
+	// RowNum/MemSize are maintained by the Manager (see segmentStats) and
+	// embedded inline so the Balancer never needs a separate segment-metadata
+	// lookup.
+	DataViewSnapshot(ctx context.Context) *api.DataViewSnapshot
+	// DataViewSnapshotForCollections returns the same native snapshot scoped
+	// to the supplied Collection IDs. A nil or empty set returns every
+	// tracked Collection.
+	DataViewSnapshotForCollections(ctx context.Context, collectionIDs map[int64]struct{}) *api.DataViewSnapshot
 }
 
 type DataViewRef interface {
@@ -86,6 +100,14 @@ type LoadableSegment struct {
 	VChannel        string
 	PartitionID     int64
 	ManifestVersion int64
+	// RowNum and MemSize are the segment's load footprint, projected from
+	// SegmentMeta by the Coordinator and maintained in memory by the Manager
+	// (never persisted, never re-read from SegmentMeta). They stay consistent
+	// with SegmentMeta across recovery, Recompute and Flush because every one
+	// of those paths re-projects the Segment set. They do not enter the
+	// viewpb wire format.
+	RowNum  int64
+	MemSize int64
 }
 
 type CreateCollectionDataViewEvent struct {
@@ -134,6 +156,17 @@ type collectionState struct {
 	id       int64
 	latest   *versionEntry
 	versions map[string]*versionEntry
+	// segmentStats maintains the per-segment RowNum/MemSize of the latest
+	// visible DataView. It is in-memory only: rebuilt from every projection
+	// (recovery bootstrap, Recompute, Flush events carry the footprint
+	// inline), never persisted, and never read back from SegmentMeta.
+	segmentStats map[int64]segmentStat
+}
+
+// segmentStat is the load footprint the Manager maintains per segment.
+type segmentStat struct {
+	rowNum  int64
+	memSize int64
 }
 
 type dataViewManager struct {
@@ -402,6 +435,7 @@ func (m *dataViewManager) OnBootstrapCollection(ctx context.Context, event Boots
 	if err := addSegments(view, event.Segments); err != nil {
 		return nil, err
 	}
+	replaceSegmentStats(state, event.Segments)
 	if err := m.persistLocked(ctx, state, view); err != nil {
 		return nil, err
 	}
@@ -441,6 +475,10 @@ func (m *dataViewManager) recomputeNow(ctx context.Context, collectionID int64, 
 	if err := rebuildSegments(next, segments); err != nil {
 		return nil, err
 	}
+	// Segment stats follow the projection regardless of membership equality:
+	// RowNum/MemSize changes alone do not advance the DataVersion, but the
+	// native snapshot must still surface the freshest load footprint.
+	replaceSegmentStats(state, segments)
 	canonicalizeDataView(next)
 	if dataViewMembershipEqual(base, next) {
 		return dataVersionFromView(base), nil
@@ -580,6 +618,108 @@ func (m *dataViewManager) GarbageCollect(ctx context.Context, collectionID int64
 	return nil
 }
 
+// DataViewSnapshot returns a native snapshot of every tracked Collection's
+// latest DataView. See DataViewSnapshotForCollections for semantics.
+func (m *dataViewManager) DataViewSnapshot(ctx context.Context) *api.DataViewSnapshot {
+	return m.DataViewSnapshotForCollections(ctx, nil)
+}
+
+// DataViewSnapshotForCollections builds a native (non-proto) snapshot of the
+// latest DataView for the requested Collections (all when collectionIDs is
+// nil or empty). Each snapshot is an immutable clone: it embeds the segment
+// RowNum/MemSize maintained by the Manager (see collectionState.segmentStats)
+// so the consumer reads load metrics inline without any per-segment lookup.
+//
+// The clone is materialized under the Collection lock, so the snapshot data
+// is fully independent of the Manager; a consumer that wants to outlive the
+// snapshot may simply retain (or copy) the returned structures — no Manager
+// handle is held.
+func (m *dataViewManager) DataViewSnapshotForCollections(ctx context.Context, collectionIDs map[int64]struct{}) *api.DataViewSnapshot {
+	states := m.listStates()
+	collections := make([]*api.CollectionDataView, 0, len(states))
+	for _, state := range states {
+		if collectionIDs != nil {
+			if _, ok := collectionIDs[state.id]; !ok {
+				continue
+			}
+		}
+		coll := m.collectionDataView(ctx, state)
+		if coll != nil {
+			collections = append(collections, coll)
+		}
+	}
+	return api.NewDataViewSnapshot(0, collections)
+}
+
+// collectionDataView materializes the native DataView of one Collection by
+// cloning its latest version entry and merging the in-memory segment stats
+// under the Collection lock, so the view and the footprint come from the
+// same snapshot point. The result is fully independent of the Manager: it
+// holds no Manager handle, and a consumer that wants to outlive the snapshot
+// simply retains (or copies) the returned native structures.
+func (m *dataViewManager) collectionDataView(ctx context.Context, state *collectionState) *api.CollectionDataView {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	entry := state.latest
+	if entry == nil || entry.isTombstone {
+		return nil
+	}
+	view := canonicalDataViewClone(entry.view)
+	stats := state.segmentStats
+	if view == nil {
+		return nil
+	}
+
+	coll := &api.CollectionDataView{
+		CollectionID: view.GetCollectionId(),
+		DataVersion:  qviews.FromProtoDataVersion(view.GetDataVersion()),
+		Shards:       make([]*api.ShardDataView, 0, len(view.GetShards())),
+	}
+	for _, shard := range view.GetShards() {
+		if shard == nil {
+			continue
+		}
+		nativeShard := &api.ShardDataView{
+			VChannel:   shard.GetVchannel(),
+			Partitions: make([]*api.PartitionDataView, 0, len(shard.GetPartitions())),
+		}
+		for _, partition := range shard.GetPartitions() {
+			if partition == nil {
+				continue
+			}
+			segments := make([]*api.SegmentDataView, 0, len(partition.GetSegmentIds()))
+			for _, segmentID := range partition.GetSegmentIds() {
+				stat := stats[segmentID]
+				segments = append(segments, &api.SegmentDataView{
+					SegmentID:   segmentID,
+					PartitionID: partition.GetPartitionId(),
+					RowNum:      stat.rowNum,
+					MemSize:     stat.memSize,
+				})
+			}
+			nativeShard.Partitions = append(nativeShard.Partitions, &api.PartitionDataView{
+				PartitionID: partition.GetPartitionId(),
+				Segments:    segments,
+			})
+		}
+		coll.Shards = append(coll.Shards, nativeShard)
+	}
+	return coll
+}
+
+// listStates snapshots the tracked Collection states under the manager-global
+// read lock.
+func (m *dataViewManager) listStates() []*collectionState {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	states := make([]*collectionState, 0, len(m.states))
+	for _, state := range m.states {
+		states = append(states, state)
+	}
+	return states
+}
+
 func (m *dataViewManager) persistLocked(ctx context.Context, state *collectionState, view *viewpb.DataViewOfCollection) error {
 	persisted := canonicalDataViewClone(view)
 	key := dataVersionKey(persisted.GetDataVersion())
@@ -652,6 +792,11 @@ func (m *dataViewManager) PrepareFlush(ctx context.Context, event FlushDataViewE
 		unlock()
 		return nil, nil, nil, err
 	}
+	// Flush is incremental: upsert the flushed segments' footprint into the
+	// stats index. The commit callback persists memory; stats are updated
+	// here (under the Collection lock) so the idempotent-replay branch below
+	// also sees the freshest footprint.
+	applySegmentStats(state, event.Segments)
 	canonicalizeDataView(next)
 	if dataViewMembershipEqual(base, next) {
 		// Idempotent replay of an already-seen flush (e.g. a retried flush
@@ -716,7 +861,7 @@ func (m *dataViewManager) lockStateForMutation(collectionID int64) (*collectionS
 			}
 			state = m.states[collectionID]
 			if state == nil {
-				state = &collectionState{id: collectionID, versions: make(map[string]*versionEntry)}
+				state = &collectionState{id: collectionID, versions: make(map[string]*versionEntry), segmentStats: make(map[int64]segmentStat)}
 				m.states[collectionID] = state
 			}
 			m.mu.Unlock()
@@ -742,7 +887,7 @@ func (m *dataViewManager) getOrCreateState(collectionID int64) *collectionState 
 	defer m.mu.Unlock()
 	state := m.states[collectionID]
 	if state == nil {
-		state = &collectionState{id: collectionID, versions: make(map[string]*versionEntry)}
+		state = &collectionState{id: collectionID, versions: make(map[string]*versionEntry), segmentStats: make(map[int64]segmentStat)}
 		m.states[collectionID] = state
 	}
 	return state
@@ -941,6 +1086,40 @@ func validatePersistedSegmentManifestVersions(view *viewpb.DataViewOfCollection)
 type segmentLocation struct {
 	vchannel    string
 	partitionID int64
+}
+
+// applySegmentStats upserts the footprint of the supplied segments into the
+// Collection's in-memory stats index. Used by the incremental flush path.
+func applySegmentStats(state *collectionState, segments []LoadableSegment) {
+	if state.segmentStats == nil {
+		state.segmentStats = make(map[int64]segmentStat)
+	}
+	for _, segment := range segments {
+		if segment.SegmentID == 0 {
+			continue
+		}
+		state.segmentStats[segment.SegmentID] = segmentStat{
+			rowNum:  segment.RowNum,
+			memSize: segment.MemSize,
+		}
+	}
+}
+
+// replaceSegmentStats rebuilds the Collection's stats index from a full
+// projection. Used by recovery bootstrap and Recompute, where the projection
+// is the source of truth for the whole Segment set.
+func replaceSegmentStats(state *collectionState, segments []LoadableSegment) {
+	stats := make(map[int64]segmentStat, len(segments))
+	for _, segment := range segments {
+		if segment.SegmentID == 0 {
+			continue
+		}
+		stats[segment.SegmentID] = segmentStat{
+			rowNum:  segment.RowNum,
+			memSize: segment.MemSize,
+		}
+	}
+	state.segmentStats = stats
 }
 
 type segmentSlot struct {
