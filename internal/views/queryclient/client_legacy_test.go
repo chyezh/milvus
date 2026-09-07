@@ -8,7 +8,6 @@ import (
 
 	commonpb "github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
-	"github.com/milvus-io/milvus/internal/views/queryclient/resolver"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
@@ -35,10 +34,6 @@ func TestLegacyClientSearchReturnsRawResults(t *testing.T) {
 		},
 		&legacyResolver{
 			vchannels: []string{shardA.VChannel, shardB.VChannel},
-			replicas: map[string]*resolver.ShardReplicas{
-				shardA.VChannel: {VChannel: shardA.VChannel, PrimaryShardID: shardA},
-				shardB.VChannel: {VChannel: shardB.VChannel, PrimaryShardID: shardB},
-			},
 		},
 	)
 
@@ -81,9 +76,6 @@ func TestLegacyClientQueryReturnsRawResults(t *testing.T) {
 		},
 		&legacyResolver{
 			vchannels: []string{shardID.VChannel},
-			replicas: map[string]*resolver.ShardReplicas{
-				shardID.VChannel: {VChannel: shardID.VChannel, PrimaryShardID: shardID},
-			},
 		},
 	)
 
@@ -117,9 +109,6 @@ func TestLegacyClientQuerySkipsEmptyDownstreamResults(t *testing.T) {
 		},
 		&legacyResolver{
 			vchannels: []string{shardID.VChannel},
-			replicas: map[string]*resolver.ShardReplicas{
-				shardID.VChannel: {VChannel: shardID.VChannel, PrimaryShardID: shardID},
-			},
 		},
 	)
 
@@ -152,9 +141,6 @@ func TestLegacyClientQueryDoesNotDispatchWhenPlanHasNoWorkNodes(t *testing.T) {
 		service,
 		&legacyResolver{
 			vchannels: []string{shardID.VChannel},
-			replicas: map[string]*resolver.ShardReplicas{
-				shardID.VChannel: {VChannel: shardID.VChannel, PrimaryShardID: shardID},
-			},
 		},
 	)
 
@@ -188,9 +174,6 @@ func TestLegacyClientSearchReturnsStatusError(t *testing.T) {
 		},
 		&legacyResolver{
 			vchannels: []string{shardID.VChannel},
-			replicas: map[string]*resolver.ShardReplicas{
-				shardID.VChannel: {VChannel: shardID.VChannel, PrimaryShardID: shardID},
-			},
 		},
 	)
 
@@ -205,15 +188,10 @@ func TestLegacyClientSearchReturnsStatusError(t *testing.T) {
 
 type legacyResolver struct {
 	vchannels []string
-	replicas  map[string]*resolver.ShardReplicas
 }
 
 func (r *legacyResolver) ResolveVChannels(context.Context, int64) ([]string, error) {
 	return r.vchannels, nil
-}
-
-func (r *legacyResolver) ResolveShard(_ context.Context, _ int64, vchannel string) (*resolver.ShardReplicas, error) {
-	return r.replicas[vchannel], nil
 }
 
 type legacyPlanClient struct {

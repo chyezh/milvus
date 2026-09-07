@@ -8,7 +8,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	commonpb "github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
-	"github.com/milvus-io/milvus/internal/views/queryclient/resolver"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
@@ -46,10 +45,6 @@ func TestShardSearchReturnsQueryPlanMVCCForRequery(t *testing.T) {
 		1,
 		planClient,
 		queryService,
-		&fakeShardResolver{replicas: &resolver.ShardReplicas{
-			VChannel:       shardID.VChannel,
-			PrimaryShardID: shardID,
-		}},
 	)
 
 	shardPlan, err := client.Search(context.Background(), &ShardSearchRequest{
@@ -80,10 +75,6 @@ func TestSessionSearchOnPrimaryLetsSNGenerateQueryPlanMVCC(t *testing.T) {
 		1,
 		planClient,
 		queryService,
-		&fakeShardResolver{replicas: &resolver.ShardReplicas{
-			VChannel:       shardID.VChannel,
-			PrimaryShardID: shardID,
-		}},
 	)
 
 	_, err := client.Search(context.Background(), &ShardSearchRequest{
@@ -114,10 +105,6 @@ func TestStrongSearchAlwaysTargetsPrimary(t *testing.T) {
 		1,
 		planClient,
 		queryService,
-		&fakeShardResolver{replicas: &resolver.ShardReplicas{
-			VChannel:       vchannel,
-			PrimaryShardID: primaryShardID,
-		}},
 	)
 
 	_, err := client.Search(context.Background(), &ShardSearchRequest{
@@ -138,18 +125,6 @@ func TestStrongSearchAlwaysTargetsPrimary(t *testing.T) {
 	require.Equal(t, commonpb.ConsistencyLevel_Strong, planClient.planReq.GetConsistencyLevel())
 	require.Nil(t, planClient.planReq.GetQueryPlanMvcc())
 	require.Equal(t, 0, planClient.mvccReqCount)
-}
-
-type fakeShardResolver struct {
-	replicas *resolver.ShardReplicas
-}
-
-func (f *fakeShardResolver) ResolveVChannels(context.Context, int64) ([]string, error) {
-	return []string{f.replicas.VChannel}, nil
-}
-
-func (f *fakeShardResolver) ResolveShard(context.Context, int64, string) (*resolver.ShardReplicas, error) {
-	return f.replicas, nil
 }
 
 type fakeQueryPlanClient struct {

@@ -76,7 +76,7 @@ func newLegacyClient(
 		cfg.MaxRetries = defaultMaxRetries
 	}
 	return &legacyClient{
-		shardClient:   newShardViewQueryClient(cfg.MaxRetries, queryPlanClient, queryServiceClient, shardResolver),
+		shardClient:   newShardViewQueryClient(cfg.MaxRetries, queryPlanClient, queryServiceClient),
 		shardResolver: shardResolver,
 	}
 }

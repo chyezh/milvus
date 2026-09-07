@@ -8,7 +8,6 @@ import (
 
 	commonpb "github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus/internal/views/queryclient/reducer"
-	"github.com/milvus-io/milvus/internal/views/queryclient/resolver"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/internal/views/viewerror"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
@@ -27,20 +26,17 @@ type shardViewQueryClient struct {
 	maxRetries         int
 	queryPlanClient    QueryPlanClient
 	queryServiceClient ViewQueryServiceClient
-	shardResolver      resolver.ShardResolver
 }
 
 func newShardViewQueryClient(
 	maxRetries int,
 	queryPlanClient QueryPlanClient,
 	queryServiceClient ViewQueryServiceClient,
-	shardResolver resolver.ShardResolver,
 ) *shardViewQueryClient {
 	return &shardViewQueryClient{
 		maxRetries:         maxRetries,
 		queryPlanClient:    queryPlanClient,
 		queryServiceClient: queryServiceClient,
-		shardResolver:      shardResolver,
 	}
 }
 
@@ -62,7 +58,7 @@ type ShardQueryRequest struct {
 // Replica resolution is handled internally. Results are fed into the provided reducer.
 // Returns the ShardPlan for potential requery.
 func (s *shardViewQueryClient) Search(ctx context.Context, req *ShardSearchRequest) (*ShardPlan, error) {
-	return s.executeShard(ctx, req.Req.CollectionID, req.VChannel, &shardExecParams{
+	return s.executeShard(ctx, req.VChannel, &shardExecParams{
 		consistencyLevel: req.Req.ConsistencyLevel,
 		buildPlanReq: func(targetShardID qviews.ShardID) *viewpb.GetQueryPlanRequest {
 			return &viewpb.GetQueryPlanRequest{
@@ -94,7 +90,7 @@ func (s *shardViewQueryClient) Search(ctx context.Context, req *ShardSearchReque
 // Replica resolution is handled internally. Results are fed into the provided reducer.
 // Returns the ShardPlan for potential requery.
 func (s *shardViewQueryClient) Query(ctx context.Context, req *ShardQueryRequest) (*ShardPlan, error) {
-	return s.executeShard(ctx, req.Req.CollectionID, req.VChannel, &shardExecParams{
+	return s.executeShard(ctx, req.VChannel, &shardExecParams{
 		consistencyLevel: req.Req.ConsistencyLevel,
 		buildPlanReq: func(targetShardID qviews.ShardID) *viewpb.GetQueryPlanRequest {
 			return &viewpb.GetQueryPlanRequest{
@@ -144,14 +140,13 @@ type shardExecParams struct {
 }
 
 // executeShard runs Phase 1 + Phase 2 for a single shard with retry.
-// Replica resolution is performed at the beginning of each attempt (including the first),
-// so stale primary mappings are automatically refreshed on retry.
+// The client always targets the primary replica; the real replica ID is
+// learned from the Phase 1 plan and used for Phase 2.
 //
 // Shard-level retry handles ViewErrors (view invalidated, not found, etc.).
 // Per-node retry within fanOutToWorkNodes handles transient non-view errors.
 func (s *shardViewQueryClient) executeShard(
 	ctx context.Context,
-	collectionID int64,
 	vchannel string,
 	params *shardExecParams,
 ) (*ShardPlan, error) {
@@ -162,15 +157,9 @@ func (s *shardViewQueryClient) executeShard(
 			return nil, ctx.Err()
 		}
 
-		// Resolve the primary replica (every attempt, including first).
-		// ShardResolver uses a local cache, so this is a zero-overhead lookup.
-		shardReplicas, err := s.shardResolver.ResolveShard(ctx, collectionID, vchannel)
-		if err != nil {
-			return nil, err
-		}
-		// The client always targets the primary replica; the real replica ID is
-		// learned from the plan and used for Phase 2.
-		targetShardID := shardReplicas.PrimaryShardID
+		// Before Phase 1 the client only knows the vchannel; the replica ID is
+		// unknown and is echoed back by the plan for Phase 2.
+		targetShardID := qviews.ShardID{ReplicaID: qviews.UnknownReplicaID, VChannel: vchannel}
 
 		// Phase 1: GetQueryPlan with consistency routing.
 		planReq := params.buildPlanReq(targetShardID)

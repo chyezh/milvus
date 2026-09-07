@@ -60,7 +60,7 @@ func (s *Server) closeViewQueryClient() {
 func newDefaultProxyViewQueryClient(etcdCli *clientv3.Client, vchannelProvider resolver.CollectionVChannelProvider) (queryclient.Client, func(), error) {
 	streamingCoordClient := streamingcoordclient.NewClient(etcdCli)
 	assignment := streamingCoordClient.Assignment()
-	shardResolver := resolver.NewShardResolverImpl(assignment, vchannelProvider)
+	shardResolver := resolver.NewShardResolverImpl(vchannelProvider)
 	streamingNodeClient := streamingnodehandler.NewHandlerClient(assignment)
 	queryNodeClient := querynodehandler.NewClient(etcdCli)
 
