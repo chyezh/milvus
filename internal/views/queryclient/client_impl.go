@@ -18,8 +18,10 @@ const defaultMaxRetries = 3
 // ViewQueryClientConfig holds configuration for the ViewQueryClient.
 type ViewQueryClientConfig struct {
 	// LoadInfoClient confirms current load state when an initialized directory is empty.
-	LoadInfoClient LoadInfoClient
-	MaxRetries     int // Maximum per-shard attempts; zero defaults to 3. At least one full candidate pass is allowed.
+	LoadInfoClient        LoadInfoClient
+	MaxRetries            int  // Maximum per-shard attempts; zero defaults to 3. At least one full candidate pass is allowed.
+	EnableSearchStreaming bool // Route supported Search requests through Streaming Reduce.
+	SearchStreamChunkSize int  // Maximum Units per Search stream Chunk. 0 uses the default (1024).
 }
 
 // viewQueryClientImpl implements ViewQueryClient.
