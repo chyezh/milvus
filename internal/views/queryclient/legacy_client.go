@@ -25,7 +25,7 @@ type Client interface {
 	Legacy() LegacyClient
 }
 
-// LegacyClient returns batch results or the final iterator ReduceStream.
+// LegacyClient returns batch results or the final ReduceStream.
 type LegacyClient interface {
 	// Statistics uses the outer BarrierMVCC; zero selects ordinary Strong sampling.
 	Statistics(ctx context.Context, collectionID int64, req *viewpb.StatisticsRequest, barrierMVCC uint64) (int64, error)
@@ -344,7 +344,6 @@ func (c *legacyClient) Query(ctx context.Context, req *LegacyQueryRequest) (*Leg
 
 func supportsQueryStream(req *internalpb.RetrieveRequest) bool {
 	return req != nil &&
-		req.GetIsIterator() &&
 		req.GetLimit() > 0 &&
 		!req.GetIsCount() &&
 		len(req.GetGroupByFieldIds()) == 0 &&
