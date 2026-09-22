@@ -190,6 +190,101 @@ func TestAcquireSealedContributionsUsesSharedLimit(t *testing.T) {
 	require.Equal(t, int32(2), maxActive.Load())
 }
 
+func TestAcquireSealedContributionsConsumesCompletedLoadsImmediately(t *testing.T) {
+	stats := storage.NewBM25Stats()
+	stats.Append(map[uint32]float32{1: 1})
+	statsBytes, err := stats.Serialize()
+	require.NoError(t, err)
+
+	secondReadStarted := make(chan struct{})
+	releaseSecondRead := make(chan struct{})
+	chunkManager := mocks.NewChunkManager(t)
+	chunkManager.EXPECT().Read(mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, path string) ([]byte, error) {
+			if path == "stats-2" {
+				close(secondReadStarted)
+				<-releaseSecondRead
+			}
+			return statsBytes, nil
+		}).Times(2)
+
+	provider := &Provider{
+		chunkManager:           chunkManager,
+		sealedCache:            newSegmentCache(),
+		sealedStatsLoadLimiter: syncutil.NewSemaphore(2),
+	}
+	consumed := make(chan int64, 2)
+	var aggregate bm25Stats
+	type result struct {
+		contributions map[int64]sealedContribution
+		err           error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		contributions, err := provider.acquireSealedContributionsWithConsumer(
+			context.Background(),
+			testSealedBM25Resources(1, 2),
+			func(contribution sealedContribution) {
+				if aggregate == nil {
+					aggregate = newBM25StatsFromSchema(testBM25WALView(qviews.DataVersion{}).Schema)
+				}
+				aggregate.merge(contribution.stats)
+				consumed <- contribution.segmentID
+			},
+		)
+		resultCh <- result{contributions: contributions, err: err}
+	}()
+
+	<-secondReadStarted
+	select {
+	case segmentID := <-consumed:
+		require.Equal(t, int64(1), segmentID)
+	case <-time.After(time.Second):
+		t.Fatal("completed sealed stats were not consumed while another load was pending")
+	}
+	close(releaseSecondRead)
+	acquired := <-resultCh
+	require.NoError(t, acquired.err)
+	require.Len(t, acquired.contributions, 2)
+	require.Equal(t, int64(2), aggregate[testBM25OutputFieldID].NumRow())
+	for _, contribution := range acquired.contributions {
+		contribution.lease.Close()
+	}
+}
+
+func TestAcquireSealedContributionsCancellationWhileWaitingForLimit(t *testing.T) {
+	readStarted := make(chan struct{})
+	chunkManager := mocks.NewChunkManager(t)
+	chunkManager.EXPECT().Read(mock.Anything, mock.Anything).
+		RunAndReturn(func(ctx context.Context, _ string) ([]byte, error) {
+			close(readStarted)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}).Once()
+
+	provider := &Provider{
+		chunkManager:           chunkManager,
+		sealedCache:            newSegmentCache(),
+		sealedStatsLoadLimiter: syncutil.NewSemaphore(1),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := provider.acquireSealedContributions(ctx, testSealedBM25Resources(1, 2))
+		resultCh <- err
+	}()
+
+	<-readStarted
+	cancel()
+	select {
+	case err := <-resultCh:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("sealed stats acquisition did not stop after cancellation")
+	}
+	require.Empty(t, provider.sealedCache.entries)
+}
+
 func TestAcquireSealedContributionsReleasesLeasesAfterError(t *testing.T) {
 	stats := storage.NewBM25Stats()
 	stats.Append(map[uint32]float32{1: 1})

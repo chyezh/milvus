@@ -593,15 +593,23 @@ func (r *oracleRuntime) materialize(call *materializationCall) {
 		resultErr = merr.Wrapf(err, "get sealed BM25 resources for data version %s", call.target.String())
 		return
 	}
-	sealed, err = r.provider.acquireSealedContributions(call.ctx, resources)
+	var stats bm25Stats
+	sealed, err = r.provider.acquireSealedContributionsWithConsumer(
+		call.ctx,
+		resources,
+		func(contribution sealedContribution) {
+			if stats == nil {
+				stats = newBM25StatsFromSchema(r.schema)
+			}
+			stats.merge(contribution.stats)
+		},
+	)
 	if err != nil {
 		resultErr = merr.Wrapf(err, "load sealed BM25 stats for data version %s", call.target.String())
 		return
 	}
-
-	stats := newBM25StatsFromSchema(r.schema)
-	for _, contribution := range sealed {
-		stats.merge(contribution.stats)
+	if stats == nil {
+		stats = newBM25StatsFromSchema(r.schema)
 	}
 
 	var oldSealed map[int64]sealedContribution
@@ -1082,6 +1090,14 @@ func (p *Provider) acquireSealedContributions(
 	ctx context.Context,
 	resources []*datapb.StreamingNodeBM25Resource,
 ) (map[int64]sealedContribution, error) {
+	return p.acquireSealedContributionsWithConsumer(ctx, resources, nil)
+}
+
+func (p *Provider) acquireSealedContributionsWithConsumer(
+	ctx context.Context,
+	resources []*datapb.StreamingNodeBM25Resource,
+	consume func(sealedContribution),
+) (map[int64]sealedContribution, error) {
 	loaded := make([]sealedContribution, len(resources))
 	keepLeases := false
 	defer func() {
@@ -1099,7 +1115,21 @@ func (p *Provider) acquireSealedContributions(
 	if limiter == nil {
 		limiter = getGlobalSealedStatsLoadLimiter()
 	}
+	results := make(chan sealedContribution, len(resources))
+	contributions := make(map[int64]sealedContribution, len(resources))
+	collectorDone := make(chan struct{})
+	go func() {
+		defer close(collectorDone)
+		for contribution := range results {
+			contributions[contribution.segmentID] = contribution
+			if consume != nil {
+				consume(contribution)
+			}
+		}
+	}()
+
 	group, groupCtx := errgroup.WithContext(ctx)
+	var acquireErr error
 	for i, resource := range resources {
 		err := limiter.Acquire(groupCtx)
 		if ctxErr := groupCtx.Err(); err == nil && ctxErr != nil {
@@ -1107,10 +1137,8 @@ func (p *Provider) acquireSealedContributions(
 			err = ctxErr
 		}
 		if err != nil {
-			if groupErr := group.Wait(); groupErr != nil {
-				return nil, groupErr
-			}
-			return nil, groupCtx.Err()
+			acquireErr = groupCtx.Err()
+			break
 		}
 		group.Go(func() error {
 			defer limiter.Release()
@@ -1124,16 +1152,18 @@ func (p *Provider) acquireSealedContributions(
 				stats:       stats,
 				lease:       lease,
 			}
+			results <- loaded[i]
 			return nil
 		})
 	}
-	if err := group.Wait(); err != nil {
-		return nil, err
+	groupErr := group.Wait()
+	close(results)
+	<-collectorDone
+	if groupErr != nil {
+		return nil, groupErr
 	}
-
-	contributions := make(map[int64]sealedContribution, len(loaded))
-	for _, contribution := range loaded {
-		contributions[contribution.segmentID] = contribution
+	if acquireErr != nil {
+		return nil, acquireErr
 	}
 	keepLeases = true
 	return contributions, nil

@@ -87,3 +87,38 @@ func TestLoadSealedSegmentStatsUsesLegacyBinlogsForStorageV2(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(1), loaded[102].NumRow())
 }
+
+func TestSegmentCacheAcquireReturnsCachedStats(t *testing.T) {
+	paramtable.Init()
+	ctx := context.Background()
+	chunkManager := storage.NewLocalChunkManager()
+	stats := storage.NewBM25Stats()
+	stats.Append(map[uint32]float32{1: 1})
+	bytes, err := stats.Serialize()
+	require.NoError(t, err)
+	statsPath := t.TempDir() + "/bm25-stats"
+	require.NoError(t, chunkManager.Write(ctx, statsPath, bytes))
+	resource := &datapb.StreamingNodeBM25Resource{
+		SegmentId:      3,
+		StorageVersion: storage.StorageV2,
+		Bm25Binlogs: []*datapb.FieldBinlog{{
+			FieldID: 102,
+			Binlogs: []*datapb.Binlog{{LogPath: statsPath}},
+		}},
+	}
+
+	cache := newSegmentCache()
+	first, firstLease, err := cache.acquire(ctx, chunkManager, resource)
+	require.NoError(t, err)
+	require.NotNil(t, firstLease)
+	second, secondLease, err := cache.acquire(ctx, chunkManager, resource)
+	require.NoError(t, err)
+	require.NotNil(t, secondLease)
+	key, err := buildSealedCacheKey(resource)
+	require.NoError(t, err)
+	require.Same(t, cache.entries[key].stats[102], first[102])
+	require.Same(t, first[102], second[102])
+
+	firstLease.Close()
+	secondLease.Close()
+}

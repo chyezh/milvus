@@ -36,9 +36,8 @@ func (c *segmentCache) acquire(
 	chunkManager storage.ChunkManager,
 	resource *datapb.StreamingNodeBM25Resource,
 ) (bm25Stats, *segmentCacheLease, error) {
-	aggregate := make(bm25Stats)
 	if chunkManager == nil || resource == nil {
-		return aggregate, nil, nil
+		return make(bm25Stats), nil, nil
 	}
 	key, err := buildSealedCacheKey(resource)
 	if err != nil {
@@ -48,8 +47,7 @@ func (c *segmentCache) acquire(
 	if err != nil {
 		return nil, nil, err
 	}
-	aggregate.merge(stats)
-	return aggregate, &segmentCacheLease{cache: c, keys: []sealedCacheKey{key}}, nil
+	return stats, &segmentCacheLease{cache: c, keys: []sealedCacheKey{key}}, nil
 }
 
 func (c *segmentCache) retain(
@@ -146,7 +144,6 @@ func loadSealedSegmentStats(
 	}
 	stats := make(bm25Stats)
 	for fieldID, paths := range pathsByField {
-		fieldStats := stats.getOrCreate(fieldID)
 		for _, path := range paths {
 			bytes, err := chunkManager.Read(ctx, path)
 			if err != nil {
@@ -156,7 +153,12 @@ func loadSealedSegmentStats(
 			if err != nil {
 				return nil, err
 			}
-			fieldStats.Merge(loaded)
+			fieldStats := stats[fieldID]
+			if fieldStats == nil {
+				stats[fieldID] = loaded
+			} else {
+				fieldStats.Merge(loaded)
+			}
 		}
 	}
 	return stats, nil
