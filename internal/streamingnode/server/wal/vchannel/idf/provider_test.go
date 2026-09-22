@@ -14,6 +14,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
+	"github.com/milvus-io/milvus/pkg/v3/util/hardware"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
@@ -104,4 +105,52 @@ func setLazyLoadSealedStats(t *testing.T, enabled bool) {
 	t.Cleanup(func() {
 		require.NoError(t, params.Reset(key))
 	})
+}
+
+func TestSealedStatsLoadConcurrency(t *testing.T) {
+	require.Equal(t, 64, sealedStatsLoadConcurrency(16, 4))
+	require.Equal(t, 8, sealedStatsLoadConcurrency(16, 0.5))
+	require.Equal(t, 1, sealedStatsLoadConcurrency(1, 0.5))
+	require.Equal(t, 1, sealedStatsLoadConcurrency(0, 4))
+	require.Equal(t, 1, sealedStatsLoadConcurrency(16, 0))
+}
+
+func TestProvidersShareSealedStatsLoadLimiter(t *testing.T) {
+	provider := NewProvider(nil)
+	futureProvider := NewFutureProvider(nil)
+	require.Same(t, provider.sealedStatsLoadLimiter, futureProvider.sealedStatsLoadLimiter)
+}
+
+func TestSealedStatsLoadLimiterHotReload(t *testing.T) {
+	params := paramtable.Get()
+	key := params.QueryNodeCfg.IDFSealedStatsLoadConcurrencyRatio.Key
+	limiter := NewProvider(nil).sealedStatsLoadLimiter
+	t.Cleanup(func() {
+		for limiter.Current() > 0 {
+			limiter.Release()
+		}
+		require.NoError(t, params.Reset(key))
+	})
+
+	cpu := hardware.GetCPUNum()
+	require.NoError(t, params.Save(key, "1"))
+	require.Equal(t, cpu, limiter.Cap())
+	for range cpu {
+		require.NoError(t, limiter.Acquire(context.Background()))
+	}
+	require.False(t, limiter.TryAcquire())
+
+	require.NoError(t, params.Save(key, "2"))
+	require.Equal(t, cpu*2, limiter.Cap())
+	require.True(t, limiter.TryAcquire())
+
+	require.NoError(t, params.Save(key, "1"))
+	require.Equal(t, cpu, limiter.Cap())
+	require.Equal(t, cpu+1, limiter.Current())
+	require.False(t, limiter.TryAcquire())
+	limiter.Release()
+	require.False(t, limiter.TryAcquire())
+	limiter.Release()
+	require.True(t, limiter.TryAcquire())
+	require.Same(t, limiter, NewFutureProvider(nil).sealedStatsLoadLimiter)
 }

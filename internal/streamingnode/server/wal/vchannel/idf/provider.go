@@ -14,9 +14,11 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/views/qviews"
+	"github.com/milvus-io/milvus/pkg/v3/config"
 	"github.com/milvus-io/milvus/pkg/v3/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
+	"github.com/milvus-io/milvus/pkg/v3/util/hardware"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
@@ -26,15 +28,41 @@ import (
 var (
 	_ queryresource.QueryRuntimeModuleBuilder = (*Provider)(nil)
 	_ queryresource.QueryRuntimeModuleBuilder = (*FutureProvider)(nil)
+
+	getGlobalSealedStatsLoadLimiter = sync.OnceValue(func() *syncutil.Semaphore {
+		params := paramtable.Get()
+		limiter := syncutil.NewSemaphore(1)
+		var resizeMu sync.Mutex
+		resize := func(_ *config.Event) {
+			resizeMu.Lock()
+			defer resizeMu.Unlock()
+			limiter.SetCapacity(sealedStatsLoadConcurrency(
+				hardware.GetCPUNum(),
+				params.QueryNodeCfg.IDFSealedStatsLoadConcurrencyRatio.GetAsFloat(),
+			))
+		}
+		params.Watch(params.QueryNodeCfg.IDFSealedStatsLoadConcurrencyRatio.Key,
+			config.NewHandler("sn.bm25.sealed-stats-load", resize))
+		resize(nil)
+		return limiter
+	})
 )
+
+func sealedStatsLoadConcurrency(cpu int, ratio float64) int {
+	if cpu <= 0 || ratio <= 0 {
+		return 1
+	}
+	return max(1, int(float64(cpu)*ratio))
+}
 
 // Provider loads sealed BM25 resources for a DataVersion and aggregates the
 // WALView growing BM25 stats into a runtime oracle.
 type Provider struct {
-	client       datapb.DataCoordClient
-	chunkManager storage.ChunkManager
-	sealedCache  *segmentCache
-	scheduler    nodescheduler.Scheduler
+	client                 datapb.DataCoordClient
+	chunkManager           storage.ChunkManager
+	sealedCache            *segmentCache
+	scheduler              nodescheduler.Scheduler
+	sealedStatsLoadLimiter *syncutil.Semaphore
 }
 
 type ProviderOption func(*Provider)
@@ -52,7 +80,11 @@ func WithNodeScheduler(scheduler nodescheduler.Scheduler) ProviderOption {
 }
 
 func NewProvider(client datapb.DataCoordClient, opts ...ProviderOption) *Provider {
-	provider := &Provider{client: client, sealedCache: newSegmentCache()}
+	provider := &Provider{
+		client:                 client,
+		sealedCache:            newSegmentCache(),
+		sealedStatsLoadLimiter: getGlobalSealedStatsLoadLimiter(),
+	}
 	for _, opt := range opts {
 		opt(provider)
 	}
@@ -60,10 +92,11 @@ func NewProvider(client datapb.DataCoordClient, opts ...ProviderOption) *Provide
 }
 
 type FutureProvider struct {
-	client       *syncutil.Future[types.MixCoordClient]
-	chunkManager storage.ChunkManager
-	sealedCache  *segmentCache
-	scheduler    nodescheduler.Scheduler
+	client                 *syncutil.Future[types.MixCoordClient]
+	chunkManager           storage.ChunkManager
+	sealedCache            *segmentCache
+	scheduler              nodescheduler.Scheduler
+	sealedStatsLoadLimiter *syncutil.Semaphore
 }
 
 func NewFutureProvider(client *syncutil.Future[types.MixCoordClient], opts ...ProviderOption) *FutureProvider {
@@ -72,10 +105,11 @@ func NewFutureProvider(client *syncutil.Future[types.MixCoordClient], opts ...Pr
 		opt(provider)
 	}
 	return &FutureProvider{
-		client:       client,
-		chunkManager: provider.chunkManager,
-		sealedCache:  newSegmentCache(),
-		scheduler:    provider.scheduler,
+		client:                 client,
+		chunkManager:           provider.chunkManager,
+		sealedCache:            newSegmentCache(),
+		scheduler:              provider.scheduler,
+		sealedStatsLoadLimiter: getGlobalSealedStatsLoadLimiter(),
 	}
 }
 
@@ -157,10 +191,11 @@ func (r *Runtime) resolveProvider(ctx context.Context) (*Provider, error) {
 		return nil, err
 	}
 	return &Provider{
-		client:       client,
-		chunkManager: r.future.chunkManager,
-		sealedCache:  r.future.sealedCache,
-		scheduler:    r.future.scheduler,
+		client:                 client,
+		chunkManager:           r.future.chunkManager,
+		sealedCache:            r.future.sealedCache,
+		scheduler:              r.future.scheduler,
+		sealedStatsLoadLimiter: r.future.sealedStatsLoadLimiter,
 	}, nil
 }
 
