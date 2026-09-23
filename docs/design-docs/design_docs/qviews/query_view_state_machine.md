@@ -132,11 +132,10 @@ scheduling policy is not implemented by the current DataView-only PR.
 1. Persist Down to ETCD (if transitioning from Up).
 2. Push Down to SN.
 
-> Query lease ownership: Coord does not wait for a lease period before entering
-> Down and always keeps at most one Up view. After receiving Down, StreamingNode
-> stops generating new query plans from the old view, but query leases/query
-> references keep its resources alive for already-generated queries. Resource
-> release completes only after those references are released.
+> Query lease ownership: Coord can enter Down immediately, but SN defers its
+> local Up → Down transition while its renewable serving lease or active query
+> references remain. QNs stay Ready until SN confirms Down and Coord advances
+> to Dropping. See [Serving Lease](query_view_lease.md).
 
 **Transitions:**
 
@@ -304,11 +303,11 @@ the crash-recovery path.
 
 | Target State | Trigger | Transition Behavior |
 |---|---|---|
-| Down | Received Down push from Coord | Delete persisted recovery info; stop accepting new query plans or execution tasks; tasks that already acquired segment handles may finish |
+| Down | Received Down push and serving lease expired with no active query references | Delete persisted recovery info; stop accepting new query plans or execution tasks; tasks that already acquired segment handles may finish |
 
 **Possible Coord States (and this node's reaction):**
 - Coord in Up / Down → SN does nothing; normal.
-- Coord pushes Down → SN transitions to Down.
+- Coord pushes Down → SN records the intent and waits for the serving lease and active query references before transitioning to Down.
 - Other signals → SN ignores.
 
 ### 2.4 UpRecovering (StreamingNode-Only Proto State)
@@ -347,11 +346,11 @@ Coord and QueryNode never enter this state. For Coord-visible reporting, UpRecov
 ### 2.5 Down
 
 **Entry Conditions:**
-- Received Down push from Coord.
+- Received Down push from Coord; the serving lease has expired and active query references are zero.
 
 **Automatic Behavior:**
 1. Delete persisted recovery info.
-2. Stop accepting new query plans or execution tasks. A Phase 2 request for an old plan must replan if it has not acquired segment handles before Down; tasks that already hold handles may finish.
+2. Stop accepting new query plans or execution tasks. A Phase 2 request arriving after the actual Down transition must replan; tasks that already hold handles may finish. Before that transition, pending Down views remain Up and successful access renews the lease.
 3. Report Down to Coord.
 
 **Transitions:**

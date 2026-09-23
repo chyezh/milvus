@@ -229,6 +229,9 @@ Key constraints:
 - Workflows across multiple view versions are completely independent, but through Coord state machine constraints, each node has at most one view in Preparing state.
 - QueryNode loss is handled only for active QN-targeted syncs: in Preparing it makes the view Unrecoverable, and in Dropping it counts that QN cleanup as complete. StreamingNode unavailability is handled by channel assignment, not by the QueryView per-view state machine.
 
+The SN renewable serving lease delays local Up → Down during active use; see
+[StreamingNode QueryView Serving Lease](query_view_lease.md).
+
 ## 8. Incremental Query Segment Lifecycle
 
 In the target QueryView integration, incremental Segments generated from WAL on

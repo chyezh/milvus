@@ -8775,6 +8775,8 @@ writeRetryInitialInterval, otherwise the effective cap is raised to twice the in
 }
 
 type streamingConfig struct {
+	QueryViewLeaseDuration ParamItem `refreshable:"false"`
+
 	// WAL payload chunking rollout switch.
 	SplitChunkSN ParamItem `refreshable:"true"`
 
@@ -8891,6 +8893,15 @@ type streamingConfig struct {
 }
 
 func (p *streamingConfig) init(base *BaseTable) {
+	p.QueryViewLeaseDuration = ParamItem{
+		Key:          "streaming.queryView.leaseDuration",
+		Version:      "3.0.2",
+		DefaultValue: "60s",
+		Doc:          "Renewable SN Up-view retention after query access. Delays normal Down; non-positive durations disable timed retention. Not refreshable.",
+		Export:       true,
+	}
+	p.QueryViewLeaseDuration.Init(base.mgr)
+
 	p.SplitChunkSN = ParamItem{
 		Key:          "streaming.splitChunkSN",
 		Version:      "3.0.2",

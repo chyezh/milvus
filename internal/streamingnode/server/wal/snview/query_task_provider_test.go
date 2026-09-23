@@ -213,6 +213,7 @@ func TestSNHandlerDownRejectsNewTasksButRetainsAcquiredHandles(t *testing.T) {
 	held := &mockGrowingSegmentHandle{id: 100, partitionID: 10}
 	mgr.runtime = &mockQueryRuntime{handles: []GrowingSegmentHandle{held}}
 	h := recoverSNQueryViewHandler(context.Background(), testPChannel, newMockCatalog(), mgr, nil)
+	h.leaseDuration = 0 // Exercise admission after immediate Down with timed retention disabled.
 	view := newPreparingSNView(1)
 	h.ApplyViews([]handler.ApplyView{{View: view}})
 	resource, ok := mgr.getAcquired(view.QueryViewKey())

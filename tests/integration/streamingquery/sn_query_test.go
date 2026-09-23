@@ -50,7 +50,7 @@ func TestStreamingQueryRPC(t *testing.T) {
 	require.NotEmpty(t, name)
 	recovering := os.Getenv("SN_QUERY_TEST_RECOVER") == "1"
 	bm25 := os.Getenv("SN_QUERY_TEST_BM25") == "1"
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	dial := func(address string) *grpc.ClientConn {
 		conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -243,7 +243,40 @@ func TestStreamingQueryRPC(t *testing.T) {
 		t.Log("persisted Up view retained for managed SN restart")
 		return
 	}
+	duration := os.Getenv("SN_QUERY_TEST_LEASE_DURATION")
+	if duration != "" {
+		// The multi-version checks may have outlived this view's last lease.
+		plan = getPlan()
+	}
 	apply(viewpb.QueryViewState_QueryViewStateDown)
+	if duration != "" {
+		leaseDuration, err := time.ParseDuration(duration)
+		require.NoError(t, err)
+		require.Positive(t, leaseDuration)
+		// Exercise each RPC alone for longer than a lease, so another RPC
+		// cannot mask a missing renewal in the method under test.
+		for _, method := range []string{"GetQueryPlan", "QueryOnView", "SearchOnView"} {
+			started := time.Now()
+			for i := 0; i < 5; i++ {
+				switch method {
+				case "GetQueryPlan":
+					plan = getPlan()
+				case "QueryOnView":
+					response, err := queries.QueryOnView(rpcctx, &viewpb.QueryOnViewRequest{LegacyReq: plan.GetLegacyRetrieveRequest(), ShardId: plan.ShardId, Version: plan.Version, Mvcc: plan.Mvcc})
+					require.NoError(t, err)
+					require.NoError(t, merr.Error(response.GetLegacyResults().GetStatus()))
+					require.Len(t, response.GetLegacyResults().GetIds().GetIntId().GetData(), 19)
+				case "SearchOnView":
+					search, err := queries.SearchOnView(rpcctx, &viewpb.SearchOnViewRequest{LegacyReq: searchPlanRPC.GetLegacySearchRequest(), ShardId: plan.ShardId, Version: plan.Version, Mvcc: plan.Mvcc})
+					require.NoError(t, err)
+					require.NoError(t, merr.Error(search.GetLegacyResults().GetStatus()))
+				}
+				time.Sleep(leaseDuration / 3)
+			}
+			require.Greater(t, time.Since(started), leaseDuration)
+			t.Logf("%s alone renewed pending-Down view for %s (lease=%s)", method, time.Since(started), leaseDuration)
+		}
+	}
 	await(viewpb.QueryViewState_QueryViewStateDown)
 	_, err = queries.QueryOnView(rpcctx, &viewpb.QueryOnViewRequest{LegacyReq: plan.GetLegacyRetrieveRequest(), ShardId: plan.GetShardId(), Version: plan.GetVersion(), Mvcc: plan.GetMvcc()})
 	require.Error(t, err)
