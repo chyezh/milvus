@@ -852,20 +852,23 @@ func TestOracleRuntimePreparationPrefetchesWithoutParsing(t *testing.T) {
 	require.Len(t, oracle.provider.sealedCache.entries, 1)
 }
 
-func TestOracleRuntimeSharesCanceledVersionMaterialization(t *testing.T) {
+func TestOracleRuntimeQueryCancellationDoesNotCancelSharedMaterialization(t *testing.T) {
 	version := qviews.DataVersion{StreamingVersion: 10}
 	client := mocks.NewMockDataCoordClient(t)
 	rpcStarted := make(chan struct{})
+	releaseRPC := make(chan struct{})
 	var calls atomic.Int32
 	client.EXPECT().GetStreamingNodeQueryViewResources(mock.Anything, mock.Anything).
 		RunAndReturn(func(ctx context.Context, req *datapb.GetStreamingNodeQueryViewResourcesRequest, _ ...grpc.CallOption) (*datapb.GetStreamingNodeQueryViewResourcesResponse, error) {
-			if calls.Add(1) == 1 {
-				close(rpcStarted)
-				<-ctx.Done()
+			calls.Add(1)
+			close(rpcStarted)
+			select {
+			case <-ctx.Done():
 				return nil, ctx.Err()
+			case <-releaseRPC:
+				return testBM25ResourceResponse(req), nil
 			}
-			return testBM25ResourceResponse(req), nil
-		}).Twice()
+		}).Once()
 	oracle := newTestLazyOracleRuntime(t, client, version)
 	defer oracle.Close()
 
@@ -887,13 +890,52 @@ func TestOracleRuntimeSharesCanceledVersionMaterialization(t *testing.T) {
 
 	cancelFirst()
 	require.ErrorIs(t, <-firstResult, context.Canceled)
-	require.ErrorIs(t, <-secondResult, context.Canceled)
 	require.False(t, oracleStatsReady(oracle))
-	require.Len(t, client.Calls, 1)
+	close(releaseRPC)
+	require.NoError(t, <-secondResult)
+	require.Equal(t, int32(1), calls.Load())
+	require.True(t, oracleStatsReady(oracle))
+}
 
-	_, _, err := oracle.BuildIDF(context.Background(), version, testBM25OutputFieldID, &schemapb.SparseFloatArray{})
-	require.NoError(t, err)
-	require.Len(t, client.Calls, 2)
+func TestOracleRuntimeCanceledWaiterDoesNotCancelSharedMaterialization(t *testing.T) {
+	version := qviews.DataVersion{StreamingVersion: 10}
+	client := mocks.NewMockDataCoordClient(t)
+	rpcStarted := make(chan struct{})
+	releaseRPC := make(chan struct{})
+	client.EXPECT().GetStreamingNodeQueryViewResources(mock.Anything, mock.Anything).
+		RunAndReturn(func(ctx context.Context, req *datapb.GetStreamingNodeQueryViewResourcesRequest, _ ...grpc.CallOption) (*datapb.GetStreamingNodeQueryViewResourcesResponse, error) {
+			close(rpcStarted)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-releaseRPC:
+				return testBM25ResourceResponse(req), nil
+			}
+		}).Once()
+	oracle := newTestLazyOracleRuntime(t, client, version)
+	defer oracle.Close()
+
+	firstResult := make(chan error, 1)
+	go func() {
+		_, _, err := oracle.BuildIDF(context.Background(), version, testBM25OutputFieldID, &schemapb.SparseFloatArray{})
+		firstResult <- err
+	}()
+	<-rpcStarted
+
+	waiterCtx, cancelWaiter := context.WithCancel(context.Background())
+	observedWaiterCtx := &observedDoneContext{Context: waiterCtx, doneObserved: make(chan struct{})}
+	waiterResult := make(chan error, 1)
+	go func() {
+		_, _, err := oracle.BuildIDF(observedWaiterCtx, version, testBM25OutputFieldID, &schemapb.SparseFloatArray{})
+		waiterResult <- err
+	}()
+	<-observedWaiterCtx.doneObserved
+	cancelWaiter()
+	require.ErrorIs(t, <-waiterResult, context.Canceled)
+
+	close(releaseRPC)
+	require.NoError(t, <-firstResult)
+	require.Len(t, client.Calls, 1)
 	require.True(t, oracleStatsReady(oracle))
 }
 
@@ -943,7 +985,7 @@ func TestOracleRuntimeRetriesCurrentMaterializationAfterLazyAdvance(t *testing.T
 	require.True(t, oracleStatsReady(oracle))
 }
 
-func TestOracleRuntimeCancellationBeforeCommitDoesNotPublish(t *testing.T) {
+func TestOracleRuntimeQueryCancellationBeforeCommitDoesNotAbortMaterialization(t *testing.T) {
 	version := qviews.DataVersion{StreamingVersion: 10}
 	client := mocks.NewMockDataCoordClient(t)
 	rpcStarted := make(chan struct{})
@@ -986,11 +1028,11 @@ func TestOracleRuntimeCancellationBeforeCommitDoesNotPublish(t *testing.T) {
 		return true
 	}, time.Second, time.Millisecond)
 	cancel()
+	require.ErrorIs(t, <-result, context.Canceled)
 	oracle.growingStore.mu.Unlock()
 	storeLocked = false
 
-	require.ErrorIs(t, <-result, context.Canceled)
-	require.False(t, oracleStatsReady(oracle))
+	require.Eventually(t, func() bool { return oracleStatsReady(oracle) }, time.Second, time.Millisecond)
 }
 
 func TestOracleRuntimeAllowsNextQueryAfterMaterializationFailure(t *testing.T) {

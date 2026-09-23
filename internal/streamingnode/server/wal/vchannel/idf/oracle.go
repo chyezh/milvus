@@ -475,40 +475,35 @@ func (r *oracleRuntime) ensureMaterialized(ctx context.Context) error {
 			r.mu.Unlock()
 			return nil
 		}
-		if call := r.materialization; call != nil {
-			r.mu.Unlock()
-			select {
-			case <-call.done:
-				r.mu.RLock()
-				targetChanged := !r.currentVersion.EQ(call.target)
-				r.mu.RUnlock()
-				if targetChanged {
-					continue
-				}
-				return call.err
-			case <-ctx.Done():
-				return ctx.Err()
+		call := r.materialization
+		if call == nil {
+			materializationCtx, cancel := context.WithCancel(context.Background())
+			call = &materializationCall{
+				target: r.currentVersion,
+				ctx:    materializationCtx,
+				cancel: cancel,
+				done:   make(chan struct{}),
 			}
+			r.materialization = call
+			go r.materialize(call)
 		}
-		materializationCtx, cancel := context.WithCancel(ctx)
-		call := &materializationCall{
-			target: r.currentVersion,
-			ctx:    materializationCtx,
-			cancel: cancel,
-			done:   make(chan struct{}),
-		}
-		r.materialization = call
 		r.mu.Unlock()
 
-		r.materialize(call)
-		cancel()
-		r.mu.RLock()
-		targetChanged := !r.currentVersion.EQ(call.target)
-		r.mu.RUnlock()
-		if targetChanged {
-			continue
+		select {
+		case <-call.done:
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			r.mu.RLock()
+			targetChanged := !r.currentVersion.EQ(call.target)
+			r.mu.RUnlock()
+			if targetChanged {
+				continue
+			}
+			return call.err
+		case <-ctx.Done():
+			return ctx.Err()
 		}
-		return call.err
 	}
 }
 
@@ -531,6 +526,7 @@ func (r *oracleRuntime) materialize(call *materializationCall) {
 		close(call.done)
 		r.mu.Unlock()
 	}()
+	defer call.cancel()
 
 	resources, err := r.provider.getSealedBM25Resources(
 		call.ctx,
