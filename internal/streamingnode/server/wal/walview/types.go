@@ -1,6 +1,8 @@
 package walview
 
 import (
+	"context"
+
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/views/qviews"
@@ -13,6 +15,10 @@ import (
 
 // VChannelWALView is the vchannel-owned WAL input view for one query view.
 type VChannelWALView struct {
+	// WithResourceEventLock orders a barrier after all already observed WAL events.
+	WithResourceEventLock func(func())
+	ResourceEventBarrier  func(context.Context) error
+
 	PChannel     string
 	VChannel     string
 	CollectionID int64
@@ -73,6 +79,7 @@ type FlushedSegment struct {
 // VChannelResourceEvent is the ordered live input delivered after a
 // VChannelWALView capture.
 type VChannelResourceEvent struct {
+	Barrier       func()
 	Message       message.ImmutableMessage
 	SegmentSealed *SegmentSealedEvent
 }

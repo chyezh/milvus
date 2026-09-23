@@ -69,6 +69,25 @@ func (r *QueryRuntime) Initialize(ctx context.Context, view walview.VChannelWALV
 	if r == nil {
 		return nil
 	}
+	view.ResourceEventBarrier = func(ctx context.Context) error {
+		done := make(chan struct{})
+		accepted := false
+		enqueue := func() { accepted = r.ObserveEvent(ctx, walview.VChannelResourceEvent{Barrier: func() { close(done) }}) }
+		if view.WithResourceEventLock != nil {
+			view.WithResourceEventLock(enqueue)
+		} else {
+			enqueue()
+		}
+		if !accepted {
+			return context.Canceled
+		}
+		select {
+		case <-done:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	for _, module := range r.modules {
 		if module == nil {
 			continue
@@ -150,7 +169,7 @@ func (r *QueryRuntime) Advance(oldestDataVersion qviews.DataVersion) {
 	}
 }
 
-func (r *QueryRuntime) PrepareDataVersion(ctx context.Context, dataVersion qviews.DataVersion) error {
+func (r *QueryRuntime) RequestRefresh(ctx context.Context, dataVersion qviews.DataVersion) error {
 	if r == nil {
 		return nil
 	}
@@ -162,29 +181,26 @@ func (r *QueryRuntime) PrepareDataVersion(ctx context.Context, dataVersion qview
 	modules := append([]QueryRuntimeModule(nil), r.modules...)
 	r.mu.Unlock()
 	for _, module := range modules {
-		versioned, ok := module.(QueryRuntimeVersionedModule)
+		versioned, ok := module.(QueryRuntimeRefreshModule)
 		if !ok {
 			continue
 		}
-		if err := versioned.PrepareDataVersion(ctx, dataVersion); err != nil {
+		if err := versioned.RequestRefresh(ctx, dataVersion); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (r *QueryRuntime) ReleaseDataVersion(dataVersion qviews.DataVersion) {
-	if r == nil {
-		return
-	}
-	r.mu.Lock()
-	modules := append([]QueryRuntimeModule(nil), r.modules...)
-	r.mu.Unlock()
-	for _, module := range modules {
-		if versioned, ok := module.(QueryRuntimeVersionedModule); ok {
-			versioned.ReleaseDataVersion(dataVersion)
+func (r *QueryRuntime) BeforeRelease(ctx context.Context, version qviews.DataVersion) error {
+	var result error
+	r.RangeModules(func(module QueryRuntimeModule) bool {
+		if module, ok := module.(QueryRuntimeReleaseModule); ok {
+			result = module.BeforeRelease(ctx, version)
 		}
-	}
+		return result == nil
+	})
+	return result
 }
 
 func (r *QueryRuntime) recordedAdvance() (qviews.DataVersion, bool) {
@@ -288,6 +304,10 @@ func (r *QueryRuntime) applyBatch(ctx context.Context, batch []walview.VChannelR
 	modules := append([]QueryRuntimeModule(nil), r.modules...)
 	r.mu.Unlock()
 	for _, event := range batch {
+		if event.Barrier != nil {
+			event.Barrier()
+			continue
+		}
 		for _, module := range modules {
 			if module != nil {
 				module.ApplyLiveEvent(ctx, event)

@@ -115,12 +115,10 @@ func (m *Manager) Release(req snview.ReleaseResource) {
 	var advanceRuntime *QueryRuntime
 	var advance qviews.DataVersion
 	var hasAdvance bool
-	var releaseDataVersion bool
 
 	m.mu.Lock()
 	if _, ok := m.refs[req.Key]; ok {
 		delete(m.refs, req.Key)
-		releaseDataVersion = !hasQueryViewDataVersion(m.refs, req.Key.QueryViewVersion.DataVersion)
 		advance, hasAdvance = minQueryViewDataVersion(m.refs)
 		advanceRuntime = m.runtime
 	}
@@ -132,12 +130,13 @@ func (m *Manager) Release(req snview.ReleaseResource) {
 	if hasAdvance && advanceRuntime != nil {
 		advanceRuntime.Advance(advance)
 	}
-	if releaseDataVersion && advanceRuntime != nil {
-		advanceRuntime.ReleaseDataVersion(req.Key.QueryViewVersion.DataVersion)
-	}
 	cancelTask(task)
 	closeRuntime(runtime)
-	m.submitCallback(req.OnDropped)
+	if hasAdvance && advanceRuntime != nil {
+		m.scheduler.Submit(resourceReleaseTask{runtime: advanceRuntime, version: advance, onDropped: req.OnDropped})
+	} else {
+		m.submitCallback(req.OnDropped)
+	}
 }
 
 // Reject completes an acquisition that cannot be reconstructed without
@@ -349,7 +348,7 @@ func (m *Manager) prepareReady(ctx context.Context, key qviews.QueryViewKey, onR
 	if !ready {
 		return nil
 	}
-	if err := runtime.PrepareDataVersion(ctx, key.QueryViewVersion.DataVersion); err != nil {
+	if err := runtime.RequestRefresh(ctx, key.QueryViewVersion.DataVersion); err != nil {
 		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 			return err
 		}
@@ -360,7 +359,6 @@ func (m *Manager) prepareReady(ctx context.Context, key qviews.QueryViewKey, onR
 	ready = ok && m.runtime == runtime && m.task == nil && m.err == nil
 	m.mu.Unlock()
 	if !ready {
-		runtime.ReleaseDataVersion(key.QueryViewVersion.DataVersion)
 		return nil
 	}
 	onReady()

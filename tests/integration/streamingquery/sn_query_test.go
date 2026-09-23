@@ -208,6 +208,14 @@ func TestStreamingQueryRPC(t *testing.T) {
 	optimized, err := plans.GetQueryPlan(rpcctx, &viewpb.GetQueryPlanRequest{CollectionId: desc.GetCollectionID(), ShardId: plan.GetShardId(), Mvcc: &viewpb.GetQueryPlanRequest_ConsistencyLevel{ConsistencyLevel: commonpb.ConsistencyLevel_Strong}, Request: &viewpb.GetQueryPlanRequest_LegacySearchRequest{LegacySearchRequest: searchReq}})
 	require.NoError(t, err)
 	searchPlanRPC := optimized.GetPlan()
+	if bm25 {
+		var debugPlan planpb.PlanNode
+		var debugHolder commonpb.PlaceholderGroup
+		require.NoError(t, proto.Unmarshal(searchPlanRPC.GetLegacySearchRequest().GetSerializedExprPlan(), &debugPlan))
+		require.NoError(t, proto.Unmarshal(searchPlanRPC.GetLegacySearchRequest().GetPlaceholderGroup(), &debugHolder))
+		t.Logf("BM25 plan avgdl=%g vectors=%v", debugPlan.GetVectorAnns().GetQueryInfo().GetBm25Avgdl(), debugHolder.GetPlaceholders())
+	}
+
 	require.NotEmpty(t, searchPlanRPC.GetWorkNodes(), "a nonempty BM25 corpus must not be optimized away after recovery")
 	search, err := queries.SearchOnView(rpcctx, &viewpb.SearchOnViewRequest{ShardId: searchPlanRPC.GetShardId(), Version: searchPlanRPC.GetVersion(), Mvcc: searchPlanRPC.GetMvcc(), LegacyReq: searchPlanRPC.GetLegacySearchRequest()})
 	require.NoError(t, err, "SearchOnView details: %v", status.Convert(err).Details())
@@ -225,6 +233,38 @@ func TestStreamingQueryRPC(t *testing.T) {
 		require.NotContains(t, searchData.GetIds().GetIntId().GetData(), int64(3))
 	}
 	t.Logf("SearchOnView returned expected neighbors: %v", searchData.GetIds().GetIntId().GetData())
+	if bm25 && !recovering {
+		// Validate the empty-latest-corpus fallback against real segcore while this
+		// old view still owns searchable rows. Unit tests verify Oracle emits these
+		// parameters; Phase 2 must keep candidates and finite scores.
+		fallback := proto.Clone(searchPlanRPC.GetLegacySearchRequest()).(*internalpb.SearchRequest)
+		var holder commonpb.PlaceholderGroup
+		require.NoError(t, proto.Unmarshal(fallback.GetPlaceholderGroup(), &holder))
+		for _, row := range holder.Placeholders[0].Values {
+			for offset := 4; offset < len(row); offset += 8 {
+				binary.LittleEndian.PutUint32(row[offset:], math.Float32bits(float32(math.Ln2)))
+			}
+		}
+		fallback.PlaceholderGroup, err = proto.Marshal(&holder)
+		require.NoError(t, err)
+		var fallbackPlan planpb.PlanNode
+		require.NoError(t, proto.Unmarshal(fallback.SerializedExprPlan, &fallbackPlan))
+		fallbackPlan.GetVectorAnns().GetQueryInfo().Bm25Avgdl = 1
+		fallback.SerializedExprPlan, err = proto.Marshal(&fallbackPlan)
+		require.NoError(t, err)
+		response, err := queries.SearchOnView(rpcctx, &viewpb.SearchOnViewRequest{ShardId: searchPlanRPC.ShardId, Version: searchPlanRPC.Version, Mvcc: searchPlanRPC.Mvcc, LegacyReq: fallback})
+		require.NoError(t, err)
+		require.NoError(t, merr.Error(response.GetLegacyResults().GetStatus()))
+		var data schemapb.SearchResultData
+		require.NoError(t, proto.Unmarshal(response.GetLegacyResults().GetSlicedBlob(), &data))
+		require.Equal(t, []int64{3}, data.GetIds().GetIntId().GetData())
+		for _, score := range data.GetScores() {
+			require.False(t, math.IsNaN(float64(score)))
+			require.False(t, math.IsInf(float64(score), 0))
+		}
+		t.Log("empty-corpus BM25 parameters preserve old-view candidates with finite scores")
+	}
+
 	// A delete after the runtime snapshot must flow through the same live scanner.
 	if !recovering {
 		deleted, err := proxy.Delete(ctx, &milvuspb.DeleteRequest{CollectionName: name, Expr: "id in [3]"})
@@ -237,6 +277,13 @@ func TestStreamingQueryRPC(t *testing.T) {
 	}
 	if os.Getenv("SN_QUERY_TEST_MULTIVERSION") == "1" {
 		verifyConcurrentSNViews(t, ctx, rpcctx, proxy, sn, etcd, namespace, name, view, getPlan(), searchPlanRPC.GetLegacySearchRequest())
+	}
+	if bm25 && os.Getenv("SN_QUERY_TEST_MULTIVERSION") == "1" {
+		response, err := plans.GetQueryPlan(rpcctx, &viewpb.GetQueryPlanRequest{CollectionId: desc.GetCollectionID(), ShardId: plan.GetShardId(), Mvcc: &viewpb.GetQueryPlanRequest_ConsistencyLevel{ConsistencyLevel: commonpb.ConsistencyLevel_Strong}, Request: &viewpb.GetQueryPlanRequest_LegacySearchRequest{LegacySearchRequest: searchReq}})
+		require.NoError(t, err)
+		require.True(t, proto.Equal(view.Meta.Version, response.GetPlan().GetVersion()))
+		require.NotEmpty(t, response.GetPlan().GetWorkNodes())
+		t.Log("old Up view still builds BM25 plans after the newer DataView was prepared and released")
 	}
 	if os.Getenv("SN_QUERY_TEST_KEEP_UP") == "1" {
 		require.NoError(t, syncer.CloseSend())

@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"sync"
 
-	"google.golang.org/protobuf/proto"
-
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/storage"
@@ -226,13 +224,10 @@ func (s *growingSegment) applyInsert(ctx context.Context, insert walview.Segment
 	if s.collection == nil {
 		return nil
 	}
-	body := insert.Message.MustBody()
-	if body == nil {
-		return merr.WrapErrServiceInternalMsg("growing insert message has nil request")
+	request, err := walview.MaterializeInsertRequest(s.collection.Schema(), insert)
+	if err != nil {
+		return err
 	}
-	request := proto.Clone(body).(*msgpb.InsertRequest)
-	request.PartitionID = insert.Assignment.GetPartitionId()
-	request.SegmentID = s.segmentID
 	request.Timestamps = insertTimestampsFromRequest(insert.TimeTick, request)
 	insertMsg := &msgstream.InsertMsg{
 		BaseMsg: msgstream.BaseMsg{

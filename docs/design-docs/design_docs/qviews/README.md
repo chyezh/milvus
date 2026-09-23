@@ -301,8 +301,8 @@ TODO(snview/streamingnode_resource_manager.md): add the StreamingNode query
 runtime manager design when that resource module is picked.
 TODO(snview/growing_segment_runtime.md): add the StreamingNode growing segment
 runtime design when that resource module is picked.
-TODO(snview/idf_oracle_runtime.md): add the StreamingNode IDF oracle runtime
-design when that resource module is picked.
+[StreamingNode IDF Oracle Runtime](snview/idf_oracle_runtime.md) defines the
+single locally prepared BM25 aggregate shared by all QueryView DataVersions.
 
 ## 11. Coord and Node Interactions
 

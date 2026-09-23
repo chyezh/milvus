@@ -80,7 +80,8 @@ func (m *VChannelRecoveryModule) queryWALViewLocked(meta *viewpb.QueryViewMeta) 
 	}
 	return walview.VChannelWALView{
 		PChannel: m.pchannel, VChannel: m.vchannel, CollectionID: state.CollectionID,
-		BaseGrowingTimeTick: m.queryObservedTimeTick, BaseTransformTimeTick: m.queryObservedTimeTick,
+		WithResourceEventLock: func(fn func()) { m.mu.Lock(); defer m.mu.Unlock(); fn() },
+		BaseGrowingTimeTick:   m.queryObservedTimeTick, BaseTransformTimeTick: m.queryObservedTimeTick,
 		LoadInfoVersion: meta.GetLoadInfoVersion(), Schema: state.Schema,
 		SegmentSnapshot: snapshot, TransformLogStream: m.queryTransformLogStream,
 		DeleteReplayStartAfterTimeTick: start,
