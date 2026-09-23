@@ -9,12 +9,11 @@
 `VChannelRecoveryModule` for QueryRuntime. It is not a RecoveryStorage API and
 does not participate in the global checkpoint protocol.
 
-> Status: design intent. `VChannelWALView` and the QueryRuntime integration
-> chain (`QueryViewStateMachine.Acquire` → `PChannelRecoveryManager.Acquire` →
-> `VChannelRecoveryModule.queryWALViewLocked` → `QueryRuntime.Initialize`) are
-> **not yet implemented** in the current code; they are pending the qviews
-> feature (#51887). TransformLog subscriptions are also a future integration,
-> independent of the [L0Materializer](l0_materializer.md) split targeted by this PR.
+> Status: implemented for SN query resource preparation in this branch.
+> `VChannelRecoveryModule` captures the view and installs a shared QueryRuntime;
+> GrowingRuntime performs bounded Delete replay through the local Summary-backed
+> TransformLog stream. This does not enable QN remote subscriptions or replace
+> the existing WAL L0 materializer.
 
 ## 1. Ownership
 
@@ -31,7 +30,7 @@ The VChannel module must coordinate these inputs for a no-gap view:
 - VChannel and schema history;
 - growing Segment stable and pending state;
 - Segment lifecycle and durable commit state;
-- WALSummary readable history through the future TransformLog adaptor;
+- WALSummary readable history through the local TransformLog adaptor;
 - the live message observation path.
 
 ## 2. Runtime Frontiers
@@ -67,13 +66,12 @@ buffers, pending tasks, or WALSummary records. Messages observed afterward see
 the installed QueryRuntime and enter its pending event queue.
 
 The captured Transform boundary describes the snapshot's required WAL prefix,
-not L0Materializer's cursor. Bounded replay through the future TransformLog
+not L0Materializer's cursor. Bounded replay through the local TransformLog
 adaptor must wait until Summary can completely provide that range before
 reporting SyncUp/completion. Do not lower the required end because a sampled
 Summary frontier is behind, or raise it to recovered Summary history ahead of
-VChannel observation. The target observation order installs Summary records
-before VChannel state/window updates; snapshot capture must preserve the same
-no-gap guarantee when future query wiring is added.
+VChannel observation. RecoveryStorage installs Summary records before VChannel state/window updates;
+snapshot capture and runtime registration preserve the same no-gap guarantee.
 
 Protect the history before GC can remove it and hold that requirement through
 preparation. An already truncated start is an error, not an empty replay.
@@ -123,3 +121,47 @@ There is no second recovery checkpoint tied to this lifecycle classification.
 3. QueryRuntime owns no RecoveryStorage handle.
 4. Runtime MVCC frontiers are not global recovery checkpoints.
 5. Readiness depends on concrete component state, not dual recovery phases.
+
+## 7. Current Preparation Flow
+
+1. A Preparing QueryView, or a recovered Up view in UpRecovering, calls the
+   PChannel resource manager's `Acquire`. The VChannel owner rejects inactive
+   channels and versions older than its retained segment-data floor.
+2. Under the VChannel lock, capture the schema, stable/pending segment snapshot,
+   requested DataVersion and observed TimeTick T. Install the runtime before
+   releasing the lock so subsequent messages enter its pending event queue.
+   A missing write-path state or incomplete final segment commit defers capture.
+3. Resolve partitions, loaded fields and indexes through `GetQueryViewLoadInfo`
+   when `load_info_version` is nonzero. The current minimal Coord implementation
+   supplies current load metadata; this is not a historical load-config store.
+4. GrowingRuntime creates segcore resources, loads persisted growing data and
+   replays snapshot Insert/Txn tails. Segments sealed after the requested
+   DataVersion remain queryable for that older view.
+5. GrowingRuntime subscribes to TransformLog for `(start, T]` and applies its
+   Delete entries. `start` is the maximum of the earliest retained segment's
+   creation TimeTick minus one (zero for missing legacy timestamps) and the
+   QueryView's transform start. With no visible segments, start equals T.
+   Bounded replay waits for coverage through T; truncated history fails with
+   `ErrTransformLogStartPointTruncated` and the view becomes Unrecoverable.
+6. IDF initializes from sealed statistics fetched for the requested DataVersion
+   and growing statistics from the same snapshot. It maintains one local
+   aggregate as described in [IDF Oracle Runtime](../qviews/snview/idf_oracle_runtime.md).
+7. QueryRuntime applies the initial queued live batch, enters Ready and keeps
+   draining ordered live events. The callback moves Preparing to Ready, or
+   UpRecovering to Up. A newly prepared view still needs Coord's Up instruction
+   before accepting queries. Queries wait for their required Growing/Transform
+   MVCC frontiers before using segment handles.
+
+Later QueryViews on this VChannel reuse the runtime, without repeating initial
+TransformLog replay. Their explicit DataVersions request asynchronous IDF
+refresh; readiness does not wait for a separate per-version BM25 aggregate.
+The first runtime initialization does wait for its BM25 resources. Once
+bootstrap finishes, Insert/Delete/Txn and lifecycle events arrive through the
+VChannel event path, not a second continuous TransformLog subscription.
+
+Implementation references (relative to repository root):
+
+- `internal/streamingnode/server/wal/vchannel/query_resource_module.go`
+- `internal/streamingnode/server/wal/vchannel/queryresource/{manager,runtime}.go`
+- `internal/streamingnode/server/wal/vchannel/growingruntime/{builder,delete_replay,live}.go`
+- `internal/streamingnode/server/wal/walsummary/stream.go`
