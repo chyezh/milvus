@@ -1,8 +1,11 @@
 package idf
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,6 +15,8 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/mocks"
@@ -30,6 +35,13 @@ const (
 	testBM25InputFieldID  = int64(101)
 	testBM25OutputFieldID = int64(102)
 )
+
+type testBytesFileReader struct {
+	*bytes.Reader
+}
+
+func (r *testBytesFileReader) Close() error         { return nil }
+func (r *testBytesFileReader) Size() (int64, error) { return int64(r.Len()), nil }
 
 type blockingNodeSchedulerTask struct {
 	started chan struct{}
@@ -65,8 +77,8 @@ func newScheduledOracleRuntime(scheduler nodescheduler.Scheduler, current qviews
 		vchannel:       "v1",
 		currentVersion: current,
 		currentStats:   make(bm25Stats),
-		currentSealed:  make(map[int64]sealedContribution),
-		currentGrowing: make(map[int64]growingContribution),
+		currentSealed:  make(map[int64]*sealedBm25Stats),
+		currentGrowing: make(map[int64]struct{}),
 		growingStore:   newGrowingStatsStore(nil),
 	}
 }
@@ -122,6 +134,112 @@ func TestOracleRuntimeSchedulesCoalescedAdvance(t *testing.T) {
 	callsMu.Unlock()
 }
 
+func TestOracleRuntimeRetriesFailedAdvance(t *testing.T) {
+	for _, failure := range []struct {
+		name string
+		err  error
+	}{
+		{name: "typed unavailable", err: merr.WrapErrServiceUnavailableMsg("temporary resource lookup failure")},
+		{name: "grpc unavailable", err: status.Error(codes.Unavailable, "temporary resource lookup failure")},
+		{name: "deadline exceeded", err: context.DeadlineExceeded},
+	} {
+		t.Run(failure.name, func(t *testing.T) {
+			current := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
+			target := qviews.DataVersion{StreamingVersion: 11, CompactVersion: 1}
+			scheduler := nodescheduler.New(1)
+			defer scheduler.Close()
+
+			var calls atomic.Int32
+			mock := mockey.Mock((*Provider).getSealedBM25Resources).To(func(
+				_ *Provider,
+				_ context.Context,
+				_ int64,
+				_ string,
+				_ qviews.DataVersion,
+				_ []int64,
+				_ uint64,
+			) ([]*datapb.StreamingNodeBM25Resource, error) {
+				if calls.Add(1) == 1 {
+					return nil, failure.err
+				}
+				return nil, nil
+			}).Build()
+			defer mock.UnPatch()
+
+			runtime := newScheduledOracleRuntime(scheduler, current)
+			runtime.MaybeAdvance(target)
+			require.Eventually(t, func() bool {
+				runtime.mu.RLock()
+				defer runtime.mu.RUnlock()
+				return runtime.currentVersion.EQ(target) && !runtime.advanceScheduled
+			}, time.Second, time.Millisecond)
+			runtime.Close()
+			require.Equal(t, int32(2), calls.Load())
+		})
+	}
+}
+
+func TestOracleRuntimeStopsAdvanceAfterCorruptPreparedStats(t *testing.T) {
+	current := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
+	target := qviews.DataVersion{StreamingVersion: 11, CompactVersion: 1}
+	scheduler := nodescheduler.New(1)
+	defer scheduler.Close()
+
+	localDir := filepath.Join(t.TempDir(), "prepared")
+	fieldDir := filepath.Join(localDir, fmt.Sprint(testBM25OutputFieldID))
+	require.NoError(t, os.MkdirAll(fieldDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(fieldDir, "0.data"), []byte{1, 2, 3}, 0o600))
+	sealed := &sealedBm25Stats{
+		key:       sealedCacheKey("prepared"),
+		segmentID: 7,
+		localDir:  localDir,
+		fieldList: []int64{testBM25OutputFieldID},
+		refs:      1,
+	}
+	cache := newSegmentCacheAt(t.TempDir())
+	cache.entries[sealed.key] = sealed
+
+	var resourceLookups atomic.Int32
+	lookup := mockey.Mock((*Provider).getSealedBM25Resources).To(func(
+		_ *Provider,
+		_ context.Context,
+		_ int64,
+		_ string,
+		_ qviews.DataVersion,
+		_ []int64,
+		_ uint64,
+	) ([]*datapb.StreamingNodeBM25Resource, error) {
+		resourceLookups.Add(1)
+		return nil, nil
+	}).Build()
+	defer lookup.UnPatch()
+
+	runtime := newScheduledOracleRuntime(scheduler, current)
+	defer runtime.Close()
+	runtime.provider.sealedCache = cache
+	runtime.prepared = map[qviews.DataVersion]map[int64]*sealedBm25Stats{
+		target: {sealed.segmentID: sealed},
+	}
+	runtime.MaybeAdvance(target)
+
+	runtime.mu.RLock()
+	handle := runtime.advanceHandle
+	runtime.mu.RUnlock()
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.NoError(t, handle.Wait(waitCtx))
+	runtime.mu.RLock()
+	versionUnchanged := runtime.currentVersion.EQ(current)
+	hasPending := runtime.hasPending
+	advanceScheduled := runtime.advanceScheduled
+	runtime.mu.RUnlock()
+	require.True(t, versionUnchanged)
+	require.False(t, hasPending)
+	require.False(t, advanceScheduled)
+	require.Equal(t, int32(0), resourceLookups.Load())
+	require.NoDirExists(t, localDir)
+}
+
 func TestAcquireSealedContributionsUsesSharedLimit(t *testing.T) {
 	stats := storage.NewBM25Stats()
 	stats.Append(map[uint32]float32{1: 1})
@@ -134,8 +252,8 @@ func TestAcquireSealedContributionsUsesSharedLimit(t *testing.T) {
 	var started atomic.Int32
 	firstBatchStarted := make(chan struct{})
 	release := make(chan struct{})
-	chunkManager.EXPECT().Read(mock.Anything, mock.Anything).
-		RunAndReturn(func(ctx context.Context, _ string) ([]byte, error) {
+	chunkManager.EXPECT().Reader(mock.Anything, mock.Anything).
+		RunAndReturn(func(ctx context.Context, _ string) (storage.FileReader, error) {
 			current := active.Add(1)
 			defer active.Add(-1)
 			for {
@@ -149,7 +267,7 @@ func TestAcquireSealedContributionsUsesSharedLimit(t *testing.T) {
 			}
 			select {
 			case <-release:
-				return statsBytes, nil
+				return &testBytesFileReader{bytes.NewReader(statsBytes)}, nil
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
@@ -157,19 +275,20 @@ func TestAcquireSealedContributionsUsesSharedLimit(t *testing.T) {
 
 	limiter := syncutil.NewSemaphore(2)
 	providers := []*Provider{
-		{chunkManager: chunkManager, sealedCache: newSegmentCache(), sealedStatsLoadLimiter: limiter},
-		{chunkManager: chunkManager, sealedCache: newSegmentCache(), sealedStatsLoadLimiter: limiter},
+		{chunkManager: chunkManager, sealedCache: newSegmentCacheAt(t.TempDir()), sealedStatsLoadLimiter: limiter},
+		{chunkManager: chunkManager, sealedCache: newSegmentCacheAt(t.TempDir()), sealedStatsLoadLimiter: limiter},
 	}
 	type result struct {
-		contributions map[int64]sealedContribution
+		contributions map[int64]*sealedBm25Stats
+		cache         *segmentCache
 		err           error
 	}
 	results := make(chan result, len(providers))
 	for i, provider := range providers {
 		resources := testSealedBM25Resources(int64(i*2+1), 2)
 		go func(provider *Provider, resources []*datapb.StreamingNodeBM25Resource) {
-			contributions, err := provider.acquireSealedContributions(context.Background(), resources)
-			results <- result{contributions: contributions, err: err}
+			contributions, err := provider.acquireSealedContributions(context.Background(), resources, make(bm25Stats))
+			results <- result{contributions: contributions, cache: provider.sealedCache, err: err}
 		}(provider, resources)
 	}
 
@@ -184,13 +303,13 @@ func TestAcquireSealedContributionsUsesSharedLimit(t *testing.T) {
 		require.NoError(t, result.err)
 		require.Len(t, result.contributions, 2)
 		for _, contribution := range result.contributions {
-			contribution.lease.Close()
+			result.cache.release(contribution)
 		}
 	}
 	require.Equal(t, int32(2), maxActive.Load())
 }
 
-func TestAcquireSealedContributionsConsumesCompletedLoadsImmediately(t *testing.T) {
+func TestAcquireSealedContributionsMergesCompletedLoadsImmediately(t *testing.T) {
 	stats := storage.NewBM25Stats()
 	stats.Append(map[uint32]float32{1: 1})
 	statsBytes, err := stats.Serialize()
@@ -199,48 +318,48 @@ func TestAcquireSealedContributionsConsumesCompletedLoadsImmediately(t *testing.
 	secondReadStarted := make(chan struct{})
 	releaseSecondRead := make(chan struct{})
 	chunkManager := mocks.NewChunkManager(t)
-	chunkManager.EXPECT().Read(mock.Anything, mock.Anything).
-		RunAndReturn(func(_ context.Context, path string) ([]byte, error) {
+	chunkManager.EXPECT().Reader(mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, path string) (storage.FileReader, error) {
 			if path == "stats-2" {
 				close(secondReadStarted)
 				<-releaseSecondRead
 			}
-			return statsBytes, nil
+			return &testBytesFileReader{bytes.NewReader(statsBytes)}, nil
 		}).Times(2)
 
 	provider := &Provider{
 		chunkManager:           chunkManager,
-		sealedCache:            newSegmentCache(),
+		sealedCache:            newSegmentCacheAt(t.TempDir()),
 		sealedStatsLoadLimiter: syncutil.NewSemaphore(2),
 	}
-	consumed := make(chan int64, 2)
-	var aggregate bm25Stats
+	merged := make(chan struct{}, 2)
+	var mergeOrigin func(*storage.BM25Stats, *storage.BM25Stats)
+	mergeMock := mockey.Mock((*storage.BM25Stats).Merge).To(func(target, source *storage.BM25Stats) {
+		mergeOrigin(target, source)
+		merged <- struct{}{}
+	}).Origin(&mergeOrigin).Build()
+	defer mergeMock.UnPatch()
+
+	aggregate := newBM25StatsFromSchema(testBM25WALView(qviews.DataVersion{}).Schema)
 	type result struct {
-		contributions map[int64]sealedContribution
+		contributions map[int64]*sealedBm25Stats
 		err           error
 	}
 	resultCh := make(chan result, 1)
 	go func() {
-		contributions, err := provider.acquireSealedContributionsWithConsumer(
+		contributions, err := provider.acquireSealedContributions(
 			context.Background(),
 			testSealedBM25Resources(1, 2),
-			func(contribution sealedContribution) {
-				if aggregate == nil {
-					aggregate = newBM25StatsFromSchema(testBM25WALView(qviews.DataVersion{}).Schema)
-				}
-				aggregate.merge(contribution.stats)
-				consumed <- contribution.segmentID
-			},
+			aggregate,
 		)
 		resultCh <- result{contributions: contributions, err: err}
 	}()
 
 	<-secondReadStarted
 	select {
-	case segmentID := <-consumed:
-		require.Equal(t, int64(1), segmentID)
+	case <-merged:
 	case <-time.After(time.Second):
-		t.Fatal("completed sealed stats were not consumed while another load was pending")
+		t.Fatal("completed sealed stats were not merged while another load was pending")
 	}
 	close(releaseSecondRead)
 	acquired := <-resultCh
@@ -248,15 +367,15 @@ func TestAcquireSealedContributionsConsumesCompletedLoadsImmediately(t *testing.
 	require.Len(t, acquired.contributions, 2)
 	require.Equal(t, int64(2), aggregate[testBM25OutputFieldID].NumRow())
 	for _, contribution := range acquired.contributions {
-		contribution.lease.Close()
+		provider.sealedCache.release(contribution)
 	}
 }
 
 func TestAcquireSealedContributionsCancellationWhileWaitingForLimit(t *testing.T) {
 	readStarted := make(chan struct{})
 	chunkManager := mocks.NewChunkManager(t)
-	chunkManager.EXPECT().Read(mock.Anything, mock.Anything).
-		RunAndReturn(func(ctx context.Context, _ string) ([]byte, error) {
+	chunkManager.EXPECT().Reader(mock.Anything, mock.Anything).
+		RunAndReturn(func(ctx context.Context, _ string) (storage.FileReader, error) {
 			close(readStarted)
 			<-ctx.Done()
 			return nil, ctx.Err()
@@ -264,13 +383,13 @@ func TestAcquireSealedContributionsCancellationWhileWaitingForLimit(t *testing.T
 
 	provider := &Provider{
 		chunkManager:           chunkManager,
-		sealedCache:            newSegmentCache(),
+		sealedCache:            newSegmentCacheAt(t.TempDir()),
 		sealedStatsLoadLimiter: syncutil.NewSemaphore(1),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	resultCh := make(chan error, 1)
 	go func() {
-		_, err := provider.acquireSealedContributions(ctx, testSealedBM25Resources(1, 2))
+		_, err := provider.acquireSealedContributions(ctx, testSealedBM25Resources(1, 2), make(bm25Stats))
 		resultCh <- err
 	}()
 
@@ -285,7 +404,7 @@ func TestAcquireSealedContributionsCancellationWhileWaitingForLimit(t *testing.T
 	require.Empty(t, provider.sealedCache.entries)
 }
 
-func TestAcquireSealedContributionsReleasesLeasesAfterError(t *testing.T) {
+func TestAcquireSealedContributionsReleasesReferencesAfterError(t *testing.T) {
 	stats := storage.NewBM25Stats()
 	stats.Append(map[uint32]float32{1: 1})
 	statsBytes, err := stats.Serialize()
@@ -293,11 +412,11 @@ func TestAcquireSealedContributionsReleasesLeasesAfterError(t *testing.T) {
 
 	goodRead := make(chan struct{})
 	chunkManager := mocks.NewChunkManager(t)
-	chunkManager.EXPECT().Read(mock.Anything, mock.Anything).
-		RunAndReturn(func(_ context.Context, path string) ([]byte, error) {
+	chunkManager.EXPECT().Reader(mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, path string) (storage.FileReader, error) {
 			if path == "stats-1" {
 				close(goodRead)
-				return statsBytes, nil
+				return &testBytesFileReader{bytes.NewReader(statsBytes)}, nil
 			}
 			<-goodRead
 			return nil, merr.WrapErrDataIntegrityMsg("test sealed stats read failure")
@@ -305,10 +424,25 @@ func TestAcquireSealedContributionsReleasesLeasesAfterError(t *testing.T) {
 
 	provider := &Provider{
 		chunkManager:           chunkManager,
-		sealedCache:            newSegmentCache(),
+		sealedCache:            newSegmentCacheAt(t.TempDir()),
 		sealedStatsLoadLimiter: syncutil.NewSemaphore(2),
 	}
-	_, err = provider.acquireSealedContributions(context.Background(), testSealedBM25Resources(1, 2))
+	_, err = provider.acquireSealedContributions(context.Background(), testSealedBM25Resources(1, 2), make(bm25Stats))
+	require.Error(t, err)
+	require.ErrorIs(t, err, merr.ErrDataIntegrity)
+	require.Empty(t, provider.sealedCache.entries)
+}
+
+func TestAcquireSealedContributionsRejectsDuplicateSegment(t *testing.T) {
+	provider := &Provider{
+		chunkManager:           storage.NewLocalChunkManager(),
+		sealedCache:            newSegmentCacheAt(t.TempDir()),
+		sealedStatsLoadLimiter: syncutil.NewSemaphore(2),
+	}
+	resources := testSealedBM25Resources(1, 2)
+	resources[1].SegmentId = resources[0].SegmentId
+
+	_, err := provider.acquireSealedContributions(context.Background(), resources, nil)
 	require.Error(t, err)
 	require.Empty(t, provider.sealedCache.entries)
 }
@@ -324,17 +458,17 @@ func TestAcquireSealedContributionsCanceledBeforeLoad(t *testing.T) {
 			}
 			provider := &Provider{
 				chunkManager:           chunkManager,
-				sealedCache:            newSegmentCache(),
+				sealedCache:            newSegmentCacheAt(t.TempDir()),
 				sealedStatsLoadLimiter: limiter,
 			}
 			ctx, cancel := context.WithCancelCause(context.Background())
 			cancel(merr.WrapErrServiceUnavailableMsg("test cancellation cause"))
 
-			_, err := provider.acquireSealedContributions(ctx, testSealedBM25Resources(1, 1))
+			_, err := provider.acquireSealedContributions(ctx, testSealedBM25Resources(1, 1), nil)
 			require.ErrorIs(t, err, context.Canceled)
 			require.Equal(t, held, limiter.Current())
 			require.Empty(t, provider.sealedCache.entries)
-			chunkManager.AssertNotCalled(t, "Read", mock.Anything, mock.Anything)
+			chunkManager.AssertNotCalled(t, "Reader", mock.Anything, mock.Anything)
 		})
 	}
 }
@@ -375,40 +509,46 @@ func TestOracleRuntimeCloseCancelsScheduledAdvance(t *testing.T) {
 	}
 }
 
-func TestOracleRuntimeRejectsStaleAdvanceDiff(t *testing.T) {
+func TestOracleRuntimeCommitDiffUsesLatestGrowingState(t *testing.T) {
 	current := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
 	target := qviews.DataVersion{StreamingVersion: 11, CompactVersion: 1}
+	schema := testBM25WALView(current).Schema
+	growingStore := newGrowingStatsStore(schema)
+	initial := storage.NewBM25Stats()
+	initial.Append(map[uint32]float32{7: 1})
+	growingStore.appendStats(20, 10, bm25Stats{testBM25OutputFieldID: initial})
+	global := newBM25StatsFromSchema(schema)
+	global.merge(bm25Stats{testBM25OutputFieldID: initial})
 	runtime := &oracleRuntime{
 		currentVersion: current,
-		currentStats:   make(bm25Stats),
-		currentSealed:  make(map[int64]sealedContribution),
-		currentGrowing: map[int64]growingContribution{
-			20: {
-				segmentID:   20,
-				partitionID: 10,
-				stats:       make(bm25Stats),
-			},
-		},
-		growingStore: newGrowingStatsStore(nil),
-		revision:     2,
+		currentStats:   global,
+		currentSealed:  make(map[int64]*sealedBm25Stats),
+		currentGrowing: map[int64]struct{}{20: {}},
+		growingStore:   growingStore,
 	}
 
-	committed, retry := runtime.commitDiff(&idfDiff{
-		target:      target,
-		revision:    1,
-		positive:    make(bm25Stats),
-		negative:    make(bm25Stats),
-		nextSealed:  make(map[int64]sealedContribution),
-		nextGrowing: make(map[int64]growingContribution),
+	additional := storage.NewBM25Stats()
+	additional.Append(map[uint32]float32{8: 2})
+	runtime.mu.Lock()
+	runtime.growingStore.appendStats(20, 10, bm25Stats{testBM25OutputFieldID: additional})
+	runtime.currentStats.merge(bm25Stats{testBM25OutputFieldID: additional})
+	runtime.growingStore.markSealed(20, target)
+	runtime.mu.Unlock()
+
+	runtime.commitDiff(context.Background(), &idfDiff{
+		target:     target,
+		positive:   make(bm25Stats),
+		negative:   make(bm25Stats),
+		nextSealed: make(map[int64]*sealedBm25Stats),
 	})
 
-	require.False(t, committed)
-	require.True(t, retry)
-	require.True(t, runtime.currentVersion.EQ(current))
-	require.Contains(t, runtime.currentGrowing, int64(20))
+	require.True(t, runtime.currentVersion.EQ(target))
+	require.Empty(t, runtime.currentGrowing)
+	require.Zero(t, runtime.currentStats[testBM25OutputFieldID].NumRow())
+	require.Zero(t, runtime.currentStats[testBM25OutputFieldID].NumToken())
 }
 
-func TestOracleRuntimePreparesAndServesExactDataVersion(t *testing.T) {
+func TestOracleRuntimeSharesSingleGlobalAcrossDataVersions(t *testing.T) {
 	current := qviews.DataVersion{StreamingVersion: 10}
 	target := qviews.DataVersion{StreamingVersion: 11}
 	fieldID := int64(102)
@@ -416,45 +556,213 @@ func TestOracleRuntimePreparesAndServesExactDataVersion(t *testing.T) {
 		Type:           schemapb.FunctionType_BM25,
 		OutputFieldIds: []int64{fieldID},
 	}}}
-	growingStore := newGrowingStatsStore(schema)
 	stats := storage.NewBM25Stats()
 	stats.Append(map[uint32]float32{7: 2})
-	growingStore.appendStats(20, 10, bm25Stats{fieldID: stats})
+	global := newBM25StatsFromSchema(schema)
+	global.merge(bm25Stats{fieldID: stats})
 
 	mock := mockey.Mock((*Provider).getSealedBM25Resources).Return(nil, nil).Build()
 	defer mock.UnPatch()
 	runtime := &oracleRuntime{
-		provider:       &Provider{sealedCache: newSegmentCache()},
+		provider:       &Provider{sealedCache: newSegmentCacheAt(t.TempDir())},
 		collectionID:   1,
 		vchannel:       "v1",
 		schema:         schema,
 		currentVersion: current,
-		currentStats:   newBM25StatsFromSchema(schema),
-		currentSealed:  make(map[int64]sealedContribution),
-		currentGrowing: make(map[int64]growingContribution),
-		growingStore:   growingStore,
+		currentStats:   global,
+		currentSealed:  make(map[int64]*sealedBm25Stats),
+		currentGrowing: make(map[int64]struct{}),
+		prepared:       make(map[qviews.DataVersion]map[int64]*sealedBm25Stats),
+		growingStore:   newGrowingStatsStore(schema),
 	}
 
 	require.NoError(t, runtime.PrepareDataVersion(context.Background(), target))
+	require.True(t, oraclePreparedReady(runtime, target))
+	require.Same(t, global[fieldID], runtime.currentStats[fieldID])
 	query := &schemapb.SparseFloatArray{Contents: [][]byte{
 		typeutil.CreateAndSortSparseFloatRow(map[uint32]float32{7: 1}),
 	}}
-	_, avgdl, err := runtime.BuildIDF(context.Background(), target, fieldID, query)
+	_, currentAvgdl, err := runtime.BuildIDF(context.Background(), current, fieldID, query)
 	require.NoError(t, err)
-	require.Equal(t, float64(2), avgdl)
+	_, targetAvgdl, err := runtime.BuildIDF(context.Background(), target, fieldID, query)
+	require.NoError(t, err)
+	require.Equal(t, float64(2), currentAvgdl)
+	require.Equal(t, currentAvgdl, targetAvgdl)
 
 	runtime.ReleaseDataVersion(target)
-	_, _, err = runtime.BuildIDF(context.Background(), target, fieldID, query)
-	require.Error(t, err)
+	_, targetAvgdl, err = runtime.BuildIDF(context.Background(), target, fieldID, query)
+	require.NoError(t, err)
+	require.Equal(t, currentAvgdl, targetAvgdl)
 }
 
-func TestOracleRuntimeLazyPreparesAndServesExactDataVersion(t *testing.T) {
+func TestOracleRuntimeReusesSealedFileDuringPreparation(t *testing.T) {
+	current := qviews.DataVersion{StreamingVersion: 10}
+	target := qviews.DataVersion{StreamingVersion: 11}
+	stats := storage.NewBM25Stats()
+	stats.Append(map[uint32]float32{7: 2})
+	statsBytes, err := stats.Serialize()
+	require.NoError(t, err)
+	resource := testSealedBM25Resources(3, 1)[0]
+
+	chunkManager := mocks.NewChunkManager(t)
+	chunkManager.EXPECT().Reader(mock.Anything, resource.GetBm25Binlogs()[0].GetBinlogs()[0].GetLogPath()).
+		Return(&testBytesFileReader{Reader: bytes.NewReader(statsBytes)}, nil).
+		Once()
+	client := mocks.NewMockDataCoordClient(t)
+	client.EXPECT().GetStreamingNodeQueryViewResources(mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, req *datapb.GetStreamingNodeQueryViewResourcesRequest, _ ...grpc.CallOption) (*datapb.GetStreamingNodeQueryViewResourcesResponse, error) {
+			response := testBM25ResourceResponse(req)
+			response.Bm25Resources = []*datapb.StreamingNodeBM25Resource{resource}
+			return response, nil
+		}).Once()
+	scheduler := nodescheduler.New(1)
+	defer scheduler.Close()
+	provider := NewProvider(client, WithChunkManager(chunkManager), WithNodeScheduler(scheduler))
+	provider.sealedCache = newSegmentCacheAt(t.TempDir())
+	oracle, err := newOracleRuntime(
+		context.Background(),
+		provider,
+		testBM25WALView(current),
+		[]*datapb.StreamingNodeBM25Resource{resource},
+		false,
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, oracle.PrepareDataVersion(context.Background(), target))
+	oracle.Advance(target)
+	require.Eventually(t, func() bool {
+		return oracleCurrentVersion(oracle).EQ(target)
+	}, time.Second, time.Millisecond)
+
+	oracle.Close()
+	require.Empty(t, provider.sealedCache.entries)
+}
+
+func TestOracleRuntimeUpdatesSealedStatsWhenResourceChangesForSameSegment(t *testing.T) {
+	current := qviews.DataVersion{StreamingVersion: 10}
+	target := qviews.DataVersion{StreamingVersion: 11}
+	chunkManager := storage.NewLocalChunkManager()
+	firstPath := writeTestBM25Stats(t, chunkManager, map[uint32]float32{7: 1})
+	secondPath := writeTestBM25Stats(t, chunkManager, map[uint32]float32{7: 4})
+	firstResource := testSealedBM25Resources(3, 1)[0]
+	firstResource.Bm25Binlogs[0].Binlogs[0].LogPath = firstPath
+	secondResource := testSealedBM25Resources(3, 1)[0]
+	secondResource.Bm25Binlogs[0].Binlogs[0].LogPath = secondPath
+
+	client := mocks.NewMockDataCoordClient(t)
+	client.EXPECT().GetStreamingNodeQueryViewResources(mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, req *datapb.GetStreamingNodeQueryViewResourcesRequest, _ ...grpc.CallOption) (*datapb.GetStreamingNodeQueryViewResourcesResponse, error) {
+			require.True(t, qviews.FromProtoDataVersion(req.GetDataVersion()).EQ(target))
+			response := testBM25ResourceResponse(req)
+			response.Bm25Resources = []*datapb.StreamingNodeBM25Resource{secondResource}
+			return response, nil
+		}).Once()
+	scheduler := nodescheduler.New(1)
+	defer scheduler.Close()
+	provider := NewProvider(client, WithChunkManager(chunkManager), WithNodeScheduler(scheduler))
+	provider.sealedCache = newSegmentCacheAt(t.TempDir())
+	oracle, err := newOracleRuntime(context.Background(), provider, testBM25WALView(current), []*datapb.StreamingNodeBM25Resource{firstResource}, false)
+	require.NoError(t, err)
+	defer oracle.Close()
+
+	_, avgdl, err := oracle.BuildIDF(context.Background(), current, testBM25OutputFieldID, nil)
+	require.NoError(t, err)
+	require.Equal(t, float64(1), avgdl)
+	require.NoError(t, oracle.PrepareDataVersion(context.Background(), target))
+
+	oracle.Advance(target)
+	require.Eventually(t, func() bool {
+		oracle.mu.RLock()
+		defer oracle.mu.RUnlock()
+		return oracle.currentVersion.EQ(target) && oracle.currentStats[testBM25OutputFieldID].GetAvgdl() == 4
+	}, time.Second, time.Millisecond)
+	_, avgdl, err = oracle.BuildIDF(context.Background(), target, testBM25OutputFieldID, nil)
+	require.NoError(t, err)
+	require.Equal(t, float64(4), avgdl)
+}
+
+func TestOracleRuntimeHandsGrowingContributionToSealedFromDisk(t *testing.T) {
+	current := qviews.DataVersion{StreamingVersion: 10}
+	target := qviews.DataVersion{StreamingVersion: 11}
+	chunkManager := storage.NewLocalChunkManager()
+	sealedStats := storage.NewBM25Stats()
+	sealedStats.Append(map[uint32]float32{7: 2}, map[uint32]float32{8: 4})
+	sealedBytes, err := sealedStats.Serialize()
+	require.NoError(t, err)
+	sealedPath := t.TempDir() + "/sealed-stats"
+	require.NoError(t, chunkManager.Write(context.Background(), sealedPath, sealedBytes))
+	sealedResource := &datapb.StreamingNodeBM25Resource{
+		SegmentId:      20,
+		PartitionId:    10,
+		StorageVersion: storage.StorageV2,
+		Bm25Binlogs: []*datapb.FieldBinlog{{
+			FieldID: testBM25OutputFieldID,
+			Binlogs: []*datapb.Binlog{{LogPath: sealedPath}},
+		}},
+	}
+
+	client := mocks.NewMockDataCoordClient(t)
+	client.EXPECT().GetStreamingNodeQueryViewResources(mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, req *datapb.GetStreamingNodeQueryViewResourcesRequest, _ ...grpc.CallOption) (*datapb.GetStreamingNodeQueryViewResourcesResponse, error) {
+			response := testBM25ResourceResponse(req)
+			response.Bm25Resources = []*datapb.StreamingNodeBM25Resource{sealedResource}
+			return response, nil
+		}).Once()
+	scheduler := nodescheduler.New(1)
+	defer scheduler.Close()
+	provider := NewProvider(client, WithChunkManager(chunkManager), WithNodeScheduler(scheduler))
+	provider.sealedCache = newSegmentCacheAt(t.TempDir())
+	schema := testBM25WALView(current).Schema
+	growingStore := newGrowingStatsStore(schema)
+	growingStats := storage.NewBM25Stats()
+	growingStats.Append(map[uint32]float32{7: 2})
+	growingStore.appendStats(20, 10, bm25Stats{testBM25OutputFieldID: growingStats})
+	growingStore.markSealed(20, target)
+	global := newBM25StatsFromSchema(schema)
+	global.merge(bm25Stats{testBM25OutputFieldID: growingStats})
+	oracle := &oracleRuntime{
+		provider:        provider,
+		scheduler:       scheduler,
+		collectionID:    1,
+		vchannel:        "test-vchannel",
+		schema:          schema,
+		currentVersion:  current,
+		currentStats:    global,
+		currentSealed:   make(map[int64]*sealedBm25Stats),
+		currentGrowing:  map[int64]struct{}{20: {}},
+		prepared:        make(map[qviews.DataVersion]map[int64]*sealedBm25Stats),
+		growingStore:    growingStore,
+		loadInfoVersion: 0,
+	}
+	defer oracle.Close()
+
+	require.NoError(t, oracle.PrepareDataVersion(context.Background(), target))
+	oracle.Advance(target)
+	require.Eventually(t, func() bool {
+		if !oracleCurrentVersion(oracle).EQ(target) {
+			return false
+		}
+		growingStore.mu.RLock()
+		defer growingStore.mu.RUnlock()
+		_, growingExists := growingStore.segments[20]
+		return !growingExists
+	}, time.Second, time.Millisecond)
+	oracle.mu.RLock()
+	currentStats := oracle.currentStats[testBM25OutputFieldID]
+	require.Equal(t, int64(2), currentStats.NumRow())
+	require.Equal(t, int64(6), currentStats.NumToken())
+	require.Empty(t, oracle.currentGrowing)
+	oracle.mu.RUnlock()
+}
+
+func TestOracleRuntimeLazyPreparationUsesSharedCurrentGlobal(t *testing.T) {
 	current := qviews.DataVersion{StreamingVersion: 10}
 	target := qviews.DataVersion{StreamingVersion: 11}
 	client := mocks.NewMockDataCoordClient(t)
 	client.EXPECT().GetStreamingNodeQueryViewResources(mock.Anything, mock.Anything).
 		RunAndReturn(func(_ context.Context, req *datapb.GetStreamingNodeQueryViewResourcesRequest, _ ...grpc.CallOption) (*datapb.GetStreamingNodeQueryViewResourcesResponse, error) {
-			require.True(t, qviews.FromProtoDataVersion(req.GetDataVersion()).EQ(target))
+			version := qviews.FromProtoDataVersion(req.GetDataVersion())
+			require.True(t, version.EQ(current))
 			return testBM25ResourceResponse(req), nil
 		}).Once()
 	oracle := newTestLazyOracleRuntime(t, client, current)
@@ -466,15 +774,16 @@ func TestOracleRuntimeLazyPreparesAndServesExactDataVersion(t *testing.T) {
 
 	require.NoError(t, oracle.PrepareDataVersion(context.Background(), target))
 	require.Empty(t, client.Calls)
+	require.False(t, oraclePreparedReady(oracle, target))
 	_, avgdl, err := oracle.BuildIDF(context.Background(), target, testBM25OutputFieldID, &schemapb.SparseFloatArray{})
 	require.NoError(t, err)
 	require.Equal(t, float64(2), avgdl)
 	require.Len(t, client.Calls, 1)
-	require.True(t, oracleStatsReady(oracle, target))
+	require.True(t, oracleStatsReady(oracle))
 
 	oracle.ReleaseDataVersion(target)
 	_, _, err = oracle.BuildIDF(context.Background(), target, testBM25OutputFieldID, &schemapb.SparseFloatArray{})
-	require.Error(t, err)
+	require.NoError(t, err)
 	require.Len(t, client.Calls, 1)
 }
 
@@ -514,11 +823,33 @@ func TestOracleRuntimeEagerPreparationCancellationIsIsolated(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("second eager preparation waited for the canceled caller")
 	}
-	require.True(t, oracleStatsReady(oracle, target))
+	require.True(t, oraclePreparedReady(oracle, target))
 
 	cancelFirst()
 	require.ErrorIs(t, <-firstResult, context.Canceled)
 	require.Len(t, client.Calls, 2)
+}
+
+func TestOracleRuntimePreparationPrefetchesWithoutParsing(t *testing.T) {
+	current := qviews.DataVersion{StreamingVersion: 10}
+	target := qviews.DataVersion{StreamingVersion: 11}
+	resource := testSealedBM25Resources(30, 1)[0]
+	chunkManager := mocks.NewChunkManager(t)
+	chunkManager.EXPECT().Reader(mock.Anything, resource.GetBm25Binlogs()[0].GetBinlogs()[0].GetLogPath()).
+		Return(&testBytesFileReader{Reader: bytes.NewReader([]byte{1, 2, 3})}, nil).Once()
+	client := mocks.NewMockDataCoordClient(t)
+	client.EXPECT().GetStreamingNodeQueryViewResources(mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, req *datapb.GetStreamingNodeQueryViewResourcesRequest, _ ...grpc.CallOption) (*datapb.GetStreamingNodeQueryViewResourcesResponse, error) {
+			response := testBM25ResourceResponse(req)
+			response.Bm25Resources = []*datapb.StreamingNodeBM25Resource{resource}
+			return response, nil
+		}).Once()
+	oracle := newTestEagerOracleRuntime(t, client, current, WithChunkManager(chunkManager))
+	defer oracle.Close()
+
+	require.NoError(t, oracle.PrepareDataVersion(context.Background(), target))
+	require.True(t, oraclePreparedReady(oracle, target))
+	require.Len(t, oracle.provider.sealedCache.entries, 1)
 }
 
 func TestOracleRuntimeSharesCanceledVersionMaterialization(t *testing.T) {
@@ -557,13 +888,59 @@ func TestOracleRuntimeSharesCanceledVersionMaterialization(t *testing.T) {
 	cancelFirst()
 	require.ErrorIs(t, <-firstResult, context.Canceled)
 	require.ErrorIs(t, <-secondResult, context.Canceled)
-	require.False(t, oracleStatsReady(oracle, version))
+	require.False(t, oracleStatsReady(oracle))
 	require.Len(t, client.Calls, 1)
 
 	_, _, err := oracle.BuildIDF(context.Background(), version, testBM25OutputFieldID, &schemapb.SparseFloatArray{})
 	require.NoError(t, err)
 	require.Len(t, client.Calls, 2)
-	require.True(t, oracleStatsReady(oracle, version))
+	require.True(t, oracleStatsReady(oracle))
+}
+
+func TestOracleRuntimeRetriesCurrentMaterializationAfterLazyAdvance(t *testing.T) {
+	current := qviews.DataVersion{StreamingVersion: 10}
+	target := qviews.DataVersion{StreamingVersion: 12}
+	client := mocks.NewMockDataCoordClient(t)
+	rpcStarted := make(chan struct{})
+	releaseFirstRPC := make(chan struct{})
+	var calls atomic.Int32
+	client.EXPECT().GetStreamingNodeQueryViewResources(mock.Anything, mock.Anything).
+		RunAndReturn(func(ctx context.Context, req *datapb.GetStreamingNodeQueryViewResourcesRequest, _ ...grpc.CallOption) (*datapb.GetStreamingNodeQueryViewResourcesResponse, error) {
+			if calls.Add(1) == 1 {
+				require.True(t, qviews.FromProtoDataVersion(req.GetDataVersion()).EQ(current))
+				close(rpcStarted)
+				<-releaseFirstRPC
+				return nil, ctx.Err()
+			}
+			require.True(t, qviews.FromProtoDataVersion(req.GetDataVersion()).EQ(target))
+			return testBM25ResourceResponse(req), nil
+		}).Twice()
+	oracle := newTestLazyOracleRuntime(t, client, current)
+	defer oracle.Close()
+
+	firstResult := make(chan error, 1)
+	go func() {
+		_, _, err := oracle.BuildIDF(context.Background(), target, testBM25OutputFieldID, &schemapb.SparseFloatArray{})
+		firstResult <- err
+	}()
+	<-rpcStarted
+	require.NoError(t, oracle.PrepareDataVersion(context.Background(), target))
+	oracle.Advance(target)
+
+	waiterCtx := &observedDoneContext{Context: context.Background(), doneObserved: make(chan struct{})}
+	secondResult := make(chan error, 1)
+	go func() {
+		_, _, err := oracle.BuildIDF(waiterCtx, target, testBM25OutputFieldID, &schemapb.SparseFloatArray{})
+		secondResult <- err
+	}()
+	<-waiterCtx.doneObserved
+	close(releaseFirstRPC)
+
+	require.NoError(t, <-firstResult)
+	require.NoError(t, <-secondResult)
+	require.Equal(t, int32(2), calls.Load())
+	require.True(t, oracleCurrentVersion(oracle).EQ(target))
+	require.True(t, oracleStatsReady(oracle))
 }
 
 func TestOracleRuntimeCancellationBeforeCommitDoesNotPublish(t *testing.T) {
@@ -613,7 +990,7 @@ func TestOracleRuntimeCancellationBeforeCommitDoesNotPublish(t *testing.T) {
 	storeLocked = false
 
 	require.ErrorIs(t, <-result, context.Canceled)
-	require.False(t, oracleStatsReady(oracle, version))
+	require.False(t, oracleStatsReady(oracle))
 }
 
 func TestOracleRuntimeAllowsNextQueryAfterMaterializationFailure(t *testing.T) {
@@ -632,13 +1009,13 @@ func TestOracleRuntimeAllowsNextQueryAfterMaterializationFailure(t *testing.T) {
 
 	_, _, err := oracle.BuildIDF(context.Background(), version, testBM25OutputFieldID, &schemapb.SparseFloatArray{})
 	require.Error(t, err)
-	require.False(t, oracleStatsReady(oracle, version))
+	require.False(t, oracleStatsReady(oracle))
 	require.Len(t, client.Calls, 1)
 
 	_, _, err = oracle.BuildIDF(context.Background(), version, testBM25OutputFieldID, &schemapb.SparseFloatArray{})
 	require.NoError(t, err)
 	require.Len(t, client.Calls, 2)
-	require.True(t, oracleStatsReady(oracle, version))
+	require.True(t, oracleStatsReady(oracle))
 }
 
 func TestOracleRuntimeIncludesGrowingStatsAddedDuringMaterialization(t *testing.T) {
@@ -682,28 +1059,50 @@ func TestOracleRuntimeIncludesGrowingStatsAddedDuringMaterialization(t *testing.
 	require.Equal(t, float64(2), resultValue.avgdl)
 }
 
-func TestOracleRuntimeLazyAdvanceDefersTargetMaterialization(t *testing.T) {
+func TestOracleRuntimeLazyTargetFilesLoadOnFirstQueryAfterAdvance(t *testing.T) {
 	current := qviews.DataVersion{StreamingVersion: 10}
 	target := qviews.DataVersion{StreamingVersion: 12}
+	stats := storage.NewBM25Stats()
+	stats.Append(map[uint32]float32{7: 2})
+	serialized, err := stats.Serialize()
+	require.NoError(t, err)
+	resource := testSealedBM25Resources(30, 1)[0]
+
+	chunkManager := mocks.NewChunkManager(t)
+	chunkManager.EXPECT().Reader(mock.Anything, resource.GetBm25Binlogs()[0].GetBinlogs()[0].GetLogPath()).
+		Return(&testBytesFileReader{Reader: bytes.NewReader(serialized)}, nil).Once()
 	client := mocks.NewMockDataCoordClient(t)
 	client.EXPECT().GetStreamingNodeQueryViewResources(mock.Anything, mock.Anything).
 		RunAndReturn(func(_ context.Context, req *datapb.GetStreamingNodeQueryViewResourcesRequest, _ ...grpc.CallOption) (*datapb.GetStreamingNodeQueryViewResourcesResponse, error) {
 			require.True(t, qviews.FromProtoDataVersion(req.GetDataVersion()).EQ(target))
-			return testBM25ResourceResponse(req), nil
+			response := testBM25ResourceResponse(req)
+			response.Bm25Resources = []*datapb.StreamingNodeBM25Resource{resource}
+			return response, nil
 		}).Once()
-	oracle := newTestLazyOracleRuntime(t, client, current)
+	scheduler := nodescheduler.New(1)
+	defer scheduler.Close()
+	provider := NewProvider(client, WithChunkManager(chunkManager), WithNodeScheduler(scheduler))
+	provider.sealedCache = newSegmentCacheAt(t.TempDir())
+	oracle, err := newOracleRuntime(context.Background(), provider, testBM25WALView(current), nil, true)
+	require.NoError(t, err)
 	defer oracle.Close()
 
 	require.NoError(t, oracle.PrepareDataVersion(context.Background(), target))
-	oracle.Advance(target)
+	require.False(t, oraclePreparedReady(oracle, target))
+	require.False(t, oracleStatsReady(oracle))
+	provider.sealedCache.mu.Lock()
+	entryCount := len(provider.sealedCache.entries)
+	provider.sealedCache.mu.Unlock()
+	require.Zero(t, entryCount)
 	require.Empty(t, client.Calls)
-	require.True(t, oracleCurrentVersion(oracle).EQ(target))
-	require.False(t, oracleStatsReady(oracle, target))
 
-	_, _, err := oracle.BuildIDF(context.Background(), target, testBM25OutputFieldID, &schemapb.SparseFloatArray{})
+	oracle.Advance(target)
+	require.True(t, oracleCurrentVersion(oracle).EQ(target))
+	require.Empty(t, client.Calls)
+	_, avgdl, err := oracle.BuildIDF(context.Background(), target, testBM25OutputFieldID, &schemapb.SparseFloatArray{})
 	require.NoError(t, err)
+	require.Equal(t, float64(2), avgdl)
 	require.Len(t, client.Calls, 1)
-	require.True(t, oracleStatsReady(oracle, target))
 }
 
 func TestOracleRuntimeLazyOnlyDefersInitialMaterialization(t *testing.T) {
@@ -725,15 +1124,17 @@ func TestOracleRuntimeLazyOnlyDefersInitialMaterialization(t *testing.T) {
 
 	_, _, err := oracle.BuildIDF(context.Background(), current, testBM25OutputFieldID, &schemapb.SparseFloatArray{})
 	require.NoError(t, err)
-	require.True(t, oracleStatsReady(oracle, current))
+	require.True(t, oracleStatsReady(oracle))
 
 	require.NoError(t, oracle.PrepareDataVersion(context.Background(), target))
-	require.True(t, oracleStatsReady(oracle, target))
+	require.True(t, oraclePreparedReady(oracle, target))
 	require.Len(t, client.Calls, 2)
 
 	oracle.Advance(target)
-	require.True(t, oracleCurrentVersion(oracle).EQ(target))
-	require.True(t, oracleStatsReady(oracle, target))
+	require.Eventually(t, func() bool {
+		return oracleCurrentVersion(oracle).EQ(target)
+	}, time.Second, time.Millisecond)
+	require.True(t, oracleStatsReady(oracle))
 	_, _, err = oracle.BuildIDF(context.Background(), target, testBM25OutputFieldID, &schemapb.SparseFloatArray{})
 	require.NoError(t, err)
 	require.Len(t, client.Calls, 2)
@@ -764,13 +1165,15 @@ func TestOracleRuntimeCloseCancelsVersionMaterialization(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
-func newTestLazyOracleRuntime(t *testing.T, client *mocks.MockDataCoordClient, version qviews.DataVersion) *oracleRuntime {
+func newTestLazyOracleRuntime(t *testing.T, client *mocks.MockDataCoordClient, version qviews.DataVersion, opts ...ProviderOption) *oracleRuntime {
 	t.Helper()
 	scheduler := nodescheduler.New(1)
 	t.Cleanup(scheduler.Close)
+	provider := NewProvider(client, append([]ProviderOption{WithNodeScheduler(scheduler)}, opts...)...)
+	provider.sealedCache = newSegmentCacheAt(t.TempDir())
 	oracle, err := newOracleRuntime(
 		context.Background(),
-		NewProvider(client, WithNodeScheduler(scheduler)),
+		provider,
 		testBM25WALView(version),
 		nil,
 		true,
@@ -779,13 +1182,15 @@ func newTestLazyOracleRuntime(t *testing.T, client *mocks.MockDataCoordClient, v
 	return oracle
 }
 
-func newTestEagerOracleRuntime(t *testing.T, client *mocks.MockDataCoordClient, version qviews.DataVersion) *oracleRuntime {
+func newTestEagerOracleRuntime(t *testing.T, client *mocks.MockDataCoordClient, version qviews.DataVersion, opts ...ProviderOption) *oracleRuntime {
 	t.Helper()
 	scheduler := nodescheduler.New(1)
 	t.Cleanup(scheduler.Close)
+	provider := NewProvider(client, append([]ProviderOption{WithNodeScheduler(scheduler)}, opts...)...)
+	provider.sealedCache = newSegmentCacheAt(t.TempDir())
 	oracle, err := newOracleRuntime(
 		context.Background(),
-		NewProvider(client, WithNodeScheduler(scheduler)),
+		provider,
 		testBM25WALView(version),
 		nil,
 		false,
@@ -831,11 +1236,17 @@ func testBM25ResourceResponse(req *datapb.GetStreamingNodeQueryViewResourcesRequ
 	}
 }
 
-func oracleStatsReady(oracle *oracleRuntime, version qviews.DataVersion) bool {
+func oracleStatsReady(oracle *oracleRuntime) bool {
 	oracle.mu.RLock()
 	defer oracle.mu.RUnlock()
-	_, ready := oracle.statsForVersionLocked(version)
-	return ready
+	return oracle.currentStats != nil
+}
+
+func oraclePreparedReady(oracle *oracleRuntime, version qviews.DataVersion) bool {
+	oracle.mu.RLock()
+	defer oracle.mu.RUnlock()
+	_, ok := oracle.prepared[version]
+	return ok
 }
 
 func oracleCurrentVersion(oracle *oracleRuntime) qviews.DataVersion {

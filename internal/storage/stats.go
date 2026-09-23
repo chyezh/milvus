@@ -389,6 +389,9 @@ func (m *BM25Stats) Merge(meta *BM25Stats) {
 func (m *BM25Stats) Minus(meta *BM25Stats) {
 	for key, value := range meta.rowsWithToken {
 		m.rowsWithToken[key] -= value
+		if m.rowsWithToken[key] == 0 {
+			delete(m.rowsWithToken, key)
+		}
 	}
 	m.numRow -= meta.numRow
 	m.numToken -= meta.numToken

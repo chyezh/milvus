@@ -7,6 +7,8 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/storage"
@@ -69,19 +71,6 @@ func (s bm25Stats) minus(src bm25Stats) {
 		}
 		s.getOrCreate(fieldID).Minus(srcStats)
 	}
-}
-
-type sealedContribution struct {
-	segmentID   int64
-	partitionID int64
-	stats       bm25Stats
-	lease       *segmentCacheLease
-}
-
-type growingContribution struct {
-	segmentID   int64
-	partitionID int64
-	stats       bm25Stats
 }
 
 type growingSegmentStats struct {
@@ -201,27 +190,30 @@ func (s *growingStatsStore) markSealed(segmentID int64, sealedAt qviews.DataVers
 	segment.sealedAt = &value
 }
 
-func (s *growingStatsStore) snapshotForDataVersion(target qviews.DataVersion, targetSealed map[int64]struct{}) map[int64]growingContribution {
+func (s *growingStatsStore) snapshotForDataVersion(
+	target qviews.DataVersion,
+	targetSealed map[int64]*sealedBm25Stats,
+	current map[int64]struct{},
+) (map[int64]struct{}, map[int64]bm25Stats) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	result := make(map[int64]growingContribution)
+	next := make(map[int64]struct{})
+	stats := make(map[int64]bm25Stats)
 	for segmentID, segment := range s.segments {
-		if _, ok := targetSealed[segmentID]; ok {
-			continue
+		_, sealed := targetSealed[segmentID]
+		visible := !sealed && (segment.sealedAt == nil || segment.sealedAt.GT(target))
+		if visible {
+			next[segmentID] = struct{}{}
 		}
-		if segment.sealedAt != nil && !segment.sealedAt.GT(target) {
-			continue
-		}
-		result[segmentID] = growingContribution{
-			segmentID:   segmentID,
-			partitionID: segment.partitionID,
-			stats:       segment.stats.clone(),
+		_, currentlyVisible := current[segmentID]
+		if visible != currentlyVisible {
+			stats[segmentID] = segment.stats.clone()
 		}
 	}
-	return result
+	return next, stats
 }
 
-func (s *growingStatsStore) cleanup(currentDataVersion qviews.DataVersion, currentGrowing map[int64]growingContribution) {
+func (s *growingStatsStore) cleanup(currentDataVersion qviews.DataVersion, currentGrowing map[int64]struct{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for segmentID, segment := range s.segments {
@@ -235,20 +227,10 @@ func (s *growingStatsStore) cleanup(currentDataVersion qviews.DataVersion, curre
 }
 
 type idfDiff struct {
-	target        qviews.DataVersion
-	revision      uint64
-	positive      bm25Stats
-	negative      bm25Stats
-	nextSealed    map[int64]sealedContribution
-	nextGrowing   map[int64]growingContribution
-	acquiredLease []*segmentCacheLease
-}
-
-type preparedOracleVersion struct {
-	version qviews.DataVersion
-	stats   bm25Stats
-	sealed  map[int64]sealedContribution
-	growing map[int64]growingContribution
+	target     qviews.DataVersion
+	positive   bm25Stats
+	negative   bm25Stats
+	nextSealed map[int64]*sealedBm25Stats
 }
 
 type materializationCall struct {
@@ -279,12 +261,11 @@ type oracleRuntime struct {
 	closed           bool
 	currentVersion   qviews.DataVersion
 	currentStats     bm25Stats
-	currentSealed    map[int64]sealedContribution
-	currentGrowing   map[int64]growingContribution
-	prepared         map[qviews.DataVersion]*preparedOracleVersion
-	materializations map[qviews.DataVersion]*materializationCall
+	currentSealed    map[int64]*sealedBm25Stats
+	currentGrowing   map[int64]struct{}
+	prepared         map[qviews.DataVersion]map[int64]*sealedBm25Stats
+	materialization  *materializationCall
 	growingStore     *growingStatsStore
-	revision         uint64
 
 	closeOnce sync.Once
 }
@@ -301,18 +282,17 @@ func newOracleRuntime(
 		scheduler = nodescheduler.Get()
 	}
 	r := &oracleRuntime{
-		provider:         provider,
-		scheduler:        scheduler,
-		lazy:             lazy,
-		collectionID:     walView.CollectionID,
-		vchannel:         walView.VChannel,
-		partitionIDs:     append([]int64(nil), walView.PartitionIDs...),
-		loadInfoVersion:  walView.LoadInfoVersion,
-		schema:           walView.Schema,
-		currentVersion:   walView.SegmentSnapshot.DataVersion,
-		prepared:         make(map[qviews.DataVersion]*preparedOracleVersion),
-		materializations: make(map[qviews.DataVersion]*materializationCall),
-		growingStore:     newGrowingStatsStore(walView.Schema),
+		provider:        provider,
+		scheduler:       scheduler,
+		lazy:            lazy,
+		collectionID:    walView.CollectionID,
+		vchannel:        walView.VChannel,
+		partitionIDs:    append([]int64(nil), walView.PartitionIDs...),
+		loadInfoVersion: walView.LoadInfoVersion,
+		schema:          walView.Schema,
+		currentVersion:  walView.SegmentSnapshot.DataVersion,
+		prepared:        make(map[qviews.DataVersion]map[int64]*sealedBm25Stats),
+		growingStore:    newGrowingStatsStore(walView.Schema),
 	}
 	if lazy {
 		if err := r.loadInitialGrowing(ctx, walView); err != nil {
@@ -322,25 +302,29 @@ func newOracleRuntime(
 	}
 
 	r.currentStats = newBM25StatsFromSchema(walView.Schema)
-	r.currentSealed = make(map[int64]sealedContribution)
-	r.currentGrowing = make(map[int64]growingContribution)
-	sealed, err := provider.acquireSealedContributions(ctx, initialResources)
+	sealed, err := provider.acquireSealedContributions(ctx, initialResources, r.currentStats)
 	if err != nil {
 		return nil, err
 	}
-	for _, contribution := range sealed {
-		r.currentSealed[contribution.segmentID] = contribution
-		r.currentStats.merge(contribution.stats)
-	}
+	r.currentSealed = sealed
 	if err := r.loadInitialGrowing(ctx, walView); err != nil {
 		r.releaseSealed(sealed)
 		return nil, err
 	}
-	targetSealed := segmentSetFromSealed(r.currentSealed)
-	r.currentGrowing = r.growingStore.snapshotForDataVersion(walView.SegmentSnapshot.DataVersion, targetSealed)
-	for _, contribution := range r.currentGrowing {
-		r.currentStats.merge(contribution.stats)
+	var growingStats map[int64]bm25Stats
+	r.currentGrowing, growingStats = r.growingStore.snapshotForDataVersion(
+		walView.SegmentSnapshot.DataVersion,
+		r.currentSealed,
+		nil,
+	)
+	for _, stats := range growingStats {
+		r.currentStats.merge(stats)
 	}
+	if err := ctx.Err(); err != nil {
+		r.releaseSealed(sealed)
+		return nil, err
+	}
+	r.growingStore.cleanup(r.currentVersion, r.currentGrowing)
 	return r, nil
 }
 
@@ -390,42 +374,23 @@ func (r *oracleRuntime) collectPersistedGrowingStats(ctx context.Context, segmen
 	return nil
 }
 
-func (r *oracleRuntime) BuildIDF(ctx context.Context, dataVersion qviews.DataVersion, fieldID int64, tfs *schemapb.SparseFloatArray) ([][]byte, float64, error) {
-	if err := r.ensureMaterialized(ctx, dataVersion); err != nil {
+func (r *oracleRuntime) BuildIDF(ctx context.Context, _ qviews.DataVersion, fieldID int64, tfs *schemapb.SparseFloatArray) ([][]byte, float64, error) {
+	if err := r.ensureMaterialized(ctx); err != nil {
 		return nil, 0, err
 	}
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	versionStats, ok := r.statsForVersionLocked(dataVersion)
+	stats, ok := r.currentStats[fieldID]
 	if !ok {
-		return nil, 0, merr.WrapErrServiceNotReadyMsg("BM25 stats for data version %s are not ready", dataVersion.String())
-	}
-	stats, ok := versionStats[fieldID]
-	if !ok {
-		return nil, 0, merr.WrapErrServiceInternalMsg("BM25 field %d not found in oracle for data version %s", fieldID, dataVersion.String())
+		return nil, 0, merr.WrapErrServiceInternalMsg("BM25 field %d not found in oracle", fieldID)
 	}
 	idfs := make([][]byte, 0, len(tfs.GetContents()))
 	for _, tf := range tfs.GetContents() {
 		idfs = append(idfs, stats.BuildIDF(tf))
 	}
 	return idfs, stats.GetAvgdl(), nil
-}
-
-func (r *oracleRuntime) statsForVersionLocked(dataVersion qviews.DataVersion) (bm25Stats, bool) {
-	if r.currentVersion.EQ(dataVersion) && r.currentStats != nil {
-		return r.currentStats, true
-	}
-	prepared := r.prepared[dataVersion]
-	if prepared == nil || prepared.stats == nil {
-		return nil, false
-	}
-	return prepared.stats, true
-}
-
-func (r *oracleRuntime) versionRegisteredLocked(dataVersion qviews.DataVersion) bool {
-	return r.currentVersion.EQ(dataVersion) || r.prepared[dataVersion] != nil
 }
 
 func (r *oracleRuntime) PrepareDataVersion(ctx context.Context, target qviews.DataVersion) error {
@@ -437,25 +402,20 @@ func (r *oracleRuntime) PrepareDataVersion(ctx context.Context, target qviews.Da
 		r.mu.Unlock()
 		return context.Canceled
 	}
-	_, ready := r.statsForVersionLocked(target)
-	deferInitialLoad := r.lazy && r.currentStats == nil
-	if deferInitialLoad && !r.versionRegisteredLocked(target) {
-		if r.prepared == nil {
-			r.prepared = make(map[qviews.DataVersion]*preparedOracleVersion)
-		}
-		r.prepared[target] = &preparedOracleVersion{version: target}
+	if !target.GT(r.currentVersion) {
+		r.mu.Unlock()
+		return nil
+	}
+	if r.lazy && r.currentStats == nil {
+		r.mu.Unlock()
+		return nil
+	}
+	if _, ok := r.prepared[target]; ok {
+		r.mu.Unlock()
+		return nil
 	}
 	r.mu.Unlock()
-	if deferInitialLoad {
-		return nil
-	}
-	if ready {
-		return nil
-	}
-	return r.prepareEagerDataVersion(ctx, target)
-}
 
-func (r *oracleRuntime) prepareEagerDataVersion(ctx context.Context, target qviews.DataVersion) error {
 	resources, err := r.provider.getSealedBM25Resources(
 		ctx,
 		r.collectionID,
@@ -467,103 +427,94 @@ func (r *oracleRuntime) prepareEagerDataVersion(ctx context.Context, target qvie
 	if err != nil {
 		return err
 	}
-	sealed, err := r.provider.acquireSealedContributions(ctx, resources)
+	sealed, err := r.provider.acquireSealedContributions(ctx, resources, nil)
 	if err != nil {
 		return err
 	}
 
 	r.mu.Lock()
-	if r.closed {
+	if err := ctx.Err(); err != nil {
 		r.mu.Unlock()
 		r.releaseSealed(sealed)
-		return context.Canceled
+		return err
 	}
-	if _, ready := r.statsForVersionLocked(target); ready {
+	closed := r.closed
+	if closed || !target.GT(r.currentVersion) {
+		r.mu.Unlock()
+		r.releaseSealed(sealed)
+		if closed {
+			return context.Canceled
+		}
+		return nil
+	}
+	if _, ok := r.prepared[target]; ok {
 		r.mu.Unlock()
 		r.releaseSealed(sealed)
 		return nil
 	}
-	targetSealed := segmentSetFromSealed(sealed)
-	growing := r.growingStore.snapshotForDataVersion(target, targetSealed)
-	stats := newBM25StatsFromSchema(r.schema)
-	for _, contribution := range sealed {
-		stats.merge(contribution.stats)
-	}
-	for _, contribution := range growing {
-		stats.merge(contribution.stats)
-	}
 	if r.prepared == nil {
-		r.prepared = make(map[qviews.DataVersion]*preparedOracleVersion)
+		r.prepared = make(map[qviews.DataVersion]map[int64]*sealedBm25Stats)
 	}
-	r.prepared[target] = &preparedOracleVersion{
-		version: target,
-		stats:   stats,
-		sealed:  sealed,
-		growing: growing,
-	}
+	r.prepared[target] = sealed
 	r.mu.Unlock()
 	return nil
 }
 
-func (r *oracleRuntime) ensureMaterialized(ctx context.Context, target qviews.DataVersion) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	r.mu.RLock()
-	closed := r.closed
-	_, ready := r.statsForVersionLocked(target)
-	r.mu.RUnlock()
-	if closed {
-		return context.Canceled
-	}
-	if ready {
-		return nil
-	}
-
-	r.mu.Lock()
-	if r.closed {
-		r.mu.Unlock()
-		return context.Canceled
-	}
-	if _, ready := r.statsForVersionLocked(target); ready {
-		r.mu.Unlock()
-		return nil
-	}
-	if !r.versionRegisteredLocked(target) {
-		r.mu.Unlock()
-		return merr.WrapErrServiceNotReadyMsg("BM25 stats for data version %s are not registered", target.String())
-	}
-	if call := r.materializations[target]; call != nil {
-		r.mu.Unlock()
-		select {
-		case <-call.done:
-			return call.err
-		case <-ctx.Done():
-			return ctx.Err()
+func (r *oracleRuntime) ensureMaterialized(ctx context.Context) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-	}
-	if r.materializations == nil {
-		r.materializations = make(map[qviews.DataVersion]*materializationCall)
-	}
-	materializationCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	call := &materializationCall{
-		target: target,
-		ctx:    materializationCtx,
-		cancel: cancel,
-		done:   make(chan struct{}),
-	}
-	r.materializations[target] = call
-	r.mu.Unlock()
 
-	r.materialize(call)
-	return call.err
+		r.mu.Lock()
+		if r.closed {
+			r.mu.Unlock()
+			return context.Canceled
+		}
+		if r.currentStats != nil {
+			r.mu.Unlock()
+			return nil
+		}
+		if call := r.materialization; call != nil {
+			r.mu.Unlock()
+			select {
+			case <-call.done:
+				r.mu.RLock()
+				targetChanged := !r.currentVersion.EQ(call.target)
+				r.mu.RUnlock()
+				if targetChanged {
+					continue
+				}
+				return call.err
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		materializationCtx, cancel := context.WithCancel(ctx)
+		call := &materializationCall{
+			target: r.currentVersion,
+			ctx:    materializationCtx,
+			cancel: cancel,
+			done:   make(chan struct{}),
+		}
+		r.materialization = call
+		r.mu.Unlock()
+
+		r.materialize(call)
+		cancel()
+		r.mu.RLock()
+		targetChanged := !r.currentVersion.EQ(call.target)
+		r.mu.RUnlock()
+		if targetChanged {
+			continue
+		}
+		return call.err
+	}
 }
 
 func (r *oracleRuntime) materialize(call *materializationCall) {
 	var (
-		sealed    map[int64]sealedContribution
+		sealed    map[int64]*sealedBm25Stats
 		resultErr error
 		committed bool
 	)
@@ -574,8 +525,8 @@ func (r *oracleRuntime) materialize(call *materializationCall) {
 
 		r.mu.Lock()
 		call.err = resultErr
-		if r.materializations[call.target] == call {
-			delete(r.materializations, call.target)
+		if r.materialization == call {
+			r.materialization = nil
 		}
 		close(call.done)
 		r.mu.Unlock()
@@ -593,30 +544,15 @@ func (r *oracleRuntime) materialize(call *materializationCall) {
 		resultErr = merr.Wrapf(err, "get sealed BM25 resources for data version %s", call.target.String())
 		return
 	}
-	var stats bm25Stats
-	sealed, err = r.provider.acquireSealedContributionsWithConsumer(
-		call.ctx,
-		resources,
-		func(contribution sealedContribution) {
-			if stats == nil {
-				stats = newBM25StatsFromSchema(r.schema)
-			}
-			stats.merge(contribution.stats)
-		},
-	)
+	stats := newBM25StatsFromSchema(r.schema)
+	sealed, err = r.provider.acquireSealedContributions(call.ctx, resources, stats)
 	if err != nil {
 		resultErr = merr.Wrapf(err, "load sealed BM25 stats for data version %s", call.target.String())
 		return
 	}
-	if stats == nil {
-		stats = newBM25StatsFromSchema(r.schema)
-	}
-
-	var oldSealed map[int64]sealedContribution
-	var currentGrowing map[int64]growingContribution
-	committedCurrent := false
+	var currentGrowing map[int64]struct{}
 	r.mu.Lock()
-	if r.closed || r.materializations[call.target] != call || !r.versionRegisteredLocked(call.target) {
+	if r.closed || r.materialization != call || r.currentStats != nil || !r.currentVersion.EQ(call.target) {
 		resultErr = call.ctx.Err()
 		if resultErr == nil {
 			resultErr = context.Canceled
@@ -624,57 +560,32 @@ func (r *oracleRuntime) materialize(call *materializationCall) {
 		r.mu.Unlock()
 		return
 	}
-	targetSealed := segmentSetFromSealed(sealed)
-	growing := r.growingStore.snapshotForDataVersion(call.target, targetSealed)
-	for _, contribution := range growing {
-		stats.merge(contribution.stats)
+	growing, growingStats := r.growingStore.snapshotForDataVersion(call.target, sealed, nil)
+	for _, segmentStats := range growingStats {
+		stats.merge(segmentStats)
 	}
 	if resultErr = call.ctx.Err(); resultErr != nil {
 		r.mu.Unlock()
 		return
 	}
-	if r.currentVersion.EQ(call.target) {
-		oldSealed = r.currentSealed
-		r.currentStats = stats
-		r.currentSealed = sealed
-		r.currentGrowing = growing
-		r.revision++
-		// Cleanup only needs a stable segment membership snapshot.
-		currentGrowing = maps.Clone(growing)
-		committedCurrent = true
-		committed = true
-	} else if prepared := r.prepared[call.target]; prepared != nil {
-		oldSealed = prepared.sealed
-		prepared.stats = stats
-		prepared.sealed = sealed
-		prepared.growing = growing
-		committed = true
-	}
-	if !committed {
-		resultErr = context.Canceled
-	}
+	r.currentStats = stats
+	r.currentSealed = sealed
+	r.currentGrowing = growing
+	// Cleanup only needs a stable segment membership snapshot.
+	currentGrowing = maps.Clone(growing)
+	committed = true
 	r.mu.Unlock()
 
-	if !committed {
-		return
-	}
-	r.releaseSealed(oldSealed)
-	if committedCurrent {
-		r.growingStore.cleanup(call.target, currentGrowing)
-	}
+	r.growingStore.cleanup(call.target, currentGrowing)
 }
 
 func (r *oracleRuntime) ReleaseDataVersion(dataVersion qviews.DataVersion) {
 	r.mu.Lock()
 	prepared := r.prepared[dataVersion]
 	delete(r.prepared, dataVersion)
-	call := r.materializations[dataVersion]
 	r.mu.Unlock()
-	if call != nil {
-		call.cancel()
-	}
 	if prepared != nil {
-		r.releaseSealed(prepared.sealed)
+		r.releaseSealed(prepared)
 	}
 }
 
@@ -701,37 +612,12 @@ func (r *oracleRuntime) applyLiveMessage(_ context.Context, msg message.Immutabl
 		partitionID := created.Header().GetPartitionId()
 		r.mu.Lock()
 		r.growingStore.registerSegment(segmentID, partitionID)
-		changed := false
 		if r.currentStats != nil {
 			_, sealed := r.currentSealed[segmentID]
 			if _, ok := r.currentGrowing[segmentID]; !ok {
 				if !sealed {
-					r.currentGrowing[segmentID] = growingContribution{
-						segmentID:   segmentID,
-						partitionID: partitionID,
-						stats:       newBM25StatsFromSchema(r.schema),
-					}
-					changed = true
+					r.currentGrowing[segmentID] = struct{}{}
 				}
-			}
-		}
-		if changed {
-			r.revision++
-		}
-		for _, prepared := range r.prepared {
-			if prepared.stats == nil {
-				continue
-			}
-			if _, ok := prepared.sealed[segmentID]; ok {
-				continue
-			}
-			if _, ok := prepared.growing[segmentID]; ok {
-				continue
-			}
-			prepared.growing[segmentID] = growingContribution{
-				segmentID:   segmentID,
-				partitionID: partitionID,
-				stats:       newBM25StatsFromSchema(r.schema),
 			}
 		}
 		r.mu.Unlock()
@@ -743,25 +629,17 @@ func (r *oracleRuntime) applyLiveMessage(_ context.Context, msg message.Immutabl
 			if err != nil {
 				return err
 			}
-			if contribution, ok := r.currentGrowing[segmentID]; ok {
-				contribution.stats.merge(stats)
-				r.currentGrowing[segmentID] = contribution
-				r.currentStats.merge(stats)
-			}
-			for _, prepared := range r.prepared {
-				if contribution, ok := prepared.growing[segmentID]; ok {
-					contribution.stats.merge(stats)
-					prepared.growing[segmentID] = contribution
-					prepared.stats.merge(stats)
+			if r.currentStats != nil {
+				if _, sealed := r.currentSealed[segmentID]; !sealed {
+					r.currentGrowing[segmentID] = struct{}{}
+					r.currentStats.merge(stats)
 				}
 			}
-			r.revision++
 			return nil
 		})
 	case message.MessageTypeFlush:
 		r.mu.Lock()
 		r.growingStore.markFlushed(message.MustAsImmutableFlushMessageV2(msg).Header().GetSegmentId())
-		r.revision++
 		r.mu.Unlock()
 	}
 	return nil
@@ -771,8 +649,7 @@ func (r *oracleRuntime) applySegmentSealed(segmentID int64, sealedAt qviews.Data
 	r.mu.Lock()
 	r.growingStore.markSealed(segmentID, sealedAt)
 	currentVersion := r.currentVersion
-	currentGrowing := cloneGrowingContributions(r.currentGrowing)
-	r.revision++
+	currentGrowing := maps.Clone(r.currentGrowing)
 	r.mu.Unlock()
 	r.growingStore.cleanup(currentVersion, currentGrowing)
 }
@@ -783,74 +660,13 @@ func (r *oracleRuntime) MaybeAdvance(target qviews.DataVersion) {
 		r.mu.Unlock()
 		return
 	}
-	if prepared := r.prepared[target]; prepared != nil && prepared.stats != nil {
-		oldSealed := r.currentSealed
-		r.currentVersion = prepared.version
-		r.currentStats = prepared.stats
-		r.currentSealed = prepared.sealed
-		r.currentGrowing = prepared.growing
-		delete(r.prepared, target)
-		obsolete := make([]map[int64]sealedContribution, 0)
-		for version, candidate := range r.prepared {
-			if !version.GT(target) {
-				obsolete = append(obsolete, candidate.sealed)
-				delete(r.prepared, version)
-			}
-		}
-		obsoleteCalls := make([]*materializationCall, 0)
-		for version, call := range r.materializations {
-			if !version.EQ(target) && !version.GT(target) {
-				obsoleteCalls = append(obsoleteCalls, call)
-			}
-		}
-		if r.hasPending && !r.pending.GT(target) {
-			r.pending = qviews.DataVersion{}
-			r.hasPending = false
-		}
-		r.revision++
-		currentGrowing := cloneGrowingContributions(r.currentGrowing)
-		r.mu.Unlock()
-		for _, call := range obsoleteCalls {
-			call.cancel()
-		}
-		r.releaseSealed(oldSealed)
-		for _, sealed := range obsolete {
-			r.releaseSealed(sealed)
-		}
-		r.growingStore.cleanup(target, currentGrowing)
-		return
-	}
 	if r.lazy && r.currentStats == nil {
-		oldSealed := r.currentSealed
+		call := r.materialization
 		r.currentVersion = target
-		r.currentStats = nil
-		r.currentSealed = nil
 		r.currentGrowing = nil
-		obsolete := make([]map[int64]sealedContribution, 0)
-		for version, candidate := range r.prepared {
-			if !version.GT(target) {
-				obsolete = append(obsolete, candidate.sealed)
-				delete(r.prepared, version)
-			}
-		}
-		obsoleteCalls := make([]*materializationCall, 0)
-		for version, call := range r.materializations {
-			if !version.EQ(target) && !version.GT(target) {
-				obsoleteCalls = append(obsoleteCalls, call)
-			}
-		}
-		if r.hasPending && !r.pending.GT(target) {
-			r.pending = qviews.DataVersion{}
-			r.hasPending = false
-		}
-		r.revision++
 		r.mu.Unlock()
-		for _, call := range obsoleteCalls {
+		if call != nil && !call.target.EQ(target) {
 			call.cancel()
-		}
-		r.releaseSealed(oldSealed)
-		for _, sealed := range obsolete {
-			r.releaseSealed(sealed)
 		}
 		r.growingStore.cleanup(target, nil)
 		return
@@ -875,19 +691,16 @@ func (r *oracleRuntime) Close() {
 		r.mu.Lock()
 		r.closed = true
 		handle := r.advanceHandle
-		calls := make([]*materializationCall, 0, len(r.materializations))
-		for _, call := range r.materializations {
-			calls = append(calls, call)
-		}
+		call := r.materialization
 		r.mu.Unlock()
-		for _, call := range calls {
+		if call != nil {
 			call.cancel()
 		}
 		if handle != nil {
 			handle.Cancel()
 			_ = handle.Wait(context.Background())
 		}
-		for _, call := range calls {
+		if call != nil {
 			<-call.done
 		}
 		r.mu.Lock()
@@ -896,11 +709,11 @@ func (r *oracleRuntime) Close() {
 		r.currentSealed = nil
 		r.currentGrowing = nil
 		r.prepared = nil
-		r.materializations = nil
+		r.materialization = nil
 		r.mu.Unlock()
 		r.releaseSealed(sealed)
 		for _, version := range prepared {
-			r.releaseSealed(version.sealed)
+			r.releaseSealed(version)
 		}
 	})
 }
@@ -917,12 +730,24 @@ func (t oracleAdvanceTask) Execute(ctx context.Context) error {
 	}
 	diff, err := r.computeDiff(ctx, target)
 	if err != nil {
+		if ctx.Err() == nil && shouldRetryAdvance(err) {
+			r.restorePending(target)
+		}
 		return r.finishAdvance(ctx, err)
 	}
-	if committed, retry := r.commitDiff(diff); !committed && retry {
-		r.restorePending(target)
-	}
+	r.commitDiff(ctx, diff)
 	return r.finishAdvance(ctx, nil)
+}
+
+func shouldRetryAdvance(err error) bool {
+	if merr.IsRetryableErr(err) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded, codes.ResourceExhausted:
+		return true
+	}
+	return false
 }
 
 func (r *oracleRuntime) popPending() (qviews.DataVersion, bool) {
@@ -961,104 +786,137 @@ func (r *oracleRuntime) finishAdvance(ctx context.Context, err error) error {
 		return err
 	}
 	r.mu.Unlock()
+	if err != nil {
+		return errors.Mark(err, nodescheduler.ErrDelay)
+	}
 	return nodescheduler.ErrDelay
 }
 
 func (r *oracleRuntime) computeDiff(ctx context.Context, target qviews.DataVersion) (*idfDiff, error) {
-	resources, err := r.provider.getSealedBM25Resources(ctx, r.collectionID, r.vchannel, target, r.partitionIDs, r.loadInfoVersion)
-	if err != nil {
-		return nil, err
+	r.mu.Lock()
+	prepared, ok := r.prepared[target]
+	if ok {
+		delete(r.prepared, target)
 	}
-	nextSealed, err := r.provider.acquireSealedContributions(ctx, resources)
-	if err != nil {
-		return nil, err
-	}
-	targetSealed := segmentSetFromSealed(nextSealed)
+	r.mu.Unlock()
 
+	var nextSealed map[int64]*sealedBm25Stats
+	if ok {
+		nextSealed = prepared
+	} else {
+		resources, err := r.provider.getSealedBM25Resources(ctx, r.collectionID, r.vchannel, target, r.partitionIDs, r.loadInfoVersion)
+		if err != nil {
+			return nil, err
+		}
+		nextSealed, err = r.provider.acquireSealedContributions(ctx, resources, nil)
+		if err != nil {
+			return nil, err
+		}
+	}
+	keepNext := false
+	defer func() {
+		if !keepNext {
+			r.releaseSealed(nextSealed)
+		}
+	}()
 	r.mu.RLock()
-	nextGrowing := r.growingStore.snapshotForDataVersion(target, targetSealed)
-	currentSealed := cloneSealedContributions(r.currentSealed)
-	currentGrowing := cloneGrowingContributions(r.currentGrowing)
-	revision := r.revision
+	currentSealed := r.currentSealed
 	r.mu.RUnlock()
 
 	diff := &idfDiff{
-		target:      target,
-		revision:    revision,
-		positive:    make(bm25Stats),
-		negative:    make(bm25Stats),
-		nextSealed:  nextSealed,
-		nextGrowing: nextGrowing,
+		target:     target,
+		positive:   make(bm25Stats),
+		negative:   make(bm25Stats),
+		nextSealed: nextSealed,
 	}
-	for _, contribution := range nextSealed {
-		diff.acquiredLease = append(diff.acquiredLease, contribution.lease)
-	}
-	for segmentID, contribution := range currentSealed {
-		if _, ok := nextSealed[segmentID]; !ok {
-			diff.negative.merge(contribution.stats)
+	for segmentID, sealedStats := range currentSealed {
+		if next := nextSealed[segmentID]; next != nil && sealedStats != nil && next.key == sealedStats.key {
+			continue
 		}
-	}
-	for segmentID, contribution := range currentGrowing {
-		if _, ok := nextGrowing[segmentID]; !ok {
-			diff.negative.merge(contribution.stats)
+		stats, err := sealedStats.FetchStats()
+		if err != nil {
+			return nil, err
 		}
+		diff.negative.merge(stats)
 	}
-	for segmentID, contribution := range nextSealed {
-		if _, ok := currentSealed[segmentID]; !ok {
-			diff.positive.merge(contribution.stats)
+	for segmentID, sealedStats := range nextSealed {
+		if current := currentSealed[segmentID]; current != nil && sealedStats != nil && current.key == sealedStats.key {
+			continue
 		}
-	}
-	for segmentID, contribution := range nextGrowing {
-		if _, ok := currentGrowing[segmentID]; !ok {
-			diff.positive.merge(contribution.stats)
+		stats, err := sealedStats.FetchStats()
+		if err != nil {
+			return nil, err
 		}
+		diff.positive.merge(stats)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	keepNext = true
 	return diff, nil
 }
 
-func (r *oracleRuntime) commitDiff(diff *idfDiff) (bool, bool) {
-	var oldSealed map[int64]sealedContribution
+func (r *oracleRuntime) commitDiff(ctx context.Context, diff *idfDiff) {
+	var (
+		oldSealed map[int64]*sealedBm25Stats
+		obsolete  []map[int64]*sealedBm25Stats
+	)
 	releaseNew := false
-	retry := false
 	r.mu.Lock()
-	if diff.revision != r.revision {
+	if r.closed || ctx.Err() != nil {
 		releaseNew = true
-		retry = diff.target.GT(r.currentVersion)
 	} else if !diff.target.GT(r.currentVersion) {
 		releaseNew = true
 	} else {
+		nextGrowing, growingStats := r.growingStore.snapshotForDataVersion(diff.target, diff.nextSealed, r.currentGrowing)
 		r.currentStats.minus(diff.negative)
+		for segmentID := range r.currentGrowing {
+			if _, ok := nextGrowing[segmentID]; !ok {
+				r.currentStats.minus(growingStats[segmentID])
+			}
+		}
 		r.currentStats.merge(diff.positive)
+		for segmentID := range nextGrowing {
+			if _, ok := r.currentGrowing[segmentID]; !ok {
+				r.currentStats.merge(growingStats[segmentID])
+			}
+		}
 		r.currentVersion = diff.target
 		oldSealed = r.currentSealed
 		r.currentSealed = diff.nextSealed
-		r.currentGrowing = diff.nextGrowing
-		r.revision++
+		r.currentGrowing = nextGrowing
+		obsolete = r.takePreparedThroughLocked(diff.target)
 	}
 	currentVersion := r.currentVersion
-	currentGrowing := cloneGrowingContributions(r.currentGrowing)
+	currentGrowing := maps.Clone(r.currentGrowing)
 	r.mu.Unlock()
 
 	if releaseNew {
-		for _, lease := range diff.acquiredLease {
-			lease.Close()
-		}
-		return false, retry
+		r.releaseSealed(diff.nextSealed)
+		return
 	}
-	for segmentID, contribution := range oldSealed {
-		if _, ok := diff.nextSealed[segmentID]; !ok && contribution.lease != nil {
-			contribution.lease.Close()
-		}
+	r.releaseSealed(oldSealed)
+	for _, sealed := range obsolete {
+		r.releaseSealed(sealed)
 	}
 	r.growingStore.cleanup(currentVersion, currentGrowing)
-	return true, false
 }
 
-func (r *oracleRuntime) releaseSealed(sealed map[int64]sealedContribution) {
-	for _, contribution := range sealed {
-		if contribution.lease != nil {
-			contribution.lease.Close()
+func (r *oracleRuntime) takePreparedThroughLocked(target qviews.DataVersion) []map[int64]*sealedBm25Stats {
+	obsolete := make([]map[int64]*sealedBm25Stats, 0)
+	for version, prepared := range r.prepared {
+		if version.GT(target) {
+			continue
 		}
+		obsolete = append(obsolete, prepared)
+		delete(r.prepared, version)
+	}
+	return obsolete
+}
+
+func (r *oracleRuntime) releaseSealed(sealed map[int64]*sealedBm25Stats) {
+	for _, sealedStats := range sealed {
+		r.provider.sealedCache.release(sealedStats)
 	}
 }
 
@@ -1089,25 +947,28 @@ func (p *Provider) getSealedBM25Resources(
 func (p *Provider) acquireSealedContributions(
 	ctx context.Context,
 	resources []*datapb.StreamingNodeBM25Resource,
-) (map[int64]sealedContribution, error) {
-	return p.acquireSealedContributionsWithConsumer(ctx, resources, nil)
-}
+	mergeInto bm25Stats,
+) (map[int64]*sealedBm25Stats, error) {
+	seen := make(map[int64]struct{}, len(resources))
+	for _, resource := range resources {
+		if resource == nil {
+			return nil, merr.WrapErrDataIntegrityMsg("nil sealed BM25 resource")
+		}
+		segmentID := resource.GetSegmentId()
+		if _, ok := seen[segmentID]; ok {
+			return nil, merr.WrapErrDataIntegrityMsg("duplicate sealed BM25 resource for segment %d", segmentID)
+		}
+		seen[segmentID] = struct{}{}
+	}
 
-func (p *Provider) acquireSealedContributionsWithConsumer(
-	ctx context.Context,
-	resources []*datapb.StreamingNodeBM25Resource,
-	consume func(sealedContribution),
-) (map[int64]sealedContribution, error) {
-	loaded := make([]sealedContribution, len(resources))
-	keepLeases := false
+	contributions := make(map[int64]*sealedBm25Stats, len(resources))
+	keepContributions := false
 	defer func() {
-		if keepLeases {
+		if keepContributions {
 			return
 		}
-		for _, contribution := range loaded {
-			if contribution.lease != nil {
-				contribution.lease.Close()
-			}
+		for _, sealedStats := range contributions {
+			p.sealedCache.release(sealedStats)
 		}
 	}()
 
@@ -1115,22 +976,26 @@ func (p *Provider) acquireSealedContributionsWithConsumer(
 	if limiter == nil {
 		limiter = getGlobalSealedStatsLoadLimiter()
 	}
-	results := make(chan sealedContribution, len(resources))
-	contributions := make(map[int64]sealedContribution, len(resources))
+	type loadResult struct {
+		segmentID   int64
+		sealedStats *sealedBm25Stats
+		stats       bm25Stats
+	}
+	results := make(chan loadResult, len(resources))
 	collectorDone := make(chan struct{})
 	go func() {
 		defer close(collectorDone)
-		for contribution := range results {
-			contributions[contribution.segmentID] = contribution
-			if consume != nil {
-				consume(contribution)
+		for result := range results {
+			contributions[result.segmentID] = result.sealedStats
+			if mergeInto != nil {
+				mergeInto.merge(result.stats)
 			}
 		}
 	}()
 
 	group, groupCtx := errgroup.WithContext(ctx)
 	var acquireErr error
-	for i, resource := range resources {
+	for _, resource := range resources {
 		err := limiter.Acquire(groupCtx)
 		if ctxErr := groupCtx.Err(); err == nil && ctxErr != nil {
 			limiter.Release()
@@ -1142,17 +1007,11 @@ func (p *Provider) acquireSealedContributionsWithConsumer(
 		}
 		group.Go(func() error {
 			defer limiter.Release()
-			stats, lease, err := p.sealedCache.acquire(groupCtx, p.chunkManager, resource)
+			stats, sealedStats, err := p.sealedCache.acquire(groupCtx, p.chunkManager, resource, mergeInto != nil)
 			if err != nil {
 				return err
 			}
-			loaded[i] = sealedContribution{
-				segmentID:   resource.GetSegmentId(),
-				partitionID: resource.GetPartitionId(),
-				stats:       stats,
-				lease:       lease,
-			}
-			results <- loaded[i]
+			results <- loadResult{segmentID: resource.GetSegmentId(), sealedStats: sealedStats, stats: stats}
 			return nil
 		})
 	}
@@ -1165,32 +1024,9 @@ func (p *Provider) acquireSealedContributionsWithConsumer(
 	if acquireErr != nil {
 		return nil, acquireErr
 	}
-	keepLeases = true
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	keepContributions = true
 	return contributions, nil
-}
-
-func segmentSetFromSealed(sealed map[int64]sealedContribution) map[int64]struct{} {
-	result := make(map[int64]struct{}, len(sealed))
-	for segmentID := range sealed {
-		result[segmentID] = struct{}{}
-	}
-	return result
-}
-
-func cloneSealedContributions(src map[int64]sealedContribution) map[int64]sealedContribution {
-	dst := make(map[int64]sealedContribution, len(src))
-	for segmentID, contribution := range src {
-		contribution.stats = contribution.stats.clone()
-		dst[segmentID] = contribution
-	}
-	return dst
-}
-
-func cloneGrowingContributions(src map[int64]growingContribution) map[int64]growingContribution {
-	dst := make(map[int64]growingContribution, len(src))
-	for segmentID, contribution := range src {
-		contribution.stats = contribution.stats.clone()
-		dst[segmentID] = contribution
-	}
-	return dst
 }

@@ -1,6 +1,7 @@
 package idf
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/milvus-io/milvus/internal/mocks"
+	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
@@ -21,7 +23,18 @@ import (
 
 func TestMain(m *testing.M) {
 	paramtable.InitWithBaseTable(paramtable.NewBaseTable(paramtable.SkipRemote(true)))
-	os.Exit(m.Run())
+	rootDir, err := os.MkdirTemp("", "milvus-idf-test-")
+	if err != nil {
+		panic(err)
+	}
+	params := paramtable.Get()
+	if err := params.Save(params.LocalStorageCfg.Path.Key, rootDir); err != nil {
+		os.RemoveAll(rootDir)
+		panic(err)
+	}
+	exitCode := m.Run()
+	os.RemoveAll(rootDir)
+	os.Exit(exitCode)
 }
 
 func TestProviderCreatesNoopRuntimeWhenBM25IsNotLoaded(t *testing.T) {
@@ -58,7 +71,7 @@ func TestRuntimePrepareRespectsLazyLoadSealedStats(t *testing.T) {
 		defer runtime.Close()
 		require.NoError(t, runtime.Prepare(context.Background(), testBM25WALView(version)))
 		require.Len(t, client.Calls, 1)
-		require.True(t, oracleStatsReady(runtime.currentOracle(), version))
+		require.True(t, oracleStatsReady(runtime.currentOracle()))
 
 		_, _, err := runtime.BuildIDF(context.Background(), version, testBM25OutputFieldID, nil)
 		require.NoError(t, err)
@@ -67,30 +80,45 @@ func TestRuntimePrepareRespectsLazyLoadSealedStats(t *testing.T) {
 
 	t.Run("lazy", func(t *testing.T) {
 		setLazyLoadSealedStats(t, true)
+		stats := storage.NewBM25Stats()
+		stats.Append(map[uint32]float32{7: 2})
+		serialized, err := stats.Serialize()
+		require.NoError(t, err)
+		resource := testSealedBM25Resources(31, 1)[0]
+		chunkManager := mocks.NewChunkManager(t)
+		chunkManager.EXPECT().Reader(mock.Anything, resource.GetBm25Binlogs()[0].GetBinlogs()[0].GetLogPath()).
+			Return(&testBytesFileReader{Reader: bytes.NewReader(serialized)}, nil).Once()
 		client := mocks.NewMockDataCoordClient(t)
 		client.EXPECT().GetStreamingNodeQueryViewResources(mock.Anything, mock.Anything).
 			RunAndReturn(func(_ context.Context, req *datapb.GetStreamingNodeQueryViewResourcesRequest, _ ...grpc.CallOption) (*datapb.GetStreamingNodeQueryViewResourcesResponse, error) {
-				return testBM25ResourceResponse(req), nil
+				response := testBM25ResourceResponse(req)
+				response.Bm25Resources = []*datapb.StreamingNodeBM25Resource{resource}
+				return response, nil
 			}).Once()
 
-		runtime := newTestRuntime(t, client)
+		runtime := newTestRuntime(t, client, WithChunkManager(chunkManager))
 		defer runtime.Close()
 		require.NoError(t, runtime.Prepare(context.Background(), testBM25WALView(version)))
 		require.Empty(t, client.Calls)
-		require.False(t, oracleStatsReady(runtime.currentOracle(), version))
+		require.False(t, oracleStatsReady(runtime.currentOracle()))
+		oracle := runtime.currentOracle()
+		require.Empty(t, oracle.currentSealed)
 
-		_, _, err := runtime.BuildIDF(context.Background(), version, testBM25OutputFieldID, nil)
+		_, avgdl, err := runtime.BuildIDF(context.Background(), version, testBM25OutputFieldID, nil)
 		require.NoError(t, err)
+		require.Equal(t, float64(2), avgdl)
 		require.Len(t, client.Calls, 1)
-		require.True(t, oracleStatsReady(runtime.currentOracle(), version))
+		require.True(t, oracleStatsReady(runtime.currentOracle()))
 	})
 }
 
-func newTestRuntime(t *testing.T, client *mocks.MockDataCoordClient) *Runtime {
+func newTestRuntime(t *testing.T, client *mocks.MockDataCoordClient, opts ...ProviderOption) *Runtime {
 	t.Helper()
 	scheduler := nodescheduler.New(1)
 	t.Cleanup(scheduler.Close)
-	module, err := NewProvider(client, WithNodeScheduler(scheduler)).NewRuntime()
+	provider := NewProvider(client, append([]ProviderOption{WithNodeScheduler(scheduler)}, opts...)...)
+	provider.sealedCache = newSegmentCacheAt(t.TempDir())
+	module, err := provider.NewRuntime()
 	require.NoError(t, err)
 	runtime, ok := module.(*Runtime)
 	require.True(t, ok)

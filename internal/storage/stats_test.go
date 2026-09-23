@@ -294,6 +294,27 @@ func TestBM25Stats_MemSize(t *testing.T) {
 	assert.Equal(t, int64(120)+100*bytesPerEntry, stats.MemSize())
 }
 
+func TestBM25Stats_MinusRemovesZeroEntries(t *testing.T) {
+	stats := NewBM25Stats()
+	stats.Append(
+		map[uint32]float32{1: 1, 2: 1},
+		map[uint32]float32{2: 1},
+	)
+	removed := NewBM25Stats()
+	removed.Append(map[uint32]float32{1: 1})
+
+	stats.Minus(removed)
+
+	assert.NotContains(t, stats.rowsWithToken, uint32(1))
+	assert.Equal(t, int32(2), stats.rowsWithToken[2])
+	assert.Equal(t, int64(1), stats.NumRow())
+
+	missing := NewBM25Stats()
+	missing.Append(map[uint32]float32{3: 1})
+	stats.Minus(missing)
+	assert.Equal(t, int32(-1), stats.rowsWithToken[3])
+}
+
 func TestBM25Stats_DeserializeFromReader(t *testing.T) {
 	t.Run("roundtrip", func(t *testing.T) {
 		original := NewBM25Stats()
