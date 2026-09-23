@@ -6,10 +6,11 @@ import (
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
 	"github.com/milvus-io/milvus/internal/util/segcore"
+	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
-func (r *Runtime) AcquireGrowingSegmentHandles(ctx context.Context, partitionIDs []int64) ([]snview.GrowingSegmentHandle, error) {
+func (r *Runtime) AcquireGrowingSegmentHandles(ctx context.Context, dataVersion qviews.DataVersion, partitionIDs []int64) ([]snview.GrowingSegmentHandle, error) {
 	if r == nil {
 		return nil, nil
 	}
@@ -32,7 +33,7 @@ func (r *Runtime) AcquireGrowingSegmentHandles(ctx context.Context, partitionIDs
 		if !partitionSelected(selectedPartitions, segment.partitionID) {
 			continue
 		}
-		csegment, ok := segment.pinIfNotReleased()
+		csegment, ok := segment.pinIfVisible(dataVersion)
 		if !ok {
 			continue
 		}

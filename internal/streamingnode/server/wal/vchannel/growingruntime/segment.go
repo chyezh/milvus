@@ -93,17 +93,26 @@ func (s *growingSegment) csegment() (segcore.CSegment, bool) {
 	return s.segment, s.segment != nil
 }
 
-func (s *growingSegment) pinIfNotReleased() (segcore.CSegment, bool) {
+func (s *growingSegment) pinIfVisible(dataVersion qviews.DataVersion) (segcore.CSegment, bool) {
 	if s == nil {
 		return nil, false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.released || s.segment == nil {
+	if !s.queryableAtLocked(dataVersion) {
 		return nil, false
 	}
 	s.refs++
 	return s.segment, true
+}
+
+// queryableAtLocked separates resource retention for older views from membership
+// in the requested view. The first sealed DataVersion already serves this
+// segment on QueryNode, even while an older view keeps its SN resource alive.
+// Caller must hold s.mu.
+func (s *growingSegment) queryableAtLocked(dataVersion qviews.DataVersion) bool {
+	return !s.released && s.segment != nil &&
+		(!s.hasSealedAtDataVersion || s.sealedAtDataVersion.GT(dataVersion))
 }
 
 func (s *growingSegment) unpin() {

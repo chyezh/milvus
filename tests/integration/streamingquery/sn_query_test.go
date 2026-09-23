@@ -235,6 +235,9 @@ func TestStreamingQueryRPC(t *testing.T) {
 		require.NotContains(t, ids, int64(3))
 		t.Log("live delete is visible through the SN query MVCC")
 	}
+	if os.Getenv("SN_QUERY_TEST_MULTIVERSION") == "1" {
+		verifyConcurrentSNViews(t, ctx, rpcctx, proxy, sn, etcd, namespace, name, view, getPlan(), searchPlanRPC.GetLegacySearchRequest())
+	}
 	if os.Getenv("SN_QUERY_TEST_KEEP_UP") == "1" {
 		require.NoError(t, syncer.CloseSend())
 		t.Log("persisted Up view retained for managed SN restart")

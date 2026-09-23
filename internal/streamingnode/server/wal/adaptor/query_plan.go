@@ -177,7 +177,7 @@ func (w *walAdaptorImpl) resolveQueryPlanMVCC(ctx context.Context, req *viewpb.G
 }
 
 type queryPlanGrowingRuntime interface {
-	MayHaveVisibleGrowingSegments(growingTimetick uint64, transformingTimetick uint64, partitionIDs []int64) bool
+	MayHaveVisibleGrowingSegments(dataVersion qviews.DataVersion, growingTimetick uint64, transformingTimetick uint64, partitionIDs []int64) bool
 }
 
 type queryPlanWorkNodeOptions struct {
@@ -263,6 +263,7 @@ func queryPlanIncludesStreamingNode(view *viewpb.QueryViewOfShard, options query
 		return true
 	}
 	return options.runtime.MayHaveVisibleGrowingSegments(
+		qviews.FromProtoDataVersion(view.GetMeta().GetVersion().GetDataVersion()),
 		options.mvcc.GetGrowingTimetick(),
 		options.mvcc.GetTransformingTimetick(),
 		options.partitionIDs,

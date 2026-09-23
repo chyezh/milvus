@@ -3,6 +3,7 @@ package growingruntime
 import (
 	"context"
 
+	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
@@ -39,7 +40,7 @@ func (r *Runtime) WaitMVCCVisible(ctx context.Context, growingTimetick uint64, t
 	return ctx.Err()
 }
 
-func (r *Runtime) MayHaveVisibleGrowingSegments(growingTimetick uint64, transformTimetick uint64, partitionIDs []int64) bool {
+func (r *Runtime) MayHaveVisibleGrowingSegments(dataVersion qviews.DataVersion, growingTimetick uint64, transformTimetick uint64, partitionIDs []int64) bool {
 	if r == nil {
 		return true
 	}
@@ -56,7 +57,7 @@ func (r *Runtime) MayHaveVisibleGrowingSegments(growingTimetick uint64, transfor
 			continue
 		}
 		segment.mu.Lock()
-		candidate := !segment.released && segment.segment != nil
+		candidate := segment.queryableAtLocked(dataVersion)
 		segment.mu.Unlock()
 		if candidate {
 			return true
