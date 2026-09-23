@@ -92,7 +92,7 @@ func recoverSNQueryViewHandler(
 		catalog:        catalog,
 		resMgr:         resMgr,
 		localOptimizer: optimizer.NewNoopLocalOptimizer(),
-		leaseDuration:  max(0, paramtable.Get().StreamingCfg.QueryViewLeaseDuration.GetAsDurationByParse()),
+		leaseDuration:  max(0, paramtable.Get().QueryViewCfg.LeaseDuration.GetAsDurationByParse()),
 	}
 
 	grouped := make(map[qviews.ShardID]map[qviews.QueryViewVersion]*snQueryViewStateMachine)

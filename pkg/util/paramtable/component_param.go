@@ -115,6 +115,7 @@ type ComponentParam struct {
 	RoleCfg        roleConfig
 	RbacConfig     rbacConfig
 	StreamingCfg   streamingConfig
+	QueryViewCfg   queryViewConfig
 	FunctionCfg    functionConfig
 	CredentialCfg  credentialConfig
 
@@ -170,6 +171,7 @@ func (p *ComponentParam) init(bt *BaseTable) {
 	p.DataCoordCfg.init(bt)
 	p.DataNodeCfg.init(bt)
 	p.StreamingCfg.init(bt)
+	p.QueryViewCfg.init(bt)
 	p.HTTPCfg.init(bt)
 	p.LogCfg.init(bt)
 	p.RoleCfg.init(bt)
@@ -8774,9 +8776,22 @@ writeRetryInitialInterval, otherwise the effective cap is raised to twice the in
 	p.ExternalCollectionTargetRowsPerSegment.Init(base.mgr)
 }
 
-type streamingConfig struct {
-	QueryViewLeaseDuration ParamItem `refreshable:"false"`
+type queryViewConfig struct {
+	LeaseDuration ParamItem `refreshable:"false"`
+}
 
+func (p *queryViewConfig) init(base *BaseTable) {
+	p.LeaseDuration = ParamItem{
+		Key:          "queryView.leaseDuration",
+		Version:      "3.0.2",
+		DefaultValue: "60s",
+		Doc:          "Renewable SN Up-view retention after query access. Delays normal Down; non-positive durations disable timed retention. Not refreshable.",
+		Export:       true,
+	}
+	p.LeaseDuration.Init(base.mgr)
+}
+
+type streamingConfig struct {
 	// WAL payload chunking rollout switch.
 	SplitChunkSN ParamItem `refreshable:"true"`
 
@@ -8893,15 +8908,6 @@ type streamingConfig struct {
 }
 
 func (p *streamingConfig) init(base *BaseTable) {
-	p.QueryViewLeaseDuration = ParamItem{
-		Key:          "streaming.queryView.leaseDuration",
-		Version:      "3.0.2",
-		DefaultValue: "60s",
-		Doc:          "Renewable SN Up-view retention after query access. Delays normal Down; non-positive durations disable timed retention. Not refreshable.",
-		Export:       true,
-	}
-	p.QueryViewLeaseDuration.Init(base.mgr)
-
 	p.SplitChunkSN = ParamItem{
 		Key:          "streaming.splitChunkSN",
 		Version:      "3.0.2",

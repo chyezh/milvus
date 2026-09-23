@@ -166,9 +166,9 @@ func TestServingLeaseForcedDropCancelsTimer(t *testing.T) {
 
 func TestServingLeaseConfigurationIsCaptured(t *testing.T) {
 	params := paramtable.Get()
-	key := params.StreamingCfg.QueryViewLeaseDuration.Key
-	require.Equal(t, "60s", params.StreamingCfg.QueryViewLeaseDuration.DefaultValue)
-	original := params.StreamingCfg.QueryViewLeaseDuration.GetValue()
+	key := params.QueryViewCfg.LeaseDuration.Key
+	require.Equal(t, "60s", params.QueryViewCfg.LeaseDuration.DefaultValue)
+	original := params.QueryViewCfg.LeaseDuration.GetValue()
 	t.Cleanup(func() { require.NoError(t, params.Save(key, original)) })
 	require.NoError(t, params.Save(key, "3s"))
 	h := recoverSNQueryViewHandler(context.Background(), testPChannel, newMockCatalog(), newMockResourceManager(), nil)
