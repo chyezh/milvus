@@ -18,6 +18,9 @@ type VChannelWALView struct {
 	// WithResourceEventLock orders a barrier after all already observed WAL events.
 	WithResourceEventLock func(func())
 	ResourceEventBarrier  func(context.Context) error
+	// PrepareQueryView checks final commits and publishes sealed notifications.
+	// QueryRuntime calls it under WithResourceEventLock before its ready barrier.
+	PrepareQueryView func() bool
 
 	PChannel     string
 	VChannel     string

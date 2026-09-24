@@ -151,13 +151,18 @@ There is no second recovery checkpoint tied to this lifecycle classification.
    and growing statistics from the same snapshot. It maintains one local
    aggregate as described in [IDF Oracle Runtime](../qviews/snview/idf_oracle_runtime.md).
 7. QueryRuntime applies the initial queued live batch, enters Ready and keeps
-   draining ordered live events. The callback moves Preparing to Ready, or
+   draining ordered live events. Each QueryView additionally checks that no
+   segment final commit remains pending, publishes any completed sealed
+   notification not yet emitted by the owner callback, and waits for an ordered
+   event barrier. Only then does the callback move Preparing to Ready, or
    UpRecovering to Up. A newly prepared view still needs Coord's Up instruction
    before accepting queries. Queries wait for their required Growing/Transform
    MVCC frontiers before using segment handles.
 
 Later QueryViews on this VChannel reuse the runtime, without repeating initial
-TransformLog replay. Their explicit DataVersions request asynchronous IDF
+TransformLog replay. They repeat the same commit check and applied-event barrier;
+an initialized runtime alone does not certify a new view's readiness. Their
+explicit DataVersions request asynchronous IDF
 refresh; readiness does not wait for a separate per-version BM25 aggregate.
 The first runtime initialization does wait for its BM25 resources. Once
 bootstrap finishes, Insert/Delete/Txn and lifecycle events arrive through the
@@ -197,3 +202,56 @@ load-info RPC also lacks exact historical-version resolution. This follow-up
 must define old/new resource ownership across Up leases while retaining one
 shared current BM25 aggregate. The partition-scope fix does not implement this
 load-config transition protocol.
+
+## 9. QueryView Readiness and Version Ordering
+
+The VChannel owner checks all current segments before each view's ready callback.
+Open growing segments do not need to flush; closing segments must finish their
+final commit. An incomplete commit delays the ready task with scheduler backoff,
+without occupying a worker waiting for the commit task. This conservative check
+can delay preparation while commits continuously overlap.
+
+`finalCommitDone` remains a durable-write fact, not proof of query visibility.
+The final task installs `SealedAtDataVersion` before its owner notification. Under
+the owner lock, the ready check therefore publishes completed sealed metadata
+itself when necessary, using the normal notification deduplication. It then queues
+an event barrier under the same lock and, after enqueue succeeds, waits for its
+completion without owner/manager locks. The barrier proves that the querying
+modules have applied the handoff metadata.
+Runtime closure wakes discarded-barrier waiters; after preparation the manager
+rechecks the view reference and runtime identity before reporting Ready.
+
+The resource manager maintains two distinct version boundaries:
+
+- Admission uses the highest DataVersion already accepted during the current
+  runtime/reference lifetime. A lower new acquisition is rejected through
+  `OnUnrecoverable`, including acquisitions from a different replica. Equal
+  versions and idempotent existing references remain valid. Removing the highest
+  reference does not lower this boundary; already retained older views continue
+  serving according to their lifecycle and leases.
+- Reclamation uses the minimum DataVersion among retained references. Reference
+  removal, recomputing this minimum and delivering `Advance` are serialized by
+  the manager. Runtime keeps its non-monotonic advance assertion. Initialization's
+  final watermark application, subsequent advances, live events and module close
+  share the runtime's application lock, preventing a recorded initial watermark
+  from overtaking or being overtaken by a later module advance.
+
+Object-storage work in `BeforeRelease` and external ready/dropped callbacks run
+outside these critical sections. The single current BM25 aggregate and deferred
+Delete replay memory optimization remain unchanged.
+
+### Deferred: slow-consumer backpressure and cancellation
+
+TODO(#40451, explicitly deferred from this PR): when GrowingRuntime consumption
+falls behind, the bounded pending event queue can fill. Enqueue then waits for
+capacity while the caller holds the VChannel owner lock, backpressuring the
+RecoveryStorage observation path and potentially delaying other VChannels on the
+same PChannel. The capacity wait currently does not wake on context cancellation
+alone; it needs capacity progress or runtime closure to unblock.
+
+This is a performance/availability degradation under sustained backlog or a
+stalled consumer. It does not let a readiness barrier overtake preceding events
+or replace the query's applied-MVCC checks. Keep the current implementation in
+this PR. A follow-up should make admission cancellation-aware and assess how to
+avoid prolonged owner-lock waits while preserving event order and backpressure,
+with full-queue slow-consumer and cancellation coverage.

@@ -39,6 +39,8 @@ type Manager struct {
 	task    *scheduledBuild
 	err     error
 	closed  bool
+	// Admission watermark, distinct from the minimum retained reclamation version.
+	latestDataVersion qviews.DataVersion
 }
 
 type queryViewRef struct {
@@ -70,12 +72,13 @@ func (m *Manager) AcquireLocked(req snview.AcquireResource, build ViewBuilder) {
 		panic("vchannel query resource is closed")
 	}
 	if _, ok := m.refs[req.Key]; !ok {
-		oldest, exists := minQueryViewDataVersion(m.refs)
-		if m.err != nil || (exists && oldest.GT(req.Key.QueryViewVersion.DataVersion)) {
+		version := req.Key.QueryViewVersion.DataVersion
+		if m.err != nil || (len(m.refs) != 0 && m.latestDataVersion.GT(version)) {
 			m.mu.Unlock()
 			m.Reject(req)
 			return
 		}
+		m.latestDataVersion = version
 		if m.refs == nil {
 			m.refs = make(map[qviews.QueryViewKey]queryViewRef)
 		}
@@ -126,11 +129,12 @@ func (m *Manager) Release(req snview.ReleaseResource) {
 	if len(m.refs) == 0 {
 		runtime, task = m.takeRuntimeLocked()
 	}
-	m.mu.Unlock()
-
+	// Keep reference removal and watermark delivery ordered across replicas.
+	// BeforeRelease may read object storage and remains outside this lock.
 	if hasAdvance && advanceRuntime != nil {
 		advanceRuntime.Advance(advance)
 	}
+	m.mu.Unlock()
 	cancelTask(task)
 	closeRuntime(runtime)
 	if hasAdvance && advanceRuntime != nil {
@@ -399,7 +403,7 @@ func (m *Manager) prepareReady(ctx context.Context, key qviews.QueryViewKey, onR
 	}
 	// TODO(#40451): bind/reprepare resources when load_info_version or schema
 	// changes. Reusing this runtime currently preserves its initial load scope.
-	if err := runtime.RequestRefresh(ctx, key.QueryViewVersion.DataVersion); err != nil {
+	if err := runtime.PrepareQueryView(ctx, key.QueryViewVersion.DataVersion); err != nil {
 		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 			return err
 		}

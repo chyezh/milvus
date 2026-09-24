@@ -255,6 +255,16 @@ the crash-recovery path.
 2. Transition growing segments to queryable state.
 3. Check whether retained growing data can satisfy the QueryView's composite
    DataVersion, using the per-Segment Flush `streaming_version` handoff metadata.
+4. Before reporting Ready, require no pending segment final commits and wait
+   until the query runtime has applied the completed sealed notifications. This
+   check also applies when reusing a runtime; it is independent of asynchronous
+   BM25 refresh. See [WAL input view readiness](../wal/streamingnode_vchannel_wal_view.md#9-queryview-readiness-and-version-ordering).
+
+New acquisitions must not regress below the shared VChannel resource manager's
+highest accepted DataVersion, including across replicas. Such acquisitions report
+Unrecoverable so Coord can replace them with a newer DataView. Equal DataVersions
+and already retained older views are allowed; this policy does not invalidate
+their existing Up leases.
 
 **Transitions:**
 
@@ -326,6 +336,8 @@ Coord and QueryNode never enter this state. For Coord-visible reporting, UpRecov
 2. Do NOT serve queries (data is incomplete).
 3. Multiple UpRecovering versions may coexist. After recovery, query planning
    selects the highest available Up version.
+4. Resource preparation uses the same final-commit and applied-sealed-event
+   readiness check before completing UpRecovering.
 
 **Transitions:**
 

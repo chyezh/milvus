@@ -66,14 +66,11 @@ func verifyConcurrentSNViews(t *testing.T, ctx, rpcctx context.Context, proxy mi
 	await(viewpb.QueryViewState_QueryViewStateUp)
 	plans := viewpb.NewQueryPlanServiceClient(sn)
 	queries := viewpb.NewViewQueryServiceClient(sn)
-	var newPlan *viewpb.QueryPlan
-	require.Eventually(t, func() bool {
-		response, err := plans.GetQueryPlan(rpcctx, &viewpb.GetQueryPlanRequest{CollectionId: next.Meta.CollectionId, ShardId: oldPlan.ShardId, Mvcc: &viewpb.GetQueryPlanRequest_ConsistencyLevel{ConsistencyLevel: commonpb.ConsistencyLevel_Strong}, Request: &viewpb.GetQueryPlanRequest_LegacyRetrieveRequest{LegacyRetrieveRequest: oldPlan.GetLegacyRetrieveRequest()}})
-		require.NoError(t, err)
-		newPlan = response.GetPlan()
-		require.True(t, proto.Equal(next.Meta.Version, newPlan.GetVersion()))
-		return len(newPlan.GetWorkNodes()) == 0
-	}, 30*time.Second, 100*time.Millisecond, "Phase 1 must prune retained segments already sealed in the new view")
+	response, err := plans.GetQueryPlan(rpcctx, &viewpb.GetQueryPlanRequest{CollectionId: next.Meta.CollectionId, ShardId: oldPlan.ShardId, Mvcc: &viewpb.GetQueryPlanRequest_ConsistencyLevel{ConsistencyLevel: commonpb.ConsistencyLevel_Strong}, Request: &viewpb.GetQueryPlanRequest_LegacyRetrieveRequest{LegacyRetrieveRequest: oldPlan.GetLegacyRetrieveRequest()}})
+	require.NoError(t, err)
+	newPlan := response.GetPlan()
+	require.True(t, proto.Equal(next.Meta.Version, newPlan.GetVersion()))
+	require.Empty(t, newPlan.GetWorkNodes(), "Ready must already fence sealed handoff; do not poll away an early Ready")
 	require.True(t, qviews.FromProtoDataVersion(newer).GT(qviews.FromProtoDataVersion(oldPlan.GetVersion().GetDataVersion())))
 	for i := 0; i < 3; i++ {
 		// Use the same post-flush MVCC for both views: only DataVersion differs.
@@ -100,4 +97,52 @@ func verifyConcurrentSNViews(t *testing.T, ctx, rpcctx context.Context, proxy mi
 	await(viewpb.QueryViewState_QueryViewStateDown)
 	apply(viewpb.QueryViewState_QueryViewStateDropped)
 	await(viewpb.QueryViewState_QueryViewStateDropped)
+	verifyCrossReplicaAdmission(t, rpcctx, sn, oldView, newer)
+}
+
+// Admission cannot regress even after the highest-version reference is dropped.
+func verifyCrossReplicaAdmission(t *testing.T, ctx context.Context, sn *grpc.ClientConn, oldView *viewpb.QueryViewOfShard, newest *viewpb.DataVersion) {
+	t.Helper()
+	stream, err := viewpb.NewViewSyncServiceClient(sn).SyncQueryView(ctx)
+	require.NoError(t, err)
+	defer stream.CloseSend()
+	for i, tc := range []struct {
+		version  *viewpb.DataVersion
+		expected viewpb.QueryViewState
+	}{
+		{oldView.GetMeta().GetVersion().GetDataVersion(), viewpb.QueryViewState_QueryViewStateUnrecoverable},
+		{newest, viewpb.QueryViewState_QueryViewStateReady},
+	} {
+		view := proto.Clone(oldView).(*viewpb.QueryViewOfShard)
+		view.Meta.ReplicaId += int64(i + 1)
+		view.Meta.Version.DataVersion = proto.Clone(tc.version).(*viewpb.DataVersion)
+		apply := func(state viewpb.QueryViewState) {
+			view.Meta.State = state
+			require.NoError(t, stream.Send(&viewpb.SyncRequest{Request: &viewpb.SyncRequest_Views{Views: &viewpb.SyncQueryViewsRequest{QueryViews: []*viewpb.QueryViewOfShard{view}}}}))
+		}
+		await := func(expected viewpb.QueryViewState) {
+			for {
+				response, err := stream.Recv()
+				require.NoError(t, err)
+				for _, report := range response.GetViews().GetQueryViews() {
+					if report.GetMeta().GetReplicaId() != view.Meta.ReplicaId {
+						continue
+					}
+					state := report.GetMeta().GetState()
+					if state == expected {
+						return
+					}
+					if expected != viewpb.QueryViewState_QueryViewStateDropped {
+						require.NotEqual(t, viewpb.QueryViewState_QueryViewStateReady, state, "stale replica view was accepted")
+						require.NotEqual(t, viewpb.QueryViewState_QueryViewStateUnrecoverable, state, "equal-version replica view was rejected")
+					}
+				}
+			}
+		}
+		apply(viewpb.QueryViewState_QueryViewStatePreparing)
+		await(tc.expected)
+		apply(viewpb.QueryViewState_QueryViewStateDropped)
+		await(viewpb.QueryViewState_QueryViewStateDropped)
+		t.Logf("cross-replica admission: replica=%d version=%s state=%s", view.Meta.ReplicaId, tc.version, tc.expected)
+	}
 }
