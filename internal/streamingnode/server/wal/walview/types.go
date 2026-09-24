@@ -27,10 +27,12 @@ type VChannelWALView struct {
 	BaseTransformTimeTick uint64
 
 	LoadInfoVersion uint64
-	PartitionIDs    []int64
-	LoadFields      []*messagespb.LoadFieldConfig
-	IndexInfos      []*indexpb.IndexInfo
-	Schema          *schemapb.CollectionSchema
+	// PartitionIDs is nil for an unrestricted legacy snapshot. A non-nil empty
+	// list means load metadata was resolved and no partitions are loaded.
+	PartitionIDs []int64
+	LoadFields   []*messagespb.LoadFieldConfig
+	IndexInfos   []*indexpb.IndexInfo
+	Schema       *schemapb.CollectionSchema
 
 	SegmentSnapshot                VisibleSegmentSnapshot
 	TransformLogStream             wal.TransformLogStream

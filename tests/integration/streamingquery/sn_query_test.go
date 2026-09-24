@@ -182,6 +182,26 @@ func TestStreamingQueryRPC(t *testing.T) {
 		}
 	}
 	t.Logf("Phase 1 + Phase 2 returned %d expected rows (recovery=%v)", len(ids), recovering)
+	// Optional partial-load fixture: the unselected partition also has growing
+	// rows, so the empty partition list above must stay within the loaded scope.
+	if unloaded := os.Getenv("SN_QUERY_TEST_UNLOADED_PARTITION"); unloaded != "" {
+		partitions, err := proxy.ShowPartitions(ctx, &milvuspb.ShowPartitionsRequest{CollectionName: name})
+		require.NoError(t, err)
+		require.NoError(t, merr.Error(partitions.GetStatus()))
+		var unloadedID int64
+		for i, name := range partitions.GetPartitionNames() {
+			if name == unloaded {
+				unloadedID = partitions.GetPartitionIDs()[i]
+			}
+		}
+		require.NotZero(t, unloadedID)
+		request := proto.Clone(plan.GetLegacyRetrieveRequest()).(*internalpb.RetrieveRequest)
+		request.PartitionIDs = []int64{unloadedID}
+		_, err = queries.QueryOnView(rpcctx, &viewpb.QueryOnViewRequest{LegacyReq: request, ShardId: plan.ShardId, Version: plan.Version, Mvcc: plan.Mvcc})
+		require.ErrorContains(t, err, "partition not loaded")
+		t.Logf("unloaded partition %s rejected; unrestricted request returned only loaded rows", unloaded)
+	}
+
 	metric := "L2"
 	if bm25 {
 		metric = "BM25"

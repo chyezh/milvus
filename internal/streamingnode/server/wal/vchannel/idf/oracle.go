@@ -222,7 +222,7 @@ func newOracleRuntime(ctx context.Context, provider *Provider, view walview.VCha
 		scheduler:       scheduler,
 		collectionID:    view.CollectionID,
 		vchannel:        view.VChannel,
-		partitionIDs:    append([]int64(nil), view.PartitionIDs...),
+		partitionIDs:    slices.Clone(view.PartitionIDs),
 		fieldIDs:        loadedFields,
 		loadInfoVersion: view.LoadInfoVersion,
 		schema:          schema,
@@ -236,6 +236,9 @@ func newOracleRuntime(ctx context.Context, provider *Provider, view walview.VCha
 	}
 
 	for _, resource := range resources {
+		if !r.includesPartition(resource.GetPartitionId()) {
+			continue
+		}
 		stats, err := loadSealedSegmentStats(ctx, provider.chunkManager, resource, r.currentStats)
 		if err != nil {
 			cancel()
@@ -309,7 +312,7 @@ func (r *oracleRuntime) collectPersistedGrowingStats(ctx context.Context, segmen
 }
 
 func (r *oracleRuntime) includesPartition(id int64) bool {
-	return len(r.partitionIDs) == 0 || slices.Contains(r.partitionIDs, id)
+	return r.partitionIDs == nil || slices.Contains(r.partitionIDs, id)
 }
 
 // BuildIDF deliberately ignores the query DataVersion: all views share the
@@ -466,6 +469,9 @@ func (r *oracleRuntime) refresh(ctx context.Context, target qviews.DataVersion) 
 	r.mu.RUnlock()
 	next := make(map[int64]*datapb.StreamingNodeBM25Resource)
 	for _, resource := range response.GetBm25Resources() {
+		if !r.includesPartition(resource.GetPartitionId()) {
+			continue
+		}
 		next[resource.GetSegmentId()] = proto.Clone(resource).(*datapb.StreamingNodeBM25Resource)
 	}
 	positive, negative := make(bm25Stats), make(bm25Stats)

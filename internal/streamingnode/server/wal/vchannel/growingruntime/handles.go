@@ -24,13 +24,19 @@ func (r *Runtime) AcquireGrowingSegmentHandles(ctx context.Context, dataVersion 
 		r.mu.Unlock()
 		return nil, merr.WrapErrServiceInternalMsg("growing runtime closed")
 	}
+	for _, id := range partitionIDs {
+		if !r.partitionLoaded(id) {
+			r.mu.Unlock()
+			return nil, merr.WrapErrPartitionNotLoaded(id)
+		}
+	}
 	handles := make([]snview.GrowingSegmentHandle, 0, len(r.segments))
 	for _, segmentID := range r.segmentIDs {
 		segment := r.segments[segmentID]
 		if segment == nil {
 			continue
 		}
-		if !partitionSelected(selectedPartitions, segment.partitionID) {
+		if !r.partitionLoaded(segment.partitionID) || !partitionSelected(selectedPartitions, segment.partitionID) {
 			continue
 		}
 		csegment, ok := segment.pinIfVisible(dataVersion)
@@ -112,4 +118,13 @@ func (h growingSegmentHandle) Release() {
 			h.runtime.unpinQuery()
 		}
 	})
+}
+
+// The loaded scope is installed during Prepare, before live events/queries.
+func (r *Runtime) partitionLoaded(id int64) bool {
+	if r.loadedPartitions == nil {
+		return true
+	}
+	_, ok := r.loadedPartitions[id]
+	return ok
 }

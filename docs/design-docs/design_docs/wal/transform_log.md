@@ -150,3 +150,39 @@ and [WAL input view](streamingnode_vchannel_wal_view.md) for snapshot handoff.
 5. Historical/live handoff and storage transitions lose no records.
 6. Subscription cursors do not advance L0 materialization or authorize GC.
 7. L0 materialization does not depend on this adaptor or on external subscribers.
+
+## 8. TODO: DDL Visibility Entries (Outside This PR)
+
+The agreed [Truncate and Partition Drop visibility TODO](../qviews/ddl_visibility.md)
+extends TransformLogEntry with explicit TruncateCollection and DropPartition
+payloads. All affected SN/QN consumers would use their ordered application and
+request MVCC to exclude invalidated segments. This requires extending the
+current Delete-only delivery/SyncUp coverage contract; payload-free barriers
+are insufficient. Until the distributed protocol is implemented, retain the
+QueryView handoff visibility fence described there. No entry, transport or
+runtime implementation is added by this design note.
+
+## 9. TODO: Bound SN Bootstrap Consumer Memory (Deferred)
+
+The current local subscription bounds the replay interval and the adaptor's
+delivery batches, but not GrowingRuntime's total bootstrap replay buffer.
+`growingruntime.drainDeleteReplay` collects every entry in the requested interval
+before `Runtime.Prepare` applies them. Its additional retained payload therefore
+grows with the entire replay interval, despite WALSummary's paged reads and the
+handler's bounded event channel.
+
+This optimization is explicitly deferred from the current PR. A follow-up should
+apply entries incrementally to the unpublished runtime, preserving partition
+scope, transaction commit timestamps and ordered application. Only complete
+replay through the target SyncUp may publish the preparation frontiers. A read or
+apply failure must discard the partial runtime and use the existing fresh-build
+retry path; cancellation must unblock delivery before waiting for subscription
+shutdown.
+
+The intended bound covers the current read batch, bounded queued entries and one
+active entry. A single oversized entry or transaction can exceed the batch soft
+limits. This does not bound WALSummary's own retained data or the delete state
+that segcore must retain. No new disk cache or per-version resources are planned.
+Validation should cover multi-page replay, midstream failures, cancellation with
+a full queue and peak extra replay memory. The current implementation remains
+unchanged by this TODO.

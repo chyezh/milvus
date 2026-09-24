@@ -375,3 +375,12 @@ StreamingNode already implements Pub-Sub capability. PureDeleteStreamManager wra
 - Bloom filter filtering + batch merge of delete data at the Node level.
 - Remote Load L0 (conflicts with Bloom filter filtering; choose one of the two).
 - Subscription catch-up merging.
+
+## 15. TODO: DDL Query Visibility
+
+[Truncate and Partition Drop Query Visibility](ddl_visibility.md) records the
+agreed follow-up: typed TransformLog entries delivered to the affected SN/QN
+consumers enable MVCC-based segment exclusion. Until then, DDL query visibility
+uses a QueryView handoff fence (QueryCoord target update in the legacy model).
+The MVCC extension and distributed delivery are outside the current SN query
+extraction PR; a progress barrier alone does not implement DDL visibility.

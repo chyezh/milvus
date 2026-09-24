@@ -51,9 +51,16 @@ func (r *Runtime) MayHaveVisibleGrowingSegments(dataVersion qviews.DataVersion, 
 	if r.closed || !r.mvccVisibleLocked(growingTimetick, transformTimetick) {
 		return true
 	}
+	// Do not optimize an invalid partition request into a successful empty
+	// result; handle acquisition must report the unloaded partition.
+	for _, id := range partitionIDs {
+		if !r.partitionLoaded(id) {
+			return true
+		}
+	}
 	for _, segmentID := range r.segmentIDs {
 		segment := r.segments[segmentID]
-		if segment == nil || !partitionSelected(selectedPartitions, segment.partitionID) {
+		if segment == nil || !r.partitionLoaded(segment.partitionID) || !partitionSelected(selectedPartitions, segment.partitionID) {
 			continue
 		}
 		segment.mu.Lock()

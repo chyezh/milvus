@@ -11,6 +11,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/views/qviews"
+	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
@@ -214,17 +215,67 @@ func (m *Manager) startBuildLocked(meta *viewpb.QueryViewMeta, build ViewBuilder
 		panic("query resource dispatcher is nil")
 	}
 	runtime := newQueryRuntime(m.dispatcher, m.newModules()...)
-	task := newResourceBuildTask(func(ctx context.Context) (*QueryRuntime, error) {
-		resolved, err := m.resolveLoadInfo(ctx, view)
-		if err != nil {
-			return runtime, errors.Mark(err, nodescheduler.ErrDelay)
-		}
-		if err := runtime.Initialize(ctx, resolved); err != nil {
+	m.runtime = runtime
+	withOwnerLock := view.WithResourceEventLock
+	var task *resourceBuildTask
+	task = newResourceBuildTask(func(ctx context.Context) (*QueryRuntime, error) {
+		if err := ctx.Err(); err != nil {
 			return runtime, err
 		}
-		return runtime, nil
+		if runtime == nil {
+			// Each retry captures a fresh snapshot and installs its live observer in
+			// the same owner critical section. Never Prepare a partially built module.
+			var captureErr error
+			capture := func() {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+				if m.closed || m.task == nil || m.task.task != task || len(m.refs) == 0 {
+					captureErr = context.Canceled
+					return
+				}
+				var ok bool
+				view, ok = build(m.oldestQueryViewMetaLocked())
+				if !ok {
+					captureErr = nodescheduler.ErrDelay
+					return
+				}
+				runtime = newQueryRuntime(m.dispatcher, m.newModules()...)
+				m.runtime = runtime
+			}
+			if withOwnerLock != nil {
+				withOwnerLock(capture)
+			} else {
+				capture()
+			}
+			if captureErr != nil {
+				return nil, captureErr
+			}
+		}
+		resolved, err := m.resolveLoadInfo(ctx, view)
+		if err == nil {
+			err = runtime.Initialize(ctx, resolved)
+		}
+		if err == nil {
+			return runtime, nil
+		}
+		// Close outside the owner/manager locks, also waking a producer blocked on
+		// the failed runtime's full event queue before the next snapshot capture.
+		closeRuntime(runtime)
+		m.mu.Lock()
+		if m.runtime == runtime {
+			m.runtime = nil
+		}
+		m.mu.Unlock()
+		runtime = nil
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if errors.Is(err, wal.ErrTransformLogStartPointTruncated) || errors.Is(err, merr.ErrDataIntegrity) {
+			return nil, err
+		}
+		mlog.Warn(ctx, "retry query runtime preparation", mlog.FieldVChannel(view.VChannel), mlog.Err(err))
+		return nil, errors.Mark(merr.Wrap(err, "initialize query runtime"), nodescheduler.ErrDelay)
 	})
-	m.runtime = runtime
 	m.task = scheduleResourceBuild(m.scheduler, task, m.finishBuild)
 	m.err = nil
 	return true
@@ -250,7 +301,9 @@ func (m *Manager) resolveLoadInfo(ctx context.Context, view walview.VChannelWALV
 	if err != nil {
 		return view, err
 	}
-	view.PartitionIDs = loadInfo.PartitionIDs
+	// A resolved empty list means no loaded partitions; nil in a WAL-only
+	// snapshot retains the legacy unrestricted scope.
+	view.PartitionIDs = append([]int64{}, loadInfo.PartitionIDs...)
 	view.LoadFields = loadInfo.LoadFields
 	view.IndexInfos = loadInfo.IndexInfos
 	return view, nil
@@ -286,16 +339,12 @@ func (m *Manager) finishBuild(task *scheduledBuild) {
 	}
 	m.task = nil
 	if err != nil {
-		if errors.Is(err, wal.ErrTransformLogStartPointTruncated) {
-			m.err = err
-			failedRuntime, m.runtime = m.runtime, nil
+		m.err = err
+		failedRuntime, m.runtime = m.runtime, nil
+		if !errors.Is(err, context.Canceled) {
 			for _, ref := range m.refs {
 				unrecoverable = append(unrecoverable, ref.onUnrecoverable)
 			}
-		} else if errors.Is(err, context.Canceled) {
-			m.err = err
-		} else {
-			panic(merr.Wrap(err, "initialize query runtime"))
 		}
 	} else {
 		m.runtime = runtime
@@ -348,6 +397,8 @@ func (m *Manager) prepareReady(ctx context.Context, key qviews.QueryViewKey, onR
 	if !ready {
 		return nil
 	}
+	// TODO(#40451): bind/reprepare resources when load_info_version or schema
+	// changes. Reusing this runtime currently preserves its initial load scope.
 	if err := runtime.RequestRefresh(ctx, key.QueryViewVersion.DataVersion); err != nil {
 		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 			return err

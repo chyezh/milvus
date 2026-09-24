@@ -275,3 +275,28 @@ func TestOracleManualFlushWaitsForFinalCommit(t *testing.T) {
 	require.Contains(t, r.growingStore.segments, int64(21))
 	require.Equal(t, int64(1), r.currentStats[102].NumRow())
 }
+
+func TestOraclePreservesResolvedEmptyPartitionScope(t *testing.T) {
+	base, resource := newTestOracle(t)
+	excluded := resource(20, 2)
+	excluded.PartitionId = 10
+	for _, partitions := range [][]int64{{}, {10}, {30}} {
+		r, err := newOracleRuntime(context.Background(), base.provider, walview.VChannelWALView{Schema: base.schema, CollectionID: 1, VChannel: "v1", PartitionIDs: partitions, SegmentSnapshot: walview.VisibleSegmentSnapshot{DataVersion: qviews.DataVersion{StreamingVersion: 10}}}, []*datapb.StreamingNodeBM25Resource{excluded})
+		require.NoError(t, err)
+		expected := int64(0)
+		if r.includesPartition(10) {
+			expected = 1
+		}
+		require.Equal(t, expected, r.currentStats[102].NumRow())
+		r.ApplyLiveEvent(context.Background(), walview.VChannelResourceEvent{Message: bm25Insert(t, 30, 2)})
+		// bm25Insert uses partition 10.
+		require.Equal(t, expected*2, r.currentStats[102].NumRow())
+		version := qviews.DataVersion{StreamingVersion: 11}
+		resources := []*datapb.StreamingNodeBM25Resource{excluded}
+		patch := mockey.Mock((*Provider).fetchResources).Return(&datapb.GetStreamingNodeQueryViewResourcesResponse{DataVersion: version.IntoProto(), Bm25Resources: resources}, nil).Build()
+		require.NoError(t, r.refresh(context.Background(), version))
+		patch.UnPatch()
+		require.Equal(t, expected*2, r.currentStats[102].NumRow())
+		r.Close()
+	}
+}

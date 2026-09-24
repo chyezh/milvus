@@ -143,6 +143,10 @@ There is no second recovery checkpoint tied to this lifecycle classification.
    QueryView's transform start. With no visible segments, start equals T.
    Bounded replay waits for coverage through T; truncated history fails with
    `ErrTransformLogStartPointTruncated` and the view becomes Unrecoverable.
+   The current consumer buffers the full interval before applying entries;
+   bounded replay here refers to the interval, not total consumer memory. The
+   [incremental replay memory TODO](transform_log.md#9-todo-bound-sn-bootstrap-consumer-memory-deferred)
+   is explicitly deferred from this PR.
 6. IDF initializes from sealed statistics fetched for the requested DataVersion
    and growing statistics from the same snapshot. It maintains one local
    aggregate as described in [IDF Oracle Runtime](../qviews/snview/idf_oracle_runtime.md).
@@ -165,3 +169,31 @@ Implementation references (relative to repository root):
 - `internal/streamingnode/server/wal/vchannel/queryresource/{manager,runtime}.go`
 - `internal/streamingnode/server/wal/vchannel/growingruntime/{builder,delete_replay,live}.go`
 - `internal/streamingnode/server/wal/walsummary/stream.go`
+
+## 8. Preparation Retry and Loaded Partition Scope
+
+An initialization timeout or transient resource-read failure keeps the view in
+Preparing. NodeScheduler retries with backoff even if no new WAL message arrives.
+Each failed attempt closes its partial modules and buffered events outside the
+owner/manager locks. The next attempt captures a fresh snapshot and installs a
+fresh QueryRuntime under the same VChannel lock. It never reuses partially
+prepared modules. A released/cancelled build cannot install a replacement or
+report Ready for a later acquisition. Truncated TransformLog history and explicit
+data-integrity failures report Unrecoverable; owner cancellation stops the build.
+
+Once load metadata is resolved, its partition list is authoritative for the
+runtime: an empty list means no loaded partitions. A nil list in a legacy,
+unresolved WAL-only snapshot preserves the unrestricted behavior. Growing
+snapshot loading, live segment creation/inserts, candidate probing and handle
+acquisition all obey the prepared scope. An empty request partition list means
+all partitions in that scope; explicitly requesting an unloaded partition fails.
+IDF initialization and refresh filter both growing contributions and sealed
+resource descriptors using the same nil-versus-empty load-scope convention.
+
+TODO(#40451, pending discussion): a later QueryView with a different
+load_info_version or schema still reuses the initial runtime/load scope. It does
+not yet trigger resource-spec reconciliation or replacement. The minimal Coord
+load-info RPC also lacks exact historical-version resolution. This follow-up
+must define old/new resource ownership across Up leases while retaining one
+shared current BM25 aggregate. The partition-scope fix does not implement this
+load-config transition protocol.
