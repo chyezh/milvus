@@ -17,7 +17,6 @@ import (
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/util/hardware"
-	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
@@ -112,11 +111,33 @@ func TestRuntimePrepareRespectsLazyLoadSealedStats(t *testing.T) {
 	})
 }
 
+func TestRuntimeAdvancesBM25OnlyDuringDataVersionPreparation(t *testing.T) {
+	setLazyLoadSealedStats(t, false)
+	current := qviews.DataVersion{StreamingVersion: 10}
+	target := qviews.DataVersion{StreamingVersion: 11}
+	client := mocks.NewMockDataCoordClient(t)
+	client.EXPECT().GetStreamingNodeQueryViewResources(mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, req *datapb.GetStreamingNodeQueryViewResourcesRequest, _ ...grpc.CallOption) (*datapb.GetStreamingNodeQueryViewResourcesResponse, error) {
+			return testBM25ResourceResponse(req), nil
+		}).Twice()
+
+	runtime := newTestRuntime(t, client)
+	defer runtime.Close()
+	require.NoError(t, runtime.Prepare(context.Background(), testBM25WALView(current)))
+	require.Len(t, client.Calls, 1)
+
+	runtime.Advance(target)
+	require.Len(t, client.Calls, 1)
+	require.True(t, oracleCurrentVersion(runtime.currentOracle()).EQ(current))
+
+	require.NoError(t, runtime.PrepareDataVersion(context.Background(), target))
+	require.Len(t, client.Calls, 2)
+	require.True(t, oracleCurrentVersion(runtime.currentOracle()).EQ(target))
+}
+
 func newTestRuntime(t *testing.T, client *mocks.MockDataCoordClient, opts ...ProviderOption) *Runtime {
 	t.Helper()
-	scheduler := nodescheduler.New(1)
-	t.Cleanup(scheduler.Close)
-	provider := NewProvider(client, append([]ProviderOption{WithNodeScheduler(scheduler)}, opts...)...)
+	provider := NewProvider(client, opts...)
 	provider.sealedCache = newSegmentCacheAt(t.TempDir())
 	module, err := provider.NewRuntime()
 	require.NoError(t, err)

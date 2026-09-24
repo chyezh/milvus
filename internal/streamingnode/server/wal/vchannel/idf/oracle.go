@@ -7,8 +7,6 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"golang.org/x/sync/errgroup"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/storage"
@@ -17,7 +15,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
-	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
 type bm25Stats map[int64]*storage.BM25Stats
@@ -250,22 +247,17 @@ type oracleRuntime struct {
 	loadInfoVersion uint64
 	schema          *schemapb.CollectionSchema
 
-	scheduler nodescheduler.Scheduler
-
-	mu               sync.RWMutex
-	lazy             bool
-	pending          qviews.DataVersion
-	hasPending       bool
-	advanceHandle    nodescheduler.TaskHandle
-	advanceScheduled bool
-	closed           bool
-	currentVersion   qviews.DataVersion
-	currentStats     bm25Stats
-	currentSealed    map[int64]*sealedBm25Stats
-	currentGrowing   map[int64]struct{}
-	prepared         map[qviews.DataVersion]map[int64]*sealedBm25Stats
-	materialization  *materializationCall
-	growingStore     *growingStatsStore
+	advanceMu       sync.Mutex
+	mu              sync.RWMutex
+	lazy            bool
+	closed          bool
+	currentVersion  qviews.DataVersion
+	currentStats    bm25Stats
+	currentSealed   map[int64]*sealedBm25Stats
+	currentGrowing  map[int64]struct{}
+	prepared        map[qviews.DataVersion]map[int64]*sealedBm25Stats
+	materialization *materializationCall
+	growingStore    *growingStatsStore
 
 	closeOnce sync.Once
 }
@@ -277,13 +269,8 @@ func newOracleRuntime(
 	initialResources []*datapb.StreamingNodeBM25Resource,
 	lazy bool,
 ) (*oracleRuntime, error) {
-	scheduler := provider.scheduler
-	if scheduler == nil {
-		scheduler = nodescheduler.Get()
-	}
 	r := &oracleRuntime{
 		provider:        provider,
-		scheduler:       scheduler,
 		lazy:            lazy,
 		collectionID:    walView.CollectionID,
 		vchannel:        walView.VChannel,
@@ -407,12 +394,23 @@ func (r *oracleRuntime) PrepareDataVersion(ctx context.Context, target qviews.Da
 		return nil
 	}
 	if r.lazy && r.currentStats == nil {
+		if err := ctx.Err(); err != nil {
+			r.mu.Unlock()
+			return err
+		}
+		call := r.materialization
+		r.currentVersion = target
+		r.currentGrowing = nil
 		r.mu.Unlock()
+		if call != nil && !call.target.EQ(target) {
+			call.cancel()
+		}
+		r.growingStore.cleanup(target, nil)
 		return nil
 	}
 	if _, ok := r.prepared[target]; ok {
 		r.mu.Unlock()
-		return nil
+		return r.advancePrepared(ctx, target)
 	}
 	r.mu.Unlock()
 
@@ -450,13 +448,51 @@ func (r *oracleRuntime) PrepareDataVersion(ctx context.Context, target qviews.Da
 	if _, ok := r.prepared[target]; ok {
 		r.mu.Unlock()
 		r.releaseSealed(sealed)
-		return nil
+		return r.advancePrepared(ctx, target)
 	}
 	if r.prepared == nil {
 		r.prepared = make(map[qviews.DataVersion]map[int64]*sealedBm25Stats)
 	}
 	r.prepared[target] = sealed
 	r.mu.Unlock()
+	return r.advancePrepared(ctx, target)
+}
+
+func (r *oracleRuntime) advancePrepared(ctx context.Context, target qviews.DataVersion) error {
+	r.advanceMu.Lock()
+	defer r.advanceMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	r.mu.RLock()
+	closed := r.closed
+	current := r.currentVersion
+	r.mu.RUnlock()
+	if closed {
+		return context.Canceled
+	}
+	if !target.GT(current) {
+		return nil
+	}
+	diff, err := r.computeDiff(ctx, target)
+	if err != nil {
+		return err
+	}
+	r.commitDiff(ctx, diff)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.mu.RLock()
+	closed = r.closed
+	advanced := !target.GT(r.currentVersion)
+	r.mu.RUnlock()
+	if closed {
+		return context.Canceled
+	}
+	if !advanced {
+		return merr.WrapErrServiceUnavailableMsg("BM25 stats did not advance to data version %s", target.String())
+	}
 	return nil
 }
 
@@ -650,51 +686,14 @@ func (r *oracleRuntime) applySegmentSealed(segmentID int64, sealedAt qviews.Data
 	r.growingStore.cleanup(currentVersion, currentGrowing)
 }
 
-func (r *oracleRuntime) MaybeAdvance(target qviews.DataVersion) {
-	r.mu.Lock()
-	if r.closed || !target.GT(r.currentVersion) {
-		r.mu.Unlock()
-		return
-	}
-	if r.lazy && r.currentStats == nil {
-		call := r.materialization
-		r.currentVersion = target
-		r.currentGrowing = nil
-		r.mu.Unlock()
-		if call != nil && !call.target.EQ(target) {
-			call.cancel()
-		}
-		r.growingStore.cleanup(target, nil)
-		return
-	}
-	if !r.hasPending || target.GT(r.pending) {
-		r.pending = target
-		r.hasPending = true
-	}
-	if !r.advanceScheduled {
-		r.advanceScheduled = true
-		r.advanceHandle = r.scheduler.Submit(oracleAdvanceTask{runtime: r})
-	}
-	r.mu.Unlock()
-}
-
-func (r *oracleRuntime) Advance(target qviews.DataVersion) {
-	r.MaybeAdvance(target)
-}
-
 func (r *oracleRuntime) Close() {
 	r.closeOnce.Do(func() {
 		r.mu.Lock()
 		r.closed = true
-		handle := r.advanceHandle
 		call := r.materialization
 		r.mu.Unlock()
 		if call != nil {
 			call.cancel()
-		}
-		if handle != nil {
-			handle.Cancel()
-			_ = handle.Wait(context.Background())
 		}
 		if call != nil {
 			<-call.done
@@ -712,80 +711,6 @@ func (r *oracleRuntime) Close() {
 			r.releaseSealed(version)
 		}
 	})
-}
-
-type oracleAdvanceTask struct {
-	runtime *oracleRuntime
-}
-
-func (t oracleAdvanceTask) Execute(ctx context.Context) error {
-	r := t.runtime
-	target, ok := r.popPending()
-	if !ok {
-		return r.finishAdvance(ctx, nil)
-	}
-	diff, err := r.computeDiff(ctx, target)
-	if err != nil {
-		if ctx.Err() == nil && shouldRetryAdvance(err) {
-			r.restorePending(target)
-		}
-		return r.finishAdvance(ctx, err)
-	}
-	r.commitDiff(ctx, diff)
-	return r.finishAdvance(ctx, nil)
-}
-
-func shouldRetryAdvance(err error) bool {
-	if merr.IsRetryableErr(err) || errors.Is(err, context.DeadlineExceeded) {
-		return true
-	}
-	switch status.Code(err) {
-	case codes.Unavailable, codes.DeadlineExceeded, codes.ResourceExhausted:
-		return true
-	}
-	return false
-}
-
-func (r *oracleRuntime) popPending() (qviews.DataVersion, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if !r.hasPending {
-		return qviews.DataVersion{}, false
-	}
-	target := r.pending
-	r.pending = qviews.DataVersion{}
-	r.hasPending = false
-	return target, true
-}
-
-func (r *oracleRuntime) restorePending(target qviews.DataVersion) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.closed || !target.GT(r.currentVersion) {
-		return
-	}
-	if !r.hasPending || target.GT(r.pending) {
-		r.pending = target
-		r.hasPending = true
-	}
-}
-
-func (r *oracleRuntime) finishAdvance(ctx context.Context, err error) error {
-	r.mu.Lock()
-	if r.hasPending && !r.pending.GT(r.currentVersion) {
-		r.pending = qviews.DataVersion{}
-		r.hasPending = false
-	}
-	if r.closed || ctx.Err() != nil || !r.hasPending {
-		r.advanceScheduled = false
-		r.mu.Unlock()
-		return err
-	}
-	r.mu.Unlock()
-	if err != nil {
-		return errors.Mark(err, nodescheduler.ErrDelay)
-	}
-	return nodescheduler.ErrDelay
 }
 
 func (r *oracleRuntime) computeDiff(ctx context.Context, target qviews.DataVersion) (*idfDiff, error) {

@@ -21,8 +21,7 @@ The purpose of `IDFOracleRuntime` is to:
 3. continuously generate growing-segment BM25 statistics from live WAL resource
    events forwarded by `QueryRuntime`;
 4. record each flushed growing segment's sealed DataVersion;
-5. asynchronously advance the current oracle when QueryView reference watermarks
-   move forward;
+5. advance the current oracle before a newer QueryView reports Ready;
 6. atomically apply BM25 statistics diffs so readers never observe a partially
    advanced oracle;
 7. release obsolete sealed file references and growing statistics;
@@ -38,13 +37,12 @@ catchup, and the transition to `Ready`.
 | Component | Role | Boundary |
 |---|---|---|
 | `VChannelRecoveryModule` | VChannel-local owner of QueryView references. It creates the vchannel `QueryRuntime`, waits for runtime initialization on `Acquire`, and advances the runtime by oldest active QueryView DataVersion. | It does not compute BM25 stats diffs and does not evict IDF internal segment stats. |
-| `QueryRuntime` | VChannel-level singleton runtime. Owns one live-event buffer and one consumer, calls `IDFOracleRuntime.Prepare`, forwards live events, and calls `IDFOracleRuntime.Advance`. | It does not compute BM25 stats or fetch sealed resources directly. |
-| `IDFOracleRuntime` | QueryRuntime module that owns one rolling aggregate, a growing BM25 stats store, sealed cache references for the current and prepared versions, and coalesced advance-task state. | It does not own the vchannel live-event buffer, expose external truncation, or own QueryView references. |
+| `QueryRuntime` | VChannel-level singleton runtime. Owns one live-event buffer and one consumer, calls `IDFOracleRuntime.PrepareDataVersion` before QueryView readiness, and forwards live events. | It does not compute BM25 stats or fetch sealed resources directly. |
+| `IDFOracleRuntime` | QueryRuntime module that owns one rolling aggregate, a growing BM25 stats store, and sealed cache references for the current and prepared versions. | It does not own the vchannel live-event buffer, expose external truncation, or own QueryView references. |
 | `VChannelWALView` | Provides the initial schema, settings, segment snapshot, historical insert input, and no-gap live resource event stream. | Its capture and no-gap contract are defined in [StreamingNode VChannel WAL View Design](../../wal/streamingnode_vchannel_wal_view.md). |
 | `SealedBM25ResourceProvider` | Calls DataCoord to fetch the complete sealed BM25 resource set for a target DataVersion. | It does not cache local files or merge oracle stats. |
 | `SealedBM25SegmentCache` | Downloads, parses, reuses, and retains sealed BM25 files. | It does not decide DataVersion advancement or contribution membership. |
 | `GrowingBM25StatsStore` | Maintains local BM25 stats for growing segments generated from snapshot and live WAL events, plus flushed/sealed metadata. | It does not fetch sealed resources from DataCoord. |
-| `IDFAdvanceTask` | Runs on the node-level `NodeScheduler`, serializes asynchronous oracle advancement requests, and coalesces them to the newest allowed requested DataVersion. | One oracle has at most one queued or running task and owns no dedicated advance goroutine. |
 
 ## 3. Component Relationships And Invariants
 
@@ -85,15 +83,10 @@ GrowingBM25StatsStore
 DataVersion advancement:
 
 ```text
-VChannelRecoveryModule
-        |
-        | QueryRuntime.Advance(oldestDataVersion)
-        v
-QueryRuntime
-        |
-        | IDFOracleRuntime.Advance(oldestDataVersion)
-        v
-NodeScheduler / IDFAdvanceTask
+QueryRuntime.PrepareDataVersion(target)
+  -> IDFOracleRuntime.PrepareDataVersion(target)
+  -> materialized: load and apply the target's stats before Ready
+  -> unmaterialized lazy: record target without sealed I/O
 ```
 
 ### 3.2 Runtime State
@@ -112,8 +105,6 @@ IDFOracleRuntime
   growingStore GrowingBM25StatsStore
   sealedCache SealedBM25SegmentCache
   provider SealedBM25ResourceProvider
-  pendingDataVersion
-  advanceTaskHandle
   close/cancel
 ```
 
@@ -174,17 +165,18 @@ first DataView membership version arrives.
     `QueryRuntime` in WAL order.
 13. The first QueryView `Up` report waits for `QueryRuntime.Initialize` to
     complete successfully.
-14. `Advance(oldestDataVersion)` may enqueue asynchronous IDF advancement, but
-    QueryView activation does not wait for the advancement to finish.
-15. IDF advancement is vchannel-local, serial, asynchronous, monotonic, and
-    executed by the node-level `NodeScheduler`.
+14. A newer QueryView reports Ready only after a materialized aggregate reaches
+    its DataVersion. An unmaterialized lazy aggregate records the target without
+    sealed I/O and materializes on the first BM25 query.
+15. IDF advancement is vchannel-local, serial, and monotonic. QueryView resource
+    preparation runs on the node-level `NodeScheduler`.
 16. Sealed BM25 contribution diffs are computed before the commit; growing
     membership is evaluated while committing under the oracle write lock.
 17. A materialized DataVersion handoff updates the sealed baseline and rolling
     aggregate under one write lock. Live growing events also update the
     aggregate under that lock.
-18. The runtime owns cleanup of obsolete growing stats, sealed file references,
-    and abandoned advance-task resources.
+18. The runtime owns cleanup of obsolete growing stats and sealed file
+    references.
 19. A valid live event that cannot be applied is a critical StreamingNode
     corruption, not a recoverable QueryView resource condition.
 
@@ -226,21 +218,20 @@ lazy mode the first BM25 query performs that materialization. The runtime keeps
 the derived oracle state, not the WALView object passed into `Prepare`.
 
 Once the initial aggregate exists, `PrepareDataVersion` fetches a newer
-DataVersion's sealed resources and retains local files before its QueryView is
-ready, without parsing them. Lazy runtimes that have not yet materialized skip
-this sealed I/O. A prepared entry contains file references only.
+DataVersion's sealed resources, parses changed stats, and commits the aggregate
+before its QueryView is ready. Lazy runtimes that have not yet materialized
+record the target DataVersion without sealed I/O. A prepared entry contains
+file references only while advancement is in progress.
 `ReleaseDataVersion` drops references for a version that is no longer needed.
 
 `ApplyLiveEvent` updates growing BM25 stats and sealed-at metadata from live
 events forwarded by `QueryRuntime`.
 
-`Advance(oldestDataVersion)` requests an asynchronous handoff to
-`oldestDataVersion` if it is newer than the current oracle DataVersion. If the
-target is not newer, it is ignored.
+`Advance(oldestDataVersion)` is a no-op in the IDF module. The generic
+`QueryRuntime` still forwards this watermark to the growing module for cleanup.
 
 There is intentionally no external `Truncate` method. Obsolete IDF internal
-state is cleaned by the runtime after diff commit, segment sealed observation,
-or advance-task cancellation.
+state is cleaned by the runtime after diff commit or segment sealed observation.
 
 ### 4.3 SealedBM25ResourceProvider
 
@@ -279,22 +270,6 @@ The store records BM25 stats for local growing segments and records
 determines growing membership and clones stats only for segments whose
 membership changes.
 
-### 4.6 IDFAdvanceTask
-
-`oracleAdvanceTask` implements the node scheduler's `Task` interface through
-`Execute(ctx context.Context) error`.
-
-`IDFOracleRuntime.Advance` records the greatest pending target and submits at
-most one task to the node-level scheduler. Multiple requests may be coalesced as
-long as the task never commits an oracle newer than the latest allowed
-`oldestDataVersion` observed from the resource manager. If a newer target
-arrives during execution, the task returns `nodescheduler.ErrDelay` and moves
-to the scheduler queue tail. Recoverable load errors restore the pending target
-for retry. A non-retryable error does not restore the failed target or apply its
-diff. The task ends if no newer target is pending.
-
-There is no dedicated goroutine, notification channel, or worker per vchannel.
-
 ## 5. Actual Behavior
 
 ### 5.1 Initial Preparation
@@ -311,8 +286,8 @@ Eager mode is the default (`queryNode.idfOracle.lazyLoadSealedStats=false`).
 When enabled, lazy initialization performs no sealed resource discovery or
 file download. The first BM25 query loads and merges sealed stats. Concurrent
 queries share that in-flight materialization.
-Once materialized, subsequent DataVersion updates use ordinary eager file
-preparation and asynchronous aggregate advancement.
+Once materialized, subsequent DataVersion updates load and apply their changed
+stats before the new QueryView reports Ready.
 
 ### 5.2 Live Event Apply
 
@@ -344,21 +319,20 @@ growing preparation without materializing sealed stats.
 ### 5.4 Oracle Advancement
 
 ```text
-QueryView references move forward
-  -> VChannelRecoveryModule computes oldestDataVersion
-  -> QueryRuntime.Advance(oldestDataVersion)
-  -> IDFOracleRuntime.Advance(oldestDataVersion)
-  -> coalesce pending DataVersion
-  -> NodeScheduler.Submit(IDFAdvanceTask), at most once per oracle
+QueryView resource preparation
+  -> QueryRuntime.PrepareDataVersion(target)
+  -> IDFOracleRuntime.PrepareDataVersion(target)
+  -> materialized: compute and commit the target's stats
+  -> unmaterialized lazy: advance the target version without sealed I/O
+  -> report Ready
 ```
 
 Once the initial aggregate exists, `PrepareDataVersion` resolves and downloads
 sealed BM25 files before a QueryView with a newer DataVersion becomes ready,
-without decoding them. If lazy initialization has not yet materialized the
-aggregate, later version preparation also defers sealed I/O. The advance
-task decodes changed sealed contributions from local files, computes the BM25
-diff, and commits it asynchronously. QueryView activation does not wait for
-this background handoff.
+decodes changed contributions, and commits the BM25 diff before reporting
+Ready. If lazy initialization has not yet materialized the aggregate, version
+preparation records the new target without sealed I/O. Its first BM25 query
+materializes the latest recorded target.
 
 The diff model:
 
@@ -372,13 +346,12 @@ positive contributions:
   growing segments newly visible at the target
 ```
 
-The task loads sealed stats and computes their positive and negative diffs
+Advancement loads sealed stats and computes their positive and negative diffs
 outside the oracle write lock. Commit applies those diffs, updates growing
 membership and the current DataVersion, and publishes the new sealed file map
-under one write lock. A recoverable compute error requeues the pending target;
-a non-retryable error leaves that target uncommitted. If no newer target is
-pending, the task ends with the sealed baseline and current DataVersion
-unchanged. Live growing updates continue to apply to the aggregate.
+under one write lock. Resource preparation retries recoverable compute errors
+and reports Unrecoverable for permanent failures; neither case reports Ready.
+Live growing updates continue to apply to the aggregate.
 
 ### 5.5 Cleanup
 
@@ -392,6 +365,6 @@ operation.
 
 ### 5.6 Close
 
-`Close` marks the oracle closed, cancels and waits for its scheduled task,
+`Close` marks the oracle closed, cancels any in-flight lazy materialization,
 releases current and prepared sealed file references, and makes the oracle
 unavailable. It is called only by `QueryRuntime.Close`.

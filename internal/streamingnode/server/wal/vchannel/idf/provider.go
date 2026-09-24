@@ -20,7 +20,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v3/util/hardware"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
-	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v3/util/syncutil"
 )
@@ -61,7 +60,6 @@ type Provider struct {
 	client                 datapb.DataCoordClient
 	chunkManager           storage.ChunkManager
 	sealedCache            *segmentCache
-	scheduler              nodescheduler.Scheduler
 	sealedStatsLoadLimiter *syncutil.Semaphore
 }
 
@@ -70,12 +68,6 @@ type ProviderOption func(*Provider)
 func WithChunkManager(chunkManager storage.ChunkManager) ProviderOption {
 	return func(p *Provider) {
 		p.chunkManager = chunkManager
-	}
-}
-
-func WithNodeScheduler(scheduler nodescheduler.Scheduler) ProviderOption {
-	return func(p *Provider) {
-		p.scheduler = scheduler
 	}
 }
 
@@ -95,7 +87,6 @@ type FutureProvider struct {
 	client                 *syncutil.Future[types.MixCoordClient]
 	chunkManager           storage.ChunkManager
 	sealedCache            *segmentCache
-	scheduler              nodescheduler.Scheduler
 	sealedStatsLoadLimiter *syncutil.Semaphore
 }
 
@@ -108,7 +99,6 @@ func NewFutureProvider(client *syncutil.Future[types.MixCoordClient], opts ...Pr
 		client:                 client,
 		chunkManager:           provider.chunkManager,
 		sealedCache:            newSegmentCache(),
-		scheduler:              provider.scheduler,
 		sealedStatsLoadLimiter: getGlobalSealedStatsLoadLimiter(),
 	}
 }
@@ -194,7 +184,6 @@ func (r *Runtime) resolveProvider(ctx context.Context) (*Provider, error) {
 		client:                 client,
 		chunkManager:           r.future.chunkManager,
 		sealedCache:            r.future.sealedCache,
-		scheduler:              r.future.scheduler,
 		sealedStatsLoadLimiter: r.future.sealedStatsLoadLimiter,
 	}, nil
 }
@@ -260,11 +249,8 @@ func (r *Runtime) ApplyLiveEvent(ctx context.Context, event walview.VChannelReso
 	}
 }
 
-func (r *Runtime) Advance(oldestDataVersion qviews.DataVersion) {
-	if oracle := r.currentOracle(); oracle != nil {
-		oracle.Advance(oldestDataVersion)
-	}
-}
+// BM25 stats advance during PrepareDataVersion, before QueryView readiness.
+func (*Runtime) Advance(qviews.DataVersion) {}
 
 func (r *Runtime) Close() {
 	r.mu.Lock()

@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -15,8 +13,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/mocks"
@@ -26,7 +22,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
-	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 	"github.com/milvus-io/milvus/pkg/v3/util/syncutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
@@ -43,11 +38,6 @@ type testBytesFileReader struct {
 func (r *testBytesFileReader) Close() error         { return nil }
 func (r *testBytesFileReader) Size() (int64, error) { return int64(r.Len()), nil }
 
-type blockingNodeSchedulerTask struct {
-	started chan struct{}
-	release chan struct{}
-}
-
 type observedDoneContext struct {
 	context.Context
 	doneObserved chan struct{}
@@ -57,187 +47,6 @@ type observedDoneContext struct {
 func (c *observedDoneContext) Done() <-chan struct{} {
 	c.once.Do(func() { close(c.doneObserved) })
 	return c.Context.Done()
-}
-
-func (t *blockingNodeSchedulerTask) Execute(ctx context.Context) error {
-	close(t.started)
-	select {
-	case <-t.release:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func newScheduledOracleRuntime(scheduler nodescheduler.Scheduler, current qviews.DataVersion) *oracleRuntime {
-	return &oracleRuntime{
-		provider:       &Provider{},
-		scheduler:      scheduler,
-		collectionID:   1,
-		vchannel:       "v1",
-		currentVersion: current,
-		currentStats:   make(bm25Stats),
-		currentSealed:  make(map[int64]*sealedBm25Stats),
-		currentGrowing: make(map[int64]struct{}),
-		growingStore:   newGrowingStatsStore(nil),
-	}
-}
-
-func TestOracleRuntimeSchedulesCoalescedAdvance(t *testing.T) {
-	current := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
-	first := qviews.DataVersion{StreamingVersion: 11, CompactVersion: 1}
-	latest := qviews.DataVersion{StreamingVersion: 12, CompactVersion: 1}
-	scheduler := nodescheduler.New(1)
-	defer scheduler.Close()
-
-	blocker := &blockingNodeSchedulerTask{started: make(chan struct{}), release: make(chan struct{})}
-	scheduler.Submit(blocker)
-	<-blocker.started
-
-	var callsMu sync.Mutex
-	calls := make([]qviews.DataVersion, 0, 1)
-	mock := mockey.Mock((*Provider).getSealedBM25Resources).To(func(
-		_ *Provider,
-		_ context.Context,
-		_ int64,
-		_ string,
-		version qviews.DataVersion,
-		_ []int64,
-		_ uint64,
-	) ([]*datapb.StreamingNodeBM25Resource, error) {
-		callsMu.Lock()
-		calls = append(calls, version)
-		callsMu.Unlock()
-		return nil, nil
-	}).Build()
-	defer mock.UnPatch()
-
-	runtime := newScheduledOracleRuntime(scheduler, current)
-	runtime.MaybeAdvance(first)
-	runtime.MaybeAdvance(latest)
-
-	runtime.mu.RLock()
-	require.True(t, runtime.advanceScheduled)
-	require.True(t, runtime.pending.EQ(latest))
-	runtime.mu.RUnlock()
-
-	close(blocker.release)
-	require.Eventually(t, func() bool {
-		runtime.mu.RLock()
-		defer runtime.mu.RUnlock()
-		return runtime.currentVersion.EQ(latest) && !runtime.advanceScheduled
-	}, time.Second, 10*time.Millisecond)
-	runtime.Close()
-
-	callsMu.Lock()
-	require.Equal(t, []qviews.DataVersion{latest}, calls)
-	callsMu.Unlock()
-}
-
-func TestOracleRuntimeRetriesFailedAdvance(t *testing.T) {
-	for _, failure := range []struct {
-		name string
-		err  error
-	}{
-		{name: "typed unavailable", err: merr.WrapErrServiceUnavailableMsg("temporary resource lookup failure")},
-		{name: "grpc unavailable", err: status.Error(codes.Unavailable, "temporary resource lookup failure")},
-		{name: "deadline exceeded", err: context.DeadlineExceeded},
-	} {
-		t.Run(failure.name, func(t *testing.T) {
-			current := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
-			target := qviews.DataVersion{StreamingVersion: 11, CompactVersion: 1}
-			scheduler := nodescheduler.New(1)
-			defer scheduler.Close()
-
-			var calls atomic.Int32
-			mock := mockey.Mock((*Provider).getSealedBM25Resources).To(func(
-				_ *Provider,
-				_ context.Context,
-				_ int64,
-				_ string,
-				_ qviews.DataVersion,
-				_ []int64,
-				_ uint64,
-			) ([]*datapb.StreamingNodeBM25Resource, error) {
-				if calls.Add(1) == 1 {
-					return nil, failure.err
-				}
-				return nil, nil
-			}).Build()
-			defer mock.UnPatch()
-
-			runtime := newScheduledOracleRuntime(scheduler, current)
-			runtime.MaybeAdvance(target)
-			require.Eventually(t, func() bool {
-				runtime.mu.RLock()
-				defer runtime.mu.RUnlock()
-				return runtime.currentVersion.EQ(target) && !runtime.advanceScheduled
-			}, time.Second, time.Millisecond)
-			runtime.Close()
-			require.Equal(t, int32(2), calls.Load())
-		})
-	}
-}
-
-func TestOracleRuntimeStopsAdvanceAfterCorruptPreparedStats(t *testing.T) {
-	current := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
-	target := qviews.DataVersion{StreamingVersion: 11, CompactVersion: 1}
-	scheduler := nodescheduler.New(1)
-	defer scheduler.Close()
-
-	localDir := filepath.Join(t.TempDir(), "prepared")
-	fieldDir := filepath.Join(localDir, fmt.Sprint(testBM25OutputFieldID))
-	require.NoError(t, os.MkdirAll(fieldDir, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(fieldDir, "0.data"), []byte{1, 2, 3}, 0o600))
-	sealed := &sealedBm25Stats{
-		key:       sealedCacheKey("prepared"),
-		segmentID: 7,
-		localDir:  localDir,
-		fieldList: []int64{testBM25OutputFieldID},
-		refs:      1,
-	}
-	cache := newSegmentCacheAt(t.TempDir())
-	cache.entries[sealed.key] = sealed
-
-	var resourceLookups atomic.Int32
-	lookup := mockey.Mock((*Provider).getSealedBM25Resources).To(func(
-		_ *Provider,
-		_ context.Context,
-		_ int64,
-		_ string,
-		_ qviews.DataVersion,
-		_ []int64,
-		_ uint64,
-	) ([]*datapb.StreamingNodeBM25Resource, error) {
-		resourceLookups.Add(1)
-		return nil, nil
-	}).Build()
-	defer lookup.UnPatch()
-
-	runtime := newScheduledOracleRuntime(scheduler, current)
-	defer runtime.Close()
-	runtime.provider.sealedCache = cache
-	runtime.prepared = map[qviews.DataVersion]map[int64]*sealedBm25Stats{
-		target: {sealed.segmentID: sealed},
-	}
-	runtime.MaybeAdvance(target)
-
-	runtime.mu.RLock()
-	handle := runtime.advanceHandle
-	runtime.mu.RUnlock()
-	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	require.NoError(t, handle.Wait(waitCtx))
-	runtime.mu.RLock()
-	versionUnchanged := runtime.currentVersion.EQ(current)
-	hasPending := runtime.hasPending
-	advanceScheduled := runtime.advanceScheduled
-	runtime.mu.RUnlock()
-	require.True(t, versionUnchanged)
-	require.False(t, hasPending)
-	require.False(t, advanceScheduled)
-	require.Equal(t, int32(0), resourceLookups.Load())
-	require.NoDirExists(t, localDir)
 }
 
 func TestAcquireSealedContributionsUsesSharedLimit(t *testing.T) {
@@ -473,42 +282,6 @@ func TestAcquireSealedContributionsCanceledBeforeLoad(t *testing.T) {
 	}
 }
 
-func TestOracleRuntimeCloseCancelsScheduledAdvance(t *testing.T) {
-	current := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
-	target := qviews.DataVersion{StreamingVersion: 11, CompactVersion: 1}
-	scheduler := nodescheduler.New(1)
-	defer scheduler.Close()
-
-	started := make(chan struct{})
-	canceled := make(chan struct{})
-	mock := mockey.Mock((*Provider).getSealedBM25Resources).To(func(
-		_ *Provider,
-		ctx context.Context,
-		_ int64,
-		_ string,
-		_ qviews.DataVersion,
-		_ []int64,
-		_ uint64,
-	) ([]*datapb.StreamingNodeBM25Resource, error) {
-		close(started)
-		<-ctx.Done()
-		close(canceled)
-		return nil, ctx.Err()
-	}).Build()
-	defer mock.UnPatch()
-
-	runtime := newScheduledOracleRuntime(scheduler, current)
-	runtime.MaybeAdvance(target)
-	<-started
-	runtime.Close()
-
-	select {
-	case <-canceled:
-	default:
-		t.Fatal("scheduled IDF advance was not canceled")
-	}
-}
-
 func TestOracleRuntimeCommitDiffUsesLatestGrowingState(t *testing.T) {
 	current := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
 	target := qviews.DataVersion{StreamingVersion: 11, CompactVersion: 1}
@@ -577,7 +350,8 @@ func TestOracleRuntimeSharesSingleGlobalAcrossDataVersions(t *testing.T) {
 	}
 
 	require.NoError(t, runtime.PrepareDataVersion(context.Background(), target))
-	require.True(t, oraclePreparedReady(runtime, target))
+	require.True(t, oracleCurrentVersion(runtime).EQ(target))
+	require.False(t, oraclePreparedReady(runtime, target))
 	require.Same(t, global[fieldID], runtime.currentStats[fieldID])
 	query := &schemapb.SparseFloatArray{Contents: [][]byte{
 		typeutil.CreateAndSortSparseFloatRow(map[uint32]float32{7: 1}),
@@ -615,9 +389,7 @@ func TestOracleRuntimeReusesSealedFileDuringPreparation(t *testing.T) {
 			response.Bm25Resources = []*datapb.StreamingNodeBM25Resource{resource}
 			return response, nil
 		}).Once()
-	scheduler := nodescheduler.New(1)
-	defer scheduler.Close()
-	provider := NewProvider(client, WithChunkManager(chunkManager), WithNodeScheduler(scheduler))
+	provider := NewProvider(client, WithChunkManager(chunkManager))
 	provider.sealedCache = newSegmentCacheAt(t.TempDir())
 	oracle, err := newOracleRuntime(
 		context.Background(),
@@ -629,10 +401,7 @@ func TestOracleRuntimeReusesSealedFileDuringPreparation(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, oracle.PrepareDataVersion(context.Background(), target))
-	oracle.Advance(target)
-	require.Eventually(t, func() bool {
-		return oracleCurrentVersion(oracle).EQ(target)
-	}, time.Second, time.Millisecond)
+	require.True(t, oracleCurrentVersion(oracle).EQ(target))
 
 	oracle.Close()
 	require.Empty(t, provider.sealedCache.entries)
@@ -657,9 +426,7 @@ func TestOracleRuntimeUpdatesSealedStatsWhenResourceChangesForSameSegment(t *tes
 			response.Bm25Resources = []*datapb.StreamingNodeBM25Resource{secondResource}
 			return response, nil
 		}).Once()
-	scheduler := nodescheduler.New(1)
-	defer scheduler.Close()
-	provider := NewProvider(client, WithChunkManager(chunkManager), WithNodeScheduler(scheduler))
+	provider := NewProvider(client, WithChunkManager(chunkManager))
 	provider.sealedCache = newSegmentCacheAt(t.TempDir())
 	oracle, err := newOracleRuntime(context.Background(), provider, testBM25WALView(current), []*datapb.StreamingNodeBM25Resource{firstResource}, false)
 	require.NoError(t, err)
@@ -669,13 +436,7 @@ func TestOracleRuntimeUpdatesSealedStatsWhenResourceChangesForSameSegment(t *tes
 	require.NoError(t, err)
 	require.Equal(t, float64(1), avgdl)
 	require.NoError(t, oracle.PrepareDataVersion(context.Background(), target))
-
-	oracle.Advance(target)
-	require.Eventually(t, func() bool {
-		oracle.mu.RLock()
-		defer oracle.mu.RUnlock()
-		return oracle.currentVersion.EQ(target) && oracle.currentStats[testBM25OutputFieldID].GetAvgdl() == 4
-	}, time.Second, time.Millisecond)
+	require.True(t, oracleCurrentVersion(oracle).EQ(target))
 	_, avgdl, err = oracle.BuildIDF(context.Background(), target, testBM25OutputFieldID, nil)
 	require.NoError(t, err)
 	require.Equal(t, float64(4), avgdl)
@@ -708,9 +469,7 @@ func TestOracleRuntimeHandsGrowingContributionToSealedFromDisk(t *testing.T) {
 			response.Bm25Resources = []*datapb.StreamingNodeBM25Resource{sealedResource}
 			return response, nil
 		}).Once()
-	scheduler := nodescheduler.New(1)
-	defer scheduler.Close()
-	provider := NewProvider(client, WithChunkManager(chunkManager), WithNodeScheduler(scheduler))
+	provider := NewProvider(client, WithChunkManager(chunkManager))
 	provider.sealedCache = newSegmentCacheAt(t.TempDir())
 	schema := testBM25WALView(current).Schema
 	growingStore := newGrowingStatsStore(schema)
@@ -722,7 +481,6 @@ func TestOracleRuntimeHandsGrowingContributionToSealedFromDisk(t *testing.T) {
 	global.merge(bm25Stats{testBM25OutputFieldID: growingStats})
 	oracle := &oracleRuntime{
 		provider:        provider,
-		scheduler:       scheduler,
 		collectionID:    1,
 		vchannel:        "test-vchannel",
 		schema:          schema,
@@ -737,16 +495,11 @@ func TestOracleRuntimeHandsGrowingContributionToSealedFromDisk(t *testing.T) {
 	defer oracle.Close()
 
 	require.NoError(t, oracle.PrepareDataVersion(context.Background(), target))
-	oracle.Advance(target)
-	require.Eventually(t, func() bool {
-		if !oracleCurrentVersion(oracle).EQ(target) {
-			return false
-		}
-		growingStore.mu.RLock()
-		defer growingStore.mu.RUnlock()
-		_, growingExists := growingStore.segments[20]
-		return !growingExists
-	}, time.Second, time.Millisecond)
+	require.True(t, oracleCurrentVersion(oracle).EQ(target))
+	growingStore.mu.RLock()
+	_, growingExists := growingStore.segments[20]
+	growingStore.mu.RUnlock()
+	require.False(t, growingExists)
 	oracle.mu.RLock()
 	currentStats := oracle.currentStats[testBM25OutputFieldID]
 	require.Equal(t, int64(2), currentStats.NumRow())
@@ -762,7 +515,7 @@ func TestOracleRuntimeLazyPreparationUsesSharedCurrentGlobal(t *testing.T) {
 	client.EXPECT().GetStreamingNodeQueryViewResources(mock.Anything, mock.Anything).
 		RunAndReturn(func(_ context.Context, req *datapb.GetStreamingNodeQueryViewResourcesRequest, _ ...grpc.CallOption) (*datapb.GetStreamingNodeQueryViewResourcesResponse, error) {
 			version := qviews.FromProtoDataVersion(req.GetDataVersion())
-			require.True(t, version.EQ(current))
+			require.True(t, version.EQ(target))
 			return testBM25ResourceResponse(req), nil
 		}).Once()
 	oracle := newTestLazyOracleRuntime(t, client, current)
@@ -775,6 +528,7 @@ func TestOracleRuntimeLazyPreparationUsesSharedCurrentGlobal(t *testing.T) {
 	require.NoError(t, oracle.PrepareDataVersion(context.Background(), target))
 	require.Empty(t, client.Calls)
 	require.False(t, oraclePreparedReady(oracle, target))
+	require.True(t, oracleCurrentVersion(oracle).EQ(target))
 	_, avgdl, err := oracle.BuildIDF(context.Background(), target, testBM25OutputFieldID, &schemapb.SparseFloatArray{})
 	require.NoError(t, err)
 	require.Equal(t, float64(2), avgdl)
@@ -823,14 +577,14 @@ func TestOracleRuntimeEagerPreparationCancellationIsIsolated(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("second eager preparation waited for the canceled caller")
 	}
-	require.True(t, oraclePreparedReady(oracle, target))
+	require.True(t, oracleCurrentVersion(oracle).EQ(target))
 
 	cancelFirst()
 	require.ErrorIs(t, <-firstResult, context.Canceled)
 	require.Len(t, client.Calls, 2)
 }
 
-func TestOracleRuntimePreparationPrefetchesWithoutParsing(t *testing.T) {
+func TestOracleRuntimePreparationRejectsCorruptStatsBeforeReady(t *testing.T) {
 	current := qviews.DataVersion{StreamingVersion: 10}
 	target := qviews.DataVersion{StreamingVersion: 11}
 	resource := testSealedBM25Resources(30, 1)[0]
@@ -847,9 +601,9 @@ func TestOracleRuntimePreparationPrefetchesWithoutParsing(t *testing.T) {
 	oracle := newTestEagerOracleRuntime(t, client, current, WithChunkManager(chunkManager))
 	defer oracle.Close()
 
-	require.NoError(t, oracle.PrepareDataVersion(context.Background(), target))
-	require.True(t, oraclePreparedReady(oracle, target))
-	require.Len(t, oracle.provider.sealedCache.entries, 1)
+	require.Error(t, oracle.PrepareDataVersion(context.Background(), target))
+	require.True(t, oracleCurrentVersion(oracle).EQ(current))
+	require.Empty(t, oracle.provider.sealedCache.entries)
 }
 
 func TestOracleRuntimeQueryCancellationDoesNotCancelSharedMaterialization(t *testing.T) {
@@ -967,7 +721,6 @@ func TestOracleRuntimeRetriesCurrentMaterializationAfterLazyAdvance(t *testing.T
 	}()
 	<-rpcStarted
 	require.NoError(t, oracle.PrepareDataVersion(context.Background(), target))
-	oracle.Advance(target)
 
 	waiterCtx := &observedDoneContext{Context: context.Background(), doneObserved: make(chan struct{})}
 	secondResult := make(chan error, 1)
@@ -1101,7 +854,7 @@ func TestOracleRuntimeIncludesGrowingStatsAddedDuringMaterialization(t *testing.
 	require.Equal(t, float64(2), resultValue.avgdl)
 }
 
-func TestOracleRuntimeLazyTargetFilesLoadOnFirstQueryAfterAdvance(t *testing.T) {
+func TestOracleRuntimeLazyTargetFilesLoadOnFirstQueryAfterReady(t *testing.T) {
 	current := qviews.DataVersion{StreamingVersion: 10}
 	target := qviews.DataVersion{StreamingVersion: 12}
 	stats := storage.NewBM25Stats()
@@ -1121,9 +874,7 @@ func TestOracleRuntimeLazyTargetFilesLoadOnFirstQueryAfterAdvance(t *testing.T) 
 			response.Bm25Resources = []*datapb.StreamingNodeBM25Resource{resource}
 			return response, nil
 		}).Once()
-	scheduler := nodescheduler.New(1)
-	defer scheduler.Close()
-	provider := NewProvider(client, WithChunkManager(chunkManager), WithNodeScheduler(scheduler))
+	provider := NewProvider(client, WithChunkManager(chunkManager))
 	provider.sealedCache = newSegmentCacheAt(t.TempDir())
 	oracle, err := newOracleRuntime(context.Background(), provider, testBM25WALView(current), nil, true)
 	require.NoError(t, err)
@@ -1132,15 +883,13 @@ func TestOracleRuntimeLazyTargetFilesLoadOnFirstQueryAfterAdvance(t *testing.T) 
 	require.NoError(t, oracle.PrepareDataVersion(context.Background(), target))
 	require.False(t, oraclePreparedReady(oracle, target))
 	require.False(t, oracleStatsReady(oracle))
+	require.True(t, oracleCurrentVersion(oracle).EQ(target))
 	provider.sealedCache.mu.Lock()
 	entryCount := len(provider.sealedCache.entries)
 	provider.sealedCache.mu.Unlock()
 	require.Zero(t, entryCount)
 	require.Empty(t, client.Calls)
 
-	oracle.Advance(target)
-	require.True(t, oracleCurrentVersion(oracle).EQ(target))
-	require.Empty(t, client.Calls)
 	_, avgdl, err := oracle.BuildIDF(context.Background(), target, testBM25OutputFieldID, &schemapb.SparseFloatArray{})
 	require.NoError(t, err)
 	require.Equal(t, float64(2), avgdl)
@@ -1169,13 +918,9 @@ func TestOracleRuntimeLazyOnlyDefersInitialMaterialization(t *testing.T) {
 	require.True(t, oracleStatsReady(oracle))
 
 	require.NoError(t, oracle.PrepareDataVersion(context.Background(), target))
-	require.True(t, oraclePreparedReady(oracle, target))
+	require.True(t, oracleCurrentVersion(oracle).EQ(target))
 	require.Len(t, client.Calls, 2)
 
-	oracle.Advance(target)
-	require.Eventually(t, func() bool {
-		return oracleCurrentVersion(oracle).EQ(target)
-	}, time.Second, time.Millisecond)
 	require.True(t, oracleStatsReady(oracle))
 	_, _, err = oracle.BuildIDF(context.Background(), target, testBM25OutputFieldID, &schemapb.SparseFloatArray{})
 	require.NoError(t, err)
@@ -1209,9 +954,7 @@ func TestOracleRuntimeCloseCancelsVersionMaterialization(t *testing.T) {
 
 func newTestLazyOracleRuntime(t *testing.T, client *mocks.MockDataCoordClient, version qviews.DataVersion, opts ...ProviderOption) *oracleRuntime {
 	t.Helper()
-	scheduler := nodescheduler.New(1)
-	t.Cleanup(scheduler.Close)
-	provider := NewProvider(client, append([]ProviderOption{WithNodeScheduler(scheduler)}, opts...)...)
+	provider := NewProvider(client, opts...)
 	provider.sealedCache = newSegmentCacheAt(t.TempDir())
 	oracle, err := newOracleRuntime(
 		context.Background(),
@@ -1226,9 +969,7 @@ func newTestLazyOracleRuntime(t *testing.T, client *mocks.MockDataCoordClient, v
 
 func newTestEagerOracleRuntime(t *testing.T, client *mocks.MockDataCoordClient, version qviews.DataVersion, opts ...ProviderOption) *oracleRuntime {
 	t.Helper()
-	scheduler := nodescheduler.New(1)
-	t.Cleanup(scheduler.Close)
-	provider := NewProvider(client, append([]ProviderOption{WithNodeScheduler(scheduler)}, opts...)...)
+	provider := NewProvider(client, opts...)
 	provider.sealedCache = newSegmentCacheAt(t.TempDir())
 	oracle, err := newOracleRuntime(
 		context.Background(),
