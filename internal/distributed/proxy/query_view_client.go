@@ -25,6 +25,7 @@ import (
 	"github.com/milvus-io/milvus/internal/views/queryclient"
 	"github.com/milvus-io/milvus/internal/views/queryclient/resolver"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
 type viewQueryClientSetter interface {
@@ -70,7 +71,12 @@ func newDefaultProxyViewQueryClient(etcdCli *clientv3.Client, vchannelProvider r
 		queryNodeClient.QueryViewClient(),
 	)
 	client := queryclient.NewLegacyViewQueryClient(
-		queryclient.ViewQueryClientConfig{},
+		queryclient.ViewQueryClientConfig{
+			EnableSearchStreaming:  paramtable.Get().ProxyCfg.EnableSearchStreaming.GetAsBool(),
+			SearchStreamChunkBytes: paramtable.Get().ProxyCfg.SearchStreamChunkBytes.GetAsInt(),
+			EnableQueryStreaming:   paramtable.Get().ProxyCfg.EnableQueryStreaming.GetAsBool(),
+			QueryStreamChunkBytes:  paramtable.Get().ProxyCfg.QueryStreamChunkBytes.GetAsInt(),
+		},
 		queryPlanClient,
 		queryServiceClient,
 		shardResolver,

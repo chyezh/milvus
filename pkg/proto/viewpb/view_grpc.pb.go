@@ -320,9 +320,11 @@ var QueryPlanService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	ViewQueryService_SearchOnView_FullMethodName  = "/milvus.proto.view.ViewQueryService/SearchOnView"
-	ViewQueryService_QueryOnView_FullMethodName   = "/milvus.proto.view.ViewQueryService/QueryOnView"
-	ViewQueryService_RequeryOnView_FullMethodName = "/milvus.proto.view.ViewQueryService/RequeryOnView"
+	ViewQueryService_SearchOnView_FullMethodName       = "/milvus.proto.view.ViewQueryService/SearchOnView"
+	ViewQueryService_SearchOnViewStream_FullMethodName = "/milvus.proto.view.ViewQueryService/SearchOnViewStream"
+	ViewQueryService_QueryOnView_FullMethodName        = "/milvus.proto.view.ViewQueryService/QueryOnView"
+	ViewQueryService_QueryOnViewStream_FullMethodName  = "/milvus.proto.view.ViewQueryService/QueryOnViewStream"
+	ViewQueryService_RequeryOnView_FullMethodName      = "/milvus.proto.view.ViewQueryService/RequeryOnView"
 )
 
 // ViewQueryServiceClient is the client API for ViewQueryService service.
@@ -331,8 +333,14 @@ const (
 type ViewQueryServiceClient interface {
 	// SearchOnView executes a vector search on segments belonging to the given view version.
 	SearchOnView(ctx context.Context, in *SearchOnViewRequest, opts ...grpc.CallOption) (*SearchOnViewResponse, error)
+	// SearchOnViewStream executes the same search over a bidirectional stream.
+	// The client sends SearchOnViewRequest first. The server returns result Chunks;
+	// interrupt and metadata are reserved for the stream lifecycle implementation.
+	SearchOnViewStream(ctx context.Context, opts ...grpc.CallOption) (ViewQueryService_SearchOnViewStreamClient, error)
 	// QueryOnView executes a query (retrieve by expression) on segments belonging to the given view version.
 	QueryOnView(ctx context.Context, in *QueryOnViewRequest, opts ...grpc.CallOption) (*QueryOnViewResponse, error)
+	// QueryOnViewStream executes the same query over a bidirectional stream.
+	QueryOnViewStream(ctx context.Context, opts ...grpc.CallOption) (ViewQueryService_QueryOnViewStreamClient, error)
 	// RequeryOnView fetches output fields for a set of PKs after Proxy-side reduce.
 	// Uses the same view version as the preceding search/query to ensure consistency.
 	RequeryOnView(ctx context.Context, in *RequeryOnViewRequest, opts ...grpc.CallOption) (*RequeryOnViewResponse, error)
@@ -355,6 +363,37 @@ func (c *viewQueryServiceClient) SearchOnView(ctx context.Context, in *SearchOnV
 	return out, nil
 }
 
+func (c *viewQueryServiceClient) SearchOnViewStream(ctx context.Context, opts ...grpc.CallOption) (ViewQueryService_SearchOnViewStreamClient, error) {
+	stream, err := c.cc.NewStream(ctx, &ViewQueryService_ServiceDesc.Streams[0], ViewQueryService_SearchOnViewStream_FullMethodName, opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &viewQueryServiceSearchOnViewStreamClient{stream}
+	return x, nil
+}
+
+type ViewQueryService_SearchOnViewStreamClient interface {
+	Send(*SearchOnViewStreamRequest) error
+	Recv() (*SearchOnViewStreamResponse, error)
+	grpc.ClientStream
+}
+
+type viewQueryServiceSearchOnViewStreamClient struct {
+	grpc.ClientStream
+}
+
+func (x *viewQueryServiceSearchOnViewStreamClient) Send(m *SearchOnViewStreamRequest) error {
+	return x.ClientStream.SendMsg(m)
+}
+
+func (x *viewQueryServiceSearchOnViewStreamClient) Recv() (*SearchOnViewStreamResponse, error) {
+	m := new(SearchOnViewStreamResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 func (c *viewQueryServiceClient) QueryOnView(ctx context.Context, in *QueryOnViewRequest, opts ...grpc.CallOption) (*QueryOnViewResponse, error) {
 	out := new(QueryOnViewResponse)
 	err := c.cc.Invoke(ctx, ViewQueryService_QueryOnView_FullMethodName, in, out, opts...)
@@ -362,6 +401,37 @@ func (c *viewQueryServiceClient) QueryOnView(ctx context.Context, in *QueryOnVie
 		return nil, err
 	}
 	return out, nil
+}
+
+func (c *viewQueryServiceClient) QueryOnViewStream(ctx context.Context, opts ...grpc.CallOption) (ViewQueryService_QueryOnViewStreamClient, error) {
+	stream, err := c.cc.NewStream(ctx, &ViewQueryService_ServiceDesc.Streams[1], ViewQueryService_QueryOnViewStream_FullMethodName, opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &viewQueryServiceQueryOnViewStreamClient{stream}
+	return x, nil
+}
+
+type ViewQueryService_QueryOnViewStreamClient interface {
+	Send(*QueryOnViewStreamRequest) error
+	Recv() (*QueryOnViewStreamResponse, error)
+	grpc.ClientStream
+}
+
+type viewQueryServiceQueryOnViewStreamClient struct {
+	grpc.ClientStream
+}
+
+func (x *viewQueryServiceQueryOnViewStreamClient) Send(m *QueryOnViewStreamRequest) error {
+	return x.ClientStream.SendMsg(m)
+}
+
+func (x *viewQueryServiceQueryOnViewStreamClient) Recv() (*QueryOnViewStreamResponse, error) {
+	m := new(QueryOnViewStreamResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 func (c *viewQueryServiceClient) RequeryOnView(ctx context.Context, in *RequeryOnViewRequest, opts ...grpc.CallOption) (*RequeryOnViewResponse, error) {
@@ -379,8 +449,14 @@ func (c *viewQueryServiceClient) RequeryOnView(ctx context.Context, in *RequeryO
 type ViewQueryServiceServer interface {
 	// SearchOnView executes a vector search on segments belonging to the given view version.
 	SearchOnView(context.Context, *SearchOnViewRequest) (*SearchOnViewResponse, error)
+	// SearchOnViewStream executes the same search over a bidirectional stream.
+	// The client sends SearchOnViewRequest first. The server returns result Chunks;
+	// interrupt and metadata are reserved for the stream lifecycle implementation.
+	SearchOnViewStream(ViewQueryService_SearchOnViewStreamServer) error
 	// QueryOnView executes a query (retrieve by expression) on segments belonging to the given view version.
 	QueryOnView(context.Context, *QueryOnViewRequest) (*QueryOnViewResponse, error)
+	// QueryOnViewStream executes the same query over a bidirectional stream.
+	QueryOnViewStream(ViewQueryService_QueryOnViewStreamServer) error
 	// RequeryOnView fetches output fields for a set of PKs after Proxy-side reduce.
 	// Uses the same view version as the preceding search/query to ensure consistency.
 	RequeryOnView(context.Context, *RequeryOnViewRequest) (*RequeryOnViewResponse, error)
@@ -393,8 +469,14 @@ type UnimplementedViewQueryServiceServer struct {
 func (UnimplementedViewQueryServiceServer) SearchOnView(context.Context, *SearchOnViewRequest) (*SearchOnViewResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SearchOnView not implemented")
 }
+func (UnimplementedViewQueryServiceServer) SearchOnViewStream(ViewQueryService_SearchOnViewStreamServer) error {
+	return status.Errorf(codes.Unimplemented, "method SearchOnViewStream not implemented")
+}
 func (UnimplementedViewQueryServiceServer) QueryOnView(context.Context, *QueryOnViewRequest) (*QueryOnViewResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method QueryOnView not implemented")
+}
+func (UnimplementedViewQueryServiceServer) QueryOnViewStream(ViewQueryService_QueryOnViewStreamServer) error {
+	return status.Errorf(codes.Unimplemented, "method QueryOnViewStream not implemented")
 }
 func (UnimplementedViewQueryServiceServer) RequeryOnView(context.Context, *RequeryOnViewRequest) (*RequeryOnViewResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RequeryOnView not implemented")
@@ -429,6 +511,32 @@ func _ViewQueryService_SearchOnView_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ViewQueryService_SearchOnViewStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(ViewQueryServiceServer).SearchOnViewStream(&viewQueryServiceSearchOnViewStreamServer{stream})
+}
+
+type ViewQueryService_SearchOnViewStreamServer interface {
+	Send(*SearchOnViewStreamResponse) error
+	Recv() (*SearchOnViewStreamRequest, error)
+	grpc.ServerStream
+}
+
+type viewQueryServiceSearchOnViewStreamServer struct {
+	grpc.ServerStream
+}
+
+func (x *viewQueryServiceSearchOnViewStreamServer) Send(m *SearchOnViewStreamResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func (x *viewQueryServiceSearchOnViewStreamServer) Recv() (*SearchOnViewStreamRequest, error) {
+	m := new(SearchOnViewStreamRequest)
+	if err := x.ServerStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 func _ViewQueryService_QueryOnView_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(QueryOnViewRequest)
 	if err := dec(in); err != nil {
@@ -445,6 +553,32 @@ func _ViewQueryService_QueryOnView_Handler(srv interface{}, ctx context.Context,
 		return srv.(ViewQueryServiceServer).QueryOnView(ctx, req.(*QueryOnViewRequest))
 	}
 	return interceptor(ctx, in, info, handler)
+}
+
+func _ViewQueryService_QueryOnViewStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(ViewQueryServiceServer).QueryOnViewStream(&viewQueryServiceQueryOnViewStreamServer{stream})
+}
+
+type ViewQueryService_QueryOnViewStreamServer interface {
+	Send(*QueryOnViewStreamResponse) error
+	Recv() (*QueryOnViewStreamRequest, error)
+	grpc.ServerStream
+}
+
+type viewQueryServiceQueryOnViewStreamServer struct {
+	grpc.ServerStream
+}
+
+func (x *viewQueryServiceQueryOnViewStreamServer) Send(m *QueryOnViewStreamResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func (x *viewQueryServiceQueryOnViewStreamServer) Recv() (*QueryOnViewStreamRequest, error) {
+	m := new(QueryOnViewStreamRequest)
+	if err := x.ServerStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 func _ViewQueryService_RequeryOnView_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -485,6 +619,19 @@ var ViewQueryService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ViewQueryService_RequeryOnView_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "SearchOnViewStream",
+			Handler:       _ViewQueryService_SearchOnViewStream_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "QueryOnViewStream",
+			Handler:       _ViewQueryService_QueryOnViewStream_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+	},
 	Metadata: "view.proto",
 }

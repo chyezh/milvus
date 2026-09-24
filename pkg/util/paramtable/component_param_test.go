@@ -53,6 +53,36 @@ func shouldPanic(t *testing.T, name string, f func()) {
 	t.Errorf("%s should have panicked", name)
 }
 
+func TestProxyQueryViewStreamingConfig(t *testing.T) {
+	base := NewBaseTable(SkipRemote(true), SkipEnv(true))
+	config := proxyConfig{}
+	config.init(base)
+	assert.False(t, config.EnableSearchStreaming.GetAsBool())
+	assert.Equal(t, 256*1024, config.SearchStreamChunkBytes.GetAsInt())
+	assert.False(t, config.EnableQueryStreaming.GetAsBool())
+	assert.Equal(t, 256*1024, config.QueryStreamChunkBytes.GetAsInt())
+	assert.NoError(t, base.Save(config.EnableSearchStreaming.Key, "true"))
+	assert.NoError(t, base.Save(config.SearchStreamChunkBytes.Key, "128"))
+	assert.NoError(t, base.Save(config.EnableQueryStreaming.Key, "true"))
+	assert.NoError(t, base.Save(config.QueryStreamChunkBytes.Key, "64"))
+	assert.True(t, config.EnableSearchStreaming.GetAsBool())
+	assert.Equal(t, 128, config.SearchStreamChunkBytes.GetAsInt())
+	assert.True(t, config.EnableQueryStreaming.GetAsBool())
+	assert.Equal(t, 64, config.QueryStreamChunkBytes.GetAsInt())
+
+	t.Setenv("PROXY_QUERYVIEW_ENABLESEARCHSTREAMING", "true")
+	t.Setenv("PROXY_QUERYVIEW_SEARCHSTREAMCHUNKBYTES", "256")
+	t.Setenv("PROXY_QUERYVIEW_ENABLEQUERYSTREAMING", "true")
+	t.Setenv("PROXY_QUERYVIEW_QUERYSTREAMCHUNKBYTES", "512")
+	envBase := NewBaseTable(SkipRemote(true))
+	envConfig := proxyConfig{}
+	envConfig.init(envBase)
+	assert.True(t, envConfig.EnableSearchStreaming.GetAsBool())
+	assert.Equal(t, 256, envConfig.SearchStreamChunkBytes.GetAsInt())
+	assert.True(t, envConfig.EnableQueryStreaming.GetAsBool())
+	assert.Equal(t, 512, envConfig.QueryStreamChunkBytes.GetAsInt())
+}
+
 func TestComponentParam_DataCoordBumpSchemaVersionCompactionParams(t *testing.T) {
 	Init()
 	params := Get()

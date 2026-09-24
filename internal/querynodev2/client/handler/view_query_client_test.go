@@ -2,10 +2,12 @@ package handler
 
 import (
 	"context"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/contextutil"
 	"github.com/milvus-io/milvus/internal/views/viewerror"
@@ -37,6 +39,66 @@ func TestClientSearchOnViewRoutesByQueryNodeID(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Same(t, searchResp, resp)
+}
+
+func TestClientSearchOnViewStreamRoutesByQueryNodeID(t *testing.T) {
+	searchReq := &viewpb.SearchOnViewRequest{}
+	clientStream := &fakeSearchOnViewClientStream{}
+	service := &fakeViewQueryServiceClient{
+		searchOnViewStream: func(ctx context.Context) (viewpb.ViewQueryService_SearchOnViewStreamClient, error) {
+			serverID, ok := contextutil.GetPickServerID(ctx)
+			require.True(t, ok)
+			require.Equal(t, int64(11), serverID)
+			clientStream.ctx = ctx
+			return clientStream, nil
+		},
+	}
+	client := &clientImpl{
+		lifetime: typeutil.NewLifetime(),
+	}
+	client.queryViewClient = &queryViewClient{
+		owner:   client,
+		service: fakeLazyService[viewpb.ViewQueryServiceClient]{service: service},
+	}
+
+	stream, err := client.QueryViewClient().SearchOnViewStream(context.Background(), 11, searchReq)
+
+	require.NoError(t, err)
+	require.Same(t, searchReq, clientStream.sent.GetRequest())
+	chunk, err := stream.Recv()
+	require.Nil(t, chunk)
+	require.ErrorIs(t, err, io.EOF)
+	require.NoError(t, stream.Close())
+	require.Equal(t, 1, clientStream.closeCalls)
+}
+
+func TestClientQueryOnViewStreamRoutesByQueryNodeID(t *testing.T) {
+	queryReq := &viewpb.QueryOnViewRequest{}
+	clientStream := &fakeQueryOnViewClientStream{}
+	service := &fakeViewQueryServiceClient{
+		queryOnViewStream: func(ctx context.Context) (viewpb.ViewQueryService_QueryOnViewStreamClient, error) {
+			serverID, ok := contextutil.GetPickServerID(ctx)
+			require.True(t, ok)
+			require.Equal(t, int64(11), serverID)
+			clientStream.ctx = ctx
+			return clientStream, nil
+		},
+	}
+	client := &clientImpl{lifetime: typeutil.NewLifetime()}
+	client.queryViewClient = &queryViewClient{
+		owner:   client,
+		service: fakeLazyService[viewpb.ViewQueryServiceClient]{service: service},
+	}
+
+	stream, err := client.QueryViewClient().QueryOnViewStream(context.Background(), 11, queryReq)
+
+	require.NoError(t, err)
+	require.Same(t, queryReq, clientStream.sent.GetRequest())
+	chunk, err := stream.Recv()
+	require.Nil(t, chunk)
+	require.ErrorIs(t, err, io.EOF)
+	require.NoError(t, stream.Close())
+	require.Equal(t, 1, clientStream.closeCalls)
 }
 
 func TestClientConvertsViewQueryRPCError(t *testing.T) {
@@ -75,19 +137,109 @@ func (s fakeLazyService[T]) GetService(context.Context) (T, error) {
 func (s fakeLazyService[T]) Close() {}
 
 type fakeViewQueryServiceClient struct {
-	searchOnView  func(context.Context, *viewpb.SearchOnViewRequest) (*viewpb.SearchOnViewResponse, error)
-	queryOnView   func(context.Context, *viewpb.QueryOnViewRequest) (*viewpb.QueryOnViewResponse, error)
-	requeryOnView func(context.Context, *viewpb.RequeryOnViewRequest) (*viewpb.RequeryOnViewResponse, error)
+	searchOnView       func(context.Context, *viewpb.SearchOnViewRequest) (*viewpb.SearchOnViewResponse, error)
+	searchOnViewStream func(context.Context) (viewpb.ViewQueryService_SearchOnViewStreamClient, error)
+	queryOnView        func(context.Context, *viewpb.QueryOnViewRequest) (*viewpb.QueryOnViewResponse, error)
+	queryOnViewStream  func(context.Context) (viewpb.ViewQueryService_QueryOnViewStreamClient, error)
+	requeryOnView      func(context.Context, *viewpb.RequeryOnViewRequest) (*viewpb.RequeryOnViewResponse, error)
 }
 
 func (c *fakeViewQueryServiceClient) SearchOnView(ctx context.Context, req *viewpb.SearchOnViewRequest, _ ...grpc.CallOption) (*viewpb.SearchOnViewResponse, error) {
 	return c.searchOnView(ctx, req)
 }
 
+func (c *fakeViewQueryServiceClient) SearchOnViewStream(ctx context.Context, _ ...grpc.CallOption) (viewpb.ViewQueryService_SearchOnViewStreamClient, error) {
+	return c.searchOnViewStream(ctx)
+}
+
 func (c *fakeViewQueryServiceClient) QueryOnView(ctx context.Context, req *viewpb.QueryOnViewRequest, _ ...grpc.CallOption) (*viewpb.QueryOnViewResponse, error) {
 	return c.queryOnView(ctx, req)
 }
 
+func (c *fakeViewQueryServiceClient) QueryOnViewStream(ctx context.Context, _ ...grpc.CallOption) (viewpb.ViewQueryService_QueryOnViewStreamClient, error) {
+	return c.queryOnViewStream(ctx)
+}
+
 func (c *fakeViewQueryServiceClient) RequeryOnView(ctx context.Context, req *viewpb.RequeryOnViewRequest, _ ...grpc.CallOption) (*viewpb.RequeryOnViewResponse, error) {
 	return c.requeryOnView(ctx, req)
+}
+
+type fakeSearchOnViewClientStream struct {
+	ctx        context.Context
+	sent       *viewpb.SearchOnViewStreamRequest
+	closeCalls int
+}
+
+func (s *fakeSearchOnViewClientStream) Send(request *viewpb.SearchOnViewStreamRequest) error {
+	s.sent = request
+	return nil
+}
+
+func (*fakeSearchOnViewClientStream) Recv() (*viewpb.SearchOnViewStreamResponse, error) {
+	return nil, io.EOF
+}
+
+func (*fakeSearchOnViewClientStream) Header() (metadata.MD, error) {
+	return nil, nil
+}
+
+func (*fakeSearchOnViewClientStream) Trailer() metadata.MD {
+	return nil
+}
+
+func (s *fakeSearchOnViewClientStream) CloseSend() error {
+	s.closeCalls++
+	return nil
+}
+
+func (s *fakeSearchOnViewClientStream) Context() context.Context {
+	return s.ctx
+}
+
+func (*fakeSearchOnViewClientStream) SendMsg(interface{}) error {
+	return nil
+}
+
+func (*fakeSearchOnViewClientStream) RecvMsg(interface{}) error {
+	return io.EOF
+}
+
+type fakeQueryOnViewClientStream struct {
+	ctx        context.Context
+	sent       *viewpb.QueryOnViewStreamRequest
+	closeCalls int
+}
+
+func (s *fakeQueryOnViewClientStream) Send(request *viewpb.QueryOnViewStreamRequest) error {
+	s.sent = request
+	return nil
+}
+
+func (*fakeQueryOnViewClientStream) Recv() (*viewpb.QueryOnViewStreamResponse, error) {
+	return nil, io.EOF
+}
+
+func (*fakeQueryOnViewClientStream) Header() (metadata.MD, error) {
+	return nil, nil
+}
+
+func (*fakeQueryOnViewClientStream) Trailer() metadata.MD {
+	return nil
+}
+
+func (s *fakeQueryOnViewClientStream) CloseSend() error {
+	s.closeCalls++
+	return nil
+}
+
+func (s *fakeQueryOnViewClientStream) Context() context.Context {
+	return s.ctx
+}
+
+func (*fakeQueryOnViewClientStream) SendMsg(interface{}) error {
+	return nil
+}
+
+func (*fakeQueryOnViewClientStream) RecvMsg(interface{}) error {
+	return io.EOF
 }
