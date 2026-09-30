@@ -123,6 +123,7 @@ type QueryTask struct {
 // behavior where such reads are not gated by the partition-key check.
 func NewQueryTask(ctx context.Context, node taskmodel.TaskNode, request *milvuspb.QueryRequest, plan *planpb.PlanNode, retrieveReq *internalpb.RetrieveRequest, cache metacache.Cache, mustUsePartitionKey bool) *QueryTask {
 	return &QueryTask{
+		viewQueryClient: viewQueryClientFromNode(node),
 		baseTask: baseTask{
 			MetaCache: cache,
 		},
@@ -1482,5 +1483,12 @@ func (t *QueryTask) OnEnqueue() error {
 	}
 	t.Base.MsgType = commonpb.MsgType_Retrieve
 	t.Base.SourceID = paramtable.GetNodeID()
+	return nil
+}
+
+func viewQueryClientFromNode(node taskmodel.TaskNode) queryclient.Client {
+	if provider, ok := node.(interface{ ViewQueryClient() queryclient.Client }); ok {
+		return provider.ViewQueryClient()
+	}
 	return nil
 }

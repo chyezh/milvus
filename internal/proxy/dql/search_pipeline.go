@@ -1353,6 +1353,7 @@ func (op *requeryOperator) requery(ctx context.Context, span trace.Span, ids *sc
 		preferredNodes[k] = v
 	}
 	qt := &QueryTask{
+		viewQueryClient: viewQueryClientFromNode(op.node),
 		baseTask: baseTask{
 			MetaCache: op.node.GetMetaCache(),
 		},

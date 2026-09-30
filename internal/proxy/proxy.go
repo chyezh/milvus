@@ -544,3 +544,5 @@ func (node *Proxy) GetRateLimiter() (types.Limiter, error) {
 	}
 	return node.simpleLimiter, nil
 }
+
+func (node *Proxy) ViewQueryClient() queryclient.Client { return node.viewQueryClient }

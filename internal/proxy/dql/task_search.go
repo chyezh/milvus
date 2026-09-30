@@ -188,6 +188,7 @@ func (t *SearchTask) unitSink() *featureusage.Tally {
 
 func NewSearchTask(ctx context.Context, node taskmodel.TaskNode, sched *scheduler.TaskScheduler, request *milvuspb.SearchRequest, optimizedSearch bool, isRecallEvaluation bool, tr *timerecord.TimeRecorder) *SearchTask {
 	return &SearchTask{
+		viewQueryClient: viewQueryClientFromNode(node),
 		baseTask: baseTask{
 			MetaCache: node.GetMetaCache(),
 		},
@@ -1521,7 +1522,7 @@ func (t *SearchTask) Execute(ctx context.Context) error {
 	return nil
 }
 
-func (t *searchTask) executeByQueryView(ctx context.Context) error {
+func (t *SearchTask) executeByQueryView(ctx context.Context) error {
 	result, err := t.viewQueryClient.Legacy().Search(ctx, &queryclient.LegacySearchRequest{
 		Req: t.SearchRequest,
 	})
