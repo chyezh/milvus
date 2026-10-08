@@ -2883,8 +2883,10 @@ func TestHandleIfSearchByPK_AllNullBM25TextYieldsEmptySearch(t *testing.T) {
 func TestProxy_Search_SearchByPKCopiesRequestPerAttempt(t *testing.T) {
 	mockey.PatchConvey("TestProxy_Search_SearchByPKCopiesRequestPerAttempt", t, func() {
 		paramtable.Init()
+		mockey.Mock((*Proxy).ensureCollectionReady).Return(nil).Build()
 
 		node := &Proxy{}
+		node.UpdateStateCode(commonpb.StateCode_Healthy)
 
 		// The first attempt reports a topk-reduced, insufficient result so
 		// that Proxy.Search runs the non-optimized fallback.
@@ -2918,8 +2920,10 @@ func TestProxy_Search_SearchByPKCopiesRequestPerAttempt(t *testing.T) {
 func TestProxy_Search_PlainRequestNotCopied(t *testing.T) {
 	mockey.PatchConvey("TestProxy_Search_PlainRequestNotCopied", t, func() {
 		paramtable.Init()
+		mockey.Mock((*Proxy).ensureCollectionReady).Return(nil).Build()
 
 		node := &Proxy{}
+		node.UpdateStateCode(commonpb.StateCode_Healthy)
 		var attempts []*milvuspb.SearchRequest
 		mockey.Mock((*Proxy).search).To(func(_ *Proxy, _ context.Context, req *milvuspb.SearchRequest, _ bool, _ bool) (*milvuspb.SearchResults, bool, bool, bool, error) {
 			attempts = append(attempts, req)

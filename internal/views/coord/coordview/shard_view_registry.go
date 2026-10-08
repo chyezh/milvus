@@ -172,6 +172,23 @@ func (r *ShardViewRegistry) Get(shardID qviews.ShardID) *ShardViewManager {
 	return r.shards[shardID]
 }
 
+// AllShardsUp checks that every expected shard has an Up view built with the
+// expected load-config version, without allocating a snapshot.
+func (r *ShardViewRegistry) AllShardsUp(shards []qviews.ShardID, expectedLoadInfoVersion uint64) bool {
+	if len(shards) == 0 || expectedLoadInfoVersion == 0 {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, shardID := range shards {
+		stats := r.stats[shardID]
+		if stats == nil || stats.UpVersion == nil || stats.UpLoadInfoVersion != expectedLoadInfoVersion {
+			return false
+		}
+	}
+	return true
+}
+
 // removeEmptyManager reclaims a manager after its last QueryView has completed
 // durable removal. Recheck both emptiness and identity because the callback is
 // invoked after releasing the manager lock.

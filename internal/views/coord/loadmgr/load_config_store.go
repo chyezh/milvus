@@ -39,6 +39,15 @@ type LoadConfigStore struct {
 
 	// snapshot is the resident immutable view returned to Balancer.
 	snapshot *LoadConfigSnapshot
+
+	observers []func(collectionID int64, released bool)
+}
+
+// LoadConfigEntry captures an immutable config and its version in one read.
+// Config is nil and ConfigVersion is zero when the collection is absent.
+type LoadConfigEntry struct {
+	Config        *LoadConfig
+	ConfigVersion uint64
 }
 
 // RecoverLoadConfigStore constructs a LoadConfigStore and rebuilds its
@@ -143,6 +152,7 @@ func (s *LoadConfigStore) Put(ctx context.Context, cfg *LoadConfig) error {
 	s.version++
 	s.versions[collectionID] = s.version
 	s.mu.Unlock()
+	s.notifyObservers(collectionID, false)
 	return nil
 }
 
@@ -173,7 +183,35 @@ func (s *LoadConfigStore) Remove(ctx context.Context, collectionID int64) error 
 	s.version++
 	delete(s.versions, collectionID)
 	s.mu.Unlock()
+	s.notifyObservers(collectionID, true)
 	return nil
+}
+
+// RegisterObserver observes future committed changes. Callbacks run under the
+// collection guard so a release notification precedes any subsequent reload.
+// They must only signal waiters, never perform I/O or reenter the store.
+func (s *LoadConfigStore) RegisterObserver(observer func(collectionID int64, released bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.observers = append(s.observers, observer)
+}
+
+func (s *LoadConfigStore) notifyObservers(collectionID int64, released bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, observer := range s.observers {
+		observer(collectionID, released)
+	}
+}
+
+// Get reads one collection and its version without materializing a snapshot.
+func (s *LoadConfigStore) Get(collectionID int64) LoadConfigEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return LoadConfigEntry{
+		Config:        s.configs[collectionID],
+		ConfigVersion: s.versions[collectionID],
+	}
 }
 
 // Contains reports whether a collection has a live load config without
@@ -200,8 +238,8 @@ func (s *LoadConfigStore) GetConfig(collectionID int64) *LoadConfig {
 
 // GetConfigVersion returns the version of the live load config for a single
 // collection without materializing the full balancer snapshot. It is the
-// O(1) counterpart of LoadConfigSnapshot.ConfigVersion and is safe to pair
-// with GetConfig when a caller needs a config and its version together.
+// O(1) counterpart of LoadConfigSnapshot.ConfigVersion. Use Get when the config
+// and version must come from the same read.
 func (s *LoadConfigStore) GetConfigVersion(collectionID int64) uint64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

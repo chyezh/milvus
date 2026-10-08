@@ -199,10 +199,13 @@ func newLoadConfigQViewsServer(t *testing.T) (*Server, *metastoremocks.QueryCoor
 	m.HandleNodeUp(context.Background(), 1)
 
 	broker := meta.NewMockBroker(t)
+	usage := newCollectionUsageManager(runtime.loadConfigStore, nil)
+	t.Cleanup(usage.close)
 	return &Server{
-		meta:          m,
-		broker:        broker,
-		qviewsRuntime: runtime,
+		meta:            m,
+		broker:          broker,
+		qviewsRuntime:   runtime,
+		collectionUsage: usage,
 	}, catalog, broker
 }
 
