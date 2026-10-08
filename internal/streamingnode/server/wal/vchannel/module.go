@@ -353,6 +353,7 @@ func (m *VChannelRecoveryModule) handleCreateCollectionMessage(msg message.Immut
 			m.vchannelView = replacement
 		}
 	}
+	m.refreshQueryRetentionLocked()
 }
 
 func (m *VChannelRecoveryModule) handleCreatePartitionMessage(msg message.ImmutableCreatePartitionMessageV1) {
