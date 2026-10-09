@@ -22,6 +22,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/cockroachdb/errors"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/views/coord/balancer/api"
@@ -47,14 +48,22 @@ type CollectionRecoveryValidator func(ctx context.Context, collectionID int64) (
 // re-enter the Manager.
 type Projector func(ctx context.Context, collectionID int64) ([]LoadableSegment, error)
 
-// FrontierProjector captures checkpoint-bounded coverage before membership is
-// projected. Its bounds include all registered unpublished data in the shard.
+// FrontierProjector supplies conservative migration inputs for snapshots which
+// predate persisted W/A. Native snapshots never use this legacy projection.
 type FrontierProjector func(ctx context.Context, collectionID int64) (map[string]uint64, error)
+
+// PendingTransformProjector constrains publication by asynchronous data not in
+// the candidate snapshot, such as a pending Import. It must not reenter Manager.
+type PendingTransformProjector func(ctx context.Context, view *viewpb.DataViewOfCollection) (map[string]uint64, error)
 
 type Option func(*dataViewManager)
 
 func WithFrontierProjector(project FrontierProjector) Option {
 	return func(m *dataViewManager) { m.frontierProjector = project }
+}
+
+func WithPendingTransformProjector(project PendingTransformProjector) Option {
+	return func(m *dataViewManager) { m.pendingTransformProjector = project }
 }
 
 type Manager interface {
@@ -130,6 +139,8 @@ type BootstrapCollectionDataViewEvent struct {
 type FlushDataViewEvent struct {
 	CollectionID int64
 	Segments     []LoadableSegment
+	// Per-vchannel WAL proofs, effective only with this Flush's atomic commit.
+	GrowingTransformStarts map[string]uint64
 }
 
 type dataViewAdvance int
@@ -163,10 +174,11 @@ type versionRefCounter struct {
 }
 
 type collectionState struct {
-	mu             sync.Mutex
-	id             int64
-	latest         *versionEntry
-	versions       map[qviews.DataVersion]*versionEntry
+	mu       sync.Mutex
+	id       int64
+	latest   *versionEntry
+	versions map[qviews.DataVersion]*versionEntry
+	// Retain only the latest native projection, not one for every historical version.
 	publishedEntry *versionEntry
 	native         *api.CollectionDataView
 }
@@ -194,8 +206,9 @@ type dataViewManager struct {
 	// projector is the SegmentMeta projection injected at construction; the
 	// async Recompute worker runs against it. nil means the manager is not
 	// wired for async reconciliation (Recompute returns an error).
-	projector         Projector
-	frontierProjector FrontierProjector
+	projector                 Projector
+	frontierProjector         FrontierProjector
+	pendingTransformProjector PendingTransformProjector
 	// workerCtx bounds the async Recompute worker's lifetime. NewManager uses
 	// a process-lifetime context; RecoverManager derives it from the caller's
 	// ctx so the worker stops when the coordinator does.
@@ -348,11 +361,6 @@ func RecoverManager(
 			state := manager.getOrCreateState(view.GetCollectionId())
 			state.mu.Lock()
 			persisted := canonicalDataViewClone(view)
-			// A legacy writer may have serialized the derived shard frontier.
-			// Recovery must reconstruct it from metadata, never trust that value.
-			for _, shard := range persisted.GetShards() {
-				shard.TransformStartAfterTimetick = 0
-			}
 			key := protoVersionToStruct(view.GetDataVersion())
 			if existing := state.versions[key]; existing != nil {
 				if !proto.Equal(existing.view, persisted) {
@@ -377,6 +385,9 @@ func RecoverManager(
 		if recoverCollection[collectionID] {
 			state := manager.getState(collectionID)
 			if err := manager.restoreTransformFrontiers(ctx, state); err != nil {
+				if !errors.Is(err, merr.ErrServiceNotReady) {
+					return nil, err
+				}
 				mlog.Warn(ctx, "failed to restore DataView Transform frontiers", mlog.FieldCollectionID(collectionID), mlog.Err(err))
 			}
 			continue
@@ -449,7 +460,8 @@ func (m *dataViewManager) OnCreateCollection(ctx context.Context, event CreateCo
 
 	view := buildEmptyDataView(event.CollectionID, event.VChannels)
 	for _, shard := range view.Shards {
-		shard.TransformStartAfterTimetick = event.TransformStarts[shard.Vchannel]
+		shard.GrowingTransformStartAfterTimetick = event.TransformStarts[shard.Vchannel]
+		shard.CompactedTransformStartAfterTimetick = event.TransformStarts[shard.Vchannel]
 	}
 	view.DataVersion = &viewpb.DataVersion{StreamingVersion: 1}
 	if err := m.persistLocked(ctx, state, view); err != nil {
@@ -508,9 +520,9 @@ func (m *dataViewManager) recomputeNow(ctx context.Context, collectionID int64, 
 	defer unlock()
 
 	base := latestView(state)
-	bounds, err := m.captureFrontiers(ctx, collectionID)
-	if err != nil {
-		return nil, err
+	if base == nil && m.frontierProjector != nil {
+		// Only Create/Bootstrap may install the complete initial shard skeleton.
+		return nil, nil
 	}
 	segments, err := project(ctx, collectionID)
 	if err != nil {
@@ -523,7 +535,7 @@ func (m *dataViewManager) recomputeNow(ctx context.Context, collectionID int64, 
 	if err := rebuildSegments(next, segments); err != nil {
 		return nil, err
 	}
-	if err := advanceTransformFrontiers(next, bounds); err != nil {
+	if err := m.advanceTransformFrontiers(ctx, next, nil); err != nil {
 		return nil, err
 	}
 	canonicalizeDataView(next)
@@ -706,11 +718,11 @@ func (m *dataViewManager) collectionDataViewLocked(state *collectionState) *api.
 		if shard == nil {
 			continue
 		}
-		// Legacy snapshots do not carry W/A evidence. Leave those inputs unknown;
-		// the production frontier publisher is installed with QueryView activation.
 		nativeShard := &api.ShardDataView{
-			VChannel:   shard.GetVchannel(),
-			Partitions: make([]*api.PartitionDataView, 0, len(shard.GetPartitions())),
+			VChannel:                             shard.GetVchannel(),
+			GrowingTransformStartAfterTimetick:   shard.GetGrowingTransformStartAfterTimetick(),
+			CompactedTransformStartAfterTimetick: shard.GetCompactedTransformStartAfterTimetick(),
+			Partitions:                           make([]*api.PartitionDataView, 0, len(shard.GetPartitions())),
 		}
 		for _, partition := range shard.GetPartitions() {
 			if partition == nil {
@@ -724,6 +736,9 @@ func (m *dataViewManager) collectionDataViewLocked(state *collectionState) *api.
 				}
 				if index < len(partition.GetSegmentManifestVersions()) {
 					segment.ManifestVersion = partition.GetSegmentManifestVersions()[index]
+				}
+				if index < len(partition.GetSegmentTransformStartAfterTimeticks()) {
+					segment.TransformStartAfterTimetick = partition.GetSegmentTransformStartAfterTimeticks()[index]
 				}
 				if stats, ok := entry.stats[segmentID]; ok {
 					segment.RowNum = stats.RowNum
@@ -833,11 +848,6 @@ func (m *dataViewManager) PrepareFlush(ctx context.Context, event FlushDataViewE
 		return nil, noop, noop, nil
 	}
 
-	bounds, err := m.captureFrontiers(ctx, event.CollectionID)
-	if err != nil {
-		unlock()
-		return nil, nil, nil, err
-	}
 	base := latestView(state)
 	next := canonicalDataViewClone(base)
 	if next == nil {
@@ -847,7 +857,7 @@ func (m *dataViewManager) PrepareFlush(ctx context.Context, event FlushDataViewE
 		unlock()
 		return nil, nil, nil, err
 	}
-	if err := advanceTransformFrontiers(next, bounds); err != nil {
+	if err := m.advanceTransformFrontiers(ctx, next, event.GrowingTransformStarts); err != nil {
 		unlock()
 		return nil, nil, nil, err
 	}
@@ -1435,6 +1445,9 @@ func (m *dataViewManager) RegisterDataViewListener(listener api.DataViewListener
 func (m *dataViewManager) publishDataViewLocked(state *collectionState) {
 	entry := state.latest
 	if entry == nil {
+		return
+	}
+	if m.frontierProjector != nil && !transformFrontiersReady(entry.view) {
 		return
 	}
 	if state.publishedEntry != entry {

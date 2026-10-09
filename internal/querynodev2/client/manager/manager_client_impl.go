@@ -227,3 +227,62 @@ func (c *managerClientImpl) publishNodeState(state resolver.VersionedState) {
 	}
 	c.nodes = next
 }
+
+func (c *managerClientImpl) RegisterQueryNodeListener(ctx context.Context, listener func(int64, *NodeInfo)) (func(), error) {
+	if !c.lifetime.Add(typeutil.LifetimeStateWorking) {
+		return nil, merr.WrapErrServiceUnavailableMsg("querynode manager client is closing")
+	}
+	defer c.lifetime.Done()
+	c.mu.Lock()
+	c.startWatchLocked()
+	ready := c.discoveryReady
+	c.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-c.stopped:
+		return nil, merr.WrapErrServiceUnavailableMsg("querynode manager client is closing")
+	case <-ready:
+	}
+	c.mu.Lock()
+	if c.nodeListeners == nil {
+		c.nodeListeners = make(map[uint64]func(int64, *NodeInfo))
+	}
+	c.nextNodeListener++
+	id := c.nextNodeListener
+	c.nodeListeners[id] = listener
+	for nodeID, node := range c.nodes {
+		listener(nodeID, node)
+	}
+	c.mu.Unlock()
+	return func() { c.mu.Lock(); delete(c.nodeListeners, id); c.mu.Unlock() }, nil
+}
+
+func (c *managerClientImpl) publishNodeState(state resolver.VersionedState) {
+	next := make(map[int64]*NodeInfo)
+	for id, session := range state.Sessions() {
+		next[id] = &NodeInfo{ServerID: id, Address: session.Address, Stopping: session.Stopping, ServerLabels: copyServerLabels(session.ServerLabels)}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for id := range c.nodes {
+		if _, ok := next[id]; !ok {
+			for _, listener := range c.nodeListeners {
+				listener(id, nil)
+			}
+		}
+	}
+	for id, node := range next {
+		old := c.nodes[id]
+		if old != nil && old.Address == node.Address && old.Stopping == node.Stopping && maps.Equal(old.ServerLabels, node.ServerLabels) {
+			continue
+		}
+		for _, listener := range c.nodeListeners {
+			listener(id, node)
+		}
+	}
+	if c.nodes == nil {
+		close(c.discoveryReady)
+	}
+	c.nodes = next
+}

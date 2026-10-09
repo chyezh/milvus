@@ -132,3 +132,10 @@ func (c *fakeQueryNodeViewSyncClient) RegisterQueryNodeListener(_ context.Contex
 	}
 	return func() {}, nil
 }
+
+func (c *fakeQueryNodeViewSyncClient) RegisterQueryNodeListener(_ context.Context, listener func(int64, *qnmanager.NodeInfo)) (func(), error) {
+	for id, node := range c.nodes {
+		listener(id, node)
+	}
+	return func() {}, nil
+}
