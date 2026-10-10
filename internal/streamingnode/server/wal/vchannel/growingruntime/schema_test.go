@@ -3,7 +3,6 @@ package growingruntime
 import (
 	"testing"
 
-	"github.com/bytedance/mockey"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -17,7 +16,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/rmq"
 )
 
-func TestAlterSchemaPreservesSegmentEncodingAndUpdatesCollection(t *testing.T) {
+func TestAlterSchemaUpdatesNativeAndInsertSchema(t *testing.T) {
 	initSegcoreForRuntimeTest(t)
 	schema := mock_segcore.GenTestCollectionSchema("schema-handoff", schemapb.DataType_Int64, false)
 	c, err := segcore.CreateCCollection(&segcore.CreateCCollectionRequest{CollectionID: 1, Schema: schema})
@@ -31,21 +30,28 @@ func TestAlterSchemaPreservesSegmentEncodingAndUpdatesCollection(t *testing.T) {
 	updated.Version = 1
 	updated.Fields = append(updated.Fields, &schemapb.FieldSchema{FieldID: 200, Name: "added", DataType: schemapb.DataType_Int64, Nullable: true})
 	msg := message.NewAlterCollectionMessageBuilderV2().WithVChannel("p_1v0").WithHeader(&messagespb.AlterCollectionMessageHeader{CollectionId: 1, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{message.FieldMaskCollectionSchema}}}).WithBody(&messagespb.AlterCollectionMessageBody{Updates: &messagespb.AlterCollectionMessageUpdates{Schema: updated}}).MustBuildMutable().WithTimeTick(100).WithLastConfirmedUseMessageID().IntoImmutableMessage(rmq.NewRmqID(100))
-	// The collection schema-cache/native update implementation is a separate
-	// prerequisite. Verify the caller contract without importing that implementation.
-	mockey.PatchConvey("ALTER forwards the schema and keeps existing segment encoding", t, func() {
-		update := mockey.Mock((*segcore.CCollection).UpdateSchema).To(func(collection *segcore.CCollection, next *schemapb.CollectionSchema, tick uint64) error {
-			require.Same(t, c, collection)
-			require.True(t, proto.Equal(updated, next))
-			require.EqualValues(t, 100, tick)
-			return nil
-		}).Build()
-		r.ApplyLiveEvent(t.Context(), walview.VChannelResourceEvent{Message: msg})
-		require.Equal(t, 1, update.Times())
-		require.EqualValues(t, 0, oldSegment.encodingSchema.GetVersion())
-		require.True(t, proto.Equal(schema, oldSegment.collection.Schema()), "ALTER must preserve the segment encoding schema")
-		require.Equal(t, uint64(100), r.AppliedGrowingTimeTick())
-	})
+	r.ApplyLiveEvent(t.Context(), walview.VChannelResourceEvent{Message: msg})
+	require.Equal(t, int32(1), r.SchemaVersion())
+	require.EqualValues(t, 0, oldSegment.encodingSchema.GetVersion())
+	require.True(t, proto.Equal(schema, oldSegment.collection.Schema()), "ALTER must preserve the segment encoding schema")
+	require.Equal(t, uint64(100), r.AppliedGrowingTimeTick())
+	require.True(t, proto.Equal(updated, c.Schema()), "insert conversion must use the newly applied schema")
+	// Replayed messages cannot roll back the Go schema cache or native revision.
+	require.NoError(t, c.UpdateSchema(schema, 99))
+	require.Equal(t, int32(1), c.Schema().GetVersion())
+	insert := newTestSegmentInsertMessage(t, "p_1v0", 101, 1, 101, updated)
+	payload := message.MustAsImmutableInsertMessageV1(insert)
+	body := payload.MustBody()
+	for _, field := range body.FieldsData {
+		if field.FieldId == 200 {
+			field.ValidData = []bool{true}
+		}
+	}
+	insert = message.NewInsertMessageBuilderV1().WithVChannel("p_1v0").WithHeader(payload.Header()).WithBody(body).MustBuildMutable().WithTimeTick(101).WithLastConfirmedUseMessageID().IntoImmutableMessage(rmq.NewRmqID(101))
+	r.ApplyLiveEvent(t.Context(), walview.VChannelResourceEvent{Message: insert})
+	segment, ok := r.Segment(101)
+	require.True(t, ok)
+	require.NotNil(t, segment)
 }
 
 func TestRecoveredGrowingSegmentUsesItsOwnSchema(t *testing.T) {
