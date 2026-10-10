@@ -3,6 +3,7 @@ package dql
 import (
 	"context"
 	"fmt"
+	"io"
 	"math"
 	"strconv"
 	"strings"
@@ -33,6 +34,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/function/embedding"
 	"github.com/milvus-io/milvus/internal/util/function/models"
 	"github.com/milvus-io/milvus/internal/util/rlsutil"
+	"github.com/milvus-io/milvus/internal/util/searchutil"
 	"github.com/milvus-io/milvus/internal/util/segcore"
 	"github.com/milvus-io/milvus/internal/util/shallowcopy"
 	"github.com/milvus-io/milvus/internal/views/queryclient"
@@ -98,6 +100,7 @@ type SearchTask struct {
 	userDynamicFields      []string
 	highlighter            Highlighter
 	resultBuf              *typeutil.ConcurrentSet[*internalpb.SearchResults]
+	resultStream           searchutil.ReduceStream
 
 	partitionIDsSet *typeutil.ConcurrentSet[UniqueID]
 
@@ -1514,7 +1517,8 @@ func (t *SearchTask) Execute(ctx context.Context) error {
 
 func (t *SearchTask) executeByQueryView(ctx context.Context) error {
 	result, err := t.viewQueryClient.Legacy().Search(ctx, &queryclient.LegacySearchRequest{
-		Req: t.SearchRequest,
+		Req:            t.SearchRequest,
+		AllowStreaming: t.supportsStreamingReduce(),
 	})
 	if err != nil {
 		return err
@@ -1522,10 +1526,36 @@ func (t *SearchTask) executeByQueryView(ctx context.Context) error {
 	if t.resultBuf == nil {
 		t.resultBuf = typeutil.NewConcurrentSet[*internalpb.SearchResults]()
 	}
+	if result.Stream != nil {
+		t.resultStream = result.Stream
+		return nil
+	}
 	for _, searchResult := range result.Results {
 		t.resultBuf.Insert(searchResult)
 	}
 	return nil
+}
+
+func (t *SearchTask) supportsStreamingReduce() bool {
+	req := t.SearchRequest
+	if req == nil ||
+		t.aggCtx != nil ||
+		len(t.orderByFields) > 0 ||
+		req.GetIsAdvanced() ||
+		len(req.GetSubReqs()) > 0 ||
+		req.GetGroupByFieldId() > 0 ||
+		len(req.GetGroupByFieldIds()) > 0 {
+		return false
+	}
+
+	// Iterator Search is classified as SearchType_DEFAULT. After rejecting
+	// unsupported request shapes above, IsIterator identifies the supported path.
+	if req.GetIsIterator() {
+		return true
+	}
+
+	return req.GetSearchType() == internalpb.SearchType_PURE_ANN_SEARCH_NO_FILTER ||
+		req.GetSearchType() == internalpb.SearchType_PURE_ANN_SEARCH_WITH_FILTER
 }
 
 // find the last bound based on reduced results and metric type
@@ -1544,6 +1574,177 @@ func getLastBound(result *milvuspb.SearchResults, incomingLastBound *float32, me
 		return math.MaxFloat32
 	}
 	return -math.MaxFloat32
+}
+
+// appendFinalSearchChunk appends one already-reduced, ordered CHUNK to the final unary Search response.
+// It does not rank or reduce hits. It applies offset and limit per query across CHUNK boundaries,
+// copies the selected result data and metadata, restores scores for negatively related metrics,
+// and returns appended field-data bytes for maxOutputSize accounting.
+func appendFinalSearchChunk(
+	output *schemapb.SearchResultData,
+	chunk *schemapb.SearchResultData,
+	seenPerQuery []int64,
+	offset int64,
+	limit int64,
+	metricType string,
+) (int64, error) {
+	if chunk.GetNumQueries() != output.GetNumQueries() {
+		return 0, fmt.Errorf("Search CHUNK nq %d does not match final result nq %d", chunk.GetNumQueries(), output.GetNumQueries())
+	}
+	if len(chunk.GetTopks()) != len(seenPerQuery) {
+		return 0, fmt.Errorf("Search CHUNK has %d per-query hit counts, expected %d", len(chunk.GetTopks()), len(seenPerQuery))
+	}
+
+	hitCount := typeutil.GetSizeOfIDs(chunk.GetIds())
+	if len(chunk.GetScores()) != hitCount {
+		return 0, fmt.Errorf("Search CHUNK score count %d does not match hit count %d", len(chunk.GetScores()), hitCount)
+	}
+	if chunk.GetElementIndices() != nil && len(chunk.GetElementIndices().GetData()) != hitCount {
+		return 0, fmt.Errorf("Search CHUNK element index count %d does not match hit count %d", len(chunk.GetElementIndices().GetData()), hitCount)
+	}
+
+	totalTopK := int64(0)
+	for _, count := range chunk.GetTopks() {
+		if count < 0 {
+			return 0, fmt.Errorf("Search CHUNK contains a negative per-query hit count %d", count)
+		}
+		totalTopK += count
+	}
+	if totalTopK != int64(hitCount) {
+		return 0, fmt.Errorf("Search CHUNK Topks total %d does not match hit count %d", totalTopK, hitCount)
+	}
+
+	if len(output.GetOutputFields()) == 0 {
+		output.OutputFields = append([]string(nil), chunk.GetOutputFields()...)
+	}
+	if output.GetPrimaryFieldName() == "" {
+		output.PrimaryFieldName = chunk.GetPrimaryFieldName()
+	}
+	output.AllSearchCount += chunk.GetAllSearchCount()
+
+	var fieldIndexComputer *typeutil.FieldDataIdxComputer
+	if len(chunk.GetFieldsData()) > 0 {
+		if len(output.GetFieldsData()) == 0 {
+			output.FieldsData = typeutil.PrepareResultFieldData(chunk.GetFieldsData(), output.GetNumQueries()*limit)
+		}
+		if len(output.GetFieldsData()) != len(chunk.GetFieldsData()) {
+			return 0, fmt.Errorf("Search CHUNK field count %d does not match final result field count %d", len(chunk.GetFieldsData()), len(output.GetFieldsData()))
+		}
+		fieldIndexComputer = typeutil.NewFieldDataIdxComputer(chunk.GetFieldsData())
+	} else if len(output.GetFieldsData()) > 0 && hitCount > 0 {
+		return 0, errors.New("Search CHUNK is missing fields present in earlier CHUNKs")
+	}
+
+	negateScore := !metric.PositivelyRelated(metricType)
+	rowIndex := int64(0)
+	var appendedSize int64
+	for queryIndex, count := range chunk.GetTopks() {
+		for i := int64(0); i < count; i++ {
+			include := seenPerQuery[queryIndex] >= offset && output.Topks[queryIndex] < limit
+			seenPerQuery[queryIndex]++
+			if !include {
+				rowIndex++
+				continue
+			}
+
+			if fieldIndexComputer != nil {
+				fieldIndexes := fieldIndexComputer.Compute(rowIndex)
+				appendedSize += typeutil.AppendFieldData(output.FieldsData, chunk.GetFieldsData(), rowIndex, fieldIndexes...)
+			}
+			typeutil.AppendPKs(output.Ids, typeutil.GetPK(chunk.GetIds(), rowIndex))
+			score := chunk.GetScores()[rowIndex]
+			if negateScore {
+				score *= -1
+			}
+			output.Scores = append(output.Scores, score)
+			if chunk.GetElementIndices() != nil {
+				if output.ElementIndices == nil {
+					output.ElementIndices = &schemapb.LongArray{Data: make([]int64, 0, output.GetNumQueries()*limit)}
+				}
+				output.ElementIndices.Data = append(output.ElementIndices.Data, chunk.GetElementIndices().GetData()[rowIndex])
+			}
+			output.Topks[queryIndex]++
+			rowIndex++
+		}
+	}
+	return appendedSize, nil
+}
+
+func (t *searchTask) consumeResultStream(
+	stream searchutil.ReduceStream,
+	metricType string,
+	collectMetadata func(*internalpb.SearchResults),
+) (*milvuspb.SearchResults, string, error) {
+	limit := t.GetTopk() - t.GetOffset()
+	if limit <= 0 {
+		return nil, metricType, merr.Combine(fmt.Errorf("invalid final Search limit %d", limit), stream.Close())
+	}
+
+	data := &schemapb.SearchResultData{
+		NumQueries: t.GetNq(),
+		TopK:       limit,
+		Ids:        &schemapb.IDs{},
+		Scores:     make([]float32, 0, t.GetNq()*limit),
+		Topks:      make([]int64, t.GetNq()),
+	}
+	seenPerQuery := make([]int64, t.GetNq())
+	var resultSize int64
+	for {
+		chunk, recvErr := stream.Recv()
+		if errors.Is(recvErr, io.EOF) {
+			break
+		}
+		if recvErr != nil {
+			return nil, metricType, merr.Combine(recvErr, stream.Close())
+		}
+		if chunk == nil || chunk.GetResultData() == nil {
+			return nil, metricType, merr.Combine(errors.New("final ReduceStream returned a CHUNK without result data"), stream.Close())
+		}
+
+		collectMetadata(chunk)
+		if chunk.GetMetricType() != "" {
+			metricType = chunk.GetMetricType()
+		}
+		appendedSize, appendErr := appendFinalSearchChunk(
+			data,
+			chunk.GetResultData(),
+			seenPerQuery,
+			t.GetOffset(),
+			limit,
+			metricType,
+		)
+		if appendErr != nil {
+			return nil, metricType, merr.Combine(appendErr, stream.Close())
+		}
+		resultSize += appendedSize
+		if resultSize > paramtable.Get().QuotaConfig.MaxOutputSize.GetAsInt64() {
+			return nil, metricType, merr.Combine(
+				merr.WrapErrParameterInvalidMsg("search results exceed the maxOutputSize Limit %d", paramtable.Get().QuotaConfig.MaxOutputSize.GetAsInt64()),
+				stream.Close(),
+			)
+		}
+
+		complete := true
+		for _, count := range data.GetTopks() {
+			if count < limit {
+				complete = false
+				break
+			}
+		}
+		if complete {
+			break
+		}
+	}
+	if closeErr := stream.Close(); closeErr != nil {
+		return nil, metricType, closeErr
+	}
+	if len(data.GetTopks()) > 0 {
+		data.TopK = data.GetTopks()[len(data.GetTopks())-1]
+	}
+	return &milvuspb.SearchResults{
+		Status:  merr.Success(),
+		Results: data,
+	}, metricType, nil
 }
 
 func isEmbeddingListPlaceholderType(pt commonpb.PlaceholderType) bool {
@@ -1594,18 +1795,13 @@ func (t *SearchTask) PostExecute(ctx context.Context) error {
 	}()
 	log := mlog.With(mlog.Int64("nq", t.GetNq()))
 
-	toReduceResults, err := t.collectSearchResults(ctx)
-	if err != nil {
-		log.Warn(ctx, "failed to collect search results", mlog.Err(err))
-		return err
-	}
-
 	t.queryChannelsTs = make(map[string]uint64)
 	t.relatedDataSize = 0
 	isTopkReduce := false
 	isRecallEvaluation := false
 	storageCost := segcore.StorageCost{}
-	for _, r := range toReduceResults {
+	metricType := t.GetMetricType()
+	collectMetadata := func(r *internalpb.SearchResults) {
 		if r.GetIsTopkReduce() {
 			isTopkReduce = true
 		}
@@ -1620,6 +1816,30 @@ func (t *SearchTask) PostExecute(ctx context.Context) error {
 		storageCost.ScannedTotalBytes += r.GetScannedTotalBytes()
 	}
 
+	var (
+		toReduceResults []*internalpb.SearchResults
+		reducedResult   *milvuspb.SearchResults
+		err             error
+	)
+	if t.resultStream != nil {
+		stream := t.resultStream
+		t.resultStream = nil
+		reducedResult, metricType, err = t.consumeResultStream(stream, metricType, collectMetadata)
+		if err != nil {
+			return err
+		}
+	} else {
+		toReduceResults, err = t.collectSearchResults(ctx)
+		if err != nil {
+			log.Warn(ctx, "failed to collect search results", mlog.Err(err))
+			return err
+		}
+		for _, r := range toReduceResults {
+			collectMetadata(r)
+		}
+		metricType = getMetricType(toReduceResults)
+	}
+
 	t.isTopkReduce = isTopkReduce
 	t.isRecallEvaluation = isRecallEvaluation
 
@@ -1629,7 +1849,13 @@ func (t *SearchTask) PostExecute(ctx context.Context) error {
 		log.Warn(ctx, "Faild to create post process pipeline")
 		return err
 	}
-	if t.result, t.storageCost, err = pipeline.Run(ctx, sp, toReduceResults, storageCost); err != nil {
+	if reducedResult != nil {
+		fillFieldNames(t.schema.CollectionSchema, reducedResult.GetResults())
+		t.result, t.storageCost, err = pipeline.RunFromReduced(ctx, sp, reducedResult, metricType, storageCost)
+	} else {
+		t.result, t.storageCost, err = pipeline.Run(ctx, sp, toReduceResults, storageCost)
+	}
+	if err != nil {
 		return err
 	}
 	t.fillResult()
@@ -1670,7 +1896,7 @@ func (t *SearchTask) PostExecute(ctx context.Context) error {
 		if iterInfo := t.queryInfos[0].GetSearchIteratorV2Info(); iterInfo != nil {
 			t.result.Results.SearchIteratorV2Results = &schemapb.SearchIteratorV2Results{
 				Token:     iterInfo.GetToken(),
-				LastBound: getLastBound(t.result, iterInfo.LastBound, getMetricType(toReduceResults)),
+				LastBound: getLastBound(t.result, iterInfo.LastBound, metricType),
 			}
 		}
 	}

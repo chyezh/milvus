@@ -3,6 +3,8 @@ package handler
 import (
 	"context"
 
+	"github.com/milvus-io/milvus/internal/util/queryutil"
+	"github.com/milvus-io/milvus/internal/util/searchutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/lazygrpc"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/internal/views/viewerror"
@@ -23,9 +25,11 @@ type QueryViewClient interface {
 
 	// SearchOnView executes a QueryView search on the StreamingNode owning the pchannel.
 	SearchOnView(ctx context.Context, pchannel types.PChannelInfo, req *viewpb.SearchOnViewRequest) (*viewpb.SearchOnViewResponse, error)
+	SearchOnViewStream(ctx context.Context, pchannel types.PChannelInfo, req *viewpb.SearchOnViewRequest) (searchutil.ReduceStream, error)
 
 	// QueryOnView executes a QueryView retrieve on the StreamingNode owning the pchannel.
 	QueryOnView(ctx context.Context, pchannel types.PChannelInfo, req *viewpb.QueryOnViewRequest) (*viewpb.QueryOnViewResponse, error)
+	QueryOnViewStream(ctx context.Context, pchannel types.PChannelInfo, req *viewpb.QueryOnViewRequest) (queryutil.ReduceStream, error)
 
 	// RequeryOnView fetches fields from the StreamingNode owning the pchannel for a previous QueryView plan.
 	RequeryOnView(ctx context.Context, pchannel types.PChannelInfo, req *viewpb.RequeryOnViewRequest) (*viewpb.RequeryOnViewResponse, error)
@@ -75,9 +79,23 @@ func (qvc *queryViewClient) SearchOnView(ctx context.Context, pchannel types.PCh
 	return result, err
 }
 
+func (qvc *queryViewClient) SearchOnViewStream(ctx context.Context, pchannel types.PChannelInfo, req *viewpb.SearchOnViewRequest) (searchutil.ReduceStream, error) {
+	result, err := executeViewQueryRPC(ctx, qvc, pchannel, "ViewQueryService.SearchOnViewStream", func(ctx context.Context, client viewpb.ViewQueryServiceClient) (searchutil.ReduceStream, error) {
+		return searchutil.NewGRPCReduceStream(ctx, client, req)
+	})
+	return result, err
+}
+
 func (qvc *queryViewClient) QueryOnView(ctx context.Context, pchannel types.PChannelInfo, req *viewpb.QueryOnViewRequest) (*viewpb.QueryOnViewResponse, error) {
 	result, err := executeViewQueryRPC(ctx, qvc, pchannel, "ViewQueryService.QueryOnView", func(ctx context.Context, client viewpb.ViewQueryServiceClient) (*viewpb.QueryOnViewResponse, error) {
 		return client.QueryOnView(ctx, req)
+	})
+	return result, err
+}
+
+func (qvc *queryViewClient) QueryOnViewStream(ctx context.Context, pchannel types.PChannelInfo, req *viewpb.QueryOnViewRequest) (queryutil.ReduceStream, error) {
+	result, err := executeViewQueryRPC(ctx, qvc, pchannel, "ViewQueryService.QueryOnViewStream", func(ctx context.Context, client viewpb.ViewQueryServiceClient) (queryutil.ReduceStream, error) {
+		return queryutil.NewGRPCReduceStream(ctx, client, req)
 	})
 	return result, err
 }

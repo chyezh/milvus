@@ -2644,6 +2644,8 @@ type proxyConfig struct {
 
 	SlowQuerySpanInSeconds ParamItem `refreshable:"true"`
 	QueryNodePoolingSize   ParamItem `refreshable:"false"`
+	EnableReduceStream     ParamItem `refreshable:"false"`
+	ReduceStreamChunkBytes ParamItem `refreshable:"false"`
 
 	HybridSearchRequeryPolicy ParamItem `refreshable:"true"`
 }
@@ -3484,6 +3486,24 @@ Disabled if the value is less or equal to 0.`,
 		Export:       true,
 	}
 	p.QueryNodePoolingSize.Init(base.mgr)
+
+	p.EnableReduceStream = ParamItem{
+		Key:          "proxy.queryView.enableReduceStream",
+		Version:      "3.0.0",
+		DefaultValue: "false",
+		Doc:          "route supported requests through Streaming Reduce",
+		Export:       true,
+	}
+	p.EnableReduceStream.Init(base.mgr)
+
+	p.ReduceStreamChunkBytes = ParamItem{
+		Key:          "proxy.queryView.reduceStreamChunkBytes",
+		Version:      "3.0.0",
+		DefaultValue: "262144",
+		Doc:          "reducible-payload byte threshold for each stream Chunk",
+		Export:       true,
+	}
+	p.ReduceStreamChunkBytes.Init(base.mgr)
 }
 
 // /////////////////////////////////////////////////////////////////////////////
