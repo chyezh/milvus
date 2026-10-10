@@ -16,7 +16,6 @@ import (
 type LoadConfig struct {
 	DbID                     int64
 	CollectionID             int64
-	SchemaVersion            int32
 	PartitionIDs             []int64
 	LoadFields               []*messagespb.LoadFieldConfig // Preload hints, not query scope.
 	RequiredFields           []*messagespb.LoadFieldConfig // Explicit internal query scope.
@@ -42,7 +41,6 @@ func (c *LoadConfig) Clone() *LoadConfig {
 	out := &LoadConfig{
 		DbID:                     c.DbID,
 		CollectionID:             c.CollectionID,
-		SchemaVersion:            c.SchemaVersion,
 		UserSpecifiedReplicaMode: c.UserSpecifiedReplicaMode,
 		SkipLoadDynamicField:     c.SkipLoadDynamicField,
 		RequiredFields:           cloneFieldConfigs(c.RequiredFields),
@@ -86,7 +84,6 @@ func FromAlterLoadConfigMessage(msg *messagespb.AlterLoadConfigMessageHeader) *L
 	cfg := &LoadConfig{
 		DbID:                     msg.GetDbId(),
 		CollectionID:             msg.GetCollectionId(),
-		SchemaVersion:            msg.GetSchemaVersion(),
 		PartitionIDs:             append([]int64{}, msg.GetPartitionIds()...),
 		UserSpecifiedReplicaMode: msg.GetUserSpecifiedReplicaMode(),
 		SkipLoadDynamicField:     msg.GetSkipLoadDynamicField(),
@@ -123,7 +120,6 @@ func buildFromPersisted(
 	cfg := &LoadConfig{
 		DbID:                     info.GetDbID(),
 		CollectionID:             info.GetCollectionID(),
-		SchemaVersion:            info.GetSchemaVersion(),
 		UserSpecifiedReplicaMode: info.GetUserSpecifiedReplicaMode(),
 		SkipLoadDynamicField:     info.GetSkipLoadDynamicField(),
 		RequiredFields:           cloneFieldConfigs(info.GetRequiredFields()),
@@ -170,7 +166,6 @@ func buildFromPersisted(
 func (c *LoadConfig) toCollectionLoadInfoProto() *querypb.CollectionLoadInfo {
 	info := &querypb.CollectionLoadInfo{
 		CollectionID:             c.CollectionID,
-		SchemaVersion:            c.SchemaVersion,
 		DbID:                     c.DbID,
 		ReplicaNumber:            int32(len(c.Replicas)),
 		Status:                   querypb.LoadStatus_Loaded,
