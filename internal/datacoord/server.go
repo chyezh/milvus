@@ -767,9 +767,6 @@ func (s *Server) initMeta(chunkManager storage.ChunkManager) error {
 			dataview.WithPendingTransformProjector(func(ctx context.Context, view *viewpb.DataViewOfCollection) (map[string]uint64, error) {
 				return pendingTransformBounds(ctx, recoveredMeta, recoveredImports, view)
 			}),
-			dataview.WithPendingTransformProjector(func(ctx context.Context, view *viewpb.DataViewOfCollection) (map[string]uint64, error) {
-				return pendingTransformBounds(ctx, recoveredMeta, recoveredImports, view)
-			}),
 		)
 		return err
 	}, retry.Attempts(connMetaMaxRetryTime)); err != nil {

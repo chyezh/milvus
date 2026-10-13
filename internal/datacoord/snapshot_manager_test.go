@@ -2418,6 +2418,7 @@ func TestSnapshotManager_RestoreData_Success(t *testing.T) {
 		snapshotS3Location string,
 		externalSpec string,
 		snapshotFingerprint string,
+		publication ...*restorePublication,
 	) error {
 		assert.Equal(t, int64(200), collectionID)
 		assert.Equal(t, int64(12345), jobID)
@@ -2668,6 +2669,7 @@ func TestSnapshotManager_RestoreData_CreateJobError(t *testing.T) {
 		snapshotS3Location string,
 		externalSpec string,
 		snapshotFingerprint string,
+		publication ...*restorePublication,
 	) error {
 		assert.False(t, external)
 		assert.Empty(t, snapshotS3Location)
