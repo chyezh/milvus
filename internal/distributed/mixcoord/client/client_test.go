@@ -398,6 +398,8 @@ func Test_NewClient(t *testing.T) {
 		r42, err := client.ValidateAnalyzer(ctx, nil)
 		retCheck(retNotNil, r42, err)
 
+		resources, err := client.GetStreamingNodeQueryViewResources(ctx, &datapb.GetStreamingNodeQueryViewResourcesRequest{})
+		retCheck(retNotNil, resources, err)
 		snapshot, err := client.GetFileResourceSnapshot(ctx, &rootcoordpb.GetFileResourceSnapshotRequest{})
 		retCheck(retNotNil, snapshot, err)
 	}
