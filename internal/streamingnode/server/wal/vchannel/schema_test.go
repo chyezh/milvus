@@ -112,4 +112,6 @@ func TestLegacyRepeatedSchemaVersionHasOneReadIdentity(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, second.Schema.Description, read.Schema.Description)
 	require.NoError(t, view.validateSchemaFields(1, 0, 20, []int64{101}), "validation must use the same canonical payload as exact lookup")
+	require.Equal(t, first.Schema.Description, view.restoreSegmentSchema(10, 12, 0).Description)
+	require.Equal(t, second.Schema.Description, view.restoreSegmentSchema(10, 17, 0).Description)
 }

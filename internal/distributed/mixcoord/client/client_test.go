@@ -399,6 +399,8 @@ func Test_NewClient(t *testing.T) {
 		r42, err := client.ValidateAnalyzer(ctx, nil)
 		retCheck(retNotNil, r42, err)
 
+		resources, err := client.GetStreamingNodeQueryViewResources(ctx, &datapb.GetStreamingNodeQueryViewResourcesRequest{})
+		retCheck(retNotNil, resources, err)
 		fetched, err := client.FetchFileResources(ctx, &rootcoordpb.FetchFileResourcesRequest{})
 		retCheck(retNotNil, fetched, err)
 	}

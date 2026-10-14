@@ -123,6 +123,7 @@ type SearchTask struct {
 	lb                shardclient.LBPolicy
 	shardClientMgr    shardclient.ShardClientMgr
 	viewQueryClient   queryclient.Client
+	queryViewPlans    []queryclient.ShardPlan
 	queryChannelsTs   map[string]Timestamp
 	queryChannelsNode *typeutil.ConcurrentMap[string, int64]
 	queryInfos        []*planpb.QueryInfo
@@ -1533,6 +1534,7 @@ func (t *SearchTask) executeByQueryView(ctx context.Context) error {
 	if t.resultBuf == nil {
 		t.resultBuf = typeutil.NewConcurrentSet[*internalpb.SearchResults]()
 	}
+	t.queryViewPlans = append([]queryclient.ShardPlan{}, result.Plans...)
 	for _, searchResult := range result.Results {
 		t.resultBuf.Insert(searchResult)
 	}
