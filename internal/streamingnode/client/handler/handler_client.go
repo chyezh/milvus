@@ -175,6 +175,8 @@ func getDialOptions(rb resolver.Builder) []grpc.DialOption {
 			{
 				"name": []map[string]string{
 					{"service": "milvus.proto.streaming.StreamingNodeHandlerService"},
+					{"service": "milvus.proto.view.QueryPlanService"},
+					{"service": "milvus.proto.view.ViewQueryService"},
 				},
 				"waitForReady": true,
 				"retryPolicy":  retryPolicy,
