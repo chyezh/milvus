@@ -283,6 +283,17 @@ Collection through queueing, native completion and result conversion, including
 cancellation. Releasing a View cannot revoke an executing task's handles. See
 [QN resource preparation](../qnview/querynode_queryview_resource_preparation.md).
 
+### QueryNode sealed operation context
+
+Each QN task binds the View's exact logical Schema, immutable LoadScope, pinned
+physical ReadState and MVCC. Segment APIs borrow Schema for that operation and
+never select or mutate a Segment-wide current schema. The collection pin covers
+queueing, native execution, asynchronous children, result reduction and field
+refill/zero-copy consumption. Releasing the View does not revoke these handles.
+ReadStates and caches own physical metadata independently of logical Schema.
+See [QN resource preparation](../qnview/querynode_queryview_resource_preparation.md).
+These requirements do not change SN/GrowingSegment ownership.
+
 ## 8. Local Optimizer
 
 LocalOptimizer belongs inside the task provider flow. It runs after the provider
