@@ -273,10 +273,6 @@ func newOracleRuntime(
 	if r.writeSchema == nil {
 		r.writeSchema = r.schema
 	}
-	r.writeSchema = walView.WriteSchema
-	if r.writeSchema == nil {
-		r.writeSchema = r.schema
-	}
 	if lazy {
 		if err := r.loadInitialGrowing(ctx, walView); err != nil {
 			return nil, err
