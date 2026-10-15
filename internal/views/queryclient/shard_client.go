@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	commonpb "github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/util/queryutil"
 	"github.com/milvus-io/milvus/internal/util/searchutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/balancer/picker"
@@ -226,6 +227,7 @@ func (s *shardViewQueryClient) QueryStream(
 	ctx context.Context,
 	vchannel string,
 	req *internalpb.RetrieveRequest,
+	schema *schemapb.CollectionSchema,
 	chunkBytes int,
 ) (queryutil.ReduceStream, *ShardPlan, error) {
 	if req == nil {
@@ -279,7 +281,7 @@ func (s *shardViewQueryClient) QueryStream(
 		return nil, nil, err
 	}
 
-	reducedStream, err := queryutil.NewReduceStream(req, childStreams, chunkBytes)
+	reducedStream, err := queryutil.NewReduceStream(req, schema, childStreams, chunkBytes)
 	if err != nil {
 		for _, childStream := range childStreams {
 			err = errors.Join(err, childStream.Close())
