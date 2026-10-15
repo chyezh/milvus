@@ -191,7 +191,7 @@ func (w *walAdaptorImpl) GetQueryPlan(ctx context.Context, req *viewpb.GetQueryP
 	case *viewpb.QueryPlan_LegacyRetrieveRequest:
 		plannedRequest = request.LegacyRetrieveRequest
 	}
-	fields, err := viewquery.ReferencedSchemaFields(plannedRequest, readRuntime.Schema())
+	fields, err := viewquery.ReferencedSchemaFields(plannedRequest, readRuntime.Schema(), req.GetRequiredFieldIds()...)
 	if err != nil {
 		return nil, err
 	}
@@ -232,6 +232,24 @@ func (w *walAdaptorImpl) GetMVCCTimestamp(ctx context.Context, req *viewpb.GetMV
 }
 
 func (w *walAdaptorImpl) resolveQueryPlanMVCC(ctx context.Context, req *viewpb.GetQueryPlanRequest, vchannel string) (*viewpb.QueryPlanMVCC, error) {
+	if req.GetReadProofAfter() != 0 {
+		if _, ok := req.GetMvcc().(*viewpb.GetQueryPlanRequest_ConsistencyLevel); !ok {
+			return nil, viewerror.NewUnknownError("WAL read proof requires consistency-based MVCC")
+		}
+		if w.Channel().AccessMode != types.AccessModeRW {
+			return nil, viewerror.NewNotPrimaryError("WAL read proof requires the primary WAL")
+		}
+		resource.Resource().TimeTickInspector().TriggerSync(w.Channel(), false)
+		frontier, proof, err := w.param.MVCCManager.WaitReadProof(ctx, vchannel, req.GetReadProofAfter())
+		if err != nil {
+			return nil, err
+		}
+		return &viewpb.QueryPlanMVCC{
+			GrowingTimetick:      frontier.GrowingTimetick,
+			TransformingTimetick: frontier.TransformingTimetick,
+			ReadProofTimetick:    proof,
+		}, nil
+	}
 	switch mvcc := req.GetMvcc().(type) {
 	case *viewpb.GetQueryPlanRequest_BarrierMvcc:
 		if w.Channel().AccessMode != types.AccessModeRW {
