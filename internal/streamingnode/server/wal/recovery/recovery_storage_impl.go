@@ -576,6 +576,9 @@ func (r *recoveryStorageImpl) observeModulesMessage(
 	if r.summaryManager != nil {
 		r.summaryManager.ObserveMessage(ctx, retained.Message())
 	}
+	// Persisted confirmations retain ordinary TimeTick complete-prefix effects
+	// (including confirming insert-only transactions in growing runtimes).
+	// The extra scoped query-plan progress is dispatched separately below.
 	r.vchannelManager.ObserveMessage(ctx, retained)
 }
 
