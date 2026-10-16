@@ -2147,7 +2147,7 @@ class ChunkedSegmentSealedImpl : public SegmentSealed {
         const std::vector<FieldId>& milvus_field_ids,
         const std::unordered_map<FieldId, FieldMeta>& field_metas,
         const SegmentLoadInfo& segment_load_info,
-        const SchemaPtr& schema_snapshot,
+        const SealedFieldLayoutPtr& schema_snapshot,
         bool eager_load,
         const std::string& aggregated_warmup_policy,
         milvus::OpContext* op_ctx,
@@ -2158,7 +2158,7 @@ class ChunkedSegmentSealedImpl : public SegmentSealed {
     std::vector<VortexColumnGroupLocalFormat>
     ResolveVortexColumnGroupLocalFormats(
         const std::shared_ptr<milvus_storage::api::ColumnGroups>& column_groups,
-        const SchemaPtr& schema_snapshot) const;
+        const SealedFieldLayoutPtr& schema_snapshot) const;
 
     void
     ReloadColumns(const std::vector<FieldId>& field_ids_to_reload,
@@ -2566,7 +2566,7 @@ class ChunkedSegmentSealedImpl : public SegmentSealed {
     VortexColumnGroupLocalFormat
     TestResolveVortexColumnGroupLocalFormat(
         const std::shared_ptr<milvus_storage::api::ColumnGroup>& column_group,
-        const SchemaPtr& schema_snapshot) const {
+        const TestFieldLayout& schema_snapshot) const {
         return ResolveVortexColumnGroupLocalFormats(
                    std::make_shared<milvus_storage::api::ColumnGroups>(
                        milvus_storage::api::ColumnGroups{column_group}),
@@ -2577,7 +2577,7 @@ class ChunkedSegmentSealedImpl : public SegmentSealed {
     std::vector<VortexColumnGroupLocalFormat>
     TestResolveVortexColumnGroupLocalFormats(
         const std::shared_ptr<milvus_storage::api::ColumnGroups>& column_groups,
-        const SchemaPtr& schema_snapshot) const {
+        const TestFieldLayout& schema_snapshot) const {
         return ResolveVortexColumnGroupLocalFormats(column_groups,
                                                     schema_snapshot);
     }
