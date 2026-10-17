@@ -12,8 +12,8 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	"github.com/milvus-io/milvus/pkg/v3/common"
-	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
@@ -31,7 +31,7 @@ func TestSchemaCacheProjectsWALSystemFields(t *testing.T) {
 		}}},
 	}
 	original := proto.Clone(schema)
-	patch := mockey.Mock(fetchCollectionSchema).Return(&streamingpb.StreamingNodeGetCollectionSchemaResponse{Schema: schema}, nil).Build()
+	patch := mockey.Mock(fetchCollectionSchema).Return(&streaming.SchemaSnapshot{Schema: schema}, nil).Build()
 	defer patch.UnPatch()
 	for _, version := range []*int32{nil, &schema.Version} {
 		cache, err := NewMetaCache(nil)
@@ -55,17 +55,17 @@ func TestSchemaCacheReadWriteSelectors(t *testing.T) {
 	require.NoError(t, err)
 	currentWrite := int32(1)
 	var exactReads, writeReads int
-	patch := mockey.Mock(fetchCollectionSchema).To(func(_ context.Context, req *streamingpb.StreamingNodeGetCollectionSchemaRequest) (*streamingpb.StreamingNodeGetCollectionSchemaResponse, error) {
-		require.EqualValues(t, 1, req.GetCollectionId())
-		require.Equal(t, "p_1v0", req.GetVchannel())
-		version := req.GetSchemaVersion()
-		if req.GetCurrentWrite() {
+	patch := mockey.Mock(fetchCollectionSchema).To(func(_ context.Context, vchannel string, selectedVersion *int32) (*streaming.SchemaSnapshot, error) {
+		require.Equal(t, "p_1v0", vchannel)
+		version := int32(0)
+		if selectedVersion == nil {
 			version = currentWrite
 			writeReads++
 		} else {
+			version = *selectedVersion
 			exactReads++
 		}
-		return &streamingpb.StreamingNodeGetCollectionSchemaResponse{Schema: &schemapb.CollectionSchema{
+		return &streaming.SchemaSnapshot{Schema: &schemapb.CollectionSchema{
 			Name: "test", Version: version, Fields: []*schemapb.FieldSchema{{FieldID: 100, Name: "id", DataType: schemapb.DataType_Int64, IsPrimaryKey: true}},
 		}}, nil
 	}).Build()
@@ -104,7 +104,7 @@ func TestSchemaCacheReadWriteSelectors(t *testing.T) {
 }
 
 func TestSchemaCacheRejectsWrongVersion(t *testing.T) {
-	patch := mockey.Mock(fetchCollectionSchema).Return(&streamingpb.StreamingNodeGetCollectionSchemaResponse{Schema: &schemapb.CollectionSchema{Version: 2}}, nil).Build()
+	patch := mockey.Mock(fetchCollectionSchema).Return(&streaming.SchemaSnapshot{Schema: &schemapb.CollectionSchema{Version: 2}}, nil).Build()
 	defer patch.UnPatch()
 	cache, err := NewMetaCache(nil)
 	require.NoError(t, err)
