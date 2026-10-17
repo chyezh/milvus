@@ -292,3 +292,7 @@ func (n *noopWALAccesser) AnalyzerClient() AnalyzerClient {
 func (n *noopWALAccesser) SchemaClient() SchemaClient {
 	return nil
 }
+
+func (n *noopWALAccesser) TransformLogStreamManager() wal.TransformLogStreamManager {
+	return nil
+}
