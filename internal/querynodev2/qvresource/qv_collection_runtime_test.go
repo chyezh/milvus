@@ -20,7 +20,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/segcorepb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
@@ -179,21 +178,19 @@ func TestQueryViewCollectionRuntimeGuard_UpdateIndexMetaUsesCollection(t *testin
 }
 
 // Patch points use mockey so requests are checked at the streaming boundary.
-type queryViewSchemaClient struct{}
+type queryViewSchemaClient struct{ streaming.SchemaClient }
 
-func (*queryViewSchemaClient) GetCollectionSchema(context.Context, *streamingpb.StreamingNodeGetCollectionSchemaRequest) (*streamingpb.StreamingNodeGetCollectionSchemaResponse, error) {
+func (*queryViewSchemaClient) GetSchemaVersion(context.Context, streaming.GetSchemaVersionRequest) (*streaming.SchemaSnapshot, error) {
 	panic("mock with mockey")
 }
 
 func mockQueryViewSchemaClient(t *testing.T) *queryViewSchemaClient {
 	t.Helper()
 	client := &queryViewSchemaClient{}
-	patch := mockey.Mock((*queryViewSchemaClient).GetCollectionSchema).To(
-		func(_ *queryViewSchemaClient, _ context.Context, req *streamingpb.StreamingNodeGetCollectionSchemaRequest) (*streamingpb.StreamingNodeGetCollectionSchemaResponse, error) {
-			require.Equal(t, int64(1), req.GetCollectionId())
-			require.IsType(t, &streamingpb.StreamingNodeGetCollectionSchemaRequest_SchemaVersion{}, req.GetSelector())
-			return &streamingpb.StreamingNodeGetCollectionSchemaResponse{
-				Schema:            &schemapb.CollectionSchema{Name: "coll", DbName: "db", Version: req.GetSchemaVersion(), Fields: []*schemapb.FieldSchema{{FieldID: 100, Name: "id", DataType: schemapb.DataType_Int64, IsPrimaryKey: true}}},
+	patch := mockey.Mock((*queryViewSchemaClient).GetSchemaVersion).To(
+		func(_ *queryViewSchemaClient, _ context.Context, req streaming.GetSchemaVersionRequest) (*streaming.SchemaSnapshot, error) {
+			return &streaming.SchemaSnapshot{
+				Schema:            &schemapb.CollectionSchema{Name: "coll", DbName: "db", Version: req.Version, Fields: []*schemapb.FieldSchema{{FieldID: 100, Name: "id", DataType: schemapb.DataType_Int64, IsPrimaryKey: true}}},
 				EffectiveTimeTick: 9,
 			}, nil
 		}).Build()
@@ -235,7 +232,7 @@ func TestQueryViewCollectionRuntimeClassifiesStreamingErrors(t *testing.T) {
 		{"shutdown", status.NewOnShutdownError("moving"), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			patch := mockey.Mock((*queryViewSchemaClient).GetCollectionSchema).Return(nil, tc.err).Build()
+			patch := mockey.Mock((*queryViewSchemaClient).GetSchemaVersion).Return(nil, tc.err).Build()
 			defer patch.UnPatch()
 			collection := &fakeQVCollectionManager{}
 			manager := newTestQueryViewCollectionRuntimeManager(&fakeQVLoadMetadataProvider{}, collection, &queryViewSchemaClient{})
@@ -287,14 +284,14 @@ func TestQueryViewCollectionRuntimeIsolatesReadGenerations(t *testing.T) {
 
 func TestQueryViewCollectionRuntimeIgnoresPerChannelSchemaTicks(t *testing.T) {
 	paramtable.Init()
-	patch := mockey.Mock((*queryViewSchemaClient).GetCollectionSchema).To(
-		func(_ *queryViewSchemaClient, _ context.Context, req *streamingpb.StreamingNodeGetCollectionSchemaRequest) (*streamingpb.StreamingNodeGetCollectionSchemaResponse, error) {
+	patch := mockey.Mock((*queryViewSchemaClient).GetSchemaVersion).To(
+		func(_ *queryViewSchemaClient, _ context.Context, req streaming.GetSchemaVersionRequest) (*streaming.SchemaSnapshot, error) {
 			tick := uint64(900)
-			if req.GetVchannel() == "p_1v1" {
+			if req.VChannel == "p_1v1" {
 				tick = 1000
 			}
-			return &streamingpb.StreamingNodeGetCollectionSchemaResponse{
-				Schema:            &schemapb.CollectionSchema{Name: "coll", Version: req.GetSchemaVersion(), Fields: []*schemapb.FieldSchema{{FieldID: 100, Name: "id", DataType: schemapb.DataType_Int64, IsPrimaryKey: true}}},
+			return &streaming.SchemaSnapshot{
+				Schema:            &schemapb.CollectionSchema{Name: "coll", Version: req.Version, Fields: []*schemapb.FieldSchema{{FieldID: 100, Name: "id", DataType: schemapb.DataType_Int64, IsPrimaryKey: true}}},
 				EffectiveTimeTick: tick,
 			}, nil
 		}).Build()

@@ -279,10 +279,9 @@ message StreamingNodeInfo {
 
 // StreamingNodeAssignment is the assignment info of a streaming node.
 message StreamingNodeAssignment {
- 
- repeated PChannelInfo secondary_channels = 3;
     StreamingNodeInfo node         = 1;
     repeated PChannelInfo channels = 2;
+    repeated PChannelInfo secondary_channels = 3;
 }
 
 // DeliverPolicy is the policy to deliver message.
@@ -364,9 +363,9 @@ message StreamingError {
 // Client: all log produce or consuming node.
 service StreamingNodeHandlerService {
     rpc ValidateAnalyzer(StreamingNodeValidateAnalyzerRequest) returns (StreamingNodeValidateAnalyzerResponse) {};
+    rpc GetCollectionSchema(StreamingNodeGetCollectionSchemaRequest) returns (StreamingNodeGetCollectionSchemaResponse) {};
     rpc SubscribeTransform(stream TransformRequest) returns (stream TransformResponse) {};
     rpc RunAnalyzer(StreamingNodeRunAnalyzerRequest) returns (StreamingNodeRunAnalyzerResponse) {};
-    rpc GetCollectionSchema(StreamingNodeGetCollectionSchemaRequest) returns (StreamingNodeGetCollectionSchemaResponse) {};
     // GetReplicateCheckpoint returns the WAL checkpoint that will be used to create scanner
     // from the correct position, ensuring no duplicate or missing messages.
     rpc GetReplicateCheckpoint(GetReplicateCheckpointRequest) returns (GetReplicateCheckpointResponse) {}
@@ -1159,6 +1158,3 @@ message TransformMessageBatch {
     // Entries are ordered by TransformLogEntry.time_tick.
     repeated TransformLogEntry entries = 3;
 }
-
-
-

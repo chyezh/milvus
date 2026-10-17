@@ -10,7 +10,6 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	"github.com/milvus-io/milvus/pkg/v3/common"
-	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
@@ -27,8 +26,12 @@ type writeSchemaSelection struct {
 	schema *SchemaInfo
 }
 
-func fetchCollectionSchema(ctx context.Context, request *streamingpb.StreamingNodeGetCollectionSchemaRequest) (*streamingpb.StreamingNodeGetCollectionSchemaResponse, error) {
-	return streaming.WAL().SchemaClient().GetCollectionSchema(ctx, request)
+func fetchCollectionSchema(ctx context.Context, vchannel string, version *int32) (*streaming.SchemaSnapshot, error) {
+	client := streaming.WAL().SchemaClient()
+	if version == nil {
+		return client.GetCurrentWriteSchema(ctx, streaming.GetCurrentWriteSchemaRequest{VChannel: vchannel})
+	}
+	return client.GetSchemaVersion(ctx, streaming.GetSchemaVersionRequest{VChannel: vchannel, Version: *version})
 }
 
 func (m *MetaCache) resolveCollectionSchema(ctx context.Context, collectionID int64, channels []string, version *int32) (*SchemaInfo, error) {
@@ -40,23 +43,17 @@ func (m *MetaCache) resolveCollectionSchema(ctx context.Context, collectionID in
 	if len(channels) == 0 {
 		return nil, merr.WrapErrServiceNotReadyMsg("collection %d has no schema channel", collectionID)
 	}
-	request := &streamingpb.StreamingNodeGetCollectionSchemaRequest{CollectionId: collectionID, Vchannel: channels[0]}
-	if version == nil {
-		request.Selector = &streamingpb.StreamingNodeGetCollectionSchemaRequest_CurrentWrite{CurrentWrite: true}
-	} else {
-		request.Selector = &streamingpb.StreamingNodeGetCollectionSchemaRequest_SchemaVersion{SchemaVersion: *version}
-	}
-	response, err := fetchCollectionSchema(ctx, request)
+	response, err := fetchCollectionSchema(ctx, channels[0], version)
 	if err != nil {
 		return nil, err
 	}
-	if response.GetSchema() == nil || (version != nil && response.GetSchema().GetVersion() != *version) {
+	if response.Schema == nil || (version != nil && response.Schema.GetVersion() != *version) {
 		return nil, merr.WrapErrServiceInternalMsg("streaming returned a mismatched collection schema")
 	}
 	// WAL schemas include RowID and Timestamp for segment encoding. Proxy
 	// validates client rows against the user projection, just as it did with
 	// DescribeCollection. Do not modify the immutable schema returned by SN.
-	schema := proto.Clone(response.GetSchema()).(*schemapb.CollectionSchema)
+	schema := proto.Clone(response.Schema).(*schemapb.CollectionSchema)
 	fields := schema.Fields[:0]
 	for _, field := range schema.Fields {
 		if !common.IsSystemField(field.GetFieldID()) {

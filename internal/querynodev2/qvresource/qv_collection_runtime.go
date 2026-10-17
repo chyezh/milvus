@@ -15,7 +15,6 @@ import (
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
@@ -48,19 +47,17 @@ func (m *queryViewCollectionRuntimeManager) Acquire(ctx context.Context, view *q
 	}
 	pb := view.IntoProto()
 	meta := pb.GetMeta()
-	collection, err := m.schemas.GetCollectionSchema(ctx, &streamingpb.StreamingNodeGetCollectionSchemaRequest{
-		CollectionId: meta.GetCollectionId(),
-		Vchannel:     meta.GetVchannel(),
-		Selector:     &streamingpb.StreamingNodeGetCollectionSchemaRequest_SchemaVersion{SchemaVersion: meta.GetSchemaVersion()},
+	collection, err := m.schemas.GetSchemaVersion(ctx, streaming.GetSchemaVersionRequest{
+		VChannel: meta.GetVchannel(), Version: meta.GetSchemaVersion(),
 	})
 	if err != nil {
 		return nil, isRetryableCollectionRuntimeError(err), err
 	}
-	if collection == nil || collection.GetSchema() == nil {
+	if collection == nil || collection.Schema == nil {
 		return nil, false, merr.WrapErrServiceInternalMsg("collection metadata is incomplete")
 	}
-	if collection.GetSchema().GetVersion() != meta.GetSchemaVersion() {
-		return nil, false, merr.WrapErrServiceInternalMsg("query view requires schema %d, streaming returned %d", meta.GetSchemaVersion(), collection.GetSchema().GetVersion())
+	if collection.Schema.GetVersion() != meta.GetSchemaVersion() {
+		return nil, false, merr.WrapErrServiceInternalMsg("query view requires schema %d, streaming returned %d", meta.GetSchemaVersion(), collection.Schema.GetVersion())
 	}
 	loadInfo, err := m.loadInfo(ctx, meta)
 	if err != nil {
@@ -75,15 +72,15 @@ func (m *queryViewCollectionRuntimeManager) Acquire(ctx context.Context, view *q
 	defer m.mu.Unlock()
 	collections := m.collections[key]
 	shared := collections != nil
-	indexMeta := segments.ComposeIndexMeta(ctx, loadInfo.IndexInfos, collection.GetSchema())
+	indexMeta := segments.ComposeIndexMeta(ctx, loadInfo.IndexInfos, collection.Schema)
 	if collections == nil {
 		collections = m.newCollections()
 		if err := collections.PutOrRef(
-			meta.GetCollectionId(), collection.GetSchema(), indexMeta,
+			meta.GetCollectionId(), collection.Schema, indexMeta,
 			&querypb.LoadMetaInfo{
 				LoadType:     querypb.LoadType_LoadCollection,
 				CollectionID: meta.GetCollectionId(),
-				DbName:       collection.GetSchema().GetDbName(),
+				DbName:       collection.Schema.GetDbName(),
 			},
 		); err != nil {
 			return nil, false, err
@@ -95,7 +92,7 @@ func (m *queryViewCollectionRuntimeManager) Acquire(ctx context.Context, view *q
 	localCollection := collections.Get(meta.GetCollectionId())
 	var ccollection *segcore.CCollection
 	if localCollection != nil {
-		localCollection = localCollection.WithLoadScope(loadInfoPartitionIDs(loadInfo, view.ViewOfQueryNode()), loadInfoFieldIDs(loadInfo, collection.GetSchema()), loadInfoHintIDs(loadInfo, collection.GetSchema()))
+		localCollection = localCollection.WithLoadScope(loadInfoPartitionIDs(loadInfo, view.ViewOfQueryNode()), loadInfoFieldIDs(loadInfo, collection.Schema), loadInfoHintIDs(loadInfo, collection.Schema))
 		ccollection = localCollection.GetCCollection()
 		if shared {
 			if err := localCollection.UpdateIndexMeta(indexMeta); err != nil {
@@ -109,8 +106,8 @@ func (m *queryViewCollectionRuntimeManager) Acquire(ctx context.Context, view *q
 		key:           key,
 		collection:    localCollection,
 		collectionID:  meta.GetCollectionId(),
-		databaseName:  collection.GetSchema().GetDbName(),
-		schema:        collection.GetSchema(),
+		databaseName:  collection.Schema.GetDbName(),
+		schema:        collection.Schema,
 		schemaVersion: int64(meta.GetSchemaVersion()),
 		ccollection:   ccollection,
 	}, false, nil
