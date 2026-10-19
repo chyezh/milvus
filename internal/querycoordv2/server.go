@@ -406,6 +406,7 @@ func (s *Server) initQViewsRuntime() error {
 	qvresource.Init(runtime.resources)
 	s.collectionUsage = newCollectionUsageManager(
 		runtime.loadConfigStore,
+		s.broker,
 		s.autoReleaseCollection,
 	)
 	return nil

@@ -31,6 +31,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	metastoremocks "github.com/milvus-io/milvus/internal/metastore/mocks"
 	"github.com/milvus-io/milvus/internal/mocks"
@@ -102,7 +103,9 @@ func newReadinessTestServerWithConfig(t *testing.T, info *querypb.CollectionLoad
 	runtime := &qviewsRuntime{loadConfigStore: store, shardViewRegistry: registry, readyChanges: newCollectionReadiness(store, registry)}
 	t.Cleanup(func() { runtime.readyChanges.Close(); registry.Close() })
 	s := &Server{ctx: ctx, qviewsRuntime: runtime}
-	s.collectionUsage = newCollectionUsageManager(store, nil)
+	usageBroker := meta.NewMockBroker(t)
+	usageBroker.EXPECT().DescribeCollection(mock.Anything, mock.Anything).Return(&milvuspb.DescribeCollectionResponse{}, nil).Maybe()
+	s.collectionUsage = newCollectionUsageManager(store, usageBroker, nil)
 	t.Cleanup(s.collectionUsage.close)
 	s.UpdateStateCode(commonpb.StateCode_Healthy)
 	return s, catalog, syncer
