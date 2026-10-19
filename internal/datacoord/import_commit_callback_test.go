@@ -355,6 +355,18 @@ func TestImportCommitCallbackV3JobPublishesVisibility(t *testing.T) {
 	require.NoError(t, imports.AddTask(ctx, v3task))
 
 	callbacks := &DDLCallbacks{Server: &Server{importMeta: imports, meta: &meta{catalog: catalog, segments: segments}}}
+	manager, err := dataview.RecoverManager(ctx, catalog, func(context.Context, int64) (bool, error) { return true, nil }, nil, nil, nil,
+		dataview.WithPendingTransformProjector(func(ctx context.Context, view *viewpb.DataViewOfCollection) (map[string]uint64, error) {
+			return pendingTransformBounds(ctx, callbacks.meta, callbacks.importMeta, view)
+		}))
+	require.NoError(t, err)
+	_, err = manager.OnCreateCollection(ctx, dataview.CreateCollectionDataViewEvent{
+		CollectionID: 100, VChannels: []string{"v1"}, TransformStarts: map[string]uint64{"v1": 50},
+	})
+	require.NoError(t, err)
+	callbacks.dataViewManager = manager
+	callbacks.meta.dataViewManager = manager
+	callbacks.UpdateStateCode(commonpb.StateCode_Healthy)
 	result := buildCommitImportBroadcastResult(1)
 	result.Results = map[string]*message.AppendResult{"v1": {TimeTick: 200}}
 
