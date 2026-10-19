@@ -636,7 +636,7 @@ queryCoord:
   loadTimeoutSeconds: 600
   autoRelease:
     enabled: false # Effective only with proxy.enableAutoLoad=true. Disabling either switch clears activity; enabling both starts a new idle TTL at the next scan.
-    idleTTLSeconds: 600 # Supports runtime updates without resetting activity. Idle time before releasing a collection with load config, even if it is still loading or an earlier query is running.
+    idleTTLSeconds: 600 # Default idle TTL; collection.autorelease.ttl.seconds overrides it (-1 disables auto release). Runtime updates preserve activity timestamps. Applies even during loading or running queries.
     checkIntervalSeconds: 30 # Supports runtime updates that reset the timer for scanning load configs and collection activity.
     releaseConcurrency: 16 # Maximum concurrent automatic releases in one scan. Runtime updates apply to the next release batch.
   distRequestTimeout: 5000 # the request timeout for querycoord fetching data distribution from querynodes, in milliseconds

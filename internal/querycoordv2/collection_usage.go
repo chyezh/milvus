@@ -24,7 +24,9 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/views/coord/loadmgr"
+	"github.com/milvus-io/milvus/pkg/v3/common"
 	"github.com/milvus-io/milvus/pkg/v3/config"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
@@ -40,6 +42,7 @@ type collectionUsageManager struct {
 	configChanged chan struct{}
 
 	loadConfigs *loadmgr.LoadConfigStore
+	broker      meta.Broker
 	release     func(context.Context, int64) error
 
 	stop context.CancelFunc
@@ -48,11 +51,13 @@ type collectionUsageManager struct {
 
 func newCollectionUsageManager(
 	loadConfigs *loadmgr.LoadConfigStore,
+	broker meta.Broker,
 	release func(context.Context, int64) error,
 ) *collectionUsageManager {
 	m := &collectionUsageManager{
 		lastActiveAt:  make(map[int64]time.Time),
 		loadConfigs:   loadConfigs,
+		broker:        broker,
 		release:       release,
 		configChanged: make(chan struct{}, 1),
 	}
@@ -196,14 +201,20 @@ func (m *collectionUsageManager) scan(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if m.shouldRelease(collectionID) {
+		if m.shouldRelease(ctx, collectionID) {
 			candidates = append(candidates, collectionID)
 		}
 	}
 	m.releaseCollections(ctx, candidates)
 }
 
-func (m *collectionUsageManager) shouldRelease(collectionID int64) bool {
+func (m *collectionUsageManager) shouldRelease(ctx context.Context, collectionID int64) bool {
+	ttl, err := m.idleTTL(ctx, collectionID)
+	if err != nil {
+		mlog.RatedWarn(ctx, 1.0, "failed to get collection auto release TTL, skip this scan",
+			mlog.FieldCollectionID(collectionID), mlog.Err(err))
+		return false
+	}
 	m.mu.Lock()
 	lastActiveAt, initialized := m.lastActiveAt[collectionID]
 	m.mu.Unlock()
@@ -213,7 +224,7 @@ func (m *collectionUsageManager) shouldRelease(collectionID int64) bool {
 		m.initializeLastActiveAt(collectionID)
 		return false
 	}
-	return time.Since(lastActiveAt) >= m.idleTTL()
+	return ttl > 0 && time.Since(lastActiveAt) >= ttl
 }
 
 func (m *collectionUsageManager) releaseCollections(ctx context.Context, collectionIDs []int64) {
@@ -263,8 +274,20 @@ func (m *collectionUsageManager) initializeLastActiveAt(collectionID int64) {
 	}
 }
 
-func (m *collectionUsageManager) idleTTL() time.Duration {
-	return paramtable.Get().QueryCoordCfg.AutoReleaseIdleTTLSeconds.GetAsDuration(time.Second)
+func (m *collectionUsageManager) idleTTL(ctx context.Context, collectionID int64) (time.Duration, error) {
+	collection, err := m.broker.DescribeCollection(ctx, collectionID)
+	if err != nil {
+		return 0, err
+	}
+	ttl, err := common.GetCollectionAutoReleaseIdleTTL(collection.GetProperties())
+	if err != nil {
+		mlog.RatedWarn(ctx, 1.0, "invalid collection auto release TTL, use global default",
+			mlog.FieldCollectionID(collectionID), mlog.Err(err))
+	}
+	if err != nil || ttl == 0 {
+		ttl = paramtable.Get().QueryCoordCfg.AutoReleaseIdleTTLSeconds.GetAsDuration(time.Second)
+	}
+	return ttl, nil
 }
 
 func (s *Server) autoReleaseCollection(ctx context.Context, collectionID int64) error {

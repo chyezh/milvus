@@ -26,8 +26,12 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
 	metastoremocks "github.com/milvus-io/milvus/internal/metastore/mocks"
+	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/views/qviews"
+	"github.com/milvus-io/milvus/pkg/v3/common"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
@@ -208,6 +212,132 @@ func TestCollectionUsageHotTTLAppliesToScan(t *testing.T) {
 	require.Equal(t, 1, *releaseCount, "shortening TTL must use the existing timestamp")
 	lastActiveAt, _ := activityTime(manager, 100)
 	require.Equal(t, initial, lastActiveAt, "changing TTL must not reset activity")
+}
+
+func TestCollectionUsageUsesDifferentCollectionTTLs(t *testing.T) {
+	enableAutoReleaseForTest(t)
+	s, manager, catalog, _ := newUsageTestManager(t)
+	for _, id := range []int64{200, 300, 400} {
+		cfg := s.qviewsRuntime.loadConfigStore.Get(100).Config.Clone()
+		cfg.CollectionID = id
+		cfg.Replicas[0].ReplicaID = id * 10
+		catalog.EXPECT().SaveCollection(mock.Anything, mock.Anything).Return(nil).Once()
+		catalog.EXPECT().SaveReplica(mock.Anything, mock.Anything).Return(nil).Once()
+		require.NoError(t, s.qviewsRuntime.loadConfigStore.Put(context.Background(), cfg))
+	}
+	broker := meta.NewMockBroker(t)
+	broker.EXPECT().DescribeCollection(mock.Anything, mock.Anything).RunAndReturn(func(_ context.Context, id int64) (*milvuspb.DescribeCollectionResponse, error) {
+		values := map[int64]string{100: "20", 200: "5", 300: "-1"}
+		response := &milvuspb.DescribeCollectionResponse{}
+		if value, ok := values[id]; ok {
+			response.Properties = []*commonpb.KeyValuePair{{Key: common.CollectionAutoReleaseIdleTTLKey, Value: value}}
+		}
+		return response, nil
+	})
+	manager.broker = broker
+	manager.scan(context.Background())
+	for _, id := range []int64{100, 200, 300, 400} {
+		setActivityTime(manager, id, time.Now().Add(-11*time.Second))
+	}
+	released := make(chan int64, 4)
+	manager.release = func(_ context.Context, id int64) error {
+		released <- id
+		return nil
+	}
+	manager.scan(context.Background())
+	require.Len(t, released, 2)
+	require.ElementsMatch(t, []int64{200, 400}, []int64{<-released, <-released})
+}
+
+func TestCollectionUsageDynamicCollectionTTL(t *testing.T) {
+	enableAutoReleaseForTest(t)
+	s, manager, _, releaseCount := newUsageTestManager(t)
+	properties := []*commonpb.KeyValuePair{{Key: common.CollectionAutoReleaseIdleTTLKey, Value: "20"}}
+	broker := meta.NewMockBroker(t)
+	broker.EXPECT().DescribeCollection(mock.Anything, int64(100)).RunAndReturn(func(context.Context, int64) (*milvuspb.DescribeCollectionResponse, error) {
+		return &milvuspb.DescribeCollectionResponse{Properties: properties}, nil
+	})
+	manager.broker = broker
+	manager.scan(context.Background())
+	initial := time.Now().Add(-6 * time.Second)
+	setActivityTime(manager, 100, initial)
+	configVersion := s.qviewsRuntime.loadConfigStore.GetConfigVersion(100)
+	for _, value := range []string{"30", "-1", "5", ""} {
+		if value == "" {
+			properties = nil
+		} else {
+			properties = []*commonpb.KeyValuePair{{Key: common.CollectionAutoReleaseIdleTTLKey, Value: value}}
+		}
+		before := *releaseCount
+		manager.scan(context.Background())
+		if value == "5" {
+			require.Equal(t, before+1, *releaseCount)
+		} else {
+			require.Equal(t, before, *releaseCount)
+		}
+		lastActiveAt, _ := activityTime(manager, 100)
+		require.Equal(t, initial, lastActiveAt, "changing or deleting a property must not reset activity")
+		require.Equal(t, configVersion, s.qviewsRuntime.loadConfigStore.GetConfigVersion(100))
+	}
+	properties = []*commonpb.KeyValuePair{{Key: common.CollectionAutoReleaseIdleTTLKey, Value: "-1"}}
+	manager.touch(100)
+	lastActiveAt, _ := activityTime(manager, 100)
+	require.True(t, lastActiveAt.After(initial), "DQL must still refresh activity while auto release is disabled for this collection")
+	properties = []*commonpb.KeyValuePair{{Key: common.CollectionAutoReleaseIdleTTLKey, Value: "5"}}
+	manager.scan(context.Background())
+	require.Equal(t, 1, *releaseCount, "enabling auto release must respect the latest DQL activity")
+}
+
+func TestCollectionUsageInvalidTTLFallsBackToGlobalTTL(t *testing.T) {
+	for _, value := range []string{"invalid", "0"} {
+		t.Run(value, func(t *testing.T) {
+			enableAutoReleaseForTest(t)
+			_, manager, _, releaseCount := newUsageTestManager(t)
+			manager.scan(context.Background())
+			broker := meta.NewMockBroker(t)
+			broker.EXPECT().DescribeCollection(mock.Anything, int64(100)).Return(&milvuspb.DescribeCollectionResponse{
+				Properties: []*commonpb.KeyValuePair{{Key: common.CollectionAutoReleaseIdleTTLKey, Value: value}},
+			}, nil).Twice()
+			manager.broker = broker
+
+			setActivityTime(manager, 100, time.Now().Add(-5*time.Second))
+			manager.scan(context.Background())
+			require.Zero(t, *releaseCount, "invalid TTL must respect the global idle TTL")
+
+			initial := time.Now().Add(-11 * time.Second)
+			setActivityTime(manager, 100, initial)
+			manager.scan(context.Background())
+			require.Equal(t, 1, *releaseCount, "invalid TTL must allow release after the global idle TTL")
+			lastActiveAt, _ := activityTime(manager, 100)
+			require.Equal(t, initial, lastActiveAt, "falling back to the global TTL must not reset activity")
+		})
+	}
+}
+
+func TestCollectionUsageSkipsUnavailableMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{name: "metadata unavailable", err: merr.ErrServiceUnavailable},
+		{name: "collection dropped", err: merr.ErrCollectionNotFound},
+		{name: "canceled", err: context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			enableAutoReleaseForTest(t)
+			_, manager, _, releaseCount := newUsageTestManager(t)
+			manager.scan(context.Background())
+			initial := time.Now().Add(-11 * time.Second)
+			setActivityTime(manager, 100, initial)
+			broker := meta.NewMockBroker(t)
+			broker.EXPECT().DescribeCollection(mock.Anything, int64(100)).Return(nil, tc.err).Once()
+			manager.broker = broker
+			manager.scan(context.Background())
+			require.Zero(t, *releaseCount, "a failed lookup must not fall back to the global TTL and release")
+			lastActiveAt, _ := activityTime(manager, 100)
+			require.Equal(t, initial, lastActiveAt)
+		})
+	}
 }
 
 func TestCollectionUsageEnsureRefreshesOnEntryAndReady(t *testing.T) {
