@@ -19,6 +19,14 @@ Persists WAL consumer state to the catalog (etcd) and object storage. The author
 
 Control may persist its latest state ahead of the global checkpoint, like a Segment snapshot. Its `control_checkpoint_time_tick` suppresses already covered control effects without skipping data replay. External effects still require idempotent retries when a crash precedes metadata publication. Startup failure and normal shutdown close the retained stream, including when it is paused at the barrier.
 
+WAL append cancellation ends the writer lifecycle and requires this recovery flow
+before writes resume. It does not prove that the interrupted record was absent.
+A durable Commit is replayed as a completed transaction; an incomplete receiving
+prefix reconstructs both TxnManager and ReplicatesManager from the same TxnBuffer;
+a durable local Flush removes the aborted prefix. The old session is not reset
+for another Commit attempt on the cancelled writer. See
+[Append retry and writer lifetime](../walbackend/walbackend.md#append-retry-and-writer-lifetime).
+
 The temporary WAL L0 materializer retains Delete/Txn and explicit Flush handles.
 Size, buffer age, explicit Flush and recovery-tail requests trigger output.
 Earlier L1 segments must be registered in DataCoord, but need not be flushed.
