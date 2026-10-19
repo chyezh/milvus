@@ -184,7 +184,13 @@ func (c *legacyClient) searchStream(ctx context.Context, req *LegacySearchReques
 	for i := range vchannels {
 		i := i
 		g.Go(func() error {
-			stream, plan, err := c.shardClient.SearchStream(ctx, vchannels[i], req, c.reduceStreamChunkBytes)
+			stream, plan, err := c.shardClient.SearchStream(ctx, &ShardSearchRequest{
+				RequiredFieldIDs: req.RequiredFieldIDs,
+				VChannel:         vchannels[i],
+				Req:              req.Req,
+				MVCC:             req.MVCC,
+				BarrierMVCC:      req.BarrierMVCC,
+			}, c.reduceStreamChunkBytes)
 			if err != nil {
 				return err
 			}
@@ -236,11 +242,12 @@ func (c *legacyClient) Query(ctx context.Context, req *LegacyQueryRequest) (*Leg
 		i := i
 		g.Go(func() error {
 			plan, err := c.shardClient.Query(gCtx, &ShardQueryRequest{
-				VChannel:    vchannels[i],
-				Req:         req.Req,
-				MVCC:        req.MVCC,
-				BarrierMVCC: req.BarrierMVCC,
-				Reducer:     collector,
+				VChannel:       vchannels[i],
+				Req:            req.Req,
+				Schema:         req.Schema,
+				MVCC:           req.MVCC,
+				BarrierMVCC:    req.BarrierMVCC,
+				Reducer:        collector,
 			})
 			if err != nil {
 				return err
@@ -284,7 +291,14 @@ func (c *legacyClient) queryStream(ctx context.Context, req *LegacyQueryRequest)
 	for i := range vchannels {
 		i := i
 		group.Go(func() error {
-			stream, plan, err := c.shardClient.QueryStream(ctx, vchannels[i], req, c.reduceStreamChunkBytes)
+			stream, plan, err := c.shardClient.QueryStream(ctx, &ShardQueryRequest{
+				ReadProofAfter: req.ReadProofAfter,
+				VChannel:       vchannels[i],
+				Req:            req.Req,
+				Schema:         req.Schema,
+				MVCC:           req.MVCC,
+				BarrierMVCC:    req.BarrierMVCC,
+			}, c.reduceStreamChunkBytes)
 			if err != nil {
 				return err
 			}
