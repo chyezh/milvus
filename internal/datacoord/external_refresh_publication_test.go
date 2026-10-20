@@ -96,8 +96,9 @@ func TestExternalRefreshPublicationRetry(t *testing.T) {
 func TestExternalRefreshPublishWaitsForSchemaAndViews(t *testing.T) {
 	ctx := context.Background()
 	job := &datapb.ExternalCollectionRefreshJob{JobId: 1, CollectionId: 100, ExternalSource: "new", ExternalSpec: "spec"}
-	mt := &meta{collections: newTestCollections(100), segments: NewSegmentsInfo()}
-	mt.collections.Insert(100, &collectionInfo{ID: 100, Schema: &schemapb.CollectionSchema{ExternalSource: "old"}})
+	store := newTestCollections(100)
+	mt := &meta{metaStore: store, segments: NewSegmentsInfo(store)}
+	mt.metaStore.PutCollection(&collectionInfo{ID: 100, Schema: &schemapb.CollectionSchema{ExternalSource: "old"}})
 	mt.segments.SetSegment(10, &SegmentInfo{SegmentInfo: &datapb.SegmentInfo{ID: 10, CollectionID: 100}})
 	manager := &externalCollectionRefreshManager{mt: mt, checker: &externalCollectionRefreshChecker{mt: mt}}
 	notify := mockey.Mock((*externalCollectionRefreshManager).handleJobFinished).Return().Build()
@@ -115,7 +116,7 @@ func TestExternalRefreshPublishWaitsForSchemaAndViews(t *testing.T) {
 	defer refresh.UnPatch()
 	require.ErrorIs(t, manager.publishRefreshJob(ctx, job), merr.ErrServiceNotReady)
 	require.Zero(t, calls)
-	mt.collections.Insert(100, &collectionInfo{ID: 100, Schema: &schemapb.CollectionSchema{ExternalSource: "new", ExternalSpec: "spec"}})
+	mt.metaStore.PutCollection(&collectionInfo{ID: 100, Schema: &schemapb.CollectionSchema{ExternalSource: "new", ExternalSpec: "spec"}})
 	require.ErrorIs(t, manager.publishRefreshJob(ctx, job), merr.ErrServiceNotReady)
 	refreshErr = nil
 	require.NoError(t, manager.publishRefreshJob(ctx, job))

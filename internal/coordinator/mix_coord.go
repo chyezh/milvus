@@ -2,7 +2,6 @@ package coordinator
 
 import (
 	"context"
-	"golang.org/x/sync/errgroup"
 	"os"
 	"path/filepath"
 	"strconv"

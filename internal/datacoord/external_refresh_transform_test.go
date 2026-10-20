@@ -57,7 +57,8 @@ func TestExternalRefreshTransformOrigin(t *testing.T) {
 		require.NoError(t, err)
 		return manager
 	}
-	mt := &meta{collections: newTestCollections(collectionID), segments: NewSegmentsInfo(), catalog: &stubCatalog{}, dataViewManager: recoverManager()}
+	store := newTestCollections(collectionID)
+	mt := &meta{metaStore: store, segments: NewSegmentsInfo(store), catalog: &stubCatalog{}, dataViewManager: recoverManager()}
 	_, err := externalRefreshTransformStart(ctx, mt, collectionID, channel)
 	require.ErrorIs(t, err, merr.ErrServiceNotReady)
 	_, err = mt.dataViewManager.OnCreateCollection(ctx, dataview.CreateCollectionDataViewEvent{

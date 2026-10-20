@@ -27,6 +27,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/metacache"
 	kvdatacoord "github.com/milvus-io/milvus/internal/metastore/kv/datacoord"
 	snapshotstorage "github.com/milvus-io/milvus/internal/snapshotio/storage"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
@@ -39,7 +40,8 @@ func TestRestoreL0MaterializationResumesFixedPlans(t *testing.T) {
 		paramtable.Init()
 		ctx := t.Context()
 		catalog := kvdatacoord.NewCatalog(NewMetaMemoryKV(), "", "")
-		m := &meta{ctx: ctx, catalog: catalog, segments: NewSegmentsInfo(), snapshotMeta: &snapshotMeta{}}
+		store := metacache.NewMetaStore(nil)
+		m := &meta{metaStore: store, ctx: ctx, catalog: catalog, segments: NewSegmentsInfo(store), snapshotMeta: &snapshotMeta{}}
 		var err error
 		m.compactionTaskMeta, err = newCompactionTaskMeta(ctx, catalog)
 		require.NoError(t, err)
@@ -131,7 +133,8 @@ func TestRestoreL0MaterializationResumesFixedPlans(t *testing.T) {
 func TestRestoreL0CommitAndTaskSaveCrash(t *testing.T) {
 	mockey.PatchConvey("input retirement is an atomic materialization proof", t, func() {
 		ctx := t.Context()
-		m := &meta{ctx: ctx, segments: NewSegmentsInfo()}
+		store := metacache.NewMetaStore(nil)
+		m := &meta{metaStore: store, ctx: ctx, segments: NewSegmentsInfo(store)}
 		m.segments.SetSegment(1, NewSegmentInfo(&datapb.SegmentInfo{ID: 1, Level: datapb.SegmentLevel_L0, State: commonpb.SegmentState_Dropped, Compacted: true, IsImporting: true}))
 		plan := &datapb.CompactionTask{PlanID: 5, RestoreJobId: 7, InputSegments: []int64{1}, RestoreTargetSegments: []int64{2}}
 		task := newL0CompactionTask(plan, nil, m)
@@ -167,7 +170,8 @@ func TestRestoreSegmentRetainsEffectiveInsertTime(t *testing.T) {
 }
 
 func TestRestoreL0RejectsMissingAndForeignTargets(t *testing.T) {
-	m := &meta{ctx: context.Background(), segments: NewSegmentsInfo()}
+	store := metacache.NewMetaStore(nil)
+	m := &meta{metaStore: store, ctx: context.Background(), segments: NewSegmentsInfo(store)}
 	task := newL0CompactionTask(&datapb.CompactionTask{RestoreJobId: 7, CollectionID: 10, Channel: "v1", PartitionID: -1, RestoreTargetSegments: []int64{2}}, nil, m)
 	_, err := task.restoreTargets()
 	require.ErrorIs(t, err, merr.ErrDataIntegrity)
@@ -180,7 +184,8 @@ func TestRestoreL0AdmissionRetry(t *testing.T) {
 	mockey.PatchConvey("rejected admission reuses its durable plan ID", t, func() {
 		ctx := t.Context()
 		catalog := kvdatacoord.NewCatalog(NewMetaMemoryKV(), "", "")
-		m := &meta{ctx: ctx, catalog: catalog, segments: NewSegmentsInfo()}
+		store := metacache.NewMetaStore(nil)
+		m := &meta{metaStore: store, ctx: ctx, catalog: catalog, segments: NewSegmentsInfo(store)}
 		var err error
 		m.compactionTaskMeta, err = newCompactionTaskMeta(ctx, catalog)
 		require.NoError(t, err)

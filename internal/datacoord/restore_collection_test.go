@@ -27,6 +27,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/metacache"
 	kvdatacoord "github.com/milvus-io/milvus/internal/metastore/kv/datacoord"
 	"github.com/milvus-io/milvus/internal/rootcoord"
 	snapshotstorage "github.com/milvus-io/milvus/internal/snapshotio/storage"
@@ -128,7 +129,8 @@ func TestRestoreCopyCoverageRequiresEveryExpectedSegment(t *testing.T) {
 func TestRestoreSegmentRegistrationResumesFromJob(t *testing.T) {
 	ctx := t.Context()
 	catalog := kvdatacoord.NewCatalog(NewMetaMemoryKV(), "", "")
-	m := &meta{catalog: catalog, segments: NewSegmentsInfo(), snapshotMeta: &snapshotMeta{}}
+	store := metacache.NewMetaStore(nil)
+	m := &meta{metaStore: store, catalog: catalog, segments: NewSegmentsInfo(store), snapshotMeta: &snapshotMeta{}}
 	copies, err := NewCopySegmentMeta(ctx, catalog, m, m.snapshotMeta, nil)
 	require.NoError(t, err)
 	job := newTestCopyJob(100, datapb.CopySegmentJobState_CopySegmentJobPending).(*copySegmentJob)
@@ -175,7 +177,8 @@ func TestRestoreCallbackPersistsJobBeforeSegments(t *testing.T) {
 	mockey.PatchConvey("callback owns segment allocation; retries reuse durable Job", t, func() {
 		ctx := t.Context()
 		catalog := kvdatacoord.NewCatalog(NewMetaMemoryKV(), "", "")
-		m := &meta{catalog: catalog, segments: NewSegmentsInfo()}
+		store := metacache.NewMetaStore(nil)
+		m := &meta{metaStore: store, catalog: catalog, segments: NewSegmentsInfo(store)}
 		copies, err := NewCopySegmentMeta(ctx, catalog, m, nil, nil)
 		require.NoError(t, err)
 		allocated := mockey.Mock((*restoreAllocatorTarget).AllocN).Return(int64(2001), int64(2002), nil).Build()

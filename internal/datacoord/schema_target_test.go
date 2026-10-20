@@ -12,14 +12,14 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/broadcast"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
-	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
 func TestPreparationSchemaOverlay(t *testing.T) {
 	mockey.PatchConvey("pending target drives jobs without mutating published cache", t, func() {
-		m := &meta{collections: typeutil.NewConcurrentMap[UniqueID, *collectionInfo](), preparationSchema: coordinatorPreparationSchema}
+		m := newEmptyTestMeta()
+		m.preparationSchema = coordinatorPreparationSchema
 		for _, id := range []int64{1, 2, 3} {
-			m.collections.Insert(id, &collectionInfo{ID: id, Schema: &schemapb.CollectionSchema{Version: 1}, DatabaseName: "db"})
+			m.metaStore.PutCollection(&collectionInfo{ID: id, Schema: &schemapb.CollectionSchema{Version: 1}, DatabaseName: "db"})
 		}
 		mockey.Mock(broadcast.GetPendingSchemaTarget).To(func(id int64) (*broadcaster.SchemaTarget, error) {
 			switch id {

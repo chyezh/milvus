@@ -24,21 +24,22 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
+	"github.com/milvus-io/milvus/internal/metacache"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/storagev2/packed"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
-	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
 func TestTransformBoundsCoverUnpublishedPartitions(t *testing.T) {
 	ctx := context.Background()
-	metadata := &meta{ctx: ctx, collections: typeutil.NewConcurrentMap[int64, *collectionInfo](), segments: NewSegmentsInfo(), channelCPs: newChannelCps()}
-	metadata.collections.Insert(100, &collectionInfo{ID: 100, VChannelNames: []string{"v1", "v2"}})
-	metadata.channelCPs.checkpoints["v1"] = &msgpb.MsgPosition{Timestamp: 200}
-	metadata.channelCPs.checkpoints["v2"] = &msgpb.MsgPosition{Timestamp: 20}
+	metadata := newEmptyTestMeta()
+	metadata.ctx = ctx
+	metadata.metaStore.PutCollection(&collectionInfo{ID: 100, VChannelNames: []string{"v1", "v2"}})
+	metadata.metaStore.LoadChannelCheckpoints(map[string]*msgpb.MsgPosition{"v1": {Timestamp: 200}})
+	metadata.metaStore.LoadChannelCheckpoints(map[string]*msgpb.MsgPosition{"v2": {Timestamp: 20}})
 	for _, segment := range []*datapb.SegmentInfo{
 		{ID: 1, CollectionID: 100, PartitionID: 1, InsertChannel: "v1", State: commonpb.SegmentState_Flushed, TransformStartAfterTimetick: 150},
 		{ID: 2, CollectionID: 100, PartitionID: 2, InsertChannel: "v1", State: commonpb.SegmentState_Sealed, TransformStartAfterTimetick: 100},
@@ -55,7 +56,7 @@ func TestTransformBoundsCoverUnpublishedPartitions(t *testing.T) {
 	bounds, err = transformFrontierBounds(ctx, metadata, nil, 100)
 	require.NoError(t, err)
 	require.Equal(t, uint64(60), bounds["v1"])
-	delete(metadata.channelCPs.checkpoints, "v2")
+	metadata.metaStore.LoadChannelCheckpoints(map[string]*msgpb.MsgPosition{"v2": nil})
 	_, err = transformFrontierBounds(ctx, metadata, nil, 100)
 	require.ErrorIs(t, err, merr.ErrServiceNotReady)
 }
@@ -74,7 +75,8 @@ func TestSegmentTransformCoverageDoesNotUseCompactedRowMinimum(t *testing.T) {
 }
 
 func TestLoadableProjectionKeepsPublishedSortInputs(t *testing.T) {
-	metadata := &meta{segments: NewSegmentsInfo()}
+	store := metacache.NewMetaStore(nil)
+	metadata := &meta{metaStore: store, segments: NewSegmentsInfo(store)}
 	for _, id := range []int64{1, 2} {
 		info := &datapb.SegmentInfo{
 			ID: id, CollectionID: 100, PartitionID: 1, InsertChannel: "v1",
@@ -94,10 +96,11 @@ func TestLoadableProjectionKeepsPublishedSortInputs(t *testing.T) {
 
 func TestTransformBoundsRequireEveryImportCommitFence(t *testing.T) {
 	ctx := context.Background()
-	metadata := &meta{ctx: ctx, collections: typeutil.NewConcurrentMap[int64, *collectionInfo](), segments: NewSegmentsInfo(), channelCPs: newChannelCps()}
-	metadata.collections.Insert(100, &collectionInfo{ID: 100, VChannelNames: []string{"v1", "v2"}})
-	metadata.channelCPs.checkpoints["v1"] = &msgpb.MsgPosition{Timestamp: 300}
-	metadata.channelCPs.checkpoints["v2"] = &msgpb.MsgPosition{Timestamp: 400}
+	metadata := newEmptyTestMeta()
+	metadata.ctx = ctx
+	metadata.metaStore.PutCollection(&collectionInfo{ID: 100, VChannelNames: []string{"v1", "v2"}})
+	metadata.metaStore.LoadChannelCheckpoints(map[string]*msgpb.MsgPosition{"v1": {Timestamp: 300}})
+	metadata.metaStore.LoadChannelCheckpoints(map[string]*msgpb.MsgPosition{"v2": {Timestamp: 400}})
 	job := &importJob{ImportJob: &datapb.ImportJob{
 		JobID: 1, CollectionID: 100, Vchannels: []string{"v1", "v2"}, State: internalpb.ImportJobState_Committing,
 		TransformCommitTimeticks: map[string]uint64{"v1": 100},
@@ -124,9 +127,10 @@ func TestTransformBoundsRequireEveryImportCommitFence(t *testing.T) {
 
 func TestTransformBoundsRejectUnknownDataButAllowEmptyAllocation(t *testing.T) {
 	ctx := context.Background()
-	metadata := &meta{ctx: ctx, collections: typeutil.NewConcurrentMap[int64, *collectionInfo](), segments: NewSegmentsInfo(), channelCPs: newChannelCps()}
-	metadata.collections.Insert(100, &collectionInfo{ID: 100, VChannelNames: []string{"v1"}})
-	metadata.channelCPs.checkpoints["v1"] = &msgpb.MsgPosition{Timestamp: 300}
+	metadata := newEmptyTestMeta()
+	metadata.ctx = ctx
+	metadata.metaStore.PutCollection(&collectionInfo{ID: 100, VChannelNames: []string{"v1"}})
+	metadata.metaStore.LoadChannelCheckpoints(map[string]*msgpb.MsgPosition{"v1": {Timestamp: 300}})
 	segment := &datapb.SegmentInfo{
 		ID: 10, CollectionID: 100, InsertChannel: "v1", State: commonpb.SegmentState_Growing,
 		StorageVersion: storage.StorageV3, ManifestPath: packed.MarshalManifestPath("segment-10", packed.ManifestEarliest),
@@ -170,7 +174,8 @@ func TestSegmentTransformCursorKeepsFirstInsertAndImportCommit(t *testing.T) {
 }
 
 func TestPendingTransformBoundsWithoutCollectionCacheOrCheckpoint(t *testing.T) {
-	metadata := &meta{ctx: t.Context(), segments: NewSegmentsInfo()}
+	store := metacache.NewMetaStore(nil)
+	metadata := &meta{metaStore: store, ctx: t.Context(), segments: NewSegmentsInfo(store)}
 	view := &viewpb.DataViewOfCollection{CollectionId: 100, Shards: []*viewpb.DataViewOfShard{{Vchannel: "v1", Partitions: []*viewpb.DataViewOfPartition{{SegmentIds: []int64{1}}}}}}
 	for _, segment := range []*datapb.SegmentInfo{
 		{ID: 1, CollectionID: 100, InsertChannel: "v1", State: commonpb.SegmentState_Flushed, TransformStartAfterTimetick: 10},
@@ -199,7 +204,8 @@ func TestPendingTransformBoundsWithoutCollectionCacheOrCheckpoint(t *testing.T) 
 
 func TestPendingImportFreezesWWithoutBlockingPublication(t *testing.T) {
 	ctx := t.Context()
-	metadata := &meta{ctx: ctx, segments: NewSegmentsInfo()}
+	store := metacache.NewMetaStore(nil)
+	metadata := &meta{metaStore: store, ctx: ctx, segments: NewSegmentsInfo(store)}
 	job := &importJob{ImportJob: &datapb.ImportJob{
 		JobID: 1, CollectionID: 100, Vchannels: []string{"v1", "v2"}, State: internalpb.ImportJobState_Importing,
 	}}

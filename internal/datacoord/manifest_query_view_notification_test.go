@@ -25,6 +25,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/metacache"
 	catalogkv "github.com/milvus-io/milvus/internal/metastore/kv/datacoord"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/storagev2/packed"
@@ -55,7 +56,7 @@ func TestManifestPublicationNotifiesQueryViews(t *testing.T) {
 			return err
 		}},
 		{"schema-bump", func(ctx context.Context, m *meta) error {
-			_, _, err := m.CompleteCompactionMutation(ctx, &datapb.CompactionTask{
+			_, err := m.CompleteCompactionMutation(ctx, &datapb.CompactionTask{
 				CollectionID: 1, InputSegments: []int64{10}, Type: datapb.CompactionType_BumpSchemaVersionCompaction,
 				Schema: &schemapb.CollectionSchema{Version: 2},
 			}, &datapb.CompactionPlanResult{Segments: []*datapb.CompactionSegment{{
@@ -65,7 +66,8 @@ func TestManifestPublicationNotifiesQueryViews(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			m := &meta{ctx: context.Background(), catalog: catalogkv.NewCatalog(NewMetaMemoryKV(), "", ""), segments: NewSegmentsInfo()}
+			store := metacache.NewMetaStore(nil)
+			m := &meta{metaStore: store, ctx: context.Background(), catalog: catalogkv.NewCatalog(NewMetaMemoryKV(), "", ""), segments: NewSegmentsInfo(store)}
 			segment := NewSegmentInfo(&datapb.SegmentInfo{
 				ID: 10, CollectionID: 1, PartitionID: 2, State: commonpb.SegmentState_Flushed,
 				Level: datapb.SegmentLevel_L1, StorageVersion: storage.StorageV3, ManifestPath: oldManifest,
@@ -123,7 +125,8 @@ func TestManifestPublicationNotifiesQueryViews(t *testing.T) {
 }
 
 func TestManifestPublicationGroupsNotifications(t *testing.T) {
-	m := &meta{ctx: context.Background(), catalog: catalogkv.NewCatalog(NewMetaMemoryKV(), "", ""), segments: NewSegmentsInfo()}
+	store := metacache.NewMetaStore(nil)
+	m := &meta{metaStore: store, ctx: context.Background(), catalog: catalogkv.NewCatalog(NewMetaMemoryKV(), "", ""), segments: NewSegmentsInfo(store)}
 	for _, id := range []int64{10, 11, 20} {
 		m.segments.SetSegment(id, NewSegmentInfo(&datapb.SegmentInfo{
 			ID: id, CollectionID: id / 10, State: commonpb.SegmentState_Flushed,
