@@ -111,6 +111,7 @@ message QueryViewOfPartition {
     int64 partition_id = 1;
     repeated int64 segment_ids = 2;
     repeated int64 ready_segment_ids = 3;
+    // Parallel to segment_ids; the required physical base version for each segment.
     repeated int64 segment_manifest_versions = 4 [packed = true];
 }
 
@@ -191,6 +192,22 @@ message QueryPlanWorkNode {
         QueryWorkNode query_node = 1;
         StreamingWorkNode streaming_node = 2;
     }
+    SegmentSelection segment_selection = 3;
+    // Positional, parallel to hybrid subrequests. Each entry is explicit.
+    repeated SegmentSelection sub_selections = 4;
+}
+
+// Selection is relative to the exact View and request partition scope.
+// Absent selection means All; repeated hybrid entries remain positional.
+message SegmentSelection {
+    enum Mode {
+        All = 0;
+        Include = 1;
+        Exclude = 2;
+        None = 3;
+    }
+    repeated int64 segment_ids = 1 [packed = true];
+    Mode mode = 2;
 }
 
 //
@@ -289,9 +306,6 @@ service ViewQueryService {
     rpc SearchOnView(SearchOnViewRequest) returns (SearchOnViewResponse) {}
     // QueryOnView executes a query (retrieve by expression) on segments belonging to the given view version.
     rpc QueryOnView(QueryOnViewRequest) returns (QueryOnViewResponse) {}
-    // RequeryOnView fetches output fields for a set of PKs after Proxy-side reduce.
-    // Uses the same view version as the preceding search/query to ensure consistency.
-    rpc RequeryOnView(RequeryOnViewRequest) returns (RequeryOnViewResponse) {}
 }
 
 message SearchOnViewRequest {
@@ -300,6 +314,8 @@ message SearchOnViewRequest {
     ShardID shard_id = 2;
     QueryViewVersion version = 3;
     QueryPlanMVCC mvcc = 4;
+    SegmentSelection segment_selection = 5;
+    repeated SegmentSelection sub_selections = 6;
 }
 
 message SearchOnViewResponse {
@@ -313,22 +329,10 @@ message QueryOnViewRequest {
     ShardID shard_id = 2;
     QueryViewVersion version = 3;
     QueryPlanMVCC mvcc = 4;
+    SegmentSelection segment_selection = 5;
 }
 
 message QueryOnViewResponse {
-    // TODO: replace with native view result types once legacy internal protos are removed.
-    internal.RetrieveResults legacy_results = 1;
-}
-
-message RequeryOnViewRequest {
-    // TODO: replace with native view request types once legacy internal protos are removed.
-    internal.RetrieveRequest legacy_req = 1;
-    ShardID shard_id = 2;
-    QueryViewVersion version = 3;
-    QueryPlanMVCC mvcc = 4;
-}
-
-message RequeryOnViewResponse {
     // TODO: replace with native view result types once legacy internal protos are removed.
     internal.RetrieveResults legacy_results = 1;
 }

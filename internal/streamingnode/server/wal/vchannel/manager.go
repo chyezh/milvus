@@ -85,7 +85,7 @@ func NewPChannelRecoveryManager(config PChannelManagerConfig) (*PChannelRecovery
 	segmentsByVChannel := groupSegmentsByVChannel(config.Segments)
 	manager := &PChannelRecoveryManager{
 		pchannel:                config.PChannel,
-		queryDispatcher:         queryresource.NewDispatcher(4),
+		queryDispatcher:         queryresource.NewConfiguredDispatcher(),
 		queryTransformLogStream: walsummary.NewStream(config.SummaryManager),
 		modules:                 typeutil.NewConcurrentMap[string, *VChannelRecoveryModule](),
 		segmentsByVChannel:      segmentsByVChannel,
@@ -514,13 +514,12 @@ func (m *PChannelRecoveryManager) AcquireStream(ctx context.Context, pchannel st
 		return nil, wal.ErrTransformLogVChannelUnavailable
 	default:
 	}
-	stream := walsummary.NewStream(m.config.SummaryManager)
+	stream := walsummary.NewDispatchStream(m.config.SummaryManager)
 	go func() {
 		select {
 		case <-ctx.Done():
 		case <-m.closeCh:
 		case <-stream.Done():
-			return
 		}
 		_ = stream.Close()
 	}()
