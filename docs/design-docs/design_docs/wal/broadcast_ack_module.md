@@ -140,7 +140,7 @@ CreateSnapshot as a hard batch boundary, including requests behind active work.
 The all-Ack callback derives each channel's snapshot position from that channel's
 broadcast append result and excludes CChannel. The shared WAL recovery checkpoint
 is not the snapshot cut. Snapshot generation receives these positions explicitly;
-it neither calls Flush RPC nor waits for cp_updater to publish them. Existing
+it neither calls Flush RPC nor waits for DataCoord channel checkpoints. Existing
 compaction protection and snapshot publication remain in the snapshot manager.
 
 ## Truncate API Completion

@@ -277,8 +277,8 @@ and exact Delete/Upsert query results.
   `FlushInsertChunk` publishes Growing data before releasing Insert handles.
 - `internal/streamingnode/server/wal/vchannel/segment/lifecycle_writer.go`:
   Growing registration and final `SaveBinlogPaths` commit.
-- `internal/streamingnode/server/wal/vchannel/checkpoint_updater.go`:
-  existing recovery-checkpoint reporting, not a safe-start producer.
+- `internal/streamingnode/server/wal/recovery/recovery_background_task.go`:
+  durable recovery-checkpoint publication, not a safe-start producer.
 - `internal/datacoord/services.go` and `internal/dataview/manager.go`:
   atomic Flush publication and immutable snapshot management.
 - `internal/datacoord/ddl_callbacks_import.go`: per-VChannel commit timestamps.

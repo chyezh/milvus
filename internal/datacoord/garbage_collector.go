@@ -1064,6 +1064,10 @@ func (gc *garbageCollector) recycleDroppedSegments(ctx context.Context, signal <
 		indexedSet.Insert(segment.GetID())
 	}
 
+	// TODO: Read the durable StreamingNode physical checkpoint for dropped-segment GC.
+	// Periodic channel-checkpoint reporting has been removed. Keep the existing
+	// safety gate until its replacement is implemented: live-channel segments
+	// beyond the historical checkpoint remain retained.
 	channelCPs := make(map[string]uint64)
 	for channel := range channels {
 		pos := gc.meta.GetChannelCheckpoint(channel)

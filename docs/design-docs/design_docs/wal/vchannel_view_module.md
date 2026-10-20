@@ -268,16 +268,15 @@ checkpoint by itself.
 6. Dirty snapshots are stable and precede global checkpoint publication.
 7. VChannel cleanup cannot delete child state still required for recovery.
 
-## 10. Temporary legacy query checkpoint reporting
+## 10. Recovery Checkpoint Ownership
 
-Until QueryView is enabled, the [WAL L0 materializer](l0_materializer.md)
-retains Delete handles through output/registration and dirty cursor installation.
-SegmentView retains Insert handles through growing publication. cp_updater can
-therefore report the published global checkpoint's original MessageID and
-TimeTick directly. There is no per-VChannel candidate queue, progress minimum,
-or completed-Flush fallback. RPC failures retry a published point next tick.
-This bridge is marked `TODO: Remove after enabling queryview.`
+The [WAL L0 materializer](l0_materializer.md) retains Delete handles through
+output/registration and dirty cursor installation. SegmentView retains Insert
+handles through growing publication. These dependencies constrain the global
+checkpoint persisted by RecoveryStorage; the manager has no periodic DataCoord
+checkpoint reporter. Its background worker only checks L0 buffer age.
 
-This change does not yet adjust WAL truncation. Backends that physically remove
-history independently of this conservative query position still need the
-separate truncation/retention integration before relying on older query seeks.
+Historical DataCoord channel checkpoints and discrete AlterWAL checkpoint
+updates remain available to legacy readers. They are not a continuously updated
+recovery frontier. Migrating dropped-segment GC to the durable physical
+checkpoint is pending; the existing GC safety gate remains in place.

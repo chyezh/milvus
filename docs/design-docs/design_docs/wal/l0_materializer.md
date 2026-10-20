@@ -9,13 +9,13 @@
 Until QueryView is enabled, VChannelRecoveryModule owns one `WALMaterializer`.
 It observes retained WAL messages and holds Delete handles until L0 output and
 DataCoord registration succeed. Together with SegmentView's temporary growing
-SaveBinlogPaths publication, this makes the published global WAL checkpoint a
-safe DataCoord channel checkpoint for legacy query recovery.
+SaveBinlogPaths publication, this protects the recoverability of the WAL
+prefix covered by the published global checkpoint.
 
 The [Summary reader materializer](summary_l0_materializer.md) remains in the
 same package with its tests, but is not instantiated by the current manager.
 The implementations are mutually exclusive. There is no user enable switch.
-After QueryView is enabled, remove WALMaterializer, cp_updater and the growing
+After QueryView is enabled, remove WALMaterializer and the growing
 publication bridge, and reconnect the Summary consumer.
 
 ## 2. Observation and Ownership
@@ -154,25 +154,25 @@ captured durable materialized position to Summary for GC. In-memory completion
 alone cannot authorize deletion. Tombstones remain until Summary has durably
 retired the relevant history.
 
-## 6. Checkpoint Reporting
+## 6. Checkpoint And Flush Completion
 
-cp_updater reports the published global checkpoint's original MessageID and
-TimeTick together for each VChannel. It has no candidate queue, materialized
-TimeTick minimum, or completed-Flush fallback. RPC failure retries a currently
-published point on the next tick.
-
-Insert registration and L0 completion are already required by the message
-handles before checkpoint publication. No additional requirement forces an L0
+RecoveryStorage persists the global checkpoint after its covered component
+snapshots. Insert registration and L0 completion are required by the retained
+message handles before publication. No additional requirement forces an L0
 cursor to equal checkpoint TimeTick across a range containing no Deletes.
-A blocked VChannel can hold the PChannel prefix and other VChannels' reported
-progress; this is the deliberate cost of the shared checkpoint.
+
+There is no periodic per-VChannel checkpoint reporting to DataCoord. Explicit
+Flush completion joins L1/L0 work through message handles and consuming-side
+acknowledgements; unrelated VChannels holding the global checkpoint cannot
+prevent that Flush from completing. WAL replay and truncation continue to use
+the durable global checkpoint.
 
 ## 7. Validation
 
 Cover size/age/explicit/stall triggers, complete mixed Txns, frozen batches,
 retry and cancellation, replay before/after materialized metadata persistence,
 L0 retry before final L1 publication, registration-insufficient and cross-partition gates,
-empty Flush, checkpoint pair reporting, and Drop/Summary retirement.
+empty Flush, durable checkpoint publication, and Drop/Summary retirement.
 Live validation must include growing Inserts plus Deletes, reload, SN/QN crash
 recovery, and enabled L0 compaction. WAL physical Truncate integration remains
 the separately deferred work.

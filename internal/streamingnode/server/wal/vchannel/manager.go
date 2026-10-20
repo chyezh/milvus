@@ -10,7 +10,6 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/l0materializer"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/queryresource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/segment"
@@ -45,15 +44,6 @@ type PChannelManagerConfig struct {
 	L0Materializer     l0materializer.Materializer
 	L0MaterializeRows  uint64
 	L0MaterializeBytes uint64
-
-	// Deprecated: GetRecoveryCheckpoint and CoordinatorBroker wire the
-	// temporary channel-checkpoint reporting (PChannelCheckpointUpdater) that
-	// mirrors the removed flusher's DataCoord.UpdateChannelCheckpoint calls.
-	// When both are non-nil the manager runs the updater; remove them
-	// together with the updater once the new checkpoint-propagation path
-	// lands.
-	GetRecoveryCheckpoint func() *utility.WALCheckpoint
-	CoordinatorBroker     checkpointReporter
 }
 
 // PChannelRecoveryManager owns all vchannel recovery modules on one pchannel.
@@ -68,10 +58,6 @@ type PChannelRecoveryManager struct {
 	dirtyMu            sync.Mutex
 	dirtyModules       map[string]*VChannelRecoveryModule
 	cleanupModules     map[string]*VChannelRecoveryModule
-
-	// Deprecated: periodic DataCoord channel-checkpoint reporting (see
-	// PChannelCheckpointUpdater). Non-nil only when the config wires it.
-	checkpointUpdater *PChannelCheckpointUpdater
 
 	closeCh   chan struct{}
 	closeOnce sync.Once
@@ -94,14 +80,6 @@ func NewPChannelRecoveryManager(config PChannelManagerConfig) (*PChannelRecovery
 		config:                  config,
 		closeCh:                 make(chan struct{}),
 	}
-	if config.GetRecoveryCheckpoint != nil && config.CoordinatorBroker != nil {
-		manager.checkpointUpdater = newPChannelCheckpointUpdater(
-			config.PChannel,
-			manager.activeVChannels,
-			config.GetRecoveryCheckpoint,
-			config.CoordinatorBroker,
-		)
-	}
 	for _, vchannel := range manager.initialVChannels(config) {
 		module, err := manager.newModule(vchannel)
 		if err != nil {
@@ -115,17 +93,6 @@ func NewPChannelRecoveryManager(config PChannelManagerConfig) (*PChannelRecovery
 	}
 	manager.releaseInitialState()
 	return manager, nil
-}
-
-// activeVChannels returns the currently active vchannels of the pchannel.
-func (m *PChannelRecoveryManager) activeVChannels() []string {
-	vchannels := make([]string, 0, m.modules.Len())
-	m.modules.Range(func(vchannel string, _ *VChannelRecoveryModule) bool {
-		vchannels = append(vchannels, vchannel)
-		return true
-	})
-	sort.Strings(vchannels)
-	return vchannels
 }
 
 func (m *PChannelRecoveryManager) initialVChannels(config PChannelManagerConfig) []string {
@@ -267,12 +234,8 @@ func (m *PChannelRecoveryManager) RequestPersistThrough(vchannel string, targetT
 	module.RequestPersistThrough(targetTimeTick)
 }
 
-// Start runs the legacy checkpoint reporter and one shared L0 age check.
+// Start runs one shared L0 age check.
 func (m *PChannelRecoveryManager) Start() {
-	if m.checkpointUpdater != nil {
-		m.wg.Add(1)
-		go func() { defer m.wg.Done(); m.checkpointUpdater.Start() }()
-	}
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
@@ -300,9 +263,6 @@ func (m *PChannelRecoveryManager) Close() {
 		m.queryDispatcher.Close()
 		close(m.closeCh)
 	})
-	if m.checkpointUpdater != nil {
-		m.checkpointUpdater.Close()
-	}
 	m.wg.Wait()
 }
 

@@ -262,13 +262,6 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 		syncmgr.BrokerMetaWriter(broker.NewCoordBroker(coord, paramtable.GetNodeID()), paramtable.GetNodeID(), retry.Attempts(1)),
 	)
 	// The temporary L0 consumer rebuilds retained Delete handles from WAL replay.
-	// Deprecated: the manager periodically reports the pchannel recovery
-	// checkpoint to DataCoord (DataCoord.UpdateChannelCheckpoint) so that
-	// GetFlushState can observe flush progress. The recovery storage write
-	// path itself never calls UpdateChannelCheckpoint; remove this wiring
-	// together with PChannelCheckpointUpdater once the new
-	// checkpoint-propagation path lands.
-	coordinatorBroker := broker.NewCoordBroker(coord, paramtable.GetNodeID())
 	manager, err := vchannel.NewPChannelRecoveryManager(vchannel.PChannelManagerConfig{
 		QueryRuntimeModuleBuilders: []queryresource.QueryRuntimeModuleBuilder{
 			queryresource.NewGrowingRuntimeModuleBuilder(nil),
@@ -287,12 +280,10 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 			idalloc.NewMAllocator(resource.Resource().IDAllocator()),
 			packed.CreateStorageConfig(),
 		),
-		SummaryManager:        summaryManager,
-		L0Materializer:        l0Writer,
-		L0MaterializeRows:     uint64(paramtable.Get().StreamingCfg.FlushL0MaxRowNum.GetAsInt()),
-		L0MaterializeBytes:    uint64(paramtable.Get().DataNodeCfg.FlushDeleteBufferBytes.GetAsInt64()),
-		GetRecoveryCheckpoint: func() *utility.WALCheckpoint { return r.GetCheckpoint(context.TODO()) },
-		CoordinatorBroker:     coordinatorBroker,
+		SummaryManager:     summaryManager,
+		L0Materializer:     l0Writer,
+		L0MaterializeRows:  uint64(paramtable.Get().StreamingCfg.FlushL0MaxRowNum.GetAsInt()),
+		L0MaterializeBytes: uint64(paramtable.Get().DataNodeCfg.FlushDeleteBufferBytes.GetAsInt64()),
 	})
 	if err != nil {
 		return err

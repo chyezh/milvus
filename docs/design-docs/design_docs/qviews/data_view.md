@@ -460,6 +460,13 @@ referenced DataView as protected. Until QueryView references have been
 recovered, that integration must fail closed. The current PR does not add this
 cross-component protection path.
 
+TODO (Pending): replace dropped-segment GC's historical DataCoord channel
+checkpoint with the durable StreamingNode physical checkpoint, together with
+the required View/reference protection. Periodic channel-checkpoint reporting
+has been removed. Until this integration is implemented, keep the existing GC
+safety gate: live-channel segments beyond the historical checkpoint remain
+retained. Do not treat missing or stale checkpoints as permission to reclaim.
+
 Dropping a collection persists the CollectionMeta Dropping state before deleting
 all DataView snapshots. Existing Refs remain valid from their in-memory snapshot
 until released, while new lookups return no DataView after the manager removes

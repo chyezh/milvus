@@ -2069,10 +2069,6 @@ func (s *Server) CheckHealth(ctx context.Context, req *milvuspb.CheckHealthReque
 		}, nil
 	}
 
-	if err := CheckCheckPointsHealth(s.meta); err != nil {
-		return componentutil.CheckHealthRespWithErr(err), nil
-	}
-
 	return componentutil.CheckHealthRespWithErr(nil), nil
 }
 

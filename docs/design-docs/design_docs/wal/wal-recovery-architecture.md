@@ -101,9 +101,9 @@ The checkpoint is the only:
 
 There is no Meta checkpoint, Data checkpoint, DataBarrier, or recovery mode.
 `Metrics().RecoveryTimeTick` currently reports Tracker completion, which can be
-ahead of Summary confirmation and published progress. The compatibility
-DataCoord VChannel checkpoint updater reports flush progress, not a second WAL
-recovery cursor.
+ahead of Summary confirmation and published progress. There is no periodic
+DataCoord VChannel checkpoint reporter. Streaming Flush completes through
+consuming-side acknowledgements, independently of global checkpoint publication.
 
 ## 4. Component Snapshot Checkpoints
 

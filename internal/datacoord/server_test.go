@@ -3079,7 +3079,7 @@ func Test_CheckHealth(t *testing.T) {
 		assert.NotEmpty(t, resp.Reasons)
 	})
 
-	t.Run("check checkpoint fail", func(t *testing.T) {
+	t.Run("historical checkpoint does not affect health", func(t *testing.T) {
 		svr := &Server{session: &sessionutil.Session{SessionRaw: sessionutil.SessionRaw{ServerID: 1}}}
 		svr.stateCode.Store(commonpb.StateCode_Healthy)
 		store := newHealthStore()
@@ -3094,8 +3094,8 @@ func Test_CheckHealth(t *testing.T) {
 		ctx := context.Background()
 		resp, err := svr.CheckHealth(ctx, &milvuspb.CheckHealthRequest{})
 		assert.NoError(t, err)
-		assert.Equal(t, false, resp.IsHealthy)
-		assert.NotEmpty(t, resp.Reasons)
+		assert.True(t, resp.IsHealthy)
+		assert.Empty(t, resp.Reasons)
 	})
 
 	t.Run("ok", func(t *testing.T) {
