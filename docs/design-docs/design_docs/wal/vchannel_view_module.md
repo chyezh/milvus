@@ -278,5 +278,7 @@ checkpoint reporter. Its background worker only checks L0 buffer age.
 
 Historical DataCoord channel checkpoints and discrete AlterWAL checkpoint
 updates remain available to legacy readers. They are not a continuously updated
-recovery frontier. Migrating dropped-segment GC to the durable physical
-checkpoint is pending; the existing GC safety gate remains in place.
+recovery frontier. Dropped-segment GC reads the durable physical checkpoint
+from StreamingNode catalog once per PChannel per sweep and reuses that snapshot
+for all its segments. Missing checkpoints and read failures retain the affected
+segments; subsequent sweeps read fresh checkpoints.

@@ -70,6 +70,8 @@ metadata still governs Summary GC and tombstone retirement.
 
 The former `flusher/flusherimpl` path and periodic VChannel checkpoint reporting
 have been removed. Historical DataCoord checkpoints remain readable for legacy
-recovery and the conservative dropped-segment GC gate. Migrating that GC gate to
-the durable StreamingNode physical checkpoint is pending; native RecoveryStorage
-checkpoint persistence, replay and truncation remain independent.
+recovery. Dropped-segment GC reads `WALCheckpoint.time_tick` directly from
+StreamingNode catalog once per PChannel per sweep, reusing the value for all
+its segments. Missing checkpoints and read failures prevent reclamation for
+that PChannel. Native RecoveryStorage checkpoint persistence, replay and
+truncation remain independent.
