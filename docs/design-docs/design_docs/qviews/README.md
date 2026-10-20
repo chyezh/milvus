@@ -62,7 +62,8 @@ complete Coord scheduling, or QN query execution/remote Delete subscriptions.
   Boost scorers follow the same ownership rule: SN adapters borrow the pinned
   CSegments through asynchronous scoring, while LocalSegments keep their local
   pin/unpin protocol. Both execute the shared segcore scoring implementation.
-- **Scope:** `RequeryOnView` returns Unimplemented. The Proxy orchestration and
+- **Scope:** retained requery uses `QueryOnView` with the original View, Schema
+  and MVCC. The Proxy orchestration and
   complete SN/QN end-to-end flow above remain integration work.
 
 Key source paths: `internal/streamingnode/server/queryplan/server.go`,
@@ -465,3 +466,10 @@ consumers enable MVCC-based segment exclusion. Until then, DDL query visibility
 uses a QueryView handoff fence (QueryCoord target update in the legacy model).
 The MVCC extension and distributed delivery are outside the current SN query
 extraction PR; a progress barrier alone does not implement DDL visibility.
+
+## QueryNode subsystem extraction
+
+See [implemented scope and production dependencies](querynode_extraction.md),
+[resource preparation](qnview/querynode_queryview_resource_preparation.md), and
+[query execution](query/query_execution.md). The node waits for applied Transform
+MVCC on the exact physical registrations retained by its query handles.
