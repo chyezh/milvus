@@ -44,6 +44,7 @@ type handlerClientImpl struct {
 	rebalanceTrigger           types.AssignmentRebalanceTrigger
 	newProducer                func(ctx context.Context, opts *producer.ProducerOptions, handler streamingpb.StreamingNodeHandlerServiceClient) (Producer, error)
 	newConsumer                func(ctx context.Context, opts *consumer.ConsumerOptions, handlerClient streamingpb.StreamingNodeHandlerServiceClient) (Consumer, error)
+	queryViewClient            QueryViewClient
 }
 
 // GetLatestMVCCTimestampIfLocal gets the latest mvcc timestamp of the vchannel.
@@ -386,6 +387,7 @@ func (hc *handlerClientImpl) waitForNextBackoff(ctx context.Context, pchannel st
 // Close closes the handler client.
 func (hc *handlerClientImpl) Close() {
 	hc.lifetime.SetState(typeutil.LifetimeStateStopped)
+	// Owners close resumable clients before joining physical stream acquisition.
 	hc.lifetime.Wait()
 
 	hc.watcher.Close()
