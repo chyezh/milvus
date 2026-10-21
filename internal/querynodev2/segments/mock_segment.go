@@ -2470,8 +2470,3 @@ func NewMockSegment(t interface {
 
 	return mock
 }
-
-// LoadIndex is patched with mockey by QueryView tests.
-func (_m *MockSegment) LoadIndex(ctx context.Context, loadInfo *querypb.SegmentLoadInfo) error {
-	panic("patch LoadIndex with mockey")
-}

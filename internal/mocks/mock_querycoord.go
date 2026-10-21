@@ -3002,8 +3002,3 @@ func NewMockQueryCoord(t interface {
 
 	return mock
 }
-
-// WatchQueryViewSegmentLoadInfo is patched with mockey by QueryView tests.
-func (_m *MockQueryCoord) WatchQueryViewSegmentLoadInfo(_a0 querypb.QueryCoord_WatchQueryViewSegmentLoadInfoServer) error {
-	panic("patch WatchQueryViewSegmentLoadInfo with mockey")
-}

@@ -4478,11 +4478,10 @@ Set to 0 to disable the penalty period.`,
 // /////////////////////////////////////////////////////////////////////////////
 // --- querynode ---
 type queryNodeConfig struct {
-	QueryViewTransformLogDrainConcurrency ParamItem `refreshable:"false"`
-	StrictGroupStrategy                   ParamItem `refreshable:"true"`
-	StrictGroupPhase1CandidateWeight      ParamItem `refreshable:"true"`
-	StrictGroupSkipRefine                 ParamItem `refreshable:"true"`
-	SoPath                                ParamItem `refreshable:"false"`
+	StrictGroupStrategy              ParamItem `refreshable:"true"`
+	StrictGroupPhase1CandidateWeight ParamItem `refreshable:"true"`
+	StrictGroupSkipRefine            ParamItem `refreshable:"true"`
+	SoPath                           ParamItem `refreshable:"false"`
 
 	// stats
 	// Deprecated: Never used

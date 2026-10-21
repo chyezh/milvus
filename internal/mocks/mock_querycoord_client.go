@@ -3339,8 +3339,3 @@ func NewMockQueryCoordClient(t interface {
 
 	return mock
 }
-
-// WatchQueryViewSegmentLoadInfo is patched with mockey by QueryView tests.
-func (_m *MockQueryCoordClient) WatchQueryViewSegmentLoadInfo(ctx context.Context, opts ...grpc.CallOption) (querypb.QueryCoord_WatchQueryViewSegmentLoadInfoClient, error) {
-	panic("patch WatchQueryViewSegmentLoadInfo with mockey")
-}

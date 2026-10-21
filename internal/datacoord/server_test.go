@@ -716,11 +716,12 @@ func TestGetQueryViewSegmentLoadInfos(t *testing.T) {
 			newFieldID   = int64(102)
 		)
 		require.NoError(t, svr.meta.AddSegment(context.Background(), NewSegmentInfo(&datapb.SegmentInfo{
-			ID:            segmentID,
-			CollectionID:  collectionID,
-			PartitionID:   partitionID,
-			InsertChannel: "vchan",
-			State:         commonpb.SegmentState_Flushed,
+			ID:                          segmentID,
+			CollectionID:                collectionID,
+			PartitionID:                 partitionID,
+			InsertChannel:               "vchan",
+			State:                       commonpb.SegmentState_Flushed,
+			TransformStartAfterTimetick: 17,
 		})))
 		require.NoError(t, svr.meta.indexMeta.CreateIndex(context.Background(), &model.Index{
 			CollectionID: collectionID,
