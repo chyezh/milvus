@@ -1,5 +1,7 @@
-> Extraction scope: this document describes the full query protocol. This change
-> wires only the QueryNode half; see the [extraction boundary](../querynode_extraction.md).
+> Integration scope: this baseline combines the QueryNode extraction, scoped WAL
+> barriers, coordinator components, and StreamingNode query execution/client.
+> Production Proxy switching and Coordinator runtime activation remain separate.
+> See the [QueryNode extraction boundary](../querynode_extraction.md) for its source scope.
 
 # Query Execution Node-Side Design
 
@@ -96,9 +98,8 @@ type ViewQueryTaskProvider interface {
 }
 ```
 
-`AcquireRequerySegmentTasks` is intentionally not part of the first runnable
-contract. Requery segment targeting and execution are deferred until the
-Search/Query path is runnable.
+`AcquireRequerySegmentTasks` is intentionally not a separate task-provider API.
+Retained requery uses `QueryOnView` with the original plan, as described below.
 
 SN and QN provide this interface through their local QueryView handlers:
 
@@ -373,8 +374,8 @@ execution. The task refs keep selected segment resources alive until
 
 Requery sends `QueryOnView` requests for the reduced PKs to the original plan's
 work nodes, retaining its QueryView version, Schema binding and MVCC. Required
-output/render fields are validated during Phase 1. There is no separate requery
-RPC or node-side stub. Existing local PK pruning and Query reduction apply.
+output/render fields are validated during Phase 1. The client does not use a separate requery RPC or node-side stub. The pre-existing `RequeryOnView` wire
+method is preserved for compatibility. Existing local PK pruning and Query reduction apply.
 
 ## 12. Error Semantics
 
@@ -450,3 +451,47 @@ The first node-side Phase 2 milestone is:
 7. Implement `SearchOnView` and `QueryOnView` RPC paths using provider plus
    scheduler.
 8. Reuse QueryOnView for requery with the original validated plan.
+
+## 16. Integrated StreamingNode execution and schema binding
+
+The injectable [query client](query_client.md) plans on the primary SN and fans
+out the sealed portion to QN. Production Proxy routing is not switched here.
+
+`SNQueryViewHandler` acquires the exact plan version in Up state. UpRecovering
+waits for local state-change notifications within the caller context. An accessed
+Up view renews its [serving lease](../query_view_lease.md). Phase 2 borrows
+metadata without copying a topology it does not use.
+
+The handler validates the request's schema binding against the leased View,
+waits for fixed Growing/Transform frontiers, resolves the View's partition scope
+and acquires growing segment handles. Handles expose the selected exact
+read-schema CCollection; physical segments retain their encoding schema. Failed
+acquisition releases every handle. Successful tasks retain them through execution,
+reduction and result conversion.
+
+The SN scheduler executes `SearchTask` / `QueryTask.ExecuteOnSegments` with
+segment adapters, independently of the old QueryNode scheduler. Phase 1 returns
+actual shard identity, View version, QueryPlanMVCC, schema binding, optimized
+request and work nodes; Phase 2 retains those identities. Load metadata includes
+required_fields and skip_load_dynamic_field alongside scope and index metadata.
+
+Fixed-snapshot coverage uses `TimeTickSyncInspector.EnsureBarrier`, supplied by
+the already integrated scoped WAL barrier implementation. Unlike the standalone
+query-execution extraction, this interface requires the capability. Its errors
+remain errors; coverage is never inferred from a resume cursor. Read proofs
+certify published WAL prefixes separately from executor timestamps, as described
+in the [plan contract](query_plan.md).
+
+View lifecycle errors retain their ViewCode and retry semantics. Query RPC
+adapters attach common.Status details for business errors, preserving Milvus
+classification and the original ViewError detail. Caller cancellation and
+deadlines retain their meaning. Retained requery uses QueryOnView with the
+original workers, schema and MVCC, without another Phase 1 selection.
+
+Component tests with injected workers do not establish end-to-end activation or
+mixed-version compatibility of this combined baseline. Key source paths include
+`internal/streamingnode/server/wal/snview/{query_lease,query_task_provider}.go`,
+`internal/streamingnode/server/viewquery/`,
+`internal/streamingnode/server/wal/vchannel/queryresource/read_schema.go`,
+`internal/views/viewquery/schema_fields.go` and
+`internal/views/viewerror/rpc_error.go`.
