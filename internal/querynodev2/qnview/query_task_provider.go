@@ -18,6 +18,7 @@ func (h *QNQueryViewHandler) AcquireSearchSegmentTasks(
 	version qviews.QueryViewVersion,
 	mvcc *viewpb.QueryPlanMVCC,
 	req *internalpb.SearchRequest,
+	selection *viewpb.SegmentSelection,
 ) (viewquery.SearchSegmentTasks, error) {
 	lease, err := h.AcquireReadyView(ctx, shardID, version)
 	if err != nil {
@@ -28,7 +29,7 @@ func (h *QNQueryViewHandler) AcquireSearchSegmentTasks(
 		return nil, viewerror.NewViewInvalidated("request schema %d does not match QueryView schema %d", req.GetSchemaVersion(), lease.Meta.GetSchemaVersion())
 	}
 
-	view := filterQueryNodeViewByPartitions(lease.View, req.GetPartitionIDs())
+	view := qviews.FilterSelectedSegments(filterQueryNodeViewByPartitions(lease.View, req.GetPartitionIDs()), selection)
 	if err := h.localOptimizer.OptimizeSearch(ctx, req); err != nil {
 		return nil, err
 	}
@@ -39,14 +40,6 @@ func (h *QNQueryViewHandler) AcquireSearchSegmentTasks(
 	handles, err := h.segMgr.AcquireSealedSegmentHandles(ctx, key, view, mvcc.GetTransformingTimetick())
 	if err != nil {
 		return nil, err
-	}
-	if mvcc.GetSchemaBinding() != nil && len(handles) > 0 {
-		if err := viewquery.ValidateSchemaBinding(req, mvcc, handles[0].Segment().(ReadableSealedSegment).Collection().Schema()); err != nil {
-			for _, handle := range handles {
-				handle.Release()
-			}
-			return nil, err
-		}
 	}
 	tasks := make([]QNSearchSegmentTask, 0, len(handles))
 	for _, handle := range handles {
@@ -65,6 +58,7 @@ func (h *QNQueryViewHandler) AcquireQuerySegmentTasks(
 	version qviews.QueryViewVersion,
 	mvcc *viewpb.QueryPlanMVCC,
 	req *internalpb.RetrieveRequest,
+	selection *viewpb.SegmentSelection,
 ) (viewquery.QuerySegmentTasks, error) {
 	lease, err := h.AcquireReadyView(ctx, shardID, version)
 	if err != nil {
@@ -75,7 +69,7 @@ func (h *QNQueryViewHandler) AcquireQuerySegmentTasks(
 		return nil, viewerror.NewViewInvalidated("request schema %d does not match QueryView schema %d", req.GetSchemaVersion(), lease.Meta.GetSchemaVersion())
 	}
 
-	view := filterQueryNodeViewByPartitions(lease.View, req.GetPartitionIDs())
+	view := qviews.FilterSelectedSegments(filterQueryNodeViewByPartitions(lease.View, req.GetPartitionIDs()), selection)
 	if err := h.localOptimizer.OptimizeRetrieve(ctx, req); err != nil {
 		return nil, err
 	}
@@ -86,14 +80,6 @@ func (h *QNQueryViewHandler) AcquireQuerySegmentTasks(
 	handles, err := h.segMgr.AcquireSealedSegmentHandles(ctx, key, view, mvcc.GetTransformingTimetick())
 	if err != nil {
 		return nil, err
-	}
-	if mvcc.GetSchemaBinding() != nil && len(handles) > 0 {
-		if err := viewquery.ValidateSchemaBinding(req, mvcc, handles[0].Segment().(ReadableSealedSegment).Collection().Schema()); err != nil {
-			for _, handle := range handles {
-				handle.Release()
-			}
-			return nil, err
-		}
 	}
 	tasks := make([]QNQuerySegmentTask, 0, len(handles))
 	for _, handle := range handles {
