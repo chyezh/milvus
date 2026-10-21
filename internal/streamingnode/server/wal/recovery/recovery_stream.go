@@ -7,6 +7,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/idempotencyview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
@@ -43,6 +44,8 @@ func (r *recoveryStorageImpl) runBoundedRecovery(
 			r.Logger().Warn(context.TODO(), "recovery from wal stream failed", mlog.Err(err))
 		}
 	}()
+	tombstones := utility.NewTxnTombstones()
+	tombstones.Advance(lastTimeTickMessage.TimeTick())
 L:
 	for {
 		select {
@@ -55,6 +58,7 @@ L:
 				}
 				return nil, merr.WrapErrServiceUnavailableMsg("recovery stream ended before the startup barrier")
 			}
+			tombstones.Observe(msg)
 			r.observeMessage(ctx, msg)
 			if msg.MessageType() == message.MessageTypeRecoveryBarrier &&
 				msg.TimeTick() == lastTimeTickMessage.TimeTick() && msg.MessageID().EQ(lastTimeTickMessage.MessageID()) {
@@ -64,6 +68,7 @@ L:
 	}
 	snapshot = r.buildInitialRecoverySnapshot()
 	snapshot.TxnBuffer = rs.TxnBuffer()
+	snapshot.TxnTombstones = tombstones
 	snapshot.SummarySnapshots, err = r.buildIdempotencySnapshots(ctx)
 	if err != nil {
 		return nil, err
