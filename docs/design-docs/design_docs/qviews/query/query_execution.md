@@ -1,8 +1,3 @@
-> Integration scope: this baseline combines the QueryNode extraction, scoped WAL
-> barriers, coordinator components, and StreamingNode query execution/client.
-> Production Proxy switching and Coordinator runtime activation remain separate.
-> See the [QueryNode extraction boundary](../querynode_extraction.md) for its source scope.
-
 # Query Execution Node-Side Design
 
 ## 1. Overview
@@ -374,8 +369,7 @@ execution. The task refs keep selected segment resources alive until
 
 Requery sends `QueryOnView` requests for the reduced PKs to the original plan's
 work nodes, retaining its QueryView version, Schema binding and MVCC. Required
-output/render fields are validated during Phase 1. The client does not use a separate requery RPC or node-side stub. The pre-existing `RequeryOnView` wire
-method is preserved for compatibility. Existing local PK pruning and Query reduction apply.
+output/render fields are validated during Phase 1. The client does not use a separate requery RPC or node-side stub. Existing local PK pruning and Query reduction apply.
 
 ## 12. Error Semantics
 
@@ -455,7 +449,7 @@ The first node-side Phase 2 milestone is:
 ## 16. Integrated StreamingNode execution and schema binding
 
 The injectable [query client](query_client.md) plans on the primary SN and fans
-out the sealed portion to QN. Production Proxy routing is not switched here.
+out the sealed portion to QN. Production Proxy routing uses this client.
 
 `SNQueryViewHandler` acquires the exact plan version in Up state. UpRecovering
 waits for local state-change notifications within the caller context. An accessed
@@ -489,7 +483,7 @@ deadlines retain their meaning. Retained requery uses QueryOnView with the
 original workers, schema and MVCC, without another Phase 1 selection.
 
 Component tests with injected workers do not establish end-to-end activation or
-mixed-version compatibility of this combined baseline. Key source paths include
+mixed-version compatibility of the integrated production path. Key source paths include
 `internal/streamingnode/server/wal/snview/{query_lease,query_task_provider}.go`,
 `internal/streamingnode/server/viewquery/`,
 `internal/streamingnode/server/wal/vchannel/queryresource/read_schema.go`,

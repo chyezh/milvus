@@ -497,11 +497,3 @@ func (m *PChannelRecoveryManager) AcquireStream(ctx context.Context, pchannel st
 	}()
 	return stream, nil
 }
-
-func (m *PChannelRecoveryManager) GetQueryReadRuntime(key qviews.QueryViewKey) (*queryresource.ReadRuntime, bool) {
-	module := m.Module(key.ShardID.VChannel)
-	if module == nil {
-		return nil, false
-	}
-	return module.QueryReadRuntime(key)
-}
