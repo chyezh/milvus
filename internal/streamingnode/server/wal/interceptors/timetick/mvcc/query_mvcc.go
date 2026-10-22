@@ -45,11 +45,12 @@ func (cm *QueryMVCCManager) ApplyRecoveryBarrier(vchannel string, timetick uint6
 	delete(cm.unconfirmedVChannels, vchannel)
 }
 
-// UpdateMVCC updates the mvcc state by incoming message.
+// UpdateMVCC uses committed transaction contents to choose the execution
+// frontiers. Empty transactions are rejected before this append-time projection.
 func (cm *QueryMVCCManager) UpdateMVCC(msg interface {
 	message.BasicMessage
 	VChannel() string
-},
+}, insertOnlyTxn bool,
 ) {
 	if msg.MessageType() == message.MessageTypeMVCCBarrier {
 		cm.mu.Lock()
@@ -103,6 +104,9 @@ func (cm *QueryMVCCManager) UpdateMVCC(msg interface {
 		return
 	}
 	mvcc := cm.vchannelMVCCs[vchannel]
+	if msgType == message.MessageTypeCommitTxn && insertOnlyTxn {
+		msgType = message.MessageTypeInsert
+	}
 	switch msgType {
 	case message.MessageTypeCreateCollection, message.MessageTypeRestoreSnapshot:
 		if tt <= max(mvcc.GrowingTimetick, mvcc.TransformingTimetick) {

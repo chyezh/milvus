@@ -24,11 +24,11 @@ func TestQueryMVCCClusterBroadcastAdvancesEveryVChannel(t *testing.T) {
 				cm.ApplyRecoveryBarrier("b", 10)
 				require.NotEmpty(t, msg.VChannel())
 				require.True(t, msg.IsPChannelLevel())
-				cm.UpdateMVCC(msg.WithTimeTick(20))
+				cm.UpdateMVCC(msg.WithTimeTick(20), false)
 				for _, vc := range []string{"a", "b"} {
 					require.Equal(t, QueryVChannelMVCC{GrowingTimetick: 10, TransformingTimetick: 20}, cm.GetQueryMVCCOfVChannel(vc))
 				}
-				cm.UpdateMVCC(createQueryTestMessage(t, 20, "", message.MessageTypeTimeTick, false, true))
+				cm.UpdateMVCC(createQueryTestMessage(t, 20, "", message.MessageTypeTimeTick, false, true), false)
 				require.True(t, cm.GetQueryMVCCOfVChannel("a").Confirmed)
 				require.True(t, cm.GetQueryMVCCOfVChannel("b").Confirmed)
 				require.Len(t, cm.vchannelMVCCs, 2, "must not register the physical/control channel as a query shard")
@@ -47,43 +47,43 @@ func TestQueryNewQueryMVCCManager(t *testing.T) {
 	v = cm.GetQueryMVCCOfVChannel("vc1")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 100, TransformingTimetick: 100, Confirmed: true}, v)
 
-	cm.UpdateMVCC(createQueryTestMessage(t, 101, "vc1", message.MessageTypeInsert, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 101, "vc1", message.MessageTypeInsert, false, true), false)
 	v = cm.GetQueryMVCCOfVChannel("vc1")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 101, TransformingTimetick: 100, Confirmed: false}, v)
 	v = cm.GetQueryMVCCOfVChannel("vc2")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 100, TransformingTimetick: 100, Confirmed: true}, v)
 
-	cm.UpdateMVCC(createQueryTestMessage(t, 102, "", message.MessageTypeTimeTick, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 102, "", message.MessageTypeTimeTick, false, true), false)
 	v = cm.GetQueryMVCCOfVChannel("vc1")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 101, TransformingTimetick: 100, Confirmed: true}, v)
 	v = cm.GetQueryMVCCOfVChannel("vc2")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 100, TransformingTimetick: 100, Confirmed: true}, v)
 
-	cm.UpdateMVCC(createQueryTestMessage(t, 103, "vc1", message.MessageTypeInsert, true, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 103, "vc1", message.MessageTypeInsert, true, true), false)
 	v = cm.GetQueryMVCCOfVChannel("vc1")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 101, TransformingTimetick: 100, Confirmed: true}, v)
 	v = cm.GetQueryMVCCOfVChannel("vc2")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 100, TransformingTimetick: 100, Confirmed: true}, v)
 
-	cm.UpdateMVCC(createQueryTestMessage(t, 104, "vc1", message.MessageTypeCommitTxn, true, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 104, "vc1", message.MessageTypeCommitTxn, true, true), false)
 	v = cm.GetQueryMVCCOfVChannel("vc1")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 104, TransformingTimetick: 104, Confirmed: false}, v)
 	v = cm.GetQueryMVCCOfVChannel("vc2")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 100, TransformingTimetick: 100, Confirmed: true}, v)
 
-	cm.UpdateMVCC(createQueryTestMessage(t, 104, "", message.MessageTypeTimeTick, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 104, "", message.MessageTypeTimeTick, false, true), false)
 	v = cm.GetQueryMVCCOfVChannel("vc1")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 104, TransformingTimetick: 104, Confirmed: true}, v)
 	v = cm.GetQueryMVCCOfVChannel("vc2")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 100, TransformingTimetick: 100, Confirmed: true}, v)
 
-	cm.UpdateMVCC(createQueryTestMessage(t, 101, "", message.MessageTypeTimeTick, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 101, "", message.MessageTypeTimeTick, false, true), false)
 	v = cm.GetQueryMVCCOfVChannel("vc1")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 104, TransformingTimetick: 104, Confirmed: true}, v)
 	v = cm.GetQueryMVCCOfVChannel("vc2")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 100, TransformingTimetick: 100, Confirmed: true}, v)
 
-	cm.UpdateMVCC(createQueryTestMessage(t, 1000, "", message.MessageTypeTimeTick, false, false))
+	cm.UpdateMVCC(createQueryTestMessage(t, 1000, "", message.MessageTypeTimeTick, false, false), false)
 	v = cm.GetQueryMVCCOfVChannel("vc1")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 104, TransformingTimetick: 104, Confirmed: true}, v)
 	v = cm.GetQueryMVCCOfVChannel("vc2")
@@ -97,15 +97,15 @@ func TestQueryQueryPlanMVCCTracksGrowingAndTransformingSeparately(t *testing.T) 
 	mvcc := cm.GetQueryMVCCOfVChannel("vc1")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 120, TransformingTimetick: 120, Confirmed: true}, mvcc)
 
-	cm.UpdateMVCC(createQueryTestMessage(t, 130, "vc1", message.MessageTypeInsert, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 130, "vc1", message.MessageTypeInsert, false, true), false)
 	mvcc = cm.GetQueryMVCCOfVChannel("vc1")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 130, TransformingTimetick: 120, Confirmed: false}, mvcc)
 
-	cm.UpdateMVCC(createQueryTestMessage(t, 140, "vc1", message.MessageTypeDelete, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 140, "vc1", message.MessageTypeDelete, false, true), false)
 	mvcc = cm.GetQueryMVCCOfVChannel("vc1")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 140, TransformingTimetick: 140, Confirmed: false}, mvcc)
 
-	cm.UpdateMVCC(createQueryTestMessage(t, 150, "", message.MessageTypeTimeTick, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 150, "", message.MessageTypeTimeTick, false, true), false)
 	mvcc = cm.GetQueryMVCCOfVChannel("vc1")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 140, TransformingTimetick: 140, Confirmed: true}, mvcc)
 
@@ -116,12 +116,12 @@ func TestQueryQueryPlanMVCCTracksGrowingAndTransformingSeparately(t *testing.T) 
 func TestQueryCreateCollectionInitializesQueryPlanMVCC(t *testing.T) {
 	cm := NewQueryMVCCManager(100)
 
-	cm.UpdateMVCC(createQueryTestMessage(t, 120, "vc1", message.MessageTypeCreateCollection, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 120, "vc1", message.MessageTypeCreateCollection, false, true), false)
 
 	mvcc := cm.GetQueryMVCCOfVChannel("vc1")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 120, TransformingTimetick: 120, Confirmed: false}, mvcc)
 
-	cm.UpdateMVCC(createQueryTestMessage(t, 120, "", message.MessageTypeTimeTick, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 120, "", message.MessageTypeTimeTick, false, true), false)
 
 	mvcc = cm.GetQueryMVCCOfVChannel("vc1")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 120, TransformingTimetick: 120, Confirmed: true}, mvcc)
@@ -130,12 +130,12 @@ func TestQueryCreateCollectionInitializesQueryPlanMVCC(t *testing.T) {
 func TestQueryRecoveryBarrierConfirmsQueryPlanMVCC(t *testing.T) {
 	cm := NewQueryMVCCManager(100)
 	cm.ApplyRecoveryBarrier("vc1", 120)
-	cm.UpdateMVCC(createQueryTestMessage(t, 130, "vc1", message.MessageTypeInsert, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 130, "vc1", message.MessageTypeInsert, false, true), false)
 
 	mvcc := cm.GetQueryMVCCOfVChannel("vc1")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 130, TransformingTimetick: 120, Confirmed: false}, mvcc)
 
-	cm.UpdateMVCC(createQueryTestMessage(t, 130, "", message.MessageTypeRecoveryBarrier, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 130, "", message.MessageTypeRecoveryBarrier, false, true), false)
 
 	mvcc = cm.GetQueryMVCCOfVChannel("vc1")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 130, TransformingTimetick: 120, Confirmed: true}, mvcc)
@@ -147,23 +147,23 @@ func TestQueryMVCCManagerTracksUnconfirmedVChannels(t *testing.T) {
 	cm.ApplyRecoveryBarrier("vc2", 120)
 	assert.Empty(t, cm.unconfirmedVChannels)
 
-	cm.UpdateMVCC(createQueryTestMessage(t, 130, "vc1", message.MessageTypeInsert, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 130, "vc1", message.MessageTypeInsert, false, true), false)
 	assert.Equal(t, map[string]struct{}{"vc1": {}}, cm.unconfirmedVChannels)
 
-	cm.UpdateMVCC(createQueryTestMessage(t, 129, "", message.MessageTypeTimeTick, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 129, "", message.MessageTypeTimeTick, false, true), false)
 	assert.Equal(t, map[string]struct{}{"vc1": {}}, cm.unconfirmedVChannels)
 
-	cm.UpdateMVCC(createQueryTestMessage(t, 130, "", message.MessageTypeTimeTick, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 130, "", message.MessageTypeTimeTick, false, true), false)
 	assert.Empty(t, cm.unconfirmedVChannels)
 
-	cm.UpdateMVCC(createQueryTestMessage(t, 140, "vc1", message.MessageTypeInsert, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 140, "vc1", message.MessageTypeInsert, false, true), false)
 	cm.ApplyRecoveryBarrier("vc1", 140)
 	assert.Empty(t, cm.unconfirmedVChannels)
 
-	cm.UpdateMVCC(createQueryTestMessage(t, 150, "", message.MessageTypeFlushAll, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 150, "", message.MessageTypeFlushAll, false, true), false)
 	assert.Equal(t, map[string]struct{}{"vc1": {}, "vc2": {}}, cm.unconfirmedVChannels)
 
-	cm.UpdateMVCC(createQueryTestMessage(t, 150, "", message.MessageTypeTimeTick, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 150, "", message.MessageTypeTimeTick, false, true), false)
 	assert.Empty(t, cm.unconfirmedVChannels)
 }
 
@@ -171,11 +171,11 @@ func TestQueryTransformBarrierMessagesAdvanceTransformingMVCC(t *testing.T) {
 	cm := NewQueryMVCCManager(100)
 	cm.ApplyRecoveryBarrier("vc1", 120)
 
-	cm.UpdateMVCC(createQueryTestMessage(t, 130, "vc1", message.MessageTypeManualFlush, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 130, "vc1", message.MessageTypeManualFlush, false, true), false)
 	mvcc := cm.GetQueryMVCCOfVChannel("vc1")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 120, TransformingTimetick: 130, Confirmed: false}, mvcc)
 
-	cm.UpdateMVCC(createQueryTestMessage(t, 130, "", message.MessageTypeTimeTick, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 130, "", message.MessageTypeTimeTick, false, true), false)
 	mvcc = cm.GetQueryMVCCOfVChannel("vc1")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 120, TransformingTimetick: 130, Confirmed: true}, mvcc)
 }
@@ -183,9 +183,9 @@ func TestQueryTransformBarrierMessagesAdvanceTransformingMVCC(t *testing.T) {
 func TestCreateSnapshotAdvancesTransformMVCC(t *testing.T) {
 	cm := NewQueryMVCCManager(100)
 	cm.ApplyRecoveryBarrier("vc1", 120)
-	cm.UpdateMVCC(createQueryTestMessage(t, 150, "vc1", message.MessageTypeInsert, false, true))
-	cm.UpdateMVCC(createQueryTestMessage(t, 160, "vc1", message.MessageTypeCreateSnapshot, false, true))
-	cm.UpdateMVCC(createQueryTestMessage(t, 160, "", message.MessageTypeTimeTick, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 150, "vc1", message.MessageTypeInsert, false, true), false)
+	cm.UpdateMVCC(createQueryTestMessage(t, 160, "vc1", message.MessageTypeCreateSnapshot, false, true), false)
+	cm.UpdateMVCC(createQueryTestMessage(t, 160, "", message.MessageTypeTimeTick, false, true), false)
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 150, TransformingTimetick: 160, Confirmed: true}, cm.GetQueryMVCCOfVChannel("vc1"))
 }
 
@@ -198,16 +198,16 @@ func TestQueryCommitImportAdvancesQueryPlanMVCC(t *testing.T) {
 	// the growing frontier untouched (imported rows never enter growing
 	// segments; moving it would stall WaitMVCCVisible on insert-less
 	// vchannels).
-	cm.UpdateMVCC(createQueryTestMessage(t, 130, "vc1", message.MessageTypeCommitImport, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 130, "vc1", message.MessageTypeCommitImport, false, true), false)
 	mvcc := cm.GetQueryMVCCOfVChannel("vc1")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 120, TransformingTimetick: 130, Confirmed: false}, mvcc)
 
-	cm.UpdateMVCC(createQueryTestMessage(t, 130, "", message.MessageTypeTimeTick, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 130, "", message.MessageTypeTimeTick, false, true), false)
 	mvcc = cm.GetQueryMVCCOfVChannel("vc1")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 120, TransformingTimetick: 130, Confirmed: true}, mvcc)
 
 	// A later CommitImport with a smaller timetick must be a no-op.
-	cm.UpdateMVCC(createQueryTestMessage(t, 129, "vc1", message.MessageTypeCommitImport, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 129, "vc1", message.MessageTypeCommitImport, false, true), false)
 	mvcc = cm.GetQueryMVCCOfVChannel("vc1")
 	assert.Equal(t, QueryVChannelMVCC{GrowingTimetick: 120, TransformingTimetick: 130, Confirmed: true}, mvcc)
 }
@@ -230,19 +230,19 @@ func TestQueryMVCCBarrierScopesAndConfirmation(t *testing.T) {
 		cm := NewQueryMVCCManager(0)
 		cm.ApplyRecoveryBarrier("v", 10)
 		cm.ApplyRecoveryBarrier("other", 10)
-		cm.UpdateMVCC(createQueryTestMessage(t, 200, "v", message.MessageTypeInsert, false, true))
+		cm.UpdateMVCC(createQueryTestMessage(t, 200, "v", message.MessageTypeInsert, false, true), false)
 		builder := message.NewMVCCBarrierMessageBuilderV2().WithHeader(&message.MVCCBarrierMessageHeader{Vchannels: []string{"v", "v2"}}).WithBody(&message.MVCCBarrierMessageBody{}).WithAllVChannel()
 		if !persisted {
 			builder.WithNotPersisted()
 		}
-		cm.UpdateMVCC(builder.MustBuildMutable().WithTimeTick(150))
+		cm.UpdateMVCC(builder.MustBuildMutable().WithTimeTick(150), false)
 		require.Equal(t, QueryVChannelMVCC{GrowingTimetick: 200, TransformingTimetick: 150, Confirmed: false}, cm.GetQueryMVCCOfVChannel("v"))
 		require.Equal(t, QueryVChannelMVCC{GrowingTimetick: 10, TransformingTimetick: 10, Confirmed: true}, cm.GetQueryMVCCOfVChannel("other"))
 		require.Equal(t, QueryVChannelMVCC{GrowingTimetick: 150, TransformingTimetick: 150, Confirmed: true}, cm.GetQueryMVCCOfVChannel("v2"))
 		// Ordinary volatile TimeTicks must retain their original no-op semantics.
-		cm.UpdateMVCC(createQueryTestMessage(t, 300, "", message.MessageTypeTimeTick, false, false))
+		cm.UpdateMVCC(createQueryTestMessage(t, 300, "", message.MessageTypeTimeTick, false, false), false)
 		require.False(t, cm.GetQueryMVCCOfVChannel("v").Confirmed)
-		cm.UpdateMVCC(message.NewMVCCBarrierMessageBuilderV2().WithHeader(&message.MVCCBarrierMessageHeader{Vchannels: []string{"v", "v2"}}).WithBody(&message.MVCCBarrierMessageBody{}).WithAllVChannel().WithNotPersisted().MustBuildMutable().WithTimeTick(200))
+		cm.UpdateMVCC(message.NewMVCCBarrierMessageBuilderV2().WithHeader(&message.MVCCBarrierMessageHeader{Vchannels: []string{"v", "v2"}}).WithBody(&message.MVCCBarrierMessageBody{}).WithAllVChannel().WithNotPersisted().MustBuildMutable().WithTimeTick(200), false)
 		require.Equal(t, QueryVChannelMVCC{GrowingTimetick: 200, TransformingTimetick: 200, Confirmed: true}, cm.GetQueryMVCCOfVChannel("v"))
 	}
 }

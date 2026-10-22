@@ -579,9 +579,19 @@ func (r *recoveryStorageImpl) observeModulesMessage(
 	if r.summaryManager != nil {
 		r.summaryManager.ObserveMessage(ctx, retained.Message())
 	}
-	// Persisted confirmations retain ordinary TimeTick complete-prefix effects
-	// (including confirming insert-only transactions in growing runtimes).
-	// The extra scoped query-plan progress is dispatched separately below.
+	// Ordinary confirmations are PChannel recovery progress, not VChannel
+	// resource events. Keep Tracker/Summary coverage without a shard-wide fanout.
+	msg := retained.Message()
+	if msg.MessageType() == message.MessageTypeTimeTick {
+		return
+	}
+	// Old WALs may contain empty transactions. They have no resource or query
+	// effects, but their Summary/AckTracker progress must still be consumed.
+	if msg.MessageType() == message.MessageTypeTxn && message.AsImmutableTxnMessage(msg).Size() == 0 {
+		return
+	}
+	// RecoveryBarrier and persisted MVCCBarrier still retain their complete-prefix
+	// effects. The extra scoped query-plan progress is dispatched separately.
 	r.vchannelManager.ObserveMessage(ctx, retained)
 }
 

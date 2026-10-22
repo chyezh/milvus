@@ -15,7 +15,7 @@ func TestRetainedMVCC(t *testing.T) {
 	cm.ApplyRecoveryBarrier("a", 100)
 	cm.ApplyRecoveryBarrier("b", 100)
 	update := func(tt uint64, vc string, kind message.MessageType) {
-		cm.UpdateMVCC(createQueryTestMessage(t, tt, vc, kind, false, true))
+		cm.UpdateMVCC(createQueryTestMessage(t, tt, vc, kind, false, true), false)
 	}
 	update(120, "a", message.MessageTypeInsert)
 	require.Equal(t, VChannelMVCC{Timetick: 120}, cm.GetMVCCOfVChannel("a"))
@@ -31,7 +31,7 @@ func TestRetainedMVCC(t *testing.T) {
 	require.Equal(t, VChannelMVCC{Timetick: 140, Confirmed: true}, cm.GetMVCCOfVChannel("a"))
 	require.Equal(t, uint64(300), cm.GetConfirmedTimeTick())
 	update(200, "", message.MessageTypeTimeTick)
-	cm.UpdateMVCC(createQueryTestMessage(t, 1000, "", message.MessageTypeTimeTick, false, false))
+	cm.UpdateMVCC(createQueryTestMessage(t, 1000, "", message.MessageTypeTimeTick, false, false), false)
 	require.Equal(t, uint64(300), cm.GetConfirmedTimeTick())
 	update(600, "", message.MessageTypeTimeTick)
 	require.Equal(t, VChannelMVCC{Timetick: 500, Confirmed: true}, cm.GetMVCCOfVChannel("b"))
@@ -41,21 +41,21 @@ func TestRetainedMVCCTransactionAndRecovery(t *testing.T) {
 	cm := NewMVCCManager(100)
 	cm.ApplyRecoveryBarrier("a", 100)
 	for _, kind := range []message.MessageType{message.MessageTypeBeginTxn, message.MessageTypeInsert, message.MessageTypeDelete, message.MessageTypeRollbackTxn} {
-		cm.UpdateMVCC(createQueryTestMessage(t, 150, "a", kind, true, true))
+		cm.UpdateMVCC(createQueryTestMessage(t, 150, "a", kind, true, true), false)
 		require.Equal(t, VChannelMVCC{Timetick: 100, Confirmed: true}, cm.GetMVCCOfVChannel("a"))
 	}
 	// A recovered transaction can have bodies before the new opening fence,
 	// but only its post-open commit becomes visible.
-	cm.UpdateMVCC(createQueryTestMessage(t, 90, "a", message.MessageTypeInsert, true, true))
-	cm.UpdateMVCC(createQueryTestMessage(t, 200, "a", message.MessageTypeCommitTxn, true, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 90, "a", message.MessageTypeInsert, true, true), false)
+	cm.UpdateMVCC(createQueryTestMessage(t, 200, "a", message.MessageTypeCommitTxn, true, true), false)
 	cm.ApplyRecoveryBarrier("a", 100)
 	require.Equal(t, VChannelMVCC{Timetick: 200}, cm.GetMVCCOfVChannel("a"))
-	cm.UpdateMVCC(createQueryTestMessage(t, 300, "", message.MessageTypeTimeTick, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 300, "", message.MessageTypeTimeTick, false, true), false)
 	require.Equal(t, VChannelMVCC{Timetick: 200, Confirmed: true}, cm.GetMVCCOfVChannel("a"))
 	// Ownership change rebuilds from the new opening fence, never an old L.
 	restarted := NewMVCCManager(400)
 	restarted.ApplyRecoveryBarrier("a", 400)
-	restarted.UpdateMVCC(createQueryTestMessage(t, 600, "", message.MessageTypeTimeTick, false, true))
+	restarted.UpdateMVCC(createQueryTestMessage(t, 600, "", message.MessageTypeTimeTick, false, true), false)
 	require.Equal(t, VChannelMVCC{Timetick: 400, Confirmed: true}, restarted.GetMVCCOfVChannel("a"))
 }
 
@@ -68,8 +68,8 @@ func TestRetainedMVCCVisibilityBarriers(t *testing.T) {
 			if kind == message.MessageTypeAlterCollection {
 				msg = message.NewAlterCollectionMessageBuilderV2().WithVChannel("a").WithHeader(&message.AlterCollectionMessageHeader{}).WithBody(&message.AlterCollectionMessageBody{}).MustBuildMutable().WithTimeTick(120)
 			}
-			cm.UpdateMVCC(msg)
-			cm.UpdateMVCC(createQueryTestMessage(t, 300, "", message.MessageTypeTimeTick, false, true))
+			cm.UpdateMVCC(msg, false)
+			cm.UpdateMVCC(createQueryTestMessage(t, 300, "", message.MessageTypeTimeTick, false, true), false)
 			require.Equal(t, VChannelMVCC{Timetick: 120, Confirmed: true}, cm.GetMVCCOfVChannel("a"))
 		})
 	}
@@ -80,8 +80,8 @@ func TestRetainedMVCCIgnoresSegmentStorageMessages(t *testing.T) {
 		t.Run(kind.String(), func(t *testing.T) {
 			cm := NewMVCCManager(100)
 			cm.ApplyRecoveryBarrier("a", 100)
-			cm.UpdateMVCC(createQueryTestMessage(t, 120, "a", message.MessageTypeInsert, false, true))
-			cm.UpdateMVCC(createQueryTestMessage(t, 140, "a", kind, false, true))
+			cm.UpdateMVCC(createQueryTestMessage(t, 120, "a", message.MessageTypeInsert, false, true), false)
+			cm.UpdateMVCC(createQueryTestMessage(t, 140, "a", kind, false, true), false)
 			require.Equal(t, VChannelMVCC{Timetick: 120}, cm.GetMVCCOfVChannel("a"))
 			require.Equal(t, uint64(100), cm.GetConfirmedTimeTick())
 			// The independent query-plan protocol must still observe Flush.
@@ -90,14 +90,14 @@ func TestRetainedMVCCIgnoresSegmentStorageMessages(t *testing.T) {
 				transformTarget = 140
 			}
 			require.Equal(t, QueryVChannelMVCC{GrowingTimetick: 120, TransformingTimetick: transformTarget}, cm.GetQueryMVCCOfVChannel("a"))
-			cm.UpdateMVCC(createQueryTestMessage(t, 300, "", message.MessageTypeTimeTick, false, true))
-			cm.UpdateMVCC(createQueryTestMessage(t, 400, "a", kind, false, true))
+			cm.UpdateMVCC(createQueryTestMessage(t, 300, "", message.MessageTypeTimeTick, false, true), false)
+			cm.UpdateMVCC(createQueryTestMessage(t, 400, "a", kind, false, true), false)
 			require.Equal(t, VChannelMVCC{Timetick: 120, Confirmed: true}, cm.GetMVCCOfVChannel("a"))
 			require.Equal(t, uint64(300), cm.GetConfirmedTimeTick())
 			// Excluding storage operations must not suppress the next visible write.
-			cm.UpdateMVCC(createQueryTestMessage(t, 500, "a", message.MessageTypeDelete, false, true))
+			cm.UpdateMVCC(createQueryTestMessage(t, 500, "a", message.MessageTypeDelete, false, true), false)
 			require.Equal(t, VChannelMVCC{Timetick: 500}, cm.GetMVCCOfVChannel("a"))
-			cm.UpdateMVCC(createQueryTestMessage(t, 600, "", message.MessageTypeTimeTick, false, true))
+			cm.UpdateMVCC(createQueryTestMessage(t, 600, "", message.MessageTypeTimeTick, false, true), false)
 			require.Equal(t, VChannelMVCC{Timetick: 500, Confirmed: true}, cm.GetMVCCOfVChannel("a"))
 		})
 	}
@@ -107,22 +107,22 @@ func TestRetainedMVCCLifecycle(t *testing.T) {
 	cm := NewMVCCManager(100)
 	for i := 0; i < 1000; i++ {
 		vc := fmt.Sprintf("p_%dv0", i)
-		cm.UpdateMVCC(createQueryTestMessage(t, 120, vc, message.MessageTypeCreateCollection, false, true))
-		cm.UpdateMVCC(createQueryTestMessage(t, 140, vc, message.MessageTypeInsert, false, true))
+		cm.UpdateMVCC(createQueryTestMessage(t, 120, vc, message.MessageTypeCreateCollection, false, true), false)
+		cm.UpdateMVCC(createQueryTestMessage(t, 140, vc, message.MessageTypeInsert, false, true), false)
 		require.Equal(t, uint64(140), cm.GetMVCCOfVChannel(vc).Timetick)
-		cm.UpdateMVCC(createQueryTestMessage(t, 160, vc, message.MessageTypeDropCollection, false, true))
+		cm.UpdateMVCC(createQueryTestMessage(t, 160, vc, message.MessageTypeDropCollection, false, true), false)
 		// A delayed callback/internal message cannot recreate a retired identity.
-		cm.UpdateMVCC(createQueryTestMessage(t, 130, vc, message.MessageTypeInsert, false, true))
-		cm.UpdateMVCC(createQueryTestMessage(t, 180, vc, message.MessageTypeFlush, false, true))
+		cm.UpdateMVCC(createQueryTestMessage(t, 130, vc, message.MessageTypeInsert, false, true), false)
+		cm.UpdateMVCC(createQueryTestMessage(t, 180, vc, message.MessageTypeFlush, false, true), false)
 	}
 	require.Empty(t, cm.vchannelMVCCTimestamps)
 	require.Equal(t, VChannelMVCC{Timetick: 160}, cm.GetMVCCOfVChannel("p_0v0"))
 	cm.ApplyRecoveryBarrier("active", 100)
 	require.Equal(t, VChannelMVCC{Timetick: 100, Confirmed: true}, cm.GetMVCCOfVChannel("active"))
-	cm.UpdateMVCC(createQueryTestMessage(t, 200, "p_1001v0", message.MessageTypeCreateCollection, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 200, "p_1001v0", message.MessageTypeCreateCollection, false, true), false)
 	require.Len(t, cm.vchannelMVCCTimestamps, 2)
 	require.Equal(t, VChannelMVCC{Timetick: 200}, cm.GetMVCCOfVChannel("p_1001v0"))
-	cm.UpdateMVCC(createQueryTestMessage(t, 210, "p_vcchan", message.MessageTypeCreateCollection, false, true))
+	cm.UpdateMVCC(createQueryTestMessage(t, 210, "p_vcchan", message.MessageTypeCreateCollection, false, true), false)
 	require.Len(t, cm.vchannelMVCCTimestamps, 2)
 }
 
@@ -134,8 +134,8 @@ func TestRetainedMVCCConcurrentConfirmation(t *testing.T) {
 		write := createQueryTestMessage(t, i, "a", message.MessageTypeInsert, false, true)
 		tick := createQueryTestMessage(t, i, "", message.MessageTypeTimeTick, false, true)
 		wg.Add(2)
-		go func() { defer wg.Done(); cm.UpdateMVCC(write); cm.GetMVCCOfVChannel("a") }()
-		go func() { defer wg.Done(); cm.UpdateMVCC(tick); cm.GetConfirmedTimeTick() }()
+		go func() { defer wg.Done(); cm.UpdateMVCC(write, false); cm.GetMVCCOfVChannel("a") }()
+		go func() { defer wg.Done(); cm.UpdateMVCC(tick, false); cm.GetConfirmedTimeTick() }()
 	}
 	wg.Wait()
 	require.Equal(t, VChannelMVCC{Timetick: 500, Confirmed: true}, cm.GetMVCCOfVChannel("a"))
@@ -153,7 +153,7 @@ func BenchmarkRetainedMVCC(b *testing.B) {
 			b.Run("confirm", func(b *testing.B) {
 				b.ReportAllocs()
 				for i := 0; i < b.N; i++ {
-					cm.UpdateMVCC(tick.WithTimeTick(uint64(301 + i)))
+					cm.UpdateMVCC(tick.WithTimeTick(uint64(301+i)), false)
 				}
 			})
 			b.Run("get", func(b *testing.B) {
@@ -165,7 +165,7 @@ func BenchmarkRetainedMVCC(b *testing.B) {
 			b.Run("update", func(b *testing.B) {
 				b.ReportAllocs()
 				for i := 0; i < b.N; i++ {
-					cm.UpdateMVCC(write.WithTimeTick(uint64(1_000_000_000 + i)))
+					cm.UpdateMVCC(write.WithTimeTick(uint64(1_000_000_000+i)), false)
 				}
 			})
 		})
@@ -186,10 +186,10 @@ func TestRetainedMVCCClusterBroadcast(t *testing.T) {
 				cm := NewMVCCManager(100)
 				cm.ApplyRecoveryBarrier("a", 100)
 				cm.ApplyRecoveryBarrier("b", 100)
-				cm.UpdateMVCC(createQueryTestMessage(t, 120, "a", message.MessageTypeInsert, false, true))
+				cm.UpdateMVCC(createQueryTestMessage(t, 120, "a", message.MessageTypeInsert, false, true), false)
 				require.True(t, msg.IsPChannelLevel())
 				require.NotEmpty(t, msg.VChannel())
-				cm.UpdateMVCC(msg.WithTimeTick(200))
+				cm.UpdateMVCC(msg.WithTimeTick(200), false)
 				require.Equal(t, VChannelMVCC{Timetick: 120}, cm.GetMVCCOfVChannel("a"))
 				for _, vc := range []string{"b", "unknown"} {
 					require.Equal(t, VChannelMVCC{Timetick: 100, Confirmed: true}, cm.GetMVCCOfVChannel(vc))
@@ -199,7 +199,7 @@ func TestRetainedMVCCClusterBroadcast(t *testing.T) {
 					transformTarget = 100
 				}
 				require.Equal(t, transformTarget, cm.GetQueryMVCCOfVChannel("a").TransformingTimetick)
-				cm.UpdateMVCC(createQueryTestMessage(t, 300, "", message.MessageTypeTimeTick, false, true))
+				cm.UpdateMVCC(createQueryTestMessage(t, 300, "", message.MessageTypeTimeTick, false, true), false)
 				require.Equal(t, VChannelMVCC{Timetick: 120, Confirmed: true}, cm.GetMVCCOfVChannel("a"))
 				require.Len(t, cm.vchannelMVCCTimestamps, 2)
 			}

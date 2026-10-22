@@ -205,12 +205,20 @@ func (impl *timeTickSyncOperator) sendTsMsgToWAL(ctx context.Context,
 		}
 		return true
 	})
-	// Ack details has been committed to wal, clear it.
-	impl.ackDetails.Clear()
 	tsMsg := msg.IntoImmutableMessage(msgID)
 	// Add it into write ahead buffer.
 	impl.interceptorBuildParam.WriteAheadBuffer.Append(msgs, tsMsg)
-	impl.MVCCManager().PublishReadProof(msgs, tsMsg)
+	impl.MVCCManager().PublishReadProof(func(yield func(message.ImmutableMessage, bool) bool) {
+		impl.ackDetails.Range(func(detail *ack.AckDetail) bool {
+			if detail.IsSync || detail.Err != nil {
+				return true
+			}
+			insertOnly := detail.Message.MessageType() == message.MessageTypeCommitTxn && detail.TxnSession != nil && detail.TxnSession.IsInsertOnly()
+			return yield(detail.Message, insertOnly)
+		})
+	}, tsMsg)
+	// Keep session classification until both WAB and read-proof publication finish.
+	impl.ackDetails.Clear()
 	impl.lastPublishedTick = ts
 	return nil
 }

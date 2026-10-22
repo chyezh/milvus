@@ -18,6 +18,7 @@ package mvcc
 
 import (
 	"context"
+	"iter"
 	"sync"
 
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
@@ -47,15 +48,18 @@ func (m *readProofManager) applyRecoveryBarrier(channel string, tick uint64) {
 // PublishReadProof runs after WAB publication in the serialized sync operator.
 // Messages are successful appends in ACK timestamp order. Transaction bodies
 // do not change frontiers until their CommitTxn is included in the prefix.
+// Each iterator value includes whether the commit contains only Inserts.
 // Idle confirmations refresh the certificate without advancing executor MVCC.
-func (cm *MVCCManager) PublishReadProof(messages []message.ImmutableMessage, confirmation message.ImmutableMessage) {
+func (cm *MVCCManager) PublishReadProof(messages iter.Seq2[message.ImmutableMessage, bool], confirmation message.ImmutableMessage) {
 	m := cm.readProof
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, msg := range messages {
-		m.frontiers.UpdateMVCC(msg)
+	if messages != nil {
+		for msg, insertOnly := range messages {
+			m.frontiers.UpdateMVCC(msg, insertOnly)
+		}
 	}
-	m.frontiers.UpdateMVCC(confirmation)
+	m.frontiers.UpdateMVCC(confirmation, false)
 	m.through = confirmation.TimeTick()
 	close(m.changed)
 	m.changed = make(chan struct{})

@@ -82,8 +82,8 @@ been delivered successfully. It makes no claim about history below Summary's
 lower bound. It has two responsibilities:
 
 1. **Advance through intervals without Deletes.** Relevant DDL/publication
-   events, insert-only transaction commits and WAL recovery barriers can advance
-   query Transform MVCC without producing a Delete Entry. SyncUp supplies the
+   events and WAL recovery barriers can advance query Transform MVCC without
+   producing a Delete Entry. SyncUp supplies the
    complete-prefix evidence needed to advance the consumer through those empty
    intervals. Applicable PChannel-wide barriers align all affected subscriptions;
    unrelated VChannel traffic does not require a broadcast.
@@ -178,9 +178,10 @@ receiving SyncUp while preceding Deletes remain queued is insufficient. The
 readiness manager and TransformLogBuffer implement this consumer-side gate;
 per-query checks separately wait for the query plan's required MVCC boundary.
 
-Notifications cover payload-free changes too: insert-only transaction commits,
-flush/import publication, relevant DDL and schema changes. Their classification
-is shared with query-plan MVCC advancement. PChannel-wide FlushAll/AlterWAL and
+Notifications cover payload-free changes too: flush/import publication, relevant
+DDL and schema changes. Pure Insert transactions advance only GrowingMVCC and
+do not notify Transform subscribers. Their classification is shared with
+query-plan MVCC advancement. PChannel-wide FlushAll/AlterWAL and
 recovery baselines remain broadcasts. GC truncation wakes readers to advance
 to the retained boundary; terminal failures wake them to fail explicitly rather
 than wait indefinitely.
@@ -237,10 +238,15 @@ binaries without MVCCBarrier support is not established by this protocol change.
 
 RecoveryStorage passively observes ordered `MVCCBarrier` messages. It exposes
 scoped Summary coverage and sends `QueryBarrierEvent` through the VChannel's
-ordered resource events. Persisted confirmations retain ordinary TimeTick full-prefix resource effects,
-including confirming Transform consumption after insert-only transactions. The
-Header scopes the extra advertised query-plan frontiers and targeted query
-notifications; it does not remove those existing durable confirmation effects.
+ordered resource events. Persisted MVCCBarrier confirmations retain full-prefix
+resource effects. The Header scopes the extra advertised query-plan frontiers
+and targeted query notifications. Ordinary TimeTick messages update PChannel
+AckTracker and Summary coverage, then stop before VChannel dispatch; they do not
+advance query execution frontiers. Pure Insert commits require only GrowingMVCC
+progress and never rely on a later TimeTick to complete a Transform wait.
+Empty transactions cannot be newly committed. Historical empty transactions
+produce no Transform entry or notification and are filtered before VChannel
+dispatch while their PChannel recovery progress is retained.
 Volatile confirmations use only the scoped event path and never dirty checkpoints
 or Summary manifests.
 Neither form adds a payload-free TransformLog record. GrowingRuntime advances

@@ -175,7 +175,12 @@ transforming_timetick = latest WAL TimeTick that must be visible in the
 Currently, Insert advances the StreamingNode growing wait position. Delete
 advances both the StreamingNode growing wait position and the QueryNode
 transforming wait position because both node types must observe the delete before
-serving a query at or after that TimeTick.
+serving a query at or after that TimeTick. A nonempty transaction containing only
+Inserts advances only GrowingMVCC at its commit TimeTick; it neither raises the
+Transform target nor notifies remote Transform consumers. Successful body types
+are tracked in TxnSession, including recovered transaction bodies, before commit
+can proceed. Read-certificate projection uses the same session from ACK records,
+so it classifies commits identically without new persisted message fields.
 
 TransformLog is the QueryNode-side projection of all WAL messages that advance
 `transforming_timetick`. The source message categories and entry kinds are

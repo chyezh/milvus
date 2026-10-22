@@ -167,7 +167,7 @@ func TestQueryPlanReadProofKeepsDualMVCC(t *testing.T) {
 		manager.ApplyRecoveryBarrier("v", 10)
 		insert := message.NewMutableMessageBeforeAppend(nil, map[string]string{"_t": strconv.FormatInt(int64(message.MessageTypeInsert), 10), "_vc": "v"}).WithTimeTick(20).IntoImmutableMessage(nil)
 		tick := message.NewTimeTickMessageBuilderV1().WithHeader(&message.TimeTickMessageHeader{}).WithBody(&message.TimeTickMsg{}).WithAllVChannel().WithNotPersisted().MustBuildMutable().WithTimeTick(100).IntoImmutableMessage(nil)
-		manager.PublishReadProof([]message.ImmutableMessage{insert}, tick)
+		manager.PublishReadProof(func(yield func(message.ImmutableMessage, bool) bool) { yield(insert, false) }, tick)
 		channel := types.PChannelInfo{AccessMode: types.AccessModeRW}
 		mockey.Mock((*roWALAdaptorImpl).Channel).To(func(*roWALAdaptorImpl) types.PChannelInfo { return channel }).Build()
 		mockey.Mock(mockey.GetMethod(resource.Resource().TimeTickInspector(), "TriggerSync")).Return().Build()

@@ -18,6 +18,7 @@ package mvcc
 
 import (
 	"context"
+	"iter"
 	"testing"
 	"time"
 
@@ -36,8 +37,8 @@ func TestReadProofUsesCompletePublishedPrefix(t *testing.T) {
 		return createQueryTestMessage(t, tt, "", message.MessageTypeTimeTick, false, false).IntoImmutableMessage(nil)
 	}
 	// An acknowledged later append must not contaminate the certified prefix.
-	cm.UpdateMVCC(createQueryTestMessage(t, 200, "v", message.MessageTypeInsert, false, true))
-	cm.PublishReadProof([]message.ImmutableMessage{msg(20, message.MessageTypeInsert, false)}, tick(100))
+	cm.UpdateMVCC(createQueryTestMessage(t, 200, "v", message.MessageTypeInsert, false, true), false)
+	cm.PublishReadProof(proofAckDetails(msg(20, message.MessageTypeInsert, false)), tick(100))
 	frontier, proof, err := cm.WaitReadProof(context.Background(), "v", 100)
 	require.NoError(t, err)
 	require.EqualValues(t, 20, frontier.GrowingTimetick)
@@ -46,13 +47,13 @@ func TestReadProofUsesCompletePublishedPrefix(t *testing.T) {
 	require.EqualValues(t, 200, cm.GetQueryMVCCOfVChannel("v").GrowingTimetick)
 
 	// Uncommitted transaction bodies cannot become visible in the read proof.
-	cm.PublishReadProof([]message.ImmutableMessage{msg(110, message.MessageTypeDelete, true)}, tick(120))
+	cm.PublishReadProof(proofAckDetails(msg(110, message.MessageTypeDelete, true)), tick(120))
 	frontier, proof, err = cm.WaitReadProof(context.Background(), "v", 120)
 	require.NoError(t, err)
 	require.EqualValues(t, 20, frontier.GrowingTimetick)
 	require.EqualValues(t, 10, frontier.TransformingTimetick)
 	require.EqualValues(t, 120, proof)
-	cm.PublishReadProof([]message.ImmutableMessage{msg(130, message.MessageTypeCommitTxn, true)}, tick(140))
+	cm.PublishReadProof(proofAckDetails(msg(130, message.MessageTypeCommitTxn, true)), tick(140))
 	frontier, _, err = cm.WaitReadProof(context.Background(), "v", 140)
 	require.NoError(t, err)
 	require.EqualValues(t, 130, frontier.GrowingTimetick)
@@ -89,4 +90,38 @@ func TestReadProofWaitsForPublicationAndCancels(t *testing.T) {
 	stop()
 	_, _, err = replacement.WaitReadProof(canceled, "v", 100)
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func proofAckDetails(msg message.ImmutableMessage) iter.Seq2[message.ImmutableMessage, bool] {
+	return func(yield func(message.ImmutableMessage, bool) bool) { yield(msg, false) }
+}
+
+func TestInsertOnlyCommitAdvancesOnlyGrowingInQueryAndReadProof(t *testing.T) {
+	cm := NewMVCCManager(10)
+	cm.ApplyRecoveryBarrier("v", 10)
+	cm.ApplyRecoveryBarrier("other", 10)
+	for _, insertOnly := range []bool{true, false} {
+		commitTick := uint64(20)
+		if !insertOnly {
+			commitTick = 40
+		}
+		commit := createQueryTestMessage(t, commitTick, "v", message.MessageTypeCommitTxn, true, true)
+		cm.UpdateMVCC(commit, insertOnly)
+		confirmation := createQueryTestMessage(t, commitTick+10, "", message.MessageTypeTimeTick, false, true)
+		cm.UpdateMVCC(confirmation, false)
+		cm.PublishReadProof(func(yield func(message.ImmutableMessage, bool) bool) {
+			yield(commit.IntoImmutableMessage(nil), insertOnly)
+		}, confirmation.IntoImmutableMessage(nil))
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		frontier, _, err := cm.WaitReadProof(ctx, "v", commitTick+10)
+		cancel()
+		require.NoError(t, err)
+		transformTick := commitTick
+		if insertOnly {
+			transformTick = 10
+		}
+		require.Equal(t, QueryVChannelMVCC{GrowingTimetick: commitTick, TransformingTimetick: transformTick, Confirmed: true}, frontier)
+		require.Equal(t, frontier, cm.GetQueryMVCCOfVChannel("v"))
+		require.Equal(t, QueryVChannelMVCC{GrowingTimetick: 10, TransformingTimetick: 10, Confirmed: true}, cm.GetQueryMVCCOfVChannel("other"))
+	}
 }

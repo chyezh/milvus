@@ -602,9 +602,9 @@ VChannels' ordinary messages can extend readable coverage without waking it.
 
 Scoped notifications follow query Transform MVCC semantics, using the shared
 message classification in `messageutil` rather than the presence of a stored
-Delete payload. Delete, CreateCollection, transaction commit (including an
-insert-only assembled transaction), CommitImport, Flush/ManualFlush, relevant
-DDL and schema changes notify their VChannel. Plain Inserts, property-only
+Delete payload. Delete, CreateCollection, commits containing non-Insert bodies,
+CommitImport, Flush/ManualFlush, relevant DDL and schema changes notify their
+VChannel. Plain Inserts, pure Insert and empty transactions, property-only
 AlterCollection and ordinary TimeTick confirmations do not. PChannel-wide
 FlushAll/AlterWAL and RecoveryBarrier notify every active scope. GC wakes scopes
 whose history is retired; a terminal failure wakes every scope. Cluster broadcast

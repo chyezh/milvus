@@ -56,8 +56,8 @@ func (cm *MVCCManager) GetConfirmedTimeTick() uint64 {
 }
 
 // UpdateMVCC updates the mvcc state by incoming message.
-func (cm *MVCCManager) UpdateMVCC(msg message.MutableMessage) {
-	cm.query.UpdateMVCC(msg)
+func (cm *MVCCManager) UpdateMVCC(msg message.MutableMessage, insertOnlyTxn bool) {
+	cm.query.UpdateMVCC(msg, insertOnlyTxn)
 	if !msg.IsPersisted() {
 		// Volatile confirmations do not change durable MVCC. Scoped query
 		// progress is handled separately by QueryMVCCManager.
