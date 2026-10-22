@@ -169,19 +169,10 @@ type streamState struct {
 
 type bufEventHandler struct {
 	buffer *vchannelBuffer
+	stream wal.TransformLogStream
 }
 
-func (h bufEventHandler) Handle(event wal.TransformLogStreamEvent) error {
-	if event.Err != nil {
-		mlog.Debug(context.TODO(), "querynode transform log buffer received subscription error",
-			mlog.FieldPChannel(h.buffer.pchannel),
-			mlog.FieldVChannel(h.buffer.vchannel),
-			mlog.Int64("subscriptionID", event.SubscriptionID),
-			mlog.Err(event.Err),
-		)
-		h.buffer.fail(event.Err)
-		return nil
-	}
+func (h bufEventHandler) Handle(event wal.TransformLogStreamEvent) {
 	if event.Entry != nil {
 		mlog.Debug(context.TODO(), "querynode transform log buffer received entry",
 			mlog.FieldPChannel(h.buffer.pchannel),
@@ -200,10 +191,16 @@ func (h bufEventHandler) Handle(event wal.TransformLogStreamEvent) error {
 		)
 		h.buffer.onSyncUp(event.SyncUp.TimeTick)
 	}
-	return nil
 }
 
-func (h bufEventHandler) Close() {}
+func (h bufEventHandler) Close() {
+	// Logical termination publishes its error before closing handlers. Physical
+	// reconnects preserve this handler; canceling one subscription does not set
+	// a stream error.
+	if err := h.stream.Error(); err != nil {
+		h.buffer.fail(err)
+	}
+}
 
 type guard struct {
 	once      sync.Once
@@ -225,7 +222,15 @@ func (g *guard) Prepare(ctx context.Context) (bool, error) {
 		return true, err
 	}
 	err = g.buffer.ensureSubscribed(ctx, stream.stream)
+	// An already terminated stream can reject Subscribe without creating a
+	// subscription or invoking its handler Close callback.
+	if terminalErr := stream.stream.Error(); terminalErr != nil {
+		g.buffer.fail(terminalErr)
+	}
 	g.buffer.mu.Lock()
+	if g.buffer.err != nil {
+		err = g.buffer.err
+	}
 	retryable := g.buffer.err == nil
 	g.buffer.mu.Unlock()
 	return retryable, err
@@ -317,7 +322,7 @@ func (b *vchannelBuffer) subscribe(ctx context.Context, stream wal.TransformLogS
 	sub, err := stream.Subscribe(ctx, wal.TransformLogSubscriptionOption{
 		VChannel:           b.vchannel,
 		StartAfterTimeTick: startAfter,
-		Handler:            bufEventHandler{buffer: b},
+		Handler:            bufEventHandler{buffer: b, stream: stream},
 	})
 	if err != nil {
 		if isUnrecoverableSubscribeError(err) {
