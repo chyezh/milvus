@@ -143,12 +143,90 @@ func TestReduceWithValidGroupResults(t *testing.T) {
 	assert.Equal(t, int64(3), out.GetAllRetrieveCount())
 }
 
+func TestGroupAggReducerMergesIncrementalResults(t *testing.T) {
+	reducer := makeGroupAggReducer()
+	makeResult := func(keys []string, values []int64) *AggregationResult {
+		return NewAggregationResult([]*schemapb.FieldData{
+			{
+				Type: schemapb.DataType_VarChar,
+				Field: &schemapb.FieldData_Scalars{Scalars: &schemapb.ScalarField{
+					Data: &schemapb.ScalarField_StringData{StringData: &schemapb.StringArray{Data: keys}},
+				}},
+			},
+			{
+				Type: schemapb.DataType_Int64,
+				Field: &schemapb.FieldData_Scalars{Scalars: &schemapb.ScalarField{
+					Data: &schemapb.ScalarField_LongData{LongData: &schemapb.LongArray{Data: values}},
+				}},
+			},
+		}, int64(len(keys)))
+	}
+
+	require.NoError(t, reducer.Merge([]*AggregationResult{makeResult([]string{"a", "b"}, []int64{10, 5})}))
+	require.NoError(t, reducer.Merge([]*AggregationResult{makeResult([]string{"a", "c"}, []int64{20, 7})}))
+
+	result, err := reducer.Result()
+	require.NoError(t, err)
+	require.Equal(t, int64(4), result.GetAllRetrieveCount())
+	keys := result.GetFieldDatas()[0].GetScalars().GetStringData().GetData()
+	values := result.GetFieldDatas()[1].GetScalars().GetLongData().GetData()
+	actual := make(map[string]int64, len(keys))
+	for i, key := range keys {
+		actual[key] = values[i]
+	}
+	require.Equal(t, map[string]int64{"a": 30, "b": 5, "c": 7}, actual)
+}
+
 // TestReduceEmptyResults verifies that reduce returns an empty result for empty input.
 func TestReduceEmptyResults(t *testing.T) {
 	reducer := makeGroupAggReducer()
 	out, err := reducer.Reduce(context.Background(), []*AggregationResult{})
 	require.NoError(t, err)
 	require.NotNil(t, out)
+}
+
+func TestEmptyGroupedAggregationHasZeroRows(t *testing.T) {
+	for _, op := range []planpb.AggregateOp{
+		planpb.AggregateOp_count, planpb.AggregateOp_sum, planpb.AggregateOp_min,
+		planpb.AggregateOp_max, planpb.AggregateOp_avg,
+	} {
+		t.Run(op.String(), func(t *testing.T) {
+			reducer := NewGroupAggReducer([]int64{1}, []*planpb.Aggregate{{Op: op, FieldId: 2}}, -1, makeTestSchema())
+			empty, err := reducer.EmptyAggResult()
+			require.NoError(t, err)
+			batch, err := reducer.Reduce(context.Background(), nil)
+			require.NoError(t, err)
+			stream, err := reducer.Result()
+			require.NoError(t, err)
+			for _, result := range []*AggregationResult{empty, batch, stream} {
+				fields := result.GetFieldDatas()
+				require.Len(t, fields, 2)
+				require.Equal(t, int64(1), fields[0].GetFieldId())
+				require.Equal(t, "category", fields[0].GetFieldName())
+				require.Zero(t, result.GetAllRetrieveCount())
+				for _, field := range fields {
+					accessor, err := NewFieldAccessor(field.GetType())
+					require.NoError(t, err)
+					accessor.SetVals(field)
+					require.Zero(t, accessor.RowCount())
+				}
+			}
+		})
+	}
+}
+
+func TestEmptyGlobalCountReturnsSingleZero(t *testing.T) {
+	reducer := NewGroupAggReducer(nil, []*planpb.Aggregate{{Op: planpb.AggregateOp_count, FieldId: 2}}, -1, makeTestSchema())
+	empty, err := reducer.EmptyAggResult()
+	require.NoError(t, err)
+	batch, err := reducer.Reduce(context.Background(), nil)
+	require.NoError(t, err)
+	stream, err := reducer.Result()
+	require.NoError(t, err)
+	for _, result := range []*AggregationResult{empty, batch, stream} {
+		require.Len(t, result.GetFieldDatas(), 1)
+		require.Equal(t, []int64{0}, result.GetFieldDatas()[0].GetScalars().GetLongData().GetData())
+	}
 }
 
 // TestReduceSingleResult verifies that reduce returns the single input unchanged.

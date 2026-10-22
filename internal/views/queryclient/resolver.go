@@ -3,6 +3,8 @@ package queryclient
 import (
 	"context"
 
+	"github.com/milvus-io/milvus/internal/util/queryutil"
+	"github.com/milvus-io/milvus/internal/util/searchutil"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
@@ -25,7 +27,9 @@ type QueryPlanClient interface {
 type ViewQueryServiceClient interface {
 	// SearchOnView executes a vector search on the given work node.
 	SearchOnView(ctx context.Context, node qviews.WorkNode, req *viewpb.SearchOnViewRequest) (*viewpb.SearchOnViewResponse, error)
+	SearchOnViewStream(ctx context.Context, node qviews.WorkNode, req *viewpb.SearchOnViewRequest) (searchutil.ReduceStream, error)
 
 	// QueryOnView executes a query (retrieve by expression) on the given work node.
 	QueryOnView(ctx context.Context, node qviews.WorkNode, req *viewpb.QueryOnViewRequest) (*viewpb.QueryOnViewResponse, error)
+	QueryOnViewStream(ctx context.Context, node qviews.WorkNode, req *viewpb.QueryOnViewRequest) (queryutil.ReduceStream, error)
 }
