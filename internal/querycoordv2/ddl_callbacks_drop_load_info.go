@@ -22,11 +22,8 @@ import (
 	"github.com/cockroachdb/errors"
 
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
-	"github.com/milvus-io/milvus/internal/views/coord/coordview"
-	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
-	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
@@ -88,11 +85,7 @@ func (s *Server) waitQueryViewsReleased(ctx context.Context, collectionID int64)
 	registry := s.qviewsRuntime.shardViewRegistry
 	changed := make(chan struct{}, 1)
 	// Subscribe before checking to avoid losing a final-removal notification.
-	unregister := registry.RegisterPublicationListener(func(shardID qviews.ShardID, stats *coordview.ShardStats) {
-		_, id, _, err := funcutil.ParseVChannel(shardID.VChannel)
-		if err != nil || id != collectionID || stats != nil {
-			return
-		}
+	unregister := registry.RegisterShardRemovalListener(collectionID, func() {
 		select {
 		case changed <- struct{}{}:
 		default:
