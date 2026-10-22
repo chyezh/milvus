@@ -173,36 +173,7 @@ func (b *Buffer) getOrCreateStreamLocked(ctx context.Context, pchannel string) (
 		refs:     make(map[string]*vchannelBuffer),
 	}
 	b.streamsByPChannel[pchannel] = state
-	go b.watchStream(state)
 	return state, nil
-}
-
-// Physical failures are resumed by the transport. Only the logical stream's
-// terminal completion invalidates the buffers that still reference it.
-func (b *Buffer) watchStream(state *streamState) {
-	<-state.stream.Done()
-	err := transformStreamFailure(state.stream)
-	b.mu.Lock()
-	refs := make([]*vchannelBuffer, 0, len(state.refs))
-	for _, buf := range state.refs {
-		refs = append(refs, buf)
-	}
-	b.mu.Unlock()
-	for _, buf := range refs {
-		buf.fail(err)
-	}
-}
-
-func transformStreamFailure(stream wal.TransformLogStream) error {
-	select {
-	case <-stream.Done():
-		if err := stream.Error(); err != nil {
-			return err
-		}
-		return merr.WrapErrServiceUnavailableMsg("transform log stream is closed")
-	default:
-		return nil
-	}
 }
 
 func (b *Buffer) removeLocked(vchannel string, buf *vchannelBuffer) wal.TransformLogStream {
@@ -227,6 +198,7 @@ type streamState struct {
 
 type bufEventHandler struct {
 	buffer *vchannelBuffer
+	stream wal.TransformLogStream
 }
 
 func (h bufEventHandler) Handle(event wal.TransformLogStreamEvent) {
@@ -250,7 +222,14 @@ func (h bufEventHandler) Handle(event wal.TransformLogStreamEvent) {
 	}
 }
 
-func (h bufEventHandler) Close() {}
+func (h bufEventHandler) Close() {
+	// Logical termination publishes its error before closing handlers. Physical
+	// reconnects preserve this handler; canceling one subscription does not set
+	// a stream error.
+	if err := h.stream.Error(); err != nil {
+		h.buffer.fail(err)
+	}
+}
 
 type guard struct {
 	once      sync.Once
@@ -271,13 +250,21 @@ func (g *guard) Prepare(ctx context.Context) (bool, error) {
 	if err != nil {
 		return true, err
 	}
-	// A new reference can arrive after the terminal watcher has taken its snapshot.
-	if err := transformStreamFailure(stream.stream); err != nil {
+	// A later reference must observe terminal failure even without a subscription.
+	if err := stream.stream.Error(); err != nil {
 		g.buffer.fail(err)
 		return false, err
 	}
 	err = g.buffer.ensureSubscribed(ctx, stream.stream)
+	// An already terminated stream can reject Subscribe without creating a
+	// subscription or invoking its handler Close callback.
+	if terminalErr := stream.stream.Error(); terminalErr != nil {
+		g.buffer.fail(terminalErr)
+	}
 	g.buffer.mu.Lock()
+	if g.buffer.err != nil {
+		err = g.buffer.err
+	}
 	retryable := g.buffer.err == nil
 	g.buffer.mu.Unlock()
 	return retryable, err
@@ -374,9 +361,9 @@ func (b *vchannelBuffer) subscribe(ctx context.Context, stream wal.TransformLogS
 	sub, err := stream.Subscribe(ctx, wal.TransformLogSubscriptionOption{
 		VChannel:           b.vchannel,
 		StartAfterTimeTick: startAfter,
-		Handler:            bufEventHandler{buffer: b},
+		Handler:            bufEventHandler{buffer: b, stream: stream},
 	})
-	if streamErr := transformStreamFailure(stream); streamErr != nil {
+	if streamErr := stream.Error(); streamErr != nil {
 		b.fail(streamErr)
 		if err != nil {
 			err = streamErr
