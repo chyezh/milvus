@@ -154,12 +154,8 @@ all Delete children at the outer TimeTick. Entry application proves progress
 through that entry; additional SyncUp is needed for payload-free progress, not
 for every live Delete.
 
-Dispatch uses the current query Transform MVCC classification: individual Inserts
-and ordinary TimeTicks produce no remote event. This extraction still advances
-Transform progress for every transaction commit, including Insert-only and empty
-transactions, because its query planner requests those frontiers. Suppressing
-those notifications requires the parent branch's ordered query-frontier publication
-to be integrated together. Relevant publication
+Dispatch uses the query Transform MVCC classification: pure Inserts, Insert-only
+transactions and ordinary TimeTicks produce no remote event. Relevant publication
 and schema events advance their VChannel. FlushAll/AlterWAL and RecoveryBarrier
 retain their global scope. Persisted and volatile MVCCBarrier progress targets
 its Header VChannels via `ObserveQueryBarrier`. Summary terminal failures actively
