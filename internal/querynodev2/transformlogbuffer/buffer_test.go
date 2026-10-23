@@ -664,9 +664,15 @@ func TestBufferRegisterSegmentReturnsBeforeCatchupDrainCompletes(t *testing.T) {
 		require.NoError(t, result.err)
 		require.NotNil(t, result.reg)
 		defer func() {
+			// Unregister joins application; unblock the test's fake first.
 			unblock.Do(func() { close(applyBlock) })
 			result.reg.Unregister()
 		}()
+		select {
+		case <-applyStarted:
+		case <-time.After(time.Second):
+			t.Fatal("catchup did not start after registration")
+		}
 	case <-time.After(time.Second):
 		t.Fatal("RegisterSegment did not return")
 	}
