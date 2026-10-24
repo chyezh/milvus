@@ -339,6 +339,7 @@ message QueryPlan {
     // original Phase 1 request by Proxy. All other optimized parameters remain
     // explicit, including empty payloads when the optimizer clears a field.
     QueryPayloadReuse reused_payloads = 7;
+    optional int64 growing_row_count = 9;
 }
 
 message QueryPayloadReuse {
