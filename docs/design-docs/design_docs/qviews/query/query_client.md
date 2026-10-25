@@ -16,9 +16,10 @@ branch. The generic staged client API is not the production entry.
 
 For each resolved vchannel, Phase 1 targets the primary StreamingNode using
 `UnknownReplicaID`. The returned plan supplies the actual shard/replica identity.
-Strong and Session are sent as Strong; Bounded and Eventually retain their enum
+Strong and Session are sent as Strong; Bounded, Eventually and Customized retain their enum
 values. Strong/Session waits for completed writes; Eventually reuses the current complete
-snapshot, and Bounded also enforces the request guarantee timestamp. All use primary-WAL planning. The presence of
+snapshot, and Bounded also enforces the request guarantee timestamp. Customized preserves its guarantee as a lower bound for both execution frontiers,
+using a scoped barrier when necessary. All use primary-WAL planning. The presence of
 `GetMVCCTimestamp` does not implement secondary replica selection.
 
 Phase 2 sends `SearchOnView` or `QueryOnView` concurrently to every worker in the
