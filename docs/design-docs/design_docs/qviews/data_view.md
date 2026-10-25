@@ -15,7 +15,7 @@ physical Segment GC are deliberately outside this component.
 consumer through `DataViewRef`:
 
 ```text
-Collection -> VChannel -> Partition -> loadable (Segment ID, Manifest version)
+Collection (SchemaVersion, DataVersion) -> VChannel -> Partition -> loadable (Segment ID, Manifest version)
 ```
 
 Each partition stores `segment_ids` and `segment_manifest_versions` as parallel
@@ -89,6 +89,20 @@ TransformLog/L0 materialization through T waits for final publication of every
 L1 created before T. Pending imports and other asynchronous publications retain
 their own fences. See [Transform Start-After TimeTick](transform_start_after_timetick.md)
 for the proof, atomic publication requirements, and retention obligations.
+
+## Supported read Schema
+
+SchemaVersion is persisted with each immutable collection snapshot. Initial
+creation supplies the collection schema. All ordinary mutations clone the latest
+schema identity. DDL alone advances it, with CompactVersion +1, either directly
+without changing segment bases or with a checked complete materialized projection.
+A replay at or behind the committed schema is a no-op. Publication failure leaves
+the old snapshot intact. Schema-only changes notify readers just like membership
+changes. QueryView takes its schema from this exact snapshot, never from latest
+collection metadata. SegmentMeta updates notify schema waiters independently of
+the best-effort recompute queue. A waiter registers before reading the projection,
+so queue saturation and metadata-only changes cannot lose its wakeup. See
+[Schema evolution](schema_evolution.md).
 
 ## Lifecycle
 
@@ -527,9 +541,10 @@ prepare freezes the statistics; changing configuration before commit cannot
 change the prepared snapshot's cost. Invalid cost values retain the manager's
 last valid sampled value.
 
-Changing configuration or Schema does not trigger a DataView update or balance
-pass. A membership/Manifest no-op retains the existing statistics. The next
-normal DataView update uses the then-current cost. Previously published native
+Changing cost configuration alone does not trigger a DataView update or balance
+pass. A membership/Manifest no-op retains the existing statistics. A schema DDL
+publication does advance DataView as defined above. The next DataView update
+uses the then-current cost. Previously published native
 objects and retained DataViewRefs remain immutable, so historical QueryViews
 continue using their own footprint. Different DataVersions may therefore carry
 different logical sizes for the same Segment.

@@ -33,6 +33,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v3/util/syncutil"
 )
 
 type Catalog interface {
@@ -99,6 +100,7 @@ type Manager interface {
 	// need a deterministic reconciliation. Same semantics as the async
 	// worker's step.
 	RecomputeNow(ctx context.Context, collectionID int64, project Projector) (*viewpb.DataVersion, error)
+	AdvanceSchema(ctx context.Context, collectionID int64, schemaVersion int32, project Projector) (*viewpb.DataVersion, error)
 	OnDropCollection(ctx context.Context, collectionID int64) (*viewpb.DataVersion, error)
 
 	Latest(ctx context.Context, collectionID int64) (DataViewRef, error)
@@ -112,6 +114,7 @@ type Manager interface {
 type DataViewRef = qviews.DataViewRef
 
 type LoadableSegment struct {
+	SchemaVersion               int32
 	SegmentID                   int64
 	VChannel                    string
 	PartitionID                 int64
@@ -127,6 +130,7 @@ type LoadableSegment struct {
 }
 
 type CreateCollectionDataViewEvent struct {
+	SchemaVersion   int32
 	CollectionID    int64
 	VChannels       []string
 	TransformStarts map[string]uint64
@@ -181,6 +185,7 @@ type versionRefCounter struct {
 
 type collectionState struct {
 	mu       sync.Mutex
+	changed  *syncutil.VersionedNotifier
 	id       int64
 	latest   *versionEntry
 	versions map[qviews.DataVersion]*versionEntry
@@ -192,7 +197,7 @@ type collectionState struct {
 // newCollectionState constructs a Collection state with an empty version
 // registry keyed by DataVersion struct.
 func newCollectionState(collectionID int64) *collectionState {
-	return &collectionState{id: collectionID, versions: make(map[qviews.DataVersion]*versionEntry)}
+	return &collectionState{id: collectionID, changed: syncutil.NewVersionedNotifier(), versions: make(map[qviews.DataVersion]*versionEntry)}
 }
 
 type dataViewManager struct {
@@ -295,6 +300,11 @@ func (m *dataViewManager) Recompute(ctx context.Context, collectionID int64) err
 		return merr.WrapErrServiceInternalMsg(
 			"DataView Recompute requested without an injected projection for collection %d",
 			collectionID)
+	}
+	// Schema waiters read SegmentMeta directly. Notify independently of the
+	// best-effort snapshot queue so saturation cannot lose DDL progress.
+	if state := m.getState(collectionID); state != nil {
+		state.changed.NotifyAll()
 	}
 	return queue.Enqueue(collectionID)
 }
@@ -477,6 +487,7 @@ func (m *dataViewManager) OnCreateCollection(ctx context.Context, event CreateCo
 	}
 
 	view := buildEmptyDataView(event.CollectionID, event.VChannels)
+	view.SchemaVersion = event.SchemaVersion
 	for _, shard := range view.Shards {
 		shard.GrowingTransformStartAfterTimetick = event.TransformStarts[shard.Vchannel]
 		shard.CompactedTransformStartAfterTimetick = event.TransformStarts[shard.Vchannel]
@@ -537,6 +548,7 @@ func (m *dataViewManager) recomputeNow(ctx context.Context, collectionID int64, 
 	}
 	defer unlock()
 
+	defer state.changed.NotifyAll()
 	base := latestView(state)
 	if base == nil && m.frontierProjector != nil {
 		// Only Create/Bootstrap may install the complete initial shard skeleton.
@@ -602,6 +614,7 @@ func (m *dataViewManager) OnDropCollection(ctx context.Context, collectionID int
 	if state != nil {
 		state.mu.Lock()
 		defer state.mu.Unlock()
+		state.changed.NotifyAll()
 	}
 	// The catalog prefix delete must run under the per-collection state lock
 	// only: holding the manager-global mutex across the etcd round trip would
@@ -729,9 +742,10 @@ func (m *dataViewManager) collectionDataViewLocked(state *collectionState) *api.
 	view := entry.view
 
 	coll := &api.CollectionDataView{
-		CollectionID: view.GetCollectionId(),
-		DataVersion:  qviews.FromProtoDataVersion(view.GetDataVersion()),
-		Shards:       make([]*api.ShardDataView, 0, len(view.GetShards())),
+		CollectionID:  view.GetCollectionId(),
+		SchemaVersion: view.GetSchemaVersion(),
+		DataVersion:   qviews.FromProtoDataVersion(view.GetDataVersion()),
+		Shards:        make([]*api.ShardDataView, 0, len(view.GetShards())),
 	}
 	for _, shard := range view.GetShards() {
 		if shard == nil {
@@ -1463,6 +1477,7 @@ func (m *dataViewManager) RegisterDataViewListener(listener api.DataViewListener
 
 // Caller holds state.mu. Publication never acquires another collection lock.
 func (m *dataViewManager) publishDataViewLocked(state *collectionState) {
+	state.changed.NotifyAll()
 	entry := state.latest
 	if entry == nil {
 		return

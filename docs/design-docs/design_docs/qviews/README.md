@@ -396,7 +396,7 @@ single locally prepared BM25 aggregate shared by all QueryView DataVersions.
 | DataCoord (inside MixCoord) | DataView Manager | Maintaining immutable Collection snapshots and DataViewRefs |
 | Coord | Sealed Segment Balancer | Consuming immutable event-published cache entries, assigning disjoint replica node sets, and distributing QueryViews |
 | Coord | QueryView Manager | View state machine transitions, syncing view information to all Nodes |
-| Streaming Node | PChannel Query Resource Manager | Preparing vchannel resources from versioned load info, latest schema, SegmentModule views, TransformLog, and BM25 resource RPC |
+| Streaming Node | PChannel Query Resource Manager | Preparing vchannel resources from versioned load info, exact View schema, SegmentModule views, TransformLog, and BM25 resource RPC |
 | Streaming Node | QueryView Manager | Listening for view state machine changes, checking prepared view resources, and publishing the required DataVersion watermark for SN-only eviction |
 | Streaming Node | TransformLog adaptor | Local SN bootstrap and remote QN publication share the Summary-backed adaptor. See [TransformLog](../wal/transform_log.md). |
 | Streaming Node | Growing Segment Manager | Incremental data management, maintaining Growing Segment lifecycle |
