@@ -3012,6 +3012,9 @@ func (m *meta) appliedCompactionResultLocked(
 }
 
 func (m *meta) CompleteCompactionMutation(ctx context.Context, t *datapb.CompactionTask, result *datapb.CompactionPlanResult) (newSegments []*SegmentInfo, retErr error) {
+	if err := m.checkCompactionSchemaPublication(ctx, t.GetCollectionID(), t.GetSchema()); err != nil {
+		return nil, err
+	}
 	defer func() {
 		if retErr == nil && t.GetType() == datapb.CompactionType_BumpSchemaVersionCompaction {
 			m.notifyQueryViewSegmentUpdates(ctx, newSegments)
@@ -3078,6 +3081,7 @@ func (m *meta) loadableProjection(ctx context.Context, collectionID int64) ([]da
 			}
 		}
 		loadable = append(loadable, dataview.LoadableSegment{
+			SchemaVersion:               segment.GetSchemaVersion(),
 			SegmentID:                   segment.GetID(),
 			VChannel:                    segment.GetInsertChannel(),
 			PartitionID:                 segment.GetPartitionID(),

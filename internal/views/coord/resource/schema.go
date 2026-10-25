@@ -38,6 +38,9 @@ func (r *Resources) PrepareSchema(ctx context.Context, collectionID int64, publi
 	if err := r.LoadConfigs.ApplySchema(ctx, collectionID, published, target, bound); err != nil {
 		return err
 	}
+	if err := r.Reconciler.PrepareDataViewSchema(ctx, collectionID, published, target); err != nil {
+		return err
+	}
 	if !r.LoadConfigs.Contains(collectionID) {
 		return nil
 	}

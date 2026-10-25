@@ -499,14 +499,13 @@ The default policy first repairs/reuses collection/RG layouts as described in
 then organizes shard work into three phases and processes all dirty shards
 in one batch so decisions across shards remain coordinated.
 
-Schema is separate from LoadConfig. Before planning, the controller reads the
-latest published schema revision once per affected loaded collection and retains
-it only for that pass. Classification forces replacement of both older Up and
-older Preparing views; this check precedes the ordinary no-stacking rule.
-Allocation copies that revision into QueryViewMeta. Failed schema reads preserve
-existing views and requeue the collection. Initial/recovery and periodic passes
-perform the same read. No historical schema lookup or schema load-config identity
-is maintained.
+Schema is separate from LoadConfig. QueryView copies SchemaVersion from the
+selected immutable DataView. Broadcaster's pending target only gates admission:
+while the DataView has not reached that target, retain serving views and defer
+ordinary target preparation. DDL installs target load intent before publishing
+the supported DataView schema. Published-schema recovery remains independent.
+A new DataView/schema supersedes an older-schema Preparing view; duplicate
+notifications on the same physical/schema base do not stack preparations.
 
 The cache Reader supplies eligible nodes, actual node row totals and their
 contributions, per-segment RowNum, desired shard summaries, and current

@@ -232,3 +232,13 @@ Growing/Transforming MVCC frontiers are not introduced here.
 Validation covers per-channel timestamps including a higher CChannel tick,
 empty channels, readiness retries, segment/job persistence failures, callback
 replay, timeout during a partial commit, and initial/commit/rollback routing.
+
+## Schema ALTER completion boundary
+
+Schema-changing AlterCollection sets AckSyncUp. Allocation fencing prevents new
+schema writes from entering old segments. RecoveryStorage retains ALTER through
+pre-boundary L1 final commits (including DataView publication); only then may
+BroadcastAck acknowledge and run the DDL callback. The callback advances the
+DataView read schema directly or waits for historical Function materialization,
+then waits for QueryView handoff before publishing public schema. No extra
+Broadcast or recovery-checkpoint wait is introduced.

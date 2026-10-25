@@ -61,49 +61,59 @@ Version zero can be a real legacy version and must not double as a latest select
 Field and Function IDs retain their lifecycle identity. Drop/re-add, including
 dynamic-field disable/re-enable, does not resurrect the old IDs or resources.
 
-## 3. Classifying changes and readiness
+## 3. DataView-owned read schema
 
-Schema changes include additions, removals, and query-semantic changes with an
-unchanged column set. A new SchemaVersion alone does not prove physical readiness.
+Every immutable DataView carries its supported `SchemaVersion`. QueryView copies
+that identity from its selected DataView; Broadcaster's pending schema is a target
+for data preparation, never permission to bind an arbitrary physical snapshot to
+that schema. Successive DataViews inherit the latest schema version and cannot
+regress it. Only the schema DDL callback explicitly advances it, publishing one
+new CompactVersion even when membership and Manifest versions are unchanged.
 
-| Change | Required read capability before publication |
-| --- | --- |
-| Ordinary default/nullable field | Correct value for every historical row; a supported virtual/default projection can satisfy this without physical rewrite |
-| StructArray | Correct nullable/default projection and consistent child fields, offsets, validity and row alignment |
-| Enable dynamic field | New `$meta` FieldID and the defined empty-object behavior for historical rows |
-| BM25 / MinHash Function and outputs | Correct historical derived outputs, required statistics and the indexes required by LoadInfo; missing derived values are not ordinary NULL/default values |
-| Drop field / StructArray / Function outputs / dynamic field | New logical schema/load requirements exclude them; retained views still own their old resources |
-| TTL or other query-runtime semantic change | New immutable runtime semantics, even without physical field changes |
-| Metadata-only change | Correct schema metadata; reuse resources if their requirements did not change |
+There are exactly two schema transitions:
 
-Materialization continues deciding from the target schema versus **actual
-physical fields**, not merely comparing Segment SchemaVersion:
+1. **Direct**: deletion, metadata/runtime-only changes, and ordinary additions
+   supported by existing NULL/default projection. The callback publishes a new
+   DataView with unchanged membership/Manifest and the target SchemaVersion.
+   Physical cleanup is independent and need not finish first.
+2. **Materialized**: newly added Function outputs require historical computation.
+   DataCoord waits until the current complete sealed projection has completed
+   target schema-bump, then atomically publishes that projection and the target
+   SchemaVersion. Replacements transfer the obligation to their successors; an
+   obsolete SegmentID is never a permanent wait target. Recheck under the DataView
+   mutation lock before publishing. Wait without holding metadata/mutation locks.
 
-- Missing columns without physical drops: reconcile on the same SegmentID and
-  advance Manifest as required.
-- Dropped physical columns: full rewrite to a new SegmentID; it can also apply
-  deletes/TTL. Old views continue to reference their original bases; durable
-  object protection against GC is part of the deferred work in section 8.2.
-- No physical differences: update schema metadata without inventing a Manifest
-  change or requiring data I/O.
+ALTER uses consuming-side `AckSyncUp`. WAL allocation fencing isolates old/new
+write schemas; consuming-side Ack additionally waits for pre-ALTER L1 final
+publication. Thus the callback cannot overlook old growing data still flushing.
+Data preparation uses Broadcaster's pending target and must not await callback
+completion or recursively broadcast.
 
-Read publication does not universally wait for physical compaction. It waits
-for the capabilities above. In particular, logical removal need not wait for
-physical column deletion, whereas a new Function cannot publish before its
-required historical outputs are usable.
+The callback first installs bound index metadata and target load intent. While
+DataView's schema trails the acknowledged target, ordinary target planning waits
+and existing serving/recovery views remain retained. It then advances DataView
+(directly or after materialization), triggers planning, waits for exact target
+schema and current load configuration Up coverage, and publishes RootCoord's read
+schema. Schema and load intent must both be ready before target planning.
 
-The admission path checks whether required materialization is supported for the
-collection. Schema-bump disabled, non-V3/no-Manifest data or unsupported external
-storage must have a supported alternative or be rejected before committing an
-unsatisfiable operation. Transient compaction protection, node loss or capacity
-shortage can delay an otherwise supported operation; timeout is not rollback.
+Normal Flush/Compaction/Import publications inherit the committed DataView schema.
+They must not introduce data incapable of satisfying that schema. Destructive
+replacement results (sort, merge, clustering and schema-bump) cannot commit
+before a direct logical schema publication;
+old exact views retain their original bases. Schema-only publications survive
+recovery and callback replay is idempotent. Version zero is a real schema.
 
-Completeness includes every relevant row represented by the selected DataView
-and SN growing/retained-segment membership. Never omit an unprepared Segment to
-make a view appear Ready. Flush/final commit, Import and Compaction racing with
-preparation must preserve that membership and capability proof. If the captured
-DataView cannot satisfy a requirement, replan against the updated DataView rather
-than waiting forever or assigning it untrue resource readiness.
+No proto compatibility or legacy DataView-schema inference is provided: this
+feature is unreleased. GC of retained physical objects remains TODO.
+
+**TODO — Import/AlterSchema exclusion:** an Import frozen under an older schema
+may already be Uncommitted when a Function-adding ALTER completes. The current
+CommitImport callback does not revalidate that frozen projection and can still
+publish segments missing the new output. The intended solution is mutual
+exclusion across the Import and AlterSchema lifecycles, not merely serialization
+of their final broadcast callbacks. This exclusion is pending; this change does
+not add rejection or materialization stages to Import. The schema capability
+proof therefore excludes that concurrent operation until exclusion is enforced.
 
 ## 4. Schema acquisition and metadata ownership
 
@@ -235,11 +245,13 @@ sequenceDiagram
     B->>S: ALTER on each VChannel
     S->>S: Fence old allocation; switch write schema; retain history
     P->>S: Fetch current write schema for DML
+    S-->>B: Consuming-side ACK after old L1 final publication
     B->>C: Ordered ACK callback with schema and channel boundaries
     C->>C: Install immutable target from Broadcaster
     C->>D: Expose target schema and bound index requirements
-    C->>V: Apply desired load delta; plan target schema
-    D-->>V: Publish materialized Segment / DataView revisions
+    C->>V: Install target load intent (planning gated by DataView schema)
+    C->>D: Advance DataView schema directly or await schema-bump
+    D-->>V: Publish DataView with supported target SchemaVersion
     V->>S: Prepare target QueryView
     V->>Q: Prepare target QueryView
     Q->>S: Get exact schema and acquire retained version
@@ -262,7 +274,9 @@ The callback executes these idempotent stages:
 1. Install the target schema from the ACKed broadcast and retain its dependencies.
 2. Expose it to DataCoord before publishing bound index metadata; apply the load
    delta through the existing owner without recursively broadcasting.
-3. Trigger preparation and wait for the complete target serving obligation.
+3. Advance DataView schema directly or await materialization of the current complete
+   data set and atomically publish it with the target schema. Then trigger QueryView
+   preparation and wait for the complete target serving obligation.
 4. Atomically persist the new public read metadata/version under the existing
    collection serialization; prevent stale callback replay from regressing it.
 5. Invalidate read caches, notify view lifecycle publication, and finish. If
