@@ -34,6 +34,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/coordinator/snmanager"
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
@@ -67,6 +68,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/proxypb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/rootcoordpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message/messageutil"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/rmq"
 	"github.com/milvus-io/milvus/pkg/v3/util"
@@ -169,7 +171,10 @@ func initStreamingSystemAndCore(t *testing.T) *Core {
 	require.NoError(t, err)
 	previous := qvresource.Resource()
 	notifications := readiness.NewNotifications()
+	schemaPreparation := mockey.Mock((*testSchemaDataViews).PrepareDataViewSchema).Return(nil).Build()
+	t.Cleanup(func() { schemaPreparation.UnPatch() })
 	qvresource.Init(&qvresource.Resources{
+		Reconciler:  &testSchemaDataViews{},
 		LoadConfigs: configs, LoadManager: loadmgr.NewCollectionLoadManager(configs, nil),
 		ShardViews: &coordview.ShardViewRegistry{}, Readiness: notifications,
 	})
@@ -221,6 +226,12 @@ func initStreamingSystemAndCore(t *testing.T) *Core {
 	core.session = sessionutil.NewSessionWithEtcd(t.Context(), path, kv)
 	bapi := mock_broadcaster.NewMockBroadcastAPI(t)
 	bapi.EXPECT().Broadcast(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, msg message.BroadcastMutableMessage) (*types.BroadcastAppendResult, error) {
+		if msg.MessageType() == message.MessageTypeAlterCollection {
+			altered := message.MustAsMutableAlterCollectionMessageV2(msg)
+			if messageutil.IsSchemaChange(altered.Header()) {
+				require.True(t, msg.BroadcastHeader().AckSyncUp, "schema callback must wait for consuming-side flush completion")
+			}
+		}
 		// Stamp the header the way the real broadcaster does, control channel included.
 		msg = msg.OverwriteBroadcastHeader(1)
 		msg = message.WithBroadcastControlChannel(msg, streaming.WAL().ControlChannel())
@@ -2440,4 +2451,11 @@ func TestRootCoord_GetFileResources(t *testing.T) {
 
 func TestRootCoordSuite(t *testing.T) {
 	suite.Run(t, new(RootCoordSuite))
+}
+
+// Boundary stub: ordinary DDL unit tests do not run the DataCoord materializer.
+type testSchemaDataViews struct{ qvresource.DataViewReconciler }
+
+func (*testSchemaDataViews) PrepareDataViewSchema(context.Context, int64, *schemapb.CollectionSchema, *schemapb.CollectionSchema) error {
+	panic("mock with mockey")
 }
