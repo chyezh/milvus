@@ -2232,8 +2232,8 @@ TEST(TestTTLFieldFilter, TestMaskWithTTLField) {
 
     // Execute query expression - this will trigger CompileExpressions which
     // automatically adds TTL field filtering expression
-    BitsetType bitset =
-        query::ExecuteQueryExpr(plan, segment.get(), active_count, query_ts);
+    BitsetType bitset = query::ExecuteQueryExpr(
+        plan, segment.get(), active_count, query_ts, schema);
 
     // Note: ExecuteQueryExpr already flips the bitset, so bitset[i] = true
     // means the row matches (not expired), bitset[i] = false means expired
@@ -2366,8 +2366,8 @@ TEST(TestTTLFieldFilter, TestMaskWithNullableTTLField) {
 
     // Execute query expression - this will trigger CompileExpressions which
     // automatically adds TTL field filtering expression
-    BitsetType bitset =
-        query::ExecuteQueryExpr(plan, segment.get(), active_count, query_ts);
+    BitsetType bitset = query::ExecuteQueryExpr(
+        plan, segment.get(), active_count, query_ts, schema);
 
     // Note: ExecuteQueryExpr already flips the bitset, so bitset[i] = true
     // means the row matches (not expired), bitset[i] = false means expired
