@@ -350,8 +350,8 @@ func (mp *MilvusProcess) ForceStop() error {
 
 // waitForReady waits for the Milvus process to be ready.
 func (mp *MilvusProcess) waitForReady(ctx context.Context) error {
-	mp.GetClient(ctx)
-	return nil
+	_, err := mp.GetClient(ctx)
+	return err
 }
 
 // GetClient gets the client for the Milvus process.
@@ -423,7 +423,7 @@ func (mp *MilvusProcess) getClient(ctx context.Context) (nodeClient, error) {
 	case "querynode":
 		return newQueryNodeClient(conn), nil
 	case "streamingnode":
-		return newQueryNodeClient(conn), nil
+		return newStreamingNodeClient(conn), nil
 	default:
 		return nil, fmt.Errorf("unknown role: %s", mp.role)
 	}
@@ -435,8 +435,6 @@ func (mp *MilvusProcess) GetAddress(ctx context.Context) (string, error) {
 	switch mp.role {
 	case typeutil.MixCoordRole:
 		key = path.Join(mp.rootPath, "meta/session", mp.role)
-	case typeutil.StreamingNodeRole:
-		key = path.Join(mp.rootPath, "meta/session", typeutil.QueryNodeRole) + "-" + strconv.FormatInt(mp.nodeID, 10)
 	default:
 		key = path.Join(mp.rootPath, "meta/session", mp.role) + "-" + strconv.FormatInt(mp.nodeID, 10)
 	}
