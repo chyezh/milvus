@@ -184,8 +184,8 @@ type versionRefCounter struct {
 }
 
 type collectionState struct {
-	changed  *syncutil.VersionedNotifier
 	mu       sync.Mutex
+	changed  *syncutil.VersionedNotifier
 	id       int64
 	latest   *versionEntry
 	versions map[qviews.DataVersion]*versionEntry

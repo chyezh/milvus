@@ -21,10 +21,11 @@ See [Balancer design](balancer_design.md) for the allocation algorithm,
 ## 1. Contract and ownership
 
 `cache.Cache` holds placement, load-configuration and DataView facts required for
-reconciliation. The latest collection schema revision is read separately from
-Coord metadata once per affected loaded collection per planning pass; it is not
-persisted in LoadConfig or cached as a historical schema. See README's Schema
-handoff section. Upstream managers
+reconciliation. DataView carries the supported read SchemaVersion, which new
+QueryViews inherit. The authorized DDL target is read separately once per
+affected loaded collection per planning pass, only to gate target preparation
+and recover retained published views. It does not override DataView schema and
+is not persisted in LoadConfig. See [Schema evolution](schema_evolution.md). Upstream managers
 remain the authoritative owners and synchronously publish their committed
 in-memory state through registered hooks. The cache owns the derived indexes
 and aggregates. Balancer reads the cache through `Get` and key iteration;

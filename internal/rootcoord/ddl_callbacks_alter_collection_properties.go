@@ -207,12 +207,16 @@ func (c *Core) broadcastAlterCollectionForAlterCollection(ctx context.Context, r
 	// fill the put load config if rg or replica number is changed.
 	udpates.AlterLoadConfig = c.getAlterLoadConfigOfAlterCollection(coll.Properties, udpates.Properties)
 
+	var broadcastOptions []message.OptBuildBroadcast
+	if messageutil.IsSchemaChange(header) {
+		broadcastOptions = append(broadcastOptions, message.OptBuildBroadcastAckSyncUp())
+	}
 	msg := message.NewAlterCollectionMessageBuilderV2().
 		WithHeader(header).
 		WithBody(&messagespb.AlterCollectionMessageBody{
 			Updates: udpates,
 		}).
-		WithBroadcast(coll.VirtualChannelNames).
+		WithBroadcast(coll.VirtualChannelNames, broadcastOptions...).
 		MustBuildBroadcast()
 	if err := c.broadcastCollectionAlter(ctx, broadcaster, msg); err != nil {
 		return err
@@ -337,7 +341,7 @@ func (c *Core) broadcastAlterCollectionForAlterDynamicField(ctx context.Context,
 				Properties: properties,
 			},
 		}).
-		WithBroadcast(coll.VirtualChannelNames).
+		WithBroadcast(coll.VirtualChannelNames, message.OptBuildBroadcastAckSyncUp()).
 		MustBuildBroadcast()
 	if err := c.broadcastCollectionAlter(ctx, broadcaster, msg); err != nil {
 		return err
@@ -396,7 +400,7 @@ func (c *Core) broadcastDisableDynamicField(ctx context.Context, req *milvuspb.A
 				Properties: properties,
 			},
 		}).
-		WithBroadcast(coll.VirtualChannelNames).
+		WithBroadcast(coll.VirtualChannelNames, message.OptBuildBroadcastAckSyncUp()).
 		MustBuildBroadcast()
 	if err := c.broadcastCollectionAlter(ctx, bc, msg); err != nil {
 		return err
