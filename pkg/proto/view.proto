@@ -99,6 +99,10 @@ message QueryViewOfStreamingNode {
     repeated ClusteredPartitionStats partition_stats = 1;
 }
 
+// Immutable statistics-object reference scoped by the enclosing QueryViewMeta's
+// vchannel and collection. Each partition appears at most once; only positive
+// versions are emitted. Runtime ownership/refcounts belong to the QueryView's
+// resource manager, not this wire descriptor.
 message ClusteredPartitionStats {
     int64 partition_id = 1;
     int64 version = 2;
