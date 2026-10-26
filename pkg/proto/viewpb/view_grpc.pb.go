@@ -282,7 +282,7 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ViewQueryServiceClient interface {
-	// StreamingNode only: latest locally Up replicas for subscribed VChannels.
+	// SN-only directory, scoped to the routed PChannel owner/term.
 	WatchVChannelReplicas(ctx context.Context, opts ...grpc.CallOption) (ViewQueryService_WatchVChannelReplicasClient, error)
 	// SearchOnView executes a vector search on segments belonging to the given view version.
 	SearchOnView(ctx context.Context, in *SearchOnViewRequest, opts ...grpc.CallOption) (*SearchOnViewResponse, error)
@@ -361,7 +361,7 @@ func (c *viewQueryServiceClient) StatisticsOnView(ctx context.Context, in *Stati
 // All implementations should embed UnimplementedViewQueryServiceServer
 // for forward compatibility
 type ViewQueryServiceServer interface {
-	// StreamingNode only: latest locally Up replicas for subscribed VChannels.
+	// SN-only directory, scoped to the routed PChannel owner/term.
 	WatchVChannelReplicas(ViewQueryService_WatchVChannelReplicasServer) error
 	// SearchOnView executes a vector search on segments belonging to the given view version.
 	SearchOnView(context.Context, *SearchOnViewRequest) (*SearchOnViewResponse, error)
