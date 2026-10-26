@@ -1158,7 +1158,7 @@ func (t *QueryTask) executeByQueryView(ctx context.Context) error {
 				lastErr = err
 				continue
 			}
-			return queryViewLoadError(ctx, t.node, t.GetCollectionID(), t.GetPartitionIDs(), err)
+			return QueryViewLoadError(ctx, t.node, t.GetCollectionID(), t.GetPartitionIDs(), err)
 		}
 		if result == nil {
 			return merr.WrapErrServiceInternalMsg("QueryView Query returned a nil result")
@@ -1180,7 +1180,7 @@ func (t *QueryTask) executeByQueryView(ctx context.Context) error {
 					lastErr = attemptErr
 					continue
 				}
-				return queryViewLoadError(ctx, t.node, t.GetCollectionID(), t.GetPartitionIDs(), attemptErr)
+				return QueryViewLoadError(ctx, t.node, t.GetCollectionID(), t.GetPartitionIDs(), attemptErr)
 			}
 			if closeErr != nil {
 				return closeErr
@@ -1197,7 +1197,7 @@ func (t *QueryTask) executeByQueryView(ctx context.Context) error {
 		}
 		return nil
 	}
-	return queryViewLoadError(ctx, t.node, t.GetCollectionID(), t.GetPartitionIDs(), lastErr)
+	return QueryViewLoadError(ctx, t.node, t.GetCollectionID(), t.GetPartitionIDs(), lastErr)
 }
 
 func (t *QueryTask) PostExecute(ctx context.Context) error {
@@ -1417,6 +1417,7 @@ func (t *QueryTask) consumeQueryResultStream(stream queryutil.ReduceStream) (*in
 		output.HasMoreResult = output.GetHasMoreResult() || chunk.GetHasMoreResult()
 		output.ScannedRemoteBytes += chunk.GetScannedRemoteBytes()
 		output.ScannedTotalBytes += chunk.GetScannedTotalBytes()
+		output.FeatureBits |= chunk.GetFeatureBits()
 		output.MvccTimestamp = max(output.GetMvccTimestamp(), chunk.GetMvccTimestamp())
 		if cost := chunk.GetCostAggregation(); cost != nil {
 			totalRelatedDataSize := output.GetCostAggregation().GetTotalRelatedDataSize() + cost.GetTotalRelatedDataSize()
