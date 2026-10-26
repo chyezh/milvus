@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 
+	"github.com/milvus-io/milvus/internal/util/streamingutil/service/balancer/picker"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/contextutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/lazygrpc"
 	"github.com/milvus-io/milvus/internal/views/viewerror"
@@ -60,8 +61,16 @@ func executeViewQueryRPC[T any](
 		var zero T
 		return zero, err
 	}
-	resp, err := call(contextutil.WithPickServerID(ctx, nodeID), client)
-	return resp, viewerror.ConvertViewError(method, err)
+	var changed <-chan struct{}
+	if qvc.owner.sessionChanges != nil {
+		changed = qvc.owner.sessionChanges.Changed()
+	}
+	resp, err := call(contextutil.WithFailFastPick(contextutil.WithPickServerID(ctx, nodeID)), client)
+	err = viewerror.ConvertViewError(method, err)
+	if picker.IsErrSubConnNoExist(err) {
+		err = &viewerror.NodeSessionUnavailable{Cause: err, Changed: changed}
+	}
+	return resp, err
 }
 
 func (qvc *queryViewClient) close() {
