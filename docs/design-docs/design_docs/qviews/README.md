@@ -31,6 +31,8 @@ per-worker/subquery selection, and empty-shard MVCC/result normalization.
 
 For the detailed query-path flow, service boundary, client orchestration, and
 shard discovery design, see [Query Client Design](query/query_client.md).
+For VChannel replica discovery from StreamingNode, see
+[Replica Discovery](query/replica_discovery.md).
 For node-side Phase 1 planning and Phase 2 execution, see
 [Query Plan Node-Side Design](query/query_plan.md) and
 [Query Execution Node-Side Design](query/query_execution.md).
