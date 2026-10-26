@@ -534,3 +534,10 @@ for its serving views. Full mixed-version upgrade validation is a separate check
 
 [DDL visibility](ddl_visibility.md) specifies the DataVersion and configuration
 fences and the operations still deferred.
+
+## Partition statistics and pruning
+
+[Global segment pruning](query/segment_pruning.md) defines immutable DataView
+statistics references, SN resource readiness and shared ownership, and per-worker
+Plan selections. Scalar and vector clustering pruning run on SN during Phase 1;
+QN applies the recorded selection before acquiring execution handles.

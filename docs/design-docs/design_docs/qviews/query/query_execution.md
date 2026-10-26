@@ -586,3 +586,10 @@ through prediction. Idle models expire after the configured file-resource cache
 TTL; removal and shutdown cannot destroy an active model. Reusing a resource name
 with a new ID never substitutes the model held by an executing query. QN/Proxy
 without a pull manager retain their existing file-resource synchronization path.
+
+## Partition statistics and pruning
+
+[Global segment pruning](../query/segment_pruning.md) defines immutable DataView
+statistics references, SN resource readiness and shared ownership, and per-worker
+Plan selections. Scalar and vector clustering pruning run on SN during Phase 1;
+QN applies the recorded selection before acquiring execution handles.
