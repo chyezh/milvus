@@ -5,12 +5,16 @@ from common.common_type import CaseLabel
 
 
 class TestMilvusClientPartitionReleaseHandoff(TestMilvusClientV2Base):
-    @pytest.mark.tags(CaseLabel.L1)
+    @pytest.mark.parametrize(
+        "replica_num",
+        [
+            pytest.param(1, marks=pytest.mark.tags(CaseLabel.L1), id="single-replica"),
+            # The ClusterOnly deployment must provide at least 2 SNs and 2 QNs.
+            pytest.param(2, marks=pytest.mark.tags(CaseLabel.ClusterOnly), id="two-replicas"),
+        ],
+    )
     @pytest.mark.parametrize("sealed", [False, True], ids=["growing", "sealed"])
-    def test_release_partition_waits_for_serving_handoff(self, sealed, request):
-        # --replica_num describes the test deployment. Multi-replica runs need
-        # at least that many StreamingNodes and QueryNodes.
-        replica_num = int(request.config.getoption("--replica_num"))
+    def test_release_partition_waits_for_serving_handoff(self, sealed, replica_num):
         client = self._client()
         name = cf.gen_collection_name_by_testcase_name()
         self.create_collection(client, name, dimension=4, shards_num=2, consistency_level="Strong")
