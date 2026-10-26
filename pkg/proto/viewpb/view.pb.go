@@ -767,6 +767,10 @@ func (x *QueryViewOfStreamingNode) GetPartitionStats() []*ClusteredPartitionStat
 	return nil
 }
 
+// Immutable statistics-object reference scoped by the enclosing QueryViewMeta's
+// vchannel and collection. Each partition appears at most once; only positive
+// versions are emitted. Runtime ownership/refcounts belong to the QueryView's
+// resource manager, not this wire descriptor.
 type ClusteredPartitionStats struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
