@@ -163,3 +163,10 @@ A published RestoreSnapshot, like CreateCollection, initializes both frontiers
 for its channel. Observing its append alone cannot register a query snapshot;
 late append callbacks cannot overwrite newer published progress. The
 RestoreSnapshot creation workflow is wired by the production integration.
+
+## Partition statistics and pruning
+
+[Global segment pruning](../query/segment_pruning.md) defines immutable DataView
+statistics references, SN resource readiness and shared ownership, and per-worker
+Plan selections. Scalar and vector clustering pruning run on SN during Phase 1;
+QN applies the recorded selection before acquiring execution handles.
