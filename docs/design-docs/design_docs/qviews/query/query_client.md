@@ -159,9 +159,9 @@ without replanning. See [plan and MVCC contracts](query_plan.md) and
 
 ## Runtime row statistics
 
-The extracted `Legacy().Statistics` component is available to future Proxy
-callers. Production Proxy routing remains separate integration work. This combined
-baseline includes both SN and QN providers and shared contracts.
+The experimental Proxy `GetStatistics` uses `Legacy().Statistics` for loaded
+partitions. Unloaded partitions retain the DataCoord metadata-count path;
+`GetCollectionStatistics` and `GetPartitionStatistics` are unchanged.
 
 For each shard the client sends a `statistics_request` through `GetQueryPlan`.
 The caller supplies its normalized timestamp as the separate `barrierMVCC`
