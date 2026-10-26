@@ -7,7 +7,10 @@ from common.common_type import CaseLabel
 class TestMilvusClientPartitionReleaseHandoff(TestMilvusClientV2Base):
     @pytest.mark.tags(CaseLabel.L1)
     @pytest.mark.parametrize("sealed", [False, True], ids=["growing", "sealed"])
-    def test_release_partition_waits_for_serving_handoff(self, sealed):
+    def test_release_partition_waits_for_serving_handoff(self, sealed, request):
+        # --replica_num describes the test deployment. Multi-replica runs need
+        # at least that many StreamingNodes and QueryNodes.
+        replica_num = int(request.config.getoption("--replica_num"))
         client = self._client()
         name = cf.gen_collection_name_by_testcase_name()
         self.create_collection(client, name, dimension=4, shards_num=2, consistency_level="Strong")
@@ -15,7 +18,7 @@ class TestMilvusClientPartitionReleaseHandoff(TestMilvusClientV2Base):
             client.create_partition(name, "p1")
             client.create_partition(name, "p2")
             client.release_collection(name)
-            client.load_partitions(name, ["p1", "p2"], replica_number=2)
+            client.load_partitions(name, ["p1", "p2"], replica_number=replica_num)
             for partition, start in [("p1", 0), ("p2", 10)]:
                 client.insert(
                     name,
@@ -41,11 +44,11 @@ class TestMilvusClientPartitionReleaseHandoff(TestMilvusClientV2Base):
             assert ids() == set(range(10, 15))
             client.release_partitions(name, ["p1"])
             assert ids() == set(range(10, 15))
-            client.load_partitions(name, ["p1"], replica_number=2)
+            client.load_partitions(name, ["p1"], replica_number=replica_num)
             assert ids() == set(range(5)) | set(range(10, 15))
             client.release_partitions(name, ["p1", "p2"])
             client.release_partitions(name, ["p1", "p2"])
-            client.load_partitions(name, ["p1"], replica_number=2)
+            client.load_partitions(name, ["p1"], replica_number=replica_num)
             assert ids() == set(range(5))
         finally:
             client.drop_collection(name)
