@@ -18,6 +18,7 @@ package querycoordv2
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/cockroachdb/errors"
 	"github.com/samber/lo"
@@ -174,7 +175,7 @@ func (s *Server) SuspendBalance(ctx context.Context, req *querypb.SuspendBalance
 		return merr.Status(err), nil
 	}
 
-	err := paramtable.Get().Save(paramtable.Get().QueryViewCfg.BalancerOptimizationEnabled.Key, "false")
+	err := alterBalanceConfig(false)
 	if err != nil {
 		log.Warn(ctx, errMsg, mlog.Err(err))
 		return merr.Status(err), nil
@@ -194,13 +195,24 @@ func (s *Server) ResumeBalance(ctx context.Context, req *querypb.ResumeBalanceRe
 		return merr.Status(err), nil
 	}
 
-	err := paramtable.Get().Save(paramtable.Get().QueryViewCfg.BalancerOptimizationEnabled.Key, "true")
+	err := alterBalanceConfig(true)
 	if err != nil {
 		log.Warn(ctx, errMsg, mlog.Err(err))
 		return merr.Status(err), nil
 	}
 
 	return merr.Success(), nil
+}
+
+// alterBalanceConfig uses the same persistent update and synchronous local
+// refresh as AlterConfig. A process-local Save would mask later etcd updates.
+func alterBalanceConfig(enabled bool) error {
+	manager := paramtable.GetBaseTable().Manager()
+	source, ok := manager.GetEtcdSource()
+	if !ok {
+		return merr.WrapErrServiceUnavailableMsg("cannot alter balance configuration: etcd source is not enabled")
+	}
+	return manager.UpdateConfigInEtcd(source, paramtable.Get().QueryViewCfg.BalancerOptimizationEnabled.Key, strconv.FormatBool(enabled))
 }
 
 // CheckBalanceStatus checks whether balance is active or suspended

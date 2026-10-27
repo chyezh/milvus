@@ -1,7 +1,9 @@
 package rollingupgrade
 
 import (
+	"path"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/suite"
 	"google.golang.org/protobuf/proto"
@@ -10,6 +12,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/pkg/v3/common"
+	"github.com/milvus-io/milvus/pkg/v3/config"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
@@ -34,6 +37,31 @@ func (s *ManualPlacementSuite) TestMoveSegments() {
 	balance, err := c.MixCoordClient.CheckBalanceStatus(ctx, &querypb.CheckBalanceStatusRequest{})
 	s.Require().NoError(merr.CheckRPCCall(balance, err))
 	s.Require().True(balance.GetIsActive())
+	status, err = c.MixCoordClient.SuspendBalance(ctx, &querypb.SuspendBalanceRequest{})
+	s.Require().NoError(merr.CheckRPCCall(status, err))
+	balance, err = c.MixCoordClient.CheckBalanceStatus(ctx, &querypb.CheckBalanceStatusRequest{})
+	s.Require().NoError(merr.CheckRPCCall(balance, err))
+	s.Require().False(balance.GetIsActive())
+	key := paramtable.Get().QueryViewCfg.BalancerOptimizationEnabled.Key
+	stored, err := c.EtcdCli.Get(ctx, path.Join(c.RootPath(), "config", config.EtcdConfigKey(key)))
+	s.Require().NoError(err)
+	s.Require().Len(stored.Kvs, 1)
+	s.Require().Equal("false", string(stored.Kvs[0].Value))
+	// A new reader recovers the persisted setting, then changes it through
+	// AlterConfig's storage entry point from outside the coordinator process.
+	manager := config.NewManager()
+	defer manager.Close()
+	sourceConfig, err := config.NewEtcdSource(c.EtcdCli, &config.EtcdInfo{KeyPrefix: c.RootPath(), RefreshInterval: time.Hour})
+	s.Require().NoError(err)
+	s.Require().NoError(manager.AddSource(sourceConfig))
+	_, recovered, err := manager.GetConfig(key)
+	s.Require().NoError(err)
+	s.Require().Equal("false", recovered)
+	s.Require().NoError(manager.AlterConfigsInEtcd(sourceConfig, map[string]string{key: "true"}, nil))
+	s.Require().Eventually(func() bool {
+		resp, err := c.MixCoordClient.CheckBalanceStatus(ctx, &querypb.CheckBalanceStatusRequest{})
+		return merr.CheckRPCCall(resp, err) == nil && resp.GetIsActive()
+	}, 10*time.Second, 100*time.Millisecond, "a previous SuspendBalance must not mask subsequent AlterConfig")
 	status, err = c.MixCoordClient.SuspendBalance(ctx, &querypb.SuspendBalanceRequest{})
 	s.Require().NoError(merr.CheckRPCCall(status, err))
 	balance, err = c.MixCoordClient.CheckBalanceStatus(ctx, &querypb.CheckBalanceStatusRequest{})
