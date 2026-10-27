@@ -1243,3 +1243,32 @@ acknowledgement. If LoadConfig is already absent, repeat release drains the
 Balancer and waits for final Registry removal under the same collection lock.
 Physical cleanup of older views after a partial release continues through the
 normal serving lease/reference protocol; fresh Phase 1 plans select the new Up.
+
+## Manual placement
+
+`ManualPlace(ctx, scope, modify)` is the common management operation. The scope
+selects a collection and/or source node through resident shard indexes; callers
+do not resolve ShardIDs. The callback receives an independent
+`map[ShardID]*QueryViewAtCoordBuilder` and changes placement only. Balancer keeps
+replica/RG eligibility and submission serialization inside this operation.
+Neither collection-wide loading progress nor an external LoadConfig lock is a
+precondition. A thin segment-move adapter selects destinations and edits builders.
+
+Under the reconcile lock, snapshot each affected manager's newest usable target
+(Preparing/Ready before an older Up), run the callback once, validate membership,
+metadata identity and node eligibility for all changes, then submit changed
+builders. The manager rechecks the exact source version before acceptance,
+including after acquiring DataView references. Configuration/topology changes
+invalidate planning snapshots or are reconciled by the normal controller.
+Unchanged builders create no views. Each accepted view carries a one-shot
+completion attached before callbacks can run, reporting its first Up or failed
+preparation; a newer successful view never completes an older request.
+
+Release the reconcile lock before waiting. Waits are event-driven, bounded by
+request context and a server timeout, and return per-shard exact versions and
+outcomes. Cancellation ends observation, not the accepted handoff. Return partial
+results on submission failure or cancellation; this is not a cross-shard atomic
+transaction. Completion state is in-memory and lives only with the operation/view.
+`LoadBalance` and `TransferSegment` share this synchronous contract. Copy mode is
+not supported by this single-placement operation. Successful placement is not a
+permanent pin and does not assert that retained old-view resources are gone.

@@ -24,7 +24,6 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
-	"github.com/milvus-io/milvus/internal/coordinator/snmanager"
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/querycoordv2/session"
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
@@ -371,79 +370,20 @@ func (s *Server) ResumeNode(ctx context.Context, req *querypb.ResumeNodeRequest)
 // if no segment_id specified, default to transfer all segment on the source node.
 // if no target_nodeId specified, default to move segment to all other nodes
 func (s *Server) TransferSegment(ctx context.Context, req *querypb.TransferSegmentRequest) (*commonpb.Status, error) {
-	log := mlog.With()
-
-	log.Info(ctx, "TransferSegment request received",
-		mlog.Int64("source", req.GetSourceNodeID()),
-		mlog.Int64("dest", req.GetTargetNodeID()),
-		mlog.Int64("segment", req.GetSegmentID()))
-
 	if err := merr.CheckHealthy(s.State()); err != nil {
-		msg := "failed to load balance"
-		log.Warn(ctx, msg, mlog.Err(err))
-		return merr.Status(merr.Wrapf(err, "%s", msg)), nil
-	}
-
-	// check whether srcNode is healthy
-	srcNode := req.GetSourceNodeID()
-	if err := s.isStoppingNode(ctx, srcNode); err != nil {
-		err := merr.WrapErrNodeNotAvailable(srcNode, "the source node is invalid")
 		return merr.Status(err), nil
 	}
-
-	replicas := s.meta.GetByNode(ctx, req.GetSourceNodeID())
-	for _, replica := range replicas {
-		// when no dst node specified, default to use all other nodes in same
-		dstNodeSet := typeutil.NewUniqueSet()
-		if req.GetToAllNodes() {
-			dstNodeSet.Insert(replica.GetRWNodes()...)
-		} else {
-			// check whether dstNode is healthy
-			if err := s.isStoppingNode(ctx, req.GetTargetNodeID()); err != nil {
-				err := merr.WrapErrNodeNotAvailable(srcNode, "the target node is invalid")
-				return merr.Status(err), nil
-			}
-			if streamingutil.IsStreamingServiceEnabled() {
-				sqn := snmanager.StaticStreamingNodeManager.GetStreamingQueryNodeIDs()
-				if sqn.Contain(req.GetTargetNodeID()) {
-					return merr.Status(
-						merr.WrapErrParameterInvalidMsg("embedded query node in streaming node can't be the destination of transfer segment")), nil
-				}
-			}
-			dstNodeSet.Insert(req.GetTargetNodeID())
-		}
-		dstNodeSet.Remove(srcNode)
-
-		// check sealed segment list
-		segments := s.dist.SegmentDistManager.GetByFilter(meta.WithCollectionID(replica.GetCollectionID()), meta.WithNodeID(srcNode))
-
-		toBalance := typeutil.NewSet[*meta.Segment]()
-		if req.GetTransferAll() {
-			toBalance.Insert(segments...)
-		} else {
-			// check whether sealed segment exist
-			segment, ok := lo.Find(segments, func(s *meta.Segment) bool { return s.GetID() == req.GetSegmentID() })
-			if !ok {
-				err := merr.WrapErrSegmentNotFound(req.GetSegmentID(), "segment not found in source node")
-				return merr.Status(err), nil
-			}
-
-			existInTarget := s.targetMgr.GetSealedSegment(ctx, segment.GetCollectionID(), segment.GetID(), meta.CurrentTarget) != nil
-			if !existInTarget {
-				log.Info(ctx, "segment doesn't exist in current target, skip it", mlog.Int64("segmentID", req.GetSegmentID()))
-			} else {
-				toBalance.Insert(segment)
-			}
-		}
-
-		err := s.balanceSegments(ctx, replica.GetCollectionID(), replica, srcNode, dstNodeSet.Collect(), toBalance.Collect(), false, req.GetCopyMode())
-		if err != nil {
-			msg := "failed to balance segments"
-			log.Warn(ctx, msg, mlog.Err(err))
-			return merr.Status(merr.Wrapf(err, "%s", msg)), nil
-		}
+	if req.GetCopyMode() {
+		return merr.Status(merr.Wrap(merr.ErrServiceUnimplemented, "QueryView manual placement does not support copy mode")), nil
 	}
-	return merr.Success(), nil
+	var destinations, segments []int64
+	if !req.GetToAllNodes() {
+		destinations = []int64{req.GetTargetNodeID()}
+	}
+	if !req.GetTransferAll() {
+		segments = []int64{req.GetSegmentID()}
+	}
+	return merr.Status(s.manualMoveSegments(ctx, 0, req.GetSourceNodeID(), destinations, segments)), nil
 }
 
 // transfer channel from source to target,
