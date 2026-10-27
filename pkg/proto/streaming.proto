@@ -1038,14 +1038,13 @@ message ReplicatePChannelMeta {
 // native gRPC errors; analyzer failures are carried by the response Status.
 message StreamingNodeRunAnalyzerRequest {
     repeated bytes placeholder = 1;
-    reserved 2, 3;
     oneof source {
-        StreamingInlineAnalyzer inline_analyzer = 4;
-        StreamingFieldAnalyzer field_analyzer = 5;
+        StreamingInlineAnalyzer inline_analyzer = 2;
+        StreamingFieldAnalyzer field_analyzer = 3;
     }
     oneof operation {
-        TokenizeOptions tokenize = 6;
-        PhraseMatchOptions phrase_match = 7;
+        TokenizeOptions tokenize = 4;
+        PhraseMatchOptions phrase_match = 5;
     }
 }
 message TokenizeOptions {
