@@ -491,63 +491,8 @@ func (s *Server) ClearReadTaskQueue(ctx context.Context, req *internalpb.ClearRe
 	return resp, nil
 }
 
+// Deprecated: QueryView migration APIs wait for the accepted view to become Up.
+// Resource-ID coverage cannot establish migration completion or safe node drain.
 func (s *Server) CheckQueryNodeDistribution(ctx context.Context, req *querypb.CheckQueryNodeDistributionRequest) (*commonpb.Status, error) {
-	log := mlog.With()
-
-	log.Info(ctx, "CheckQueryNodeDistribution request received",
-		mlog.Int64("source", req.GetSourceNodeID()),
-		mlog.Int64("dest", req.GetTargetNodeID()))
-
-	errMsg := "failed to check query node distribution"
-	if err := merr.CheckHealthy(s.State()); err != nil {
-		log.Warn(ctx, errMsg, mlog.Err(err))
-		return merr.Status(err), nil
-	}
-
-	sourceNode := s.nodeMgr.Get(req.GetSourceNodeID())
-	if sourceNode == nil {
-		err := merr.WrapErrNodeNotFound(req.GetSourceNodeID(), "source node not found")
-		log.Warn(ctx, errMsg, mlog.Err(err))
-		return merr.Status(err), nil
-	}
-
-	targetNode := s.nodeMgr.Get(req.GetTargetNodeID())
-	if targetNode == nil {
-		err := merr.WrapErrNodeNotFound(req.GetTargetNodeID(), "target node not found")
-		log.Warn(ctx, errMsg, mlog.Err(err))
-		return merr.Status(err), nil
-	}
-
-	// check channel list
-	channelOnSrc := s.dist.ChannelDistManager.GetByFilter(meta.WithNodeID2Channel(req.GetSourceNodeID()))
-	channelOnDst := s.dist.ChannelDistManager.GetByFilter(meta.WithNodeID2Channel(req.GetTargetNodeID()))
-	channelDstMap := lo.SliceToMap(channelOnDst, func(ch *meta.DmChannel) (string, *meta.DmChannel) {
-		return ch.GetChannelName(), ch
-	})
-	for _, ch := range channelOnSrc {
-		if s.targetMgr.GetDmChannel(ctx, ch.GetCollectionID(), ch.GetChannelName(), meta.CurrentTargetFirst) == nil {
-			continue
-		}
-
-		if _, ok := channelDstMap[ch.GetChannelName()]; !ok {
-			return merr.Status(merr.WrapErrChannelLack(ch.GetChannelName())), nil
-		}
-	}
-
-	// check whether all segments exist in source node has been loaded in target node
-	segmentOnSrc := s.dist.SegmentDistManager.GetByFilter(meta.WithNodeID(req.GetSourceNodeID()))
-	segmentOnDst := s.dist.SegmentDistManager.GetByFilter(meta.WithNodeID(req.GetTargetNodeID()))
-	segmentDstMap := lo.SliceToMap(segmentOnDst, func(s *meta.Segment) (int64, *meta.Segment) {
-		return s.GetID(), s
-	})
-	for _, segment := range segmentOnSrc {
-		if s.targetMgr.GetSealedSegment(ctx, segment.GetCollectionID(), segment.GetID(), meta.CurrentTargetFirst) == nil {
-			continue
-		}
-
-		if _, ok := segmentDstMap[segment.GetID()]; !ok {
-			return merr.Status(merr.WrapErrSegmentLack(segment.GetID())), nil
-		}
-	}
-	return merr.Success(), nil
+	return merr.Status(merr.Wrap(merr.ErrServiceUnimplemented, "CheckQueryNodeDistribution is deprecated; LoadBalance and TransferSegment wait for QueryView handoff, but do not guarantee safe node shutdown")), nil
 }

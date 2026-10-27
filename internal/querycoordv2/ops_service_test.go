@@ -249,94 +249,26 @@ func (suite *OpsServiceSuite) TestGetQueryNodeDistribution() {
 	suite.Equal(2, len(resp.GetSealedSegmentIDs()))
 }
 
-func (suite *OpsServiceSuite) TestCheckQueryNodeDistribution() {
-	// test server unhealthy
-	suite.server.UpdateStateCode(commonpb.StateCode_Abnormal)
-	ctx := context.Background()
-	resp, err := suite.server.CheckQueryNodeDistribution(ctx, &querypb.CheckQueryNodeDistributionRequest{})
-	suite.NoError(err)
-	suite.False(merr.Ok(resp))
-
-	// test node not found
-	suite.server.UpdateStateCode(commonpb.StateCode_Healthy)
-	resp, err = suite.server.CheckQueryNodeDistribution(ctx, &querypb.CheckQueryNodeDistributionRequest{
-		TargetNodeID: 2,
-	})
-	suite.NoError(err)
-	suite.False(merr.Ok(resp))
-	suite.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
-		NodeID:   1,
-		Address:  "localhost",
-		Hostname: "localhost",
-	}))
-
-	resp, err = suite.server.CheckQueryNodeDistribution(ctx, &querypb.CheckQueryNodeDistributionRequest{
-		SourceNodeID: 1,
-	})
-	suite.NoError(err)
-	suite.False(merr.Ok(resp))
-
-	suite.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
-		NodeID:   1,
-		Address:  "localhost",
-		Hostname: "localhost",
-	}))
-	// test success
-	channels := []*meta.DmChannel{
-		{
-			VchannelInfo: &datapb.VchannelInfo{
-				CollectionID: 1,
-				ChannelName:  "channel1",
-			},
-			Node: 1,
-		},
-		{
-			VchannelInfo: &datapb.VchannelInfo{
-				CollectionID: 1,
-				ChannelName:  "channel2",
-			},
-			Node: 1,
-		},
+func (suite *OpsServiceSuite) TestCheckQueryNodeDistributionDeprecated() {
+	// A deprecated endpoint must not read the retired distribution or Target,
+	// nor report success merely because the old resource sets are empty.
+	suite.server.nodeMgr = nil
+	suite.server.dist = nil
+	suite.server.targetMgr = nil
+	for _, state := range []commonpb.StateCode{commonpb.StateCode_Healthy, commonpb.StateCode_Abnormal} {
+		suite.server.UpdateStateCode(state)
+		for _, req := range []*querypb.CheckQueryNodeDistributionRequest{
+			{},
+			{SourceNodeID: 1, TargetNodeID: 2},
+			{SourceNodeID: 1, TargetNodeID: 1},
+		} {
+			resp, err := suite.server.CheckQueryNodeDistribution(suite.T().Context(), req)
+			suite.NoError(err)
+			suite.ErrorIs(merr.Error(resp), merr.ErrServiceUnimplemented)
+			suite.Contains(resp.GetReason(), "deprecated")
+			suite.Contains(resp.GetReason(), "LoadBalance and TransferSegment")
+		}
 	}
-
-	segments := []*meta.Segment{
-		{
-			SegmentInfo: &datapb.SegmentInfo{
-				ID:            1,
-				CollectionID:  1,
-				PartitionID:   1,
-				InsertChannel: "channel1",
-			},
-			Node: 1,
-		},
-		{
-			SegmentInfo: &datapb.SegmentInfo{
-				ID:            2,
-				CollectionID:  1,
-				PartitionID:   1,
-				InsertChannel: "channel2",
-			},
-			Node: 1,
-		},
-	}
-	suite.dist.ChannelDistManager.Update(1, channels...)
-	suite.dist.SegmentDistManager.Update(1, segments...)
-
-	resp, err = suite.server.CheckQueryNodeDistribution(ctx, &querypb.CheckQueryNodeDistributionRequest{
-		SourceNodeID: 1,
-		TargetNodeID: 2,
-	})
-	suite.NoError(err)
-	suite.False(merr.Ok(resp))
-
-	suite.dist.ChannelDistManager.Update(2, channels...)
-	suite.dist.SegmentDistManager.Update(2, segments...)
-	resp, err = suite.server.CheckQueryNodeDistribution(ctx, &querypb.CheckQueryNodeDistributionRequest{
-		SourceNodeID: 1,
-		TargetNodeID: 1,
-	})
-	suite.NoError(err)
-	suite.True(merr.Ok(resp))
 }
 
 func (suite *OpsServiceSuite) TestSuspendAndResumeNode() {
