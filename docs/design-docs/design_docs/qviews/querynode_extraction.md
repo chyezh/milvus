@@ -21,6 +21,15 @@ snapshots; current indexes are resolved separately. A missing retained version
 returns ServiceNotReady, never current collection metadata. The node also rejects
 a response with a different collection/version identity.
 
+Version zero is a separate current-load lookup, used to distinguish a live load
+configuration from a released collection. This extraction reads the legacy
+CollectionManager because QV Coordinator runtime wiring is not included. A
+configuration that is still loading succeeds; an absent configuration returns
+CollectionNotLoaded even if retained history exists. This path returns current
+partitions and load-field hints, without a versioned required-field snapshot.
+The complete QV runtime resolves the current LoadConfigStore entry to its exact
+LoadInfoStore snapshot instead. Nonzero requests never fall back to this path.
+
 This extraction does not publish LoadInfo snapshots from legacy Load APIs,
 generate QueryViews, generate DataView W/A or Segment replay cursors, switch Proxy
 routing, or implement schema publication. A production producer must persist the
