@@ -65,15 +65,17 @@ func (m *ShardViewManager) placementSourceLocked() *CoordQueryViewStateMachine {
 	return source
 }
 
-// PlacementBuilder copies the newest usable placement, never mutating a live view.
-func (m *ShardViewManager) PlacementBuilder() (*qviews.QueryViewAtCoordBuilder, error) {
+// PlacementBuilder copies the newest usable placement, never mutating a live
+// view. A released/empty manager has no snapshot; the caller decides whether
+// an absent shard is relevant to its operation.
+func (m *ShardViewManager) PlacementBuilder() *qviews.QueryViewAtCoordBuilder {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	source := m.placementSourceLocked()
 	if m.releaseRequested || m.closed || source == nil {
-		return nil, merr.WrapErrServiceUnavailableMsg("shard %s has no placement to modify", m.shardID.String())
+		return nil
 	}
-	return qviews.NewQueryViewAtCoordBuilderFromView(source.View()), nil
+	return qviews.NewQueryViewAtCoordBuilderFromView(source.View())
 }
 
 func (m *ShardViewManager) AddManualPreparing(ctx context.Context, builder *qviews.QueryViewAtCoordBuilder, source qviews.QueryViewVersion) (*Preparation, error) {

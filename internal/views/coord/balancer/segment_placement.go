@@ -10,15 +10,44 @@ import (
 
 // MoveSegments is the segment API adapter to ManualPlace. It only edits the
 // supplied builders; admission, lifecycle and exact-version waits are shared.
-func (b *DefaultBalancer) MoveSegments(ctx context.Context, scope PlacementScope, destinations, segments []int64) (map[qviews.ShardID]ManualPlaceResult, error) {
-	return b.ManualPlace(ctx, scope, func(builders map[qviews.ShardID]*qviews.QueryViewAtCoordBuilder) error {
+func (b *DefaultBalancer) MoveSegments(ctx context.Context, collectionID, source int64, destinations, segments []int64) (map[qviews.ShardID]ManualPlaceResult, error) {
+	return b.ManualPlace(ctx, PlacementScope{CollectionID: collectionID, NodeID: source}, func(builders map[qviews.ShardID]*qviews.QueryViewAtCoordBuilder) error {
+		if source == 0 {
+			return merr.WrapErrParameterInvalidMsg("source query node is required")
+		}
+		if b.cache.GetNode(source) == nil {
+			return merr.WrapErrNodeNotFound(source)
+		}
+		if collectionID != 0 {
+			collection := b.cache.GetCollection(collectionID)
+			if collection == nil || collection.LoadConfig() == nil {
+				return merr.WrapErrCollectionNotLoaded(collectionID)
+			}
+		}
+
 		wanted := make(map[int64]bool, len(segments))
 		for _, segment := range segments {
 			wanted[segment] = false
 		}
 		placements := make(map[int64]*CollectionPlacement)
 		rows := make(map[int64]int64)
-		for _, builder := range builders {
+		for id, builder := range builders {
+			matching := false
+			for _, ids := range builder.Assignments()[source] {
+				for _, segment := range ids {
+					if _, selected := wanted[segment]; len(wanted) == 0 || selected {
+						matching = true
+						break
+					}
+				}
+				if matching {
+					break
+				}
+			}
+			if !matching {
+				delete(builders, id)
+				continue
+			}
 			meta := builder.Build().GetMeta()
 			pl := placements[meta.GetCollectionId()]
 			if pl == nil {
@@ -26,6 +55,9 @@ func (b *DefaultBalancer) MoveSegments(ctx context.Context, scope PlacementScope
 				pl, err = b.placementLocked(meta.GetCollectionId())
 				if err != nil {
 					return err
+				}
+				if pl.Config == nil || !pl.LayoutReady {
+					return merr.WrapErrServiceUnavailableMsg("collection %d placement is changing", meta.GetCollectionId())
 				}
 				placements[meta.GetCollectionId()] = pl
 			}
@@ -36,10 +68,10 @@ func (b *DefaultBalancer) MoveSegments(ctx context.Context, scope PlacementScope
 			candidates = slices.Clone(candidates)
 			slices.Sort(candidates)
 			candidates = slices.Compact(candidates)
-			candidates = slices.DeleteFunc(candidates, func(node int64) bool { return node == scope.SourceNodeID })
+			candidates = slices.DeleteFunc(candidates, func(node int64) bool { return node == source })
 			assignments := builder.Assignments()
 			// Iterate a snapshot: destinations are inserted into assignments below.
-			partitions := assignments[scope.SourceNodeID]
+			partitions := assignments[source]
 			for partition, ids := range partitions {
 				remaining := make([]int64, 0, len(ids))
 				for _, segment := range ids {
@@ -88,7 +120,7 @@ func (b *DefaultBalancer) MoveSegments(ctx context.Context, scope PlacementScope
 				}
 			}
 			if len(partitions) == 0 {
-				delete(assignments, scope.SourceNodeID)
+				delete(assignments, source)
 			}
 		}
 		for segment, found := range wanted {
@@ -96,6 +128,13 @@ func (b *DefaultBalancer) MoveSegments(ctx context.Context, scope PlacementScope
 				return merr.WrapErrSegmentNotFound(segment, "segment not found in source placement")
 			}
 		}
+		for collection, placement := range placements {
+			current := b.cache.GetCollection(collection)
+			if current == nil || current.LoadConfig() != placement.Config || current.ConfigVersion() != placement.ConfigVersion {
+				return merr.WrapErrServiceUnavailableMsg("load configuration changed during segment migration")
+			}
+		}
+
 		return nil
 	})
 }

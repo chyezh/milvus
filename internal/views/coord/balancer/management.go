@@ -16,7 +16,7 @@ import (
 type Management interface {
 	Placement(context.Context, int64) (*CollectionPlacement, error)
 	ManualPlace(context.Context, PlacementScope, func(map[qviews.ShardID]*qviews.QueryViewAtCoordBuilder) error) (map[qviews.ShardID]ManualPlaceResult, error)
-	MoveSegments(context.Context, PlacementScope, []int64, []int64) (map[qviews.ShardID]ManualPlaceResult, error)
+	MoveSegments(context.Context, int64, int64, []int64, []int64) (map[qviews.ShardID]ManualPlaceResult, error)
 }
 
 type CollectionPlacement struct {

@@ -14,11 +14,11 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
-// PlacementScope selects resident shards by collection and/or source node.
-// Zero means no restriction for that dimension; at least one must be provided.
+// PlacementScope is an index filter, not an operation policy. Zero means no
+// restriction. Missing entries produce an empty snapshot for the callback.
 type PlacementScope struct {
 	CollectionID int64
-	SourceNodeID int64
+	NodeID       int64
 }
 
 type ManualPlaceResult struct {
@@ -30,7 +30,9 @@ type ManualPlaceResult struct {
 
 // ManualPlace serializes planning, not waiting, with automatic reconciliation.
 // The callback runs once and must not block, reenter the balancer, or retain its
-// builders. Results identify exact accepted versions, including partial failure.
+// builders. Filtering belongs to the callback; retained builders must preserve
+// their source data and metadata. Results identify exact accepted versions,
+// including partial failure.
 func (b *DefaultBalancer) ManualPlace(ctx context.Context, scope PlacementScope, modify func(map[qviews.ShardID]*qviews.QueryViewAtCoordBuilder) error) (map[qviews.ShardID]ManualPlaceResult, error) {
 	if err := b.cache.WaitForReady(ctx); err != nil {
 		return nil, err
@@ -43,58 +45,46 @@ func (b *DefaultBalancer) ManualPlace(ctx context.Context, scope PlacementScope,
 		if err := ctx.Err(); err != nil {
 			return context.Cause(ctx)
 		}
-		ids, err := b.manualShards(scope)
-		if err != nil {
-			return err
-		}
+		ids := b.manualShards(scope)
 		builders := make(map[qviews.ShardID]*qviews.QueryViewAtCoordBuilder, len(ids))
 		originals := make(map[qviews.ShardID]*viewpb.QueryViewOfShard, len(ids))
 		managers := make(map[qviews.ShardID]*coordview.ShardViewManager, len(ids))
-		placements := make(map[int64]*CollectionPlacement)
 		for _, id := range ids {
 			manager := b.viewRegistry.Get(id)
 			if manager == nil {
-				return merr.WrapErrServiceUnavailableMsg("shard %s was released during manual placement", id.String())
+				continue
 			}
-			builder, err := manager.PlacementBuilder()
-			if err != nil {
-				return err
+			builder := manager.PlacementBuilder()
+			if builder == nil {
+				continue
 			}
 			original := builder.Build()
-			collectionID := original.GetMeta().GetCollectionId()
-			if _, ok := placements[collectionID]; !ok {
-				pl, err := b.placementLocked(collectionID)
-				if err != nil {
-					return err
-				}
-				if pl.Config == nil || !pl.LayoutReady {
-					return merr.WrapErrServiceUnavailableMsg("collection %d placement is changing", collectionID)
-				}
-				placements[collectionID] = pl
-			}
 			managers[id], originals[id] = manager, original
 			builders[id] = qviews.NewQueryViewAtCoordBuilderFromView(original)
 		}
 		if err := modify(builders); err != nil {
 			return err
 		}
-		if len(builders) != len(originals) {
-			return merr.WrapErrServiceInternalMsg("manual placement callback changed the shard set")
+		// A callback may filter the snapshot, but cannot submit a new shard
+		// without a captured manager and source version.
+		for id, builder := range builders {
+			if builder != nil && originals[id] == nil {
+				return merr.WrapErrServiceInternalMsg("manual placement has no source snapshot for shard %s", id.String())
+			}
 		}
 		changed := make(map[qviews.ShardID]*qviews.QueryViewAtCoordBuilder)
 		for _, id := range ids {
 			builder := builders[id]
 			if builder == nil {
-				return merr.WrapErrServiceInternalMsg("manual placement callback removed shard %s", id.String())
+				continue
 			}
 			before, after := originals[id], builder.Build()
-			pl := placements[before.GetMeta().GetCollectionId()]
-			if err := b.validateManualPlacement(before, after, pl); err != nil {
-				return err
-			}
 			if proto.Equal(before, after) {
 				results[id] = ManualPlaceResult{Version: qviews.FromProtoQueryViewVersion(before.GetMeta().GetVersion())}
 				continue
+			}
+			if err := validateManualPlacementData(before, after); err != nil {
+				return err
 			}
 			// Detach all callback-owned memory before publishing to managers.
 			changed[id] = qviews.NewQueryViewAtCoordBuilderFromView(after)
@@ -105,11 +95,6 @@ func (b *DefaultBalancer) ManualPlace(ctx context.Context, scope PlacementScope,
 				continue
 			}
 			before := originals[id]
-			pl := placements[before.GetMeta().GetCollectionId()]
-			current := b.cache.GetCollection(pl.Config.CollectionID)
-			if current == nil || current.LoadConfig() != pl.Config || current.ConfigVersion() != pl.ConfigVersion {
-				return merr.WrapErrServiceUnavailableMsg("load configuration changed during manual placement")
-			}
 			p, err := managers[id].AddManualPreparing(ctx, builder, qviews.FromProtoQueryViewVersion(before.GetMeta().GetVersion()))
 			if err != nil {
 				results[id] = ManualPlaceResult{Err: err}
@@ -134,30 +119,27 @@ func (b *DefaultBalancer) ManualPlace(ctx context.Context, scope PlacementScope,
 	return results, err
 }
 
-func (b *DefaultBalancer) manualShards(scope PlacementScope) ([]qviews.ShardID, error) {
-	if scope.CollectionID != 0 {
-		collection := b.cache.GetCollection(scope.CollectionID)
-		if collection == nil || collection.LoadConfig() == nil {
-			return nil, merr.WrapErrCollectionNotLoaded(scope.CollectionID)
-		}
-	}
+// manualShards only selects an indexed snapshot. Whether an empty or partial
+// match is valid is entirely up to the operation callback.
+func (b *DefaultBalancer) manualShards(scope PlacementScope) []qviews.ShardID {
 	var ids []qviews.ShardID
-	if scope.SourceNodeID != 0 {
-		node := b.cache.GetNode(scope.SourceNodeID)
-		if node == nil {
-			return nil, merr.WrapErrNodeNotFound(scope.SourceNodeID)
-		}
-		node.RangeShards(func(id qviews.ShardID) bool {
-			collectionID, ok := b.cache.CollectionForReplica(id.ReplicaID)
-			if ok && (scope.CollectionID == 0 || scope.CollectionID == collectionID) {
-				ids = append(ids, id)
+	switch {
+	case scope.NodeID != 0:
+		ids = b.viewRegistry.NodeShards(scope.NodeID)
+		if scope.CollectionID != 0 {
+			collectionShards := make(map[qviews.ShardID]struct{})
+			for _, id := range b.viewRegistry.CollectionShards(scope.CollectionID) {
+				collectionShards[id] = struct{}{}
 			}
-			return true
-		})
-	} else if scope.CollectionID != 0 {
+			ids = slices.DeleteFunc(ids, func(id qviews.ShardID) bool {
+				_, ok := collectionShards[id]
+				return !ok
+			})
+		}
+	case scope.CollectionID != 0:
 		ids = b.viewRegistry.CollectionShards(scope.CollectionID)
-	} else {
-		return nil, merr.WrapErrParameterInvalidMsg("manual placement requires a collection or source node")
+	default:
+		ids = b.viewRegistry.ShardIDs()
 	}
 	slices.SortFunc(ids, func(a, c qviews.ShardID) int {
 		if a.ReplicaID != c.ReplicaID {
@@ -165,45 +147,40 @@ func (b *DefaultBalancer) manualShards(scope PlacementScope) ([]qviews.ShardID, 
 		}
 		return cmp.Compare(a.VChannel, c.VChannel)
 	})
-	return ids, nil
+	return ids
 }
 
-func (b *DefaultBalancer) validateManualPlacement(before, after *viewpb.QueryViewOfShard, pl *CollectionPlacement) error {
+// validateManualPlacementData allows placement changes only. Compare against the
+// captured view, not the latest DataView: the source already encodes its selected
+// partitions, schema and physical versions. Validate every changed shard before
+// submitting any of them.
+func validateManualPlacementData(before, after *viewpb.QueryViewOfShard) error {
 	if !proto.Equal(before.GetMeta(), after.GetMeta()) || !proto.Equal(before.GetStreamingNode(), after.GetStreamingNode()) {
-		return merr.WrapErrServiceInternalMsg("manual placement must preserve view metadata")
+		return merr.WrapErrServiceInternalMsg("manual placement must preserve view metadata and streaming resources")
 	}
-	type member struct{ partition, manifest, node int64 }
+	type member struct{ partition, manifest int64 }
 	members := make(map[int64]member)
 	for _, node := range before.GetQueryNode() {
-		for _, p := range node.GetPartitions() {
-			for i, segment := range p.GetSegmentIds() {
+		for _, partition := range node.GetPartitions() {
+			for i, segment := range partition.GetSegmentIds() {
 				var manifest int64
-				if i < len(p.GetSegmentManifestVersions()) {
-					manifest = p.GetSegmentManifestVersions()[i]
+				if i < len(partition.GetSegmentManifestVersions()) {
+					manifest = partition.GetSegmentManifestVersions()[i]
 				}
-				members[segment] = member{p.GetPartitionId(), manifest, node.GetNodeId()}
+				members[segment] = member{partition.GetPartitionId(), manifest}
 			}
 		}
 	}
 	for _, node := range after.GetQueryNode() {
-		for _, p := range node.GetPartitions() {
-			for i, segment := range p.GetSegmentIds() {
-				original, ok := members[segment]
+		for _, partition := range node.GetPartitions() {
+			for i, segment := range partition.GetSegmentIds() {
 				var manifest int64
-				if i < len(p.GetSegmentManifestVersions()) {
-					manifest = p.GetSegmentManifestVersions()[i]
+				if i < len(partition.GetSegmentManifestVersions()) {
+					manifest = partition.GetSegmentManifestVersions()[i]
 				}
-				if !ok || original.partition != p.GetPartitionId() || original.manifest != manifest {
+				original, ok := members[segment]
+				if !ok || original != (member{partition.GetPartitionId(), manifest}) {
 					return merr.WrapErrServiceInternalMsg("manual placement changed or duplicated segment %d", segment)
-				}
-				if original.node != node.GetNodeId() {
-					info := b.cache.GetNode(node.GetNodeId())
-					if info == nil || !info.Info().Alive || info.Info().Stopping {
-						return merr.WrapErrServiceUnavailableMsg("destination node %d is unavailable", node.GetNodeId())
-					}
-					if !slices.Contains(pl.Nodes[after.GetMeta().GetReplicaId()], node.GetNodeId()) {
-						return merr.WrapErrNodeNotFound(node.GetNodeId(), "destination is outside the replica placement")
-					}
 				}
 				delete(members, segment)
 			}
