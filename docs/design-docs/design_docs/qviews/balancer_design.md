@@ -117,7 +117,7 @@ does not read ParamTable directly.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `queryView.balancer.autoBalance` | `true` | Enables MayOptimize on both event-triggered and periodic reconciles; mandatory placement, recovery, replica isolation, and releases continue when false. |
+| `queryView.balancer.optimization.enabled` | `true` | Enables MayOptimize on both event-triggered and periodic reconciles; mandatory placement, recovery, replica isolation, and releases continue when false. |
 | `queryView.balancer.reconcileInterval` | `1m` | Positive duration between periodic reconciles. Lower values increase optimization/check frequency and CPU overhead; higher values reduce scans. Event-triggered work is independent. |
 | `queryView.balancer.targetRowsPerShardNode` | `100000` | Positive rows used to derive free shard fanout. Increasing favors fewer nodes; decreasing increases the free allowance. Not a node capacity limit. |
 
@@ -221,29 +221,23 @@ replica node lists include leaders; QN migration eligibility is determined from
 the QN layout separately. Configuration identity is rechecked after the snapshot,
 including release/reload with identical configuration content.
 
-`LoadBalance` requires complete current-config shard coverage. It validates the
-source QN, destination QNs in the same replica target, and requested segments in
-the source's Up placement before accepting any replacement views. An omitted
-destination list selects other eligible QNs of that replica; an omitted segment
-list selects all source segments. An ongoing handoff or stale layout returns a
-retriable error instead of overriding newer work.
+`LoadBalance` and `TransferSegment` use the synchronous, exact-version
+[Manual placement](#manual-placement) contract below.
 
-Manual placement is serialized with automatic reconciliation and uses the same
-`ShardViewManager.AddPreparing` lifecycle. It preserves the source view's data,
-schema, load configuration, Manifest identities and transform cursors, changing
-only requested segment assignments. The normal Preparing/Up/Down protocol keeps
-old service and references until handoff. Load/release is serialized with view
-acceptance through the collection config lock; the lock is released before
-waiting for workers.
+`SuspendBalance` and `ResumeBalance` directly save `false` or `true` to
+`queryView.balancer.optimization.enabled`. `CheckBalanceStatus` reads that same
+configuration. There is no separate administrative suspension flag. The existing
+configuration watcher publishes the changed profile and wakes reconciliation;
+an active batch may finish with its pinned profile, and accepted Preparing views
+continue. Disabling optimization leaves mandatory placement, recovery,
+data/schema/config updates, release and manual placement enabled. These calls
+use the existing process-local runtime configuration mechanism, not a separate
+persistent control record.
 
-The RPC remains synchronous: success requires an Up view at least as new as
-each accepted migration and the requested destination assignments. A release,
-configuration change, failed preparation or superseding incompatible placement
-cannot report success. Waiting subscribes before acceptance and rechecks after
-reading state to avoid lost notifications. The request deadline and existing
-segment-task timeout bound the wait. Timeout does not roll back accepted views;
-multi-shard application is not an atomic transaction. Manual placement is a
-one-time operation, not a permanent constraint on later automatic balancing.
+`ListCheckers`, `ActivateChecker` and `DeactivateChecker` are deprecated. Their
+wire endpoints remain available but return `ErrServiceUnimplemented` (code 10)
+with a reason identifying the deprecated API and its balance-control alternative.
+They neither access nor modify the retired CheckerController.
 
 ### 2.2 BalancePolicy
 

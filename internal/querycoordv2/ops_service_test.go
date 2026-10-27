@@ -166,42 +166,26 @@ func (suite *OpsServiceSuite) SetupTest() {
 	suite.server.UpdateStateCode(commonpb.StateCode_Healthy)
 }
 
-func (suite *OpsServiceSuite) TestActiveCheckers() {
-	// test server unhealthy
-	suite.server.UpdateStateCode(commonpb.StateCode_Abnormal)
-	ctx := context.Background()
-	resp, err := suite.server.ListCheckers(ctx, &querypb.ListCheckersRequest{})
-	suite.NoError(err)
-	suite.False(merr.Ok(resp.Status))
-
-	resp1, err := suite.server.DeactivateChecker(ctx, &querypb.DeactivateCheckerRequest{})
-	suite.NoError(err)
-	suite.False(merr.Ok(resp1))
-
-	resp2, err := suite.server.ActivateChecker(ctx, &querypb.ActivateCheckerRequest{})
-	suite.NoError(err)
-	suite.False(merr.Ok(resp2))
-
-	// test active success
-	suite.server.UpdateStateCode(commonpb.StateCode_Healthy)
-	resp, err = suite.server.ListCheckers(ctx, &querypb.ListCheckersRequest{})
-	suite.NoError(err)
-	suite.True(merr.Ok(resp.Status))
-	suite.Len(resp.GetCheckerInfos(), 5)
-
-	resp4, err := suite.server.DeactivateChecker(ctx, &querypb.DeactivateCheckerRequest{
-		CheckerID: int32(utils.ChannelChecker),
-	})
-	suite.NoError(err)
-	suite.True(merr.Ok(resp4))
-	suite.False(suite.checkerController.IsActive(utils.ChannelChecker))
-
-	resp5, err := suite.server.ActivateChecker(ctx, &querypb.ActivateCheckerRequest{
-		CheckerID: int32(utils.ChannelChecker),
-	})
-	suite.NoError(err)
-	suite.True(merr.Ok(resp5))
-	suite.True(suite.checkerController.IsActive(utils.ChannelChecker))
+func (suite *OpsServiceSuite) TestDeprecatedCheckers() {
+	// These compatibility endpoints must not touch the retired controller.
+	suite.server.checkerController = nil
+	ctx := suite.T().Context()
+	for _, state := range []commonpb.StateCode{commonpb.StateCode_Healthy, commonpb.StateCode_Abnormal} {
+		suite.server.UpdateStateCode(state)
+		resp, err := suite.server.ListCheckers(ctx, &querypb.ListCheckersRequest{})
+		suite.NoError(err)
+		suite.ErrorIs(merr.Error(resp.GetStatus()), merr.ErrServiceUnimplemented)
+		suite.Contains(resp.GetStatus().GetReason(), "deprecated")
+		suite.Empty(resp.GetCheckerInfos())
+		status, err := suite.server.ActivateChecker(ctx, &querypb.ActivateCheckerRequest{CheckerID: int32(utils.BalanceChecker)})
+		suite.NoError(err)
+		suite.ErrorIs(merr.Error(status), merr.ErrServiceUnimplemented)
+		suite.Contains(status.GetReason(), "ResumeBalance")
+		status, err = suite.server.DeactivateChecker(ctx, &querypb.DeactivateCheckerRequest{CheckerID: int32(utils.BalanceChecker)})
+		suite.NoError(err)
+		suite.ErrorIs(merr.Error(status), merr.ErrServiceUnimplemented)
+		suite.Contains(status.GetReason(), "SuspendBalance")
+	}
 }
 
 func (suite *OpsServiceSuite) TestListQueryNode() {
@@ -356,6 +340,10 @@ func (suite *OpsServiceSuite) TestCheckQueryNodeDistribution() {
 }
 
 func (suite *OpsServiceSuite) TestSuspendAndResumeBalance() {
+	key := paramtable.Get().QueryViewCfg.BalancerOptimizationEnabled.Key
+	original := paramtable.Get().QueryViewCfg.BalancerOptimizationEnabled.GetValue()
+	suite.T().Cleanup(func() { suite.NoError(paramtable.Get().Save(key, original)) })
+	suite.server.checkerController = nil
 	// test server unhealthy
 	suite.server.UpdateStateCode(commonpb.StateCode_Abnormal)
 	ctx := context.Background()
@@ -372,7 +360,7 @@ func (suite *OpsServiceSuite) TestSuspendAndResumeBalance() {
 	resp, err = suite.server.SuspendBalance(ctx, &querypb.SuspendBalanceRequest{})
 	suite.NoError(err)
 	suite.True(merr.Ok(resp))
-	suite.False(suite.checkerController.IsActive(utils.BalanceChecker))
+	suite.False(paramtable.Get().QueryViewCfg.BalancerOptimizationEnabled.GetAsBool())
 
 	resp1, err := suite.server.CheckBalanceStatus(ctx, &querypb.CheckBalanceStatusRequest{})
 	suite.NoError(err)
@@ -381,11 +369,16 @@ func (suite *OpsServiceSuite) TestSuspendAndResumeBalance() {
 	resp, err = suite.server.ResumeBalance(ctx, &querypb.ResumeBalanceRequest{})
 	suite.NoError(err)
 	suite.True(merr.Ok(resp))
-	suite.True(suite.checkerController.IsActive(utils.BalanceChecker))
+	suite.True(paramtable.Get().QueryViewCfg.BalancerOptimizationEnabled.GetAsBool())
 
 	resp2, err := suite.server.CheckBalanceStatus(ctx, &querypb.CheckBalanceStatusRequest{})
 	suite.NoError(err)
 	suite.Equal(true, resp2.GetIsActive())
+	// Direct configuration changes and the API share one source of truth.
+	suite.NoError(paramtable.Get().Save(key, "false"))
+	resp2, err = suite.server.CheckBalanceStatus(ctx, &querypb.CheckBalanceStatusRequest{})
+	suite.NoError(err)
+	suite.False(resp2.GetIsActive())
 }
 
 func (suite *OpsServiceSuite) TestSuspendAndResumeNode() {
