@@ -1246,20 +1246,34 @@ normal serving lease/reference protocol; fresh Phase 1 plans select the new Up.
 
 ## Manual placement
 
-`ManualPlace(ctx, scope, modify)` is the common management operation. The scope
-selects a collection and/or source node through resident shard indexes; callers
-do not resolve ShardIDs. The callback receives an independent
-`map[ShardID]*QueryViewAtCoordBuilder` and changes placement only. Balancer keeps
-replica/RG eligibility and submission serialization inside this operation.
-Neither collection-wide loading progress nor an external LoadConfig lock is a
-precondition. A thin segment-move adapter selects destinations and edits builders.
+`ManualPlace(ctx, scope, modify)` is the common management operation. The optional
+scope restricts the snapshot by collection and/or node using resident shard
+indexes. NodeID is an index hint, with no source/destination semantics. Missing
+entries or managers without a usable view are absent from the snapshot; an empty
+snapshot still reaches the callback.
 
-Under the reconcile lock, snapshot each affected manager's newest usable target
-(Preparing/Ready before an older Up), run the callback once, validate membership,
-metadata identity and node eligibility for all changes, then submit changed
-builders. The manager rechecks the exact source version before acceptance,
-including after acquiring DataView references. Configuration/topology changes
-invalidate planning snapshots or are reconciled by the normal controller.
+The callback receives an independent `map[ShardID]*QueryViewAtCoordBuilder`. It
+owns operation-specific filtering and validation, may remove entries, and decides
+whether missing matches are errors. The segment-move adapter implements source
+and target semantics, segment matching, replica/RG eligibility and configuration
+checks inside this callback. ManualPlace does not impose those policies or read
+ReplicaManager. It rejects additions without a captured manager/source, which
+cannot participate in its source-version submission protocol.
+
+Data integrity is a mandatory ManualPlace invariant. Before any submission, each
+retained changed builder must preserve its source metadata (including DataVersion,
+SchemaVersion, load version and transform cursor), streaming resources (partition
+stats), and exact Segment membership, partition and Manifest version. Segments
+may move between nodes but cannot be added, removed or duplicated. Filtering out
+an entire shard means no submission for that shard; it does not remove its data.
+The comparison uses the captured source view, which already reflects partition
+selection, rather than requiring the latest full collection DataView.
+
+Under the reconcile lock, snapshot each manager's newest usable target
+(Preparing/Ready before an older Up), run the callback once, detach changed
+builders and submit them. The manager rechecks the exact source version before
+acceptance, including after acquiring DataView references. Lifecycle checks
+remain in the manager; topology changes are reconciled by the normal controller.
 Unchanged builders create no views. Each accepted view carries a one-shot
 completion attached before callbacks can run, reporting its first Up or failed
 preparation; a newer successful view never completes an older request.

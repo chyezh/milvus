@@ -17,8 +17,8 @@ func TestManualPreparationExactOutcome(t *testing.T) {
 			catalog, syncer := newMockCatalog(), newMockSyncer()
 			mgr := newTestManager(t, catalog, syncer)
 			require.NoError(t, mgr.AddPreparing(t.Context(), testBuilder(1, 1, 1)))
-			builder, err := mgr.PlacementBuilder()
-			require.NoError(t, err)
+			builder := mgr.PlacementBuilder()
+			require.NotNil(t, builder)
 			p, err := mgr.AddManualPreparing(t.Context(), builder, testVersion(1, 1, 1))
 			require.NoError(t, err)
 			mgr.waitFlush()
@@ -66,11 +66,11 @@ func TestManualPreparationExactOutcome(t *testing.T) {
 func TestManualPreparationRejectsStaleSource(t *testing.T) {
 	mgr := newTestManager(t, newMockCatalog(), newMockSyncer())
 	require.NoError(t, mgr.AddPreparing(t.Context(), testBuilder(1, 1, 1)))
-	builder, err := mgr.PlacementBuilder()
-	require.NoError(t, err)
+	builder := mgr.PlacementBuilder()
+	require.NotNil(t, builder)
 	// A normal reconcile accepted a different placement after the snapshot.
 	require.NoError(t, mgr.AddPreparing(t.Context(), testBuilder(1, 1, 1)))
-	_, err = mgr.AddManualPreparing(t.Context(), builder, testVersion(1, 1, 1))
+	_, err := mgr.AddManualPreparing(t.Context(), builder, testVersion(1, 1, 1))
 	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
 	require.Equal(t, testVersion(1, 1, 2), *mgr.Stats().PreparingVersion)
 }
