@@ -200,8 +200,9 @@ func (c *MiniClusterV3) init() {
 
 // initClients initializes the clients.
 func (c *MiniClusterV3) initClients() {
-	c.initMilvusClient()
+	// Observe a failed coordinator before waiting for dependent Proxy readiness.
 	c.initInternalClient()
+	c.initMilvusClient()
 }
 
 // initMilvusClient initializes the milvus client.

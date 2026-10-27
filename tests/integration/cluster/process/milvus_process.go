@@ -274,6 +274,7 @@ func (mp *MilvusProcess) notifyBySignal() {
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
 	for {
 		select {
 		case <-mp.notifier.Context().Done():
@@ -378,6 +379,7 @@ func (mp *MilvusProcess) asyncGetClient(ctx context.Context) {
 	now = time.Now()
 
 	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
 	for {
 		resp, err := c.GetComponentStates(ctx, &milvuspb.GetComponentStatesRequest{})
 		if err == nil && resp.State.GetStateCode() == commonpb.StateCode_Healthy {
@@ -448,7 +450,9 @@ func (mp *MilvusProcess) GetAddress(ctx context.Context) (string, error) {
 		case <-ctx.Done():
 			return "", ctx.Err()
 		case <-mp.notifier.Context().Done():
-			return "", mp.notifier.BlockAndGetResult()
+			// background joins asyncGetClient before publishing its final result.
+			// Address discovery runs inside that worker and must not wait for the join.
+			return "", context.Cause(mp.notifier.Context())
 		case <-ticker.C:
 			val, err := mp.etcdCli.Get(ctx, key)
 			if err != nil {

@@ -141,11 +141,7 @@ func (s *ManualRollingUpgradeSuite) TestTransfer() {
 		DbName:         dbName,
 		CollectionName: collectionName,
 	})
-	s.NoError(err)
-	err = merr.Error(loadStatus)
-	if err != nil {
-		mlog.Warn(context.TODO(), "LoadCollection fail reason", mlog.Err(err))
-	}
+	s.Require().NoError(merr.CheckRPCCall(loadStatus, err))
 	s.WaitForLoad(ctx, collectionName)
 	mlog.Info(context.TODO(), "Load collection done")
 
@@ -353,8 +349,13 @@ func (s *ManualRollingUpgradeSuite) TestSuspendNode() {
 	resp2, err := s.Cluster.MixCoordClient.SuspendNode(ctx, &querypb.SuspendNodeRequest{
 		NodeID: qn2.GetNodeID(),
 	})
-	s.NoError(err)
-	s.True(merr.Ok(resp2))
+	s.Require().NoError(merr.CheckRPCCall(resp2, err))
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		status, err := s.Cluster.MixCoordClient.ResumeNode(cleanupCtx, &querypb.ResumeNodeRequest{NodeID: qn2.GetNodeID()})
+		s.NoError(merr.CheckRPCCall(status, err))
+	}()
 
 	// load
 	loadStatus, err := c.MilvusClient.LoadCollection(ctx, &milvuspb.LoadCollectionRequest{
@@ -396,6 +397,12 @@ func (s *ManualRollingUpgradeSuite) TestSuspendNode() {
 		}
 		status, err := s.Cluster.MixCoordClient.SuspendNode(ctx, &querypb.SuspendNodeRequest{NodeID: node.GetID()})
 		s.Require().NoError(merr.CheckRPCCall(status, err))
+		defer func(nodeID int64) {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			status, err := s.Cluster.MixCoordClient.ResumeNode(cleanupCtx, &querypb.ResumeNodeRequest{NodeID: nodeID})
+			s.NoError(merr.CheckRPCCall(status, err))
+		}(node.GetID())
 	}
 
 	s.Require().Eventually(func() bool {
