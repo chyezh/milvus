@@ -243,6 +243,14 @@ wire endpoints remain available but return `ErrServiceUnimplemented` (code 10)
 with a reason identifying the deprecated API and its balance-control alternative.
 They neither access nor modify the retired CheckerController.
 
+`CheckQueryNodeDistribution` is also deprecated and returns
+`ErrServiceUnimplemented` through its existing RPC. Its old ChannelName/SegmentID
+coverage check is removed: it cannot establish QueryView migration completion or
+safe source-node shutdown. `LoadBalance` and `TransferSegment` already wait for
+the accepted QueryView to become Up; neither promises that all old leases and
+in-flight requests on the source node have drained. `GetQueryNodeDistribution`
+remains available for inspecting confirmed resources.
+
 ### 2.2 BalancePolicy
 
 Policy retains the batch algorithm but takes a read-only cache interface:
