@@ -224,15 +224,19 @@ including release/reload with identical configuration content.
 `LoadBalance` and `TransferSegment` use the synchronous, exact-version
 [Manual placement](#manual-placement) contract below.
 
-`SuspendBalance` and `ResumeBalance` directly save `false` or `true` to
+`SuspendBalance` and `ResumeBalance` persist `false` or `true` to
 `queryView.balancer.optimization.enabled`. `CheckBalanceStatus` reads that same
 configuration. There is no separate administrative suspension flag. The existing
 configuration watcher publishes the changed profile and wakes reconciliation;
 an active batch may finish with its pinned profile, and accepted Preparing views
 continue. Disabling optimization leaves mandatory placement, recovery,
 data/schema/config updates, release and manual placement enabled. These calls
-use the existing process-local runtime configuration mechanism, not a separate
-persistent control record.
+reuse AlterConfig's `UpdateConfigInEtcd` / `AlterConfigsInEtcd` path: commit to
+etcd and synchronously refresh the local EtcdSource before returning. Subsequent
+processes recover the same value from etcd. No runtime overlay is written, so
+later AlterConfig writes or resets remain effective. If the etcd source is
+unavailable or persistence/refresh fails, the operation returns an error instead
+of falling back to a process-local change.
 
 `ListCheckers`, `ActivateChecker` and `DeactivateChecker` are deprecated. Their
 wire endpoints remain available but return `ErrServiceUnimplemented` (code 10)
