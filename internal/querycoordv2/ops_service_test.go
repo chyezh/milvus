@@ -446,254 +446,37 @@ func (suite *OpsServiceSuite) TestSuspendAndResumeNode() {
 }
 
 func (suite *OpsServiceSuite) TestTransferSegment() {
-	ctx := context.Background()
-
-	// test server unhealthy
-	suite.server.UpdateStateCode(commonpb.StateCode_Abnormal)
-	resp, err := suite.server.TransferSegment(ctx, &querypb.TransferSegmentRequest{})
-	suite.NoError(err)
-	suite.False(merr.Ok(resp))
-
-	suite.server.UpdateStateCode(commonpb.StateCode_Healthy)
-	// test source node not healthy
-	resp, err = suite.server.TransferSegment(ctx, &querypb.TransferSegmentRequest{
-		SourceNodeID: 1,
-	})
-	suite.NoError(err)
-	suite.False(merr.Ok(resp))
-	suite.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
-		NodeID:   1,
-		Address:  "localhost",
-		Hostname: "localhost",
-	}))
-
-	collectionID := int64(1)
-	partitionID := int64(1)
-	replicaID := int64(1)
-	nodes := []int64{1, 2, 3, 4}
-	replica := utils.CreateTestReplica(replicaID, collectionID, nodes)
-	suite.meta.Put(ctx, replica)
-	collection := utils.CreateTestCollection(collectionID, 1)
-	partition := utils.CreateTestPartition(partitionID, collectionID)
-	suite.meta.PutCollection(ctx, collection, partition)
-	segmentIDs := []int64{1, 2, 3, 4}
-	channelNames := []string{"channel-1", "channel-2", "channel-3", "channel-4"}
-
-	// test target node not healthy
-	resp, err = suite.server.TransferSegment(ctx, &querypb.TransferSegmentRequest{
-		SourceNodeID: nodes[0],
-		TargetNodeID: nodes[1],
-	})
-	suite.NoError(err)
-	suite.False(merr.Ok(resp))
-	suite.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
-		NodeID:   2,
-		Address:  "localhost",
-		Hostname: "localhost",
-	}))
-
-	// test segment not exist in node
-	resp, err = suite.server.TransferSegment(ctx, &querypb.TransferSegmentRequest{
-		SourceNodeID: nodes[0],
-		TargetNodeID: nodes[1],
-		SegmentID:    segmentIDs[0],
-	})
-	suite.NoError(err)
-	suite.False(merr.Ok(resp))
-
-	segments := []*datapb.SegmentInfo{
-		{
-			ID:            segmentIDs[0],
-			CollectionID:  collectionID,
-			PartitionID:   partitionID,
-			InsertChannel: channelNames[0],
-			NumOfRows:     1,
-		},
-		{
-			ID:            segmentIDs[1],
-			CollectionID:  collectionID,
-			PartitionID:   partitionID,
-			InsertChannel: channelNames[1],
-			NumOfRows:     1,
-		},
-		{
-			ID:            segmentIDs[2],
-			CollectionID:  collectionID,
-			PartitionID:   partitionID,
-			InsertChannel: channelNames[2],
-			NumOfRows:     1,
-		},
-		{
-			ID:            segmentIDs[3],
-			CollectionID:  collectionID,
-			PartitionID:   partitionID,
-			InsertChannel: channelNames[3],
-			NumOfRows:     1,
-		},
-	}
-
-	channels := []*datapb.VchannelInfo{
-		{
-			CollectionID: collectionID,
-			ChannelName:  channelNames[0],
-		},
-		{
-			CollectionID: collectionID,
-			ChannelName:  channelNames[1],
-		},
-		{
-			CollectionID: collectionID,
-			ChannelName:  channelNames[2],
-		},
-		{
-			CollectionID: collectionID,
-			ChannelName:  channelNames[3],
-		},
-	}
-	segmentInfos := lo.Map(segments, func(segment *datapb.SegmentInfo, _ int) *meta.Segment {
-		return &meta.Segment{
-			SegmentInfo: segment,
-			Node:        nodes[0],
+	calls := 0
+	var failure error
+	patch := mockey.Mock((*Server).manualMoveSegments).To(func(_ *Server, _ context.Context, collection, source int64, destinations, segments []int64) error {
+		calls++
+		suite.Zero(collection)
+		suite.Equal(int64(1), source)
+		if calls == 1 {
+			suite.Equal([]int64{2}, destinations)
+			suite.Equal([]int64{100}, segments)
+		} else {
+			suite.Empty(destinations)
+			suite.Empty(segments)
 		}
-	})
-	chanenlInfos := lo.Map(channels, func(channel *datapb.VchannelInfo, _ int) *meta.DmChannel {
-		return &meta.DmChannel{
-			VchannelInfo: channel,
-			Node:         nodes[0],
-		}
-	})
-	suite.dist.SegmentDistManager.Update(1, segmentInfos[0])
-
-	// test segment not exist in current target, expect no task assign and success
-	assign.InitGlobalAssignPolicyFactory(suite.taskScheduler, suite.nodeMgr, suite.dist, suite.meta, suite.targetMgr)
-	balance.InitGlobalBalancerFactory(suite.taskScheduler, suite.nodeMgr, suite.dist, suite.targetMgr)
-	resp, err = suite.server.TransferSegment(ctx, &querypb.TransferSegmentRequest{
-		SourceNodeID: nodes[0],
-		TargetNodeID: nodes[1],
-		SegmentID:    segmentIDs[0],
-	})
-	suite.NoError(err)
-	suite.True(merr.Ok(resp))
-
-	suite.broker.EXPECT().GetRecoveryInfoV2(mock.Anything, collectionID).Return(channels, segments, nil)
-	suite.targetMgr.UpdateCollectionNextTarget(ctx, 1)
-	suite.targetMgr.UpdateCollectionCurrentTarget(ctx, 1)
-	suite.dist.SegmentDistManager.Update(1, segmentInfos...)
-	suite.dist.ChannelDistManager.Update(1, chanenlInfos...)
-
-	for _, node := range nodes {
-		suite.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
-			NodeID:   node,
-			Address:  "localhost",
-			Hostname: "localhost",
-		}))
-		suite.meta.HandleNodeUp(ctx, node)
-	}
-
-	// test transfer segment success, expect generate 1 balance segment task
-	suite.taskScheduler.EXPECT().Add(mock.Anything).RunAndReturn(func(t task.Task) error {
-		actions := t.Actions()
-		suite.Equal(len(actions), 2)
-		suite.Equal(actions[0].Node(), int64(2))
-		return nil
-	})
-	resp, err = suite.server.TransferSegment(ctx, &querypb.TransferSegmentRequest{
-		SourceNodeID: nodes[0],
-		TargetNodeID: nodes[1],
-		SegmentID:    segmentIDs[0],
-	})
-	suite.NoError(err)
-	suite.True(merr.Ok(resp))
-
-	// test copy mode, expect generate 1 load segment task
-	suite.taskScheduler.ExpectedCalls = nil
-	suite.taskScheduler.EXPECT().GetSegmentTaskDeltaSnapshot(mock.Anything, mock.Anything).Return(task.NewSegmentTaskDeltaSnapshot(nil, nil)).Maybe()
-	suite.taskScheduler.EXPECT().GetChannelTaskDelta(mock.Anything, mock.Anything).Return(0).Maybe()
-	suite.taskScheduler.EXPECT().Add(mock.Anything).RunAndReturn(func(t task.Task) error {
-		actions := t.Actions()
-		suite.Equal(len(actions), 1)
-		suite.Equal(actions[0].Node(), int64(2))
-		return nil
-	})
-	resp, err = suite.server.TransferSegment(ctx, &querypb.TransferSegmentRequest{
-		SourceNodeID: nodes[0],
-		TargetNodeID: nodes[1],
-		SegmentID:    segmentIDs[0],
-		CopyMode:     true,
-	})
-	suite.NoError(err)
-	suite.True(merr.Ok(resp))
-
-	// test transfer all segments, expect generate 4 load segment task
-	suite.taskScheduler.ExpectedCalls = nil
-	suite.taskScheduler.EXPECT().GetSegmentTaskDeltaSnapshot(mock.Anything, mock.Anything).Return(task.NewSegmentTaskDeltaSnapshot(nil, nil)).Maybe()
-	suite.taskScheduler.EXPECT().GetChannelTaskDelta(mock.Anything, mock.Anything).Return(0).Maybe()
-	counter := atomic.NewInt64(0)
-	suite.taskScheduler.EXPECT().Add(mock.Anything).RunAndReturn(func(t task.Task) error {
-		actions := t.Actions()
-		suite.Equal(len(actions), 2)
-		suite.Equal(actions[0].Node(), int64(2))
-		counter.Inc()
-		return nil
-	})
-	resp, err = suite.server.TransferSegment(ctx, &querypb.TransferSegmentRequest{
-		SourceNodeID: nodes[0],
-		TargetNodeID: nodes[1],
-		TransferAll:  true,
-	})
-	suite.NoError(err)
-	suite.True(merr.Ok(resp))
-	suite.Equal(counter.Load(), int64(4))
-
-	// test transfer all segment to all nodes, expect generate 4 load segment task
-	suite.taskScheduler.ExpectedCalls = nil
-	suite.taskScheduler.EXPECT().GetSegmentTaskDeltaSnapshot(mock.Anything, mock.Anything).Return(task.NewSegmentTaskDeltaSnapshot(nil, nil)).Maybe()
-	suite.taskScheduler.EXPECT().GetChannelTaskDelta(mock.Anything, mock.Anything).Return(0).Maybe()
-	counter = atomic.NewInt64(0)
-	nodeSet := typeutil.NewUniqueSet()
-	suite.taskScheduler.EXPECT().Add(mock.Anything).RunAndReturn(func(t task.Task) error {
-		actions := t.Actions()
-		suite.Equal(len(actions), 2)
-		nodeSet.Insert(actions[0].Node())
-		counter.Inc()
-		return nil
-	})
-	resp, err = suite.server.TransferSegment(ctx, &querypb.TransferSegmentRequest{
-		SourceNodeID: nodes[0],
-		TransferAll:  true,
-		ToAllNodes:   true,
-	})
-	suite.NoError(err)
-	suite.True(merr.Ok(resp))
-	suite.Equal(counter.Load(), int64(4))
-	suite.Len(nodeSet.Collect(), 3)
-
-	// test transfer segment idempotent
-	suite.taskScheduler.ExpectedCalls = nil
-	suite.taskScheduler.EXPECT().GetSegmentTaskDeltaSnapshot(mock.Anything, mock.Anything).Return(task.NewSegmentTaskDeltaSnapshot(nil, nil)).Maybe()
-	suite.taskScheduler.EXPECT().GetChannelTaskDelta(mock.Anything, mock.Anything).Return(0).Maybe()
-	counter = atomic.NewInt64(0)
-	taskIDSet := typeutil.NewUniqueSet()
-	suite.taskScheduler.EXPECT().Add(mock.Anything).RunAndReturn(func(t task.Task) error {
-		if taskIDSet.Contain(t.ID()) {
-			return errors.New("duplicate task")
-		}
-		return nil
-	})
-	resp, err = suite.server.TransferSegment(ctx, &querypb.TransferSegmentRequest{
-		SourceNodeID: nodes[0],
-		TransferAll:  true,
-		ToAllNodes:   true,
-	})
-	suite.NoError(err)
-	suite.True(merr.Ok(resp))
-	resp, err = suite.server.TransferSegment(ctx, &querypb.TransferSegmentRequest{
-		SourceNodeID: nodes[0],
-		TransferAll:  true,
-		ToAllNodes:   true,
-	})
-	suite.NoError(err)
-	suite.True(merr.Ok(resp))
+		return failure
+	}).Build()
+	defer patch.UnPatch()
+	req := &querypb.TransferSegmentRequest{SourceNodeID: 1, TargetNodeID: 2, SegmentID: 100}
+	resp, err := suite.server.TransferSegment(suite.T().Context(), req)
+	suite.NoError(merr.CheckRPCCall(resp, err))
+	req.ToAllNodes, req.TransferAll = true, true
+	failure = merr.ErrServiceUnavailable
+	resp, err = suite.server.TransferSegment(suite.T().Context(), req)
+	suite.ErrorIs(merr.CheckRPCCall(resp, err), failure)
+	req.CopyMode = true
+	resp, err = suite.server.TransferSegment(suite.T().Context(), req)
+	suite.ErrorIs(merr.CheckRPCCall(resp, err), merr.ErrServiceUnimplemented)
+	suite.Equal(2, calls)
+	suite.server.UpdateStateCode(commonpb.StateCode_Initializing)
+	resp, err = suite.server.TransferSegment(suite.T().Context(), req)
+	suite.ErrorIs(merr.CheckRPCCall(resp, err), merr.ErrServiceNotReady)
+	suite.Equal(2, calls)
 }
 
 func (suite *OpsServiceSuite) TestTransferChannel() {
