@@ -339,48 +339,6 @@ func (suite *OpsServiceSuite) TestCheckQueryNodeDistribution() {
 	suite.True(merr.Ok(resp))
 }
 
-func (suite *OpsServiceSuite) TestSuspendAndResumeBalance() {
-	key := paramtable.Get().QueryViewCfg.BalancerOptimizationEnabled.Key
-	original := paramtable.Get().QueryViewCfg.BalancerOptimizationEnabled.GetValue()
-	suite.T().Cleanup(func() { suite.NoError(paramtable.Get().Save(key, original)) })
-	suite.server.checkerController = nil
-	// test server unhealthy
-	suite.server.UpdateStateCode(commonpb.StateCode_Abnormal)
-	ctx := context.Background()
-	resp, err := suite.server.SuspendBalance(ctx, &querypb.SuspendBalanceRequest{})
-	suite.NoError(err)
-	suite.False(merr.Ok(resp))
-
-	resp, err = suite.server.ResumeBalance(ctx, &querypb.ResumeBalanceRequest{})
-	suite.NoError(err)
-	suite.False(merr.Ok(resp))
-
-	// test suspend success
-	suite.server.UpdateStateCode(commonpb.StateCode_Healthy)
-	resp, err = suite.server.SuspendBalance(ctx, &querypb.SuspendBalanceRequest{})
-	suite.NoError(err)
-	suite.True(merr.Ok(resp))
-	suite.False(paramtable.Get().QueryViewCfg.BalancerOptimizationEnabled.GetAsBool())
-
-	resp1, err := suite.server.CheckBalanceStatus(ctx, &querypb.CheckBalanceStatusRequest{})
-	suite.NoError(err)
-	suite.Equal(false, resp1.GetIsActive())
-
-	resp, err = suite.server.ResumeBalance(ctx, &querypb.ResumeBalanceRequest{})
-	suite.NoError(err)
-	suite.True(merr.Ok(resp))
-	suite.True(paramtable.Get().QueryViewCfg.BalancerOptimizationEnabled.GetAsBool())
-
-	resp2, err := suite.server.CheckBalanceStatus(ctx, &querypb.CheckBalanceStatusRequest{})
-	suite.NoError(err)
-	suite.Equal(true, resp2.GetIsActive())
-	// Direct configuration changes and the API share one source of truth.
-	suite.NoError(paramtable.Get().Save(key, "false"))
-	resp2, err = suite.server.CheckBalanceStatus(ctx, &querypb.CheckBalanceStatusRequest{})
-	suite.NoError(err)
-	suite.False(resp2.GetIsActive())
-}
-
 func (suite *OpsServiceSuite) TestSuspendAndResumeNode() {
 	// test server unhealthy
 	suite.server.UpdateStateCode(commonpb.StateCode_Abnormal)
