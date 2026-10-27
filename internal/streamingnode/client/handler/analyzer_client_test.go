@@ -99,7 +99,7 @@ func TestAnalyzerAssignmentRetry(t *testing.T) {
 				return &streamingpb.StreamingNodeRunAnalyzerResponse{}, nil
 			}).Build()
 			client := &handlerClientImpl{lifetime: typeutil.NewLifetime(), watcher: &analyzerWatcher{}, service: &analyzerService{}, rebalanceTrigger: &analyzerTrigger{}}
-			req := &streamingpb.StreamingNodeRunAnalyzerRequest{Source: &streamingpb.StreamingNodeRunAnalyzerRequest_FieldAnalyzer{FieldAnalyzer: &streamingpb.StreamingFieldAnalyzer{Vchannel: "p_1v0"}}}
+			req := &streamingpb.StreamingNodeRunAnalyzerRequest{Source: &streamingpb.StreamingNodeRunAnalyzerRequest_FieldAnalyzer{FieldAnalyzer: &streamingpb.StreamingFieldAnalyzer{Vchannel: "p_1v0"}}, Operation: &streamingpb.StreamingNodeRunAnalyzerRequest_Tokenize{Tokenize: &streamingpb.TokenizeOptions{}}}
 			resp, err := client.RunAnalyzer(context.Background(), req)
 			require.Nil(t, req.GetFieldAnalyzer().GetPchannel(), "retry must not mutate caller request")
 			switch scenario {
@@ -153,7 +153,7 @@ func TestAnalyzerAssignmentRetryPreservesExactReadSchema(t *testing.T) {
 				return &streamingpb.StreamingNodeRunAnalyzerResponse{Status: merr.Success()}, nil
 			}).Build()
 			client := &handlerClientImpl{lifetime: typeutil.NewLifetime(), watcher: &analyzerWatcher{}, service: &analyzerService{}, rebalanceTrigger: &analyzerTrigger{}}
-			req := &streamingpb.StreamingNodeRunAnalyzerRequest{Source: &streamingpb.StreamingNodeRunAnalyzerRequest_FieldAnalyzer{FieldAnalyzer: &streamingpb.StreamingFieldAnalyzer{Vchannel: "p_1v0", ReadSchemaVersion: &version}}}
+			req := &streamingpb.StreamingNodeRunAnalyzerRequest{Source: &streamingpb.StreamingNodeRunAnalyzerRequest_FieldAnalyzer{FieldAnalyzer: &streamingpb.StreamingFieldAnalyzer{Vchannel: "p_1v0", ReadSchemaVersion: &version}}, Operation: &streamingpb.StreamingNodeRunAnalyzerRequest_Tokenize{Tokenize: &streamingpb.TokenizeOptions{}}}
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			_, err := client.RunAnalyzer(ctx, req)
@@ -180,7 +180,7 @@ func TestAnalyzerInlineUsesExistingPicker(t *testing.T) {
 			return &streamingpb.StreamingNodeRunAnalyzerResponse{}, nil
 		}).Build()
 		owner := &handlerClientImpl{lifetime: typeutil.NewLifetime(), service: &analyzerService{}}
-		req := &streamingpb.StreamingNodeRunAnalyzerRequest{Source: &streamingpb.StreamingNodeRunAnalyzerRequest_InlineAnalyzer{InlineAnalyzer: &streamingpb.StreamingInlineAnalyzer{AnalyzerParams: "{}"}}}
+		req := &streamingpb.StreamingNodeRunAnalyzerRequest{Source: &streamingpb.StreamingNodeRunAnalyzerRequest_InlineAnalyzer{InlineAnalyzer: &streamingpb.StreamingInlineAnalyzer{AnalyzerParams: "{}"}}, Operation: &streamingpb.StreamingNodeRunAnalyzerRequest_Tokenize{Tokenize: &streamingpb.TokenizeOptions{}}}
 		_, err := owner.RunAnalyzer(context.Background(), req)
 		require.NoError(t, err)
 		require.Equal(t, 2, calls)
@@ -250,7 +250,7 @@ func TestAnalyzerInlineUnimplementedAndCancellation(t *testing.T) {
 				return nil, status.NewOnShutdownError("closing")
 			}).Build()
 			owner := &handlerClientImpl{lifetime: typeutil.NewLifetime(), service: &analyzerService{}}
-			req := &streamingpb.StreamingNodeRunAnalyzerRequest{Source: &streamingpb.StreamingNodeRunAnalyzerRequest_InlineAnalyzer{InlineAnalyzer: &streamingpb.StreamingInlineAnalyzer{}}}
+			req := &streamingpb.StreamingNodeRunAnalyzerRequest{Source: &streamingpb.StreamingNodeRunAnalyzerRequest_InlineAnalyzer{InlineAnalyzer: &streamingpb.StreamingInlineAnalyzer{}}, Operation: &streamingpb.StreamingNodeRunAnalyzerRequest_Tokenize{Tokenize: &streamingpb.TokenizeOptions{}}}
 			_, err := owner.RunAnalyzer(ctx, req)
 			if scenario == "unimplemented" {
 				require.Equal(t, codes.Unimplemented, grpcstatus.Code(err))
@@ -402,7 +402,7 @@ func TestAnalyzerRequestsRespectCallerDeadline(t *testing.T) {
 				if validate {
 					_, err = client.ValidateAnalyzer(ctx, &streamingpb.StreamingNodeValidateAnalyzerRequest{})
 				} else {
-					_, err = client.RunAnalyzer(ctx, &streamingpb.StreamingNodeRunAnalyzerRequest{Source: &streamingpb.StreamingNodeRunAnalyzerRequest_InlineAnalyzer{InlineAnalyzer: &streamingpb.StreamingInlineAnalyzer{}}})
+					_, err = client.RunAnalyzer(ctx, &streamingpb.StreamingNodeRunAnalyzerRequest{Source: &streamingpb.StreamingNodeRunAnalyzerRequest_InlineAnalyzer{InlineAnalyzer: &streamingpb.StreamingInlineAnalyzer{}}, Operation: &streamingpb.StreamingNodeRunAnalyzerRequest_Tokenize{Tokenize: &streamingpb.TokenizeOptions{}}})
 				}
 				done <- err
 			}()
@@ -441,7 +441,7 @@ func TestAnalyzerRequestsPreserveCallerContext(t *testing.T) {
 				return &streamingpb.StreamingNodeValidateAnalyzerResponse{}, nil
 			}).Build()
 			client := &handlerClientImpl{lifetime: typeutil.NewLifetime(), service: &analyzerService{}}
-			_, err := client.RunAnalyzer(ctx, &streamingpb.StreamingNodeRunAnalyzerRequest{Source: &streamingpb.StreamingNodeRunAnalyzerRequest_InlineAnalyzer{InlineAnalyzer: &streamingpb.StreamingInlineAnalyzer{}}})
+			_, err := client.RunAnalyzer(ctx, &streamingpb.StreamingNodeRunAnalyzerRequest{Source: &streamingpb.StreamingNodeRunAnalyzerRequest_InlineAnalyzer{InlineAnalyzer: &streamingpb.StreamingInlineAnalyzer{}}, Operation: &streamingpb.StreamingNodeRunAnalyzerRequest_Tokenize{Tokenize: &streamingpb.TokenizeOptions{}}})
 			require.NoError(t, err)
 			_, err = client.ValidateAnalyzer(ctx, &streamingpb.StreamingNodeValidateAnalyzerRequest{})
 			require.NoError(t, err)
