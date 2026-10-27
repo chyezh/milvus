@@ -29,12 +29,22 @@ func (s *ManualPlacementSuite) SetupSuite() {
 
 func (s *ManualPlacementSuite) TestMoveSegments() {
 	c, ctx := s.Cluster, s.Cluster.GetContext()
+	status, err := c.MixCoordClient.ResumeBalance(ctx, &querypb.ResumeBalanceRequest{})
+	s.Require().NoError(merr.CheckRPCCall(status, err))
+	balance, err := c.MixCoordClient.CheckBalanceStatus(ctx, &querypb.CheckBalanceStatusRequest{})
+	s.Require().NoError(merr.CheckRPCCall(balance, err))
+	s.Require().True(balance.GetIsActive())
+	status, err = c.MixCoordClient.SuspendBalance(ctx, &querypb.SuspendBalanceRequest{})
+	s.Require().NoError(merr.CheckRPCCall(status, err))
+	balance, err = c.MixCoordClient.CheckBalanceStatus(ctx, &querypb.CheckBalanceStatusRequest{})
+	s.Require().NoError(merr.CheckRPCCall(balance, err))
+	s.Require().False(balance.GetIsActive())
 	second := c.AddQueryNode()
 	name := "ManualPlacement" + funcutil.GenRandomStr()
 	const dim, rows = 128, 3000
 	schema, err := proto.Marshal(integration.ConstructSchema(name, dim, true))
 	s.Require().NoError(err)
-	status, err := c.MilvusClient.CreateCollection(ctx, &milvuspb.CreateCollectionRequest{
+	status, err = c.MilvusClient.CreateCollection(ctx, &milvuspb.CreateCollectionRequest{
 		CollectionName: name, Schema: schema, ShardsNum: 2,
 		Properties: []*commonpb.KeyValuePair{{Key: common.CollectionAutoCompactionKey, Value: "false"}},
 	})

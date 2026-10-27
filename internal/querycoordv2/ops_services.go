@@ -26,7 +26,6 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/querycoordv2/session"
-	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
 	"github.com/milvus-io/milvus/internal/util/streamingutil"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
@@ -36,69 +35,21 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
+// Deprecated: QueryView no longer uses independently controlled checkers.
 func (s *Server) ListCheckers(ctx context.Context, req *querypb.ListCheckersRequest) (*querypb.ListCheckersResponse, error) {
-	log := mlog.With()
-	log.Info(ctx, "list checkers request received")
-	if err := merr.CheckHealthy(s.State()); err != nil {
-		log.Warn(ctx, "failed to list checkers", mlog.Err(err))
-		return &querypb.ListCheckersResponse{
-			Status: merr.Status(err),
-		}, nil
-	}
-	checkers := s.checkerController.Checkers()
-	checkerIDSet := typeutil.NewSet(req.CheckerIDs...)
-
-	resp := &querypb.ListCheckersResponse{
-		Status: merr.Success(),
-	}
-	for _, checker := range checkers {
-		if checkerIDSet.Len() == 0 || checkerIDSet.Contain(int32(checker.ID())) {
-			resp.CheckerInfos = append(resp.CheckerInfos, &querypb.CheckerInfo{
-				Id:        int32(checker.ID()),
-				Activated: checker.IsActive(),
-				Desc:      checker.ID().String(),
-				Found:     true,
-			})
-			checkerIDSet.Remove(int32(checker.ID()))
-		}
-	}
-
-	for _, id := range checkerIDSet.Collect() {
-		resp.CheckerInfos = append(resp.CheckerInfos, &querypb.CheckerInfo{
-			Id:    id,
-			Found: false,
-		})
-	}
-
-	return resp, nil
+	return &querypb.ListCheckersResponse{
+		Status: merr.Status(merr.Wrap(merr.ErrServiceUnimplemented, "ListCheckers is deprecated; use CheckBalanceStatus for QueryView balance configuration")),
+	}, nil
 }
 
+// Deprecated: use ResumeBalance to enable optional QueryView balancing.
 func (s *Server) ActivateChecker(ctx context.Context, req *querypb.ActivateCheckerRequest) (*commonpb.Status, error) {
-	log := mlog.With()
-	log.Info(ctx, "activate checker request received")
-	if err := merr.CheckHealthy(s.State()); err != nil {
-		log.Warn(ctx, "failed to activate checker", mlog.Err(err))
-		return merr.Status(err), nil
-	}
-	if err := s.checkerController.Activate(utils.CheckerType(req.CheckerID)); err != nil {
-		log.Warn(ctx, "failed to activate checker", mlog.Err(err))
-		return merr.Status(merr.WrapErrParameterInvalidMsg("invalid checker type %d: %v", req.CheckerID, err)), nil
-	}
-	return merr.Success(), nil
+	return merr.Status(merr.Wrap(merr.ErrServiceUnimplemented, "ActivateChecker is deprecated; use ResumeBalance for QueryView balancing")), nil
 }
 
+// Deprecated: use SuspendBalance to disable optional QueryView balancing.
 func (s *Server) DeactivateChecker(ctx context.Context, req *querypb.DeactivateCheckerRequest) (*commonpb.Status, error) {
-	log := mlog.With()
-	log.Info(ctx, "deactivate checker request received")
-	if err := merr.CheckHealthy(s.State()); err != nil {
-		log.Warn(ctx, "failed to deactivate checker", mlog.Err(err))
-		return merr.Status(err), nil
-	}
-	if err := s.checkerController.Deactivate(utils.CheckerType(req.CheckerID)); err != nil {
-		log.Warn(ctx, "failed to deactivate checker", mlog.Err(err))
-		return merr.Status(merr.WrapErrParameterInvalidMsg("invalid checker type %d: %v", req.CheckerID, err)), nil
-	}
-	return merr.Success(), nil
+	return merr.Status(merr.Wrap(merr.ErrServiceUnimplemented, "DeactivateChecker is deprecated; use SuspendBalance for QueryView balancing")), nil
 }
 
 // ListQueryNode return all available node list, for each node, return it's (nodeID, ip_address)
@@ -213,7 +164,7 @@ func (s *Server) ResumeChannelBalance(ctx context.Context) error {
 	return nil
 }
 
-// SuspendBalance background balance for all query node, include stopping balance and auto balance
+// SuspendBalance disables optional QueryView placement optimization.
 func (s *Server) SuspendBalance(ctx context.Context, req *querypb.SuspendBalanceRequest) (*commonpb.Status, error) {
 	log := mlog.With()
 	log.Info(ctx, "SuspendBalance request received")
@@ -223,7 +174,7 @@ func (s *Server) SuspendBalance(ctx context.Context, req *querypb.SuspendBalance
 		return merr.Status(err), nil
 	}
 
-	err := s.checkerController.Deactivate(utils.BalanceChecker)
+	err := paramtable.Get().Save(paramtable.Get().QueryViewCfg.BalancerOptimizationEnabled.Key, "false")
 	if err != nil {
 		log.Warn(ctx, errMsg, mlog.Err(err))
 		return merr.Status(err), nil
@@ -232,7 +183,7 @@ func (s *Server) SuspendBalance(ctx context.Context, req *querypb.SuspendBalance
 	return merr.Success(), nil
 }
 
-// ResumeBalance background balance for all query node, include stopping balance and auto balance
+// ResumeBalance enables optional QueryView placement optimization.
 func (s *Server) ResumeBalance(ctx context.Context, req *querypb.ResumeBalanceRequest) (*commonpb.Status, error) {
 	log := mlog.With()
 
@@ -243,7 +194,7 @@ func (s *Server) ResumeBalance(ctx context.Context, req *querypb.ResumeBalanceRe
 		return merr.Status(err), nil
 	}
 
-	err := s.checkerController.Activate(utils.BalanceChecker)
+	err := paramtable.Get().Save(paramtable.Get().QueryViewCfg.BalancerOptimizationEnabled.Key, "true")
 	if err != nil {
 		log.Warn(ctx, errMsg, mlog.Err(err))
 		return merr.Status(err), nil
@@ -265,17 +216,9 @@ func (s *Server) CheckBalanceStatus(ctx context.Context, req *querypb.CheckBalan
 		}, nil
 	}
 
-	isActive, err := s.checkerController.IsActive(utils.BalanceChecker)
-	if err != nil {
-		log.Warn(ctx, errMsg, mlog.Err(err))
-		return &querypb.CheckBalanceStatusResponse{
-			Status: merr.Status(err),
-		}, nil
-	}
-
 	return &querypb.CheckBalanceStatusResponse{
 		Status:   merr.Success(),
-		IsActive: isActive,
+		IsActive: paramtable.Get().QueryViewCfg.BalancerOptimizationEnabled.GetAsBool(),
 	}, nil
 }
 
