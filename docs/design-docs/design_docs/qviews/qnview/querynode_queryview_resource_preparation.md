@@ -327,6 +327,21 @@ resource estimates; it releases the initial preparing Collection before becoming
 available to Views. The Go View owns its Collection until all operations finish.
 
 
+Segment metrics inspect SegmentResourceManager's actual physical bases, not
+View requirements or the legacy SegmentManager registry. Sampling increments
+the existing resource/base operation references under the manager lock, then
+reads physical metadata outside it and releases the references. A closing
+resource cannot acquire a new sample; reconciliation cannot retire a sampled
+base. No schema reference or additional collection pin is needed. Resources
+retained by old Views or queries remain observable until retirement.
+
+A base shared by several Views is sampled once. Distinct physical bases of one
+SegmentID are aggregated into one response entry: memory sums the existing
+per-base MemSize measurements, rows use the maximum loaded insert count rather
+than multiplying logical rows, and indexed fields are merged by field/build ID.
+The existing MemSize and index/raw-data measurements remain physical inspection
+values, not an atomic snapshot of all concurrent reopen/index operations.
+
 Physical ReadStates retain immutable resource generations: columns, indexes,
 readers and row-domain metadata. PublishedSegmentState also owns a
 SealedFieldLayout containing the independent descriptions needed by those

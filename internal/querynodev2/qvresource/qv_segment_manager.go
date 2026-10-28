@@ -24,7 +24,7 @@ func NewQueryViewPhysicalSegmentLoader(manager *segments.Manager, loader segment
 	})
 }
 
-func NewQueryViewSegmentManager(ctx context.Context, manager *segments.Manager, loader segments.Loader, meta qnview.QueryViewLoadMetadataProvider, streams wal.TransformLogStreamManager, streamFactory qnview.SegmentLoadInfoStreamFactory) qnview.SegmentManager {
+func NewQueryViewSegmentManager(ctx context.Context, manager *segments.Manager, loader segments.Loader, meta qnview.QueryViewLoadMetadataProvider, streams wal.TransformLogStreamManager, streamFactory qnview.SegmentLoadInfoStreamFactory) *qnview.SegmentResourceManager {
 	if manager == nil || loader == nil || meta == nil || streams == nil || streamFactory == nil {
 		return nil
 	}

@@ -12,5 +12,10 @@ func (node *QueryNode) NewQueryViewSegmentManager(ctx context.Context, meta qnvi
 	if node == nil {
 		return nil
 	}
-	return qvresource.NewQueryViewSegmentManager(ctx, node.manager, node.loader, meta, streams, streamFactory)
+	manager := qvresource.NewQueryViewSegmentManager(ctx, node.manager, node.loader, meta, streams, streamFactory)
+	if manager == nil {
+		return nil
+	}
+	node.queryViewSegments.Store(manager)
+	return manager
 }
