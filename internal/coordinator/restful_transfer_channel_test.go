@@ -97,3 +97,23 @@ func TestTransferStreamingChannelWaits(t *testing.T) {
 		t.Fatal(ctx.Err())
 	}
 }
+
+func TestTransferBatchSegmentMoveOnly(t *testing.T) {
+	calls := 0
+	patch := mockey.Mock((*querycoordv2.Server).TransferSegment).To(func(_ *querycoordv2.Server, _ context.Context, req *querypb.TransferSegmentRequest) (*commonpb.Status, error) {
+		calls++
+		require.False(t, req.CopyMode)
+		require.Equal(t, int64(1), req.SourceNodeID)
+		require.True(t, req.ToAllNodes)
+		require.True(t, req.TransferAll)
+		return merr.Success(), nil
+	}).Build()
+	defer patch.UnPatch()
+	coord := &mixCoordImpl{queryCoordServer: &querycoordv2.Server{}}
+	for _, suffix := range []string{"", `,"copy_mode":true`, `,"copy_mode":false`} {
+		w := httptest.NewRecorder()
+		coord.TransferBatchSegment(w, httptest.NewRequest(http.MethodPost, "/management/batch/transfer", strings.NewReader(`{"source_node_id":1`+suffix+`}`)))
+		require.Equal(t, http.StatusOK, w.Code)
+	}
+	require.Equal(t, 3, calls)
+}

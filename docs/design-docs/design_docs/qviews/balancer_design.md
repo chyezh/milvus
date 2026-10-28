@@ -223,6 +223,9 @@ including release/reload with identical configuration content.
 
 `LoadBalance` and `TransferSegment` use the synchronous, exact-version
 [Manual placement](#manual-placement) contract below.
+All Segment transfers are moves. Both REST variants ignore the legacy
+`copy_mode` parameter; the retained RPC `CopyMode` field is ignored as well.
+There is no separate copy-placement path.
 
 `TransferChannel` instead delegates to the WAL Balancer: it moves a whole
 PChannel between StreamingNodes and waits for target WAL assignment confirmation,
@@ -257,6 +260,15 @@ safe source-node shutdown. `LoadBalance` and `TransferSegment` already wait for
 the accepted QueryView to become Up; neither promises that all old leases and
 in-flight requests on the source node have drained. `GetQueryNodeDistribution`
 remains available for inspecting confirmed resources.
+
+Proxy `/management/querycoord/distribution/check` is a deprecated HTTP 200
+no-op with an explicit message that no check was performed. It does not call
+the deprecated RPC. `/management/query/task_queue/clear` follows the same
+HTTP convention and does not clear any queues. Coordinator and QueryCoord
+`ClearReadTaskQueue` RPCs return `ErrServiceUnimplemented` with a deprecated
+reason, without fan-out to Proxy or QN legacy schedulers. QueryView execution
+is not governed by those schedulers. The lower-level worker RPC definitions
+remain available; they are no longer invoked by these management endpoints.
 
 ### 2.2 BalancePolicy
 

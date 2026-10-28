@@ -20,9 +20,7 @@ import (
 	"context"
 	"strconv"
 
-	"github.com/cockroachdb/errors"
 	"github.com/samber/lo"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus/internal/querycoordv2/session"
@@ -33,7 +31,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
-	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
 // Deprecated: QueryView no longer uses independently controlled checkers.
@@ -129,42 +126,6 @@ func (s *Server) GetQueryNodeDistribution(ctx context.Context, req *querypb.GetQ
 	}, nil
 }
 
-func (s *Server) SuspendChannelBalance(ctx context.Context) error {
-	log := mlog.With()
-	log.Info(ctx, "SuspendChannelBalance request received")
-
-	errMsg := "failed to suspend channel balance for all querynode"
-	if err := merr.CheckHealthy(s.State()); err != nil {
-		log.Warn(ctx, errMsg, mlog.Err(err))
-		return err
-	}
-	if err := paramtable.Get().Save(Params.QueryCoordCfg.AutoBalanceChannel.Key, "false"); err != nil {
-		log.Warn(ctx, err.Error(), mlog.Err(err))
-		return err
-	}
-	log.Info(ctx, "SuspendChannelBalance request finished successfully")
-	return nil
-}
-
-func (s *Server) ResumeChannelBalance(ctx context.Context) error {
-	log := mlog.With()
-	log.Info(ctx, "ResumeChannelBalance request received")
-
-	errMsg := "failed to resume channel balance for all querynode"
-	if err := merr.CheckHealthy(s.State()); err != nil {
-		log.Warn(ctx, errMsg, mlog.Err(err))
-		return err
-	}
-
-	if err := paramtable.Get().Save(Params.QueryCoordCfg.AutoBalanceChannel.Key, "true"); err != nil {
-		log.Warn(ctx, err.Error(), mlog.Err(err))
-		return err
-	}
-	log.Info(ctx, "ResumeChannelBalance request finished successfully")
-
-	return nil
-}
-
 // SuspendBalance disables optional QueryView placement optimization.
 func (s *Server) SuspendBalance(ctx context.Context, req *querypb.SuspendBalanceRequest) (*commonpb.Status, error) {
 	log := mlog.With()
@@ -232,21 +193,6 @@ func (s *Server) CheckBalanceStatus(ctx context.Context, req *querypb.CheckBalan
 		Status:   merr.Success(),
 		IsActive: paramtable.Get().QueryViewCfg.BalancerOptimizationEnabled.GetAsBool(),
 	}, nil
-}
-
-func (s *Server) CheckChannelBalanceActive(ctx context.Context) (bool, error) {
-	log := mlog.With()
-	log.Info(ctx, "ResumeChannelBalance request received")
-
-	if err := merr.CheckHealthy(s.State()); err != nil {
-		log.Warn(ctx, "failed to resume channel balance", mlog.Err(err))
-		return false, err
-	}
-	active := paramtable.Get().QueryCoordCfg.AutoBalanceChannel.GetAsBool()
-
-	log.Info(ctx, "ResumeChannelBalance request finished successfully", mlog.Bool("active", active))
-
-	return active, nil
 }
 
 // IsNodeSuspended checks if a specific node is suspended based on the provided request.
@@ -328,9 +274,7 @@ func (s *Server) TransferSegment(ctx context.Context, req *querypb.TransferSegme
 	if err := merr.CheckHealthy(s.State()); err != nil {
 		return merr.Status(err), nil
 	}
-	if req.GetCopyMode() {
-		return merr.Status(merr.Wrap(merr.ErrServiceUnimplemented, "QueryView manual placement does not support copy mode")), nil
-	}
+	// CopyMode is retained on the wire but ignored: QueryView only supports move.
 	var destinations, segments []int64
 	if !req.GetToAllNodes() {
 		destinations = []int64{req.GetTargetNodeID()}
@@ -371,80 +315,11 @@ func (s *Server) TransferChannel(ctx context.Context, req *querypb.TransferChann
 	return merr.Status(b.TransferChannels(ctx, transfer)), nil
 }
 
+// Deprecated: the legacy scheduler cannot clear QueryView execution queues.
 func (s *Server) ClearReadTaskQueue(ctx context.Context, req *internalpb.ClearReadTaskQueueRequest) (*internalpb.ClearReadTaskQueueResponse, error) {
-	mlog.Info(ctx, "ClearReadTaskQueue request received",
-		mlog.String("taskType", req.GetTaskType()),
-		mlog.String("reason", req.GetReason()))
-
-	resp := &internalpb.ClearReadTaskQueueResponse{Status: merr.Success()}
-	if err := merr.CheckHealthy(s.State()); err != nil {
-		resp.Status = merr.Status(err)
-		return resp, nil
-	}
-
-	nodes := s.nodeMgr.GetAll()
-	group := &errgroup.Group{}
-	results := make(chan *internalpb.ClearReadTaskQueueComponentResult, len(nodes))
-	for _, node := range nodes {
-		if node.IsStoppingState() {
-			continue
-		}
-		nodeID := node.ID()
-		group.Go(func() error {
-			nodeResp, err := s.cluster.ClearReadTaskQueue(ctx, nodeID, req)
-			if errors.Is(err, merr.ErrServiceUnimplemented) {
-				return nil
-			}
-			if err != nil {
-				results <- &internalpb.ClearReadTaskQueueComponentResult{
-					Status: merr.Status(err),
-					Role:   typeutil.QueryNodeRole,
-					NodeID: nodeID,
-				}
-				return merr.Wrapf(err, "ClearReadTaskQueue failed, queryNodeID = %d", nodeID)
-			}
-
-			if len(nodeResp.GetResults()) > 0 {
-				for _, result := range nodeResp.GetResults() {
-					results <- result
-				}
-			} else {
-				results <- &internalpb.ClearReadTaskQueueComponentResult{
-					Status:          nodeResp.GetStatus(),
-					Role:            typeutil.QueryNodeRole,
-					NodeID:          nodeID,
-					QueuedCleared:   nodeResp.GetQuerynodeQueuedCleared(),
-					QueuedNqCleared: nodeResp.GetQueuedNqCleared(),
-				}
-			}
-			if !merr.Ok(nodeResp.GetStatus()) {
-				return merr.Wrapf(merr.Error(nodeResp.GetStatus()), "ClearReadTaskQueue failed, queryNodeID = %d", nodeID)
-			}
-			return nil
-		})
-	}
-
-	err := group.Wait()
-	close(results)
-	for result := range results {
-		resp.Results = append(resp.Results, result)
-		if result.GetRole() == typeutil.QueryNodeRole && merr.Ok(result.GetStatus()) {
-			resp.QuerynodeQueuedCleared += result.GetQueuedCleared()
-			resp.QueuedNqCleared += result.GetQueuedNqCleared()
-		}
-	}
-	if err != nil {
-		resp.Status = merr.Status(err)
-	}
-
-	mlog.Info(ctx, "cleared querynode read task queues",
-		mlog.String("taskType", req.GetTaskType()),
-		mlog.String("reason", req.GetReason()),
-		mlog.Int("queryNodes", len(resp.GetResults())),
-		mlog.Int64("queuedCleared", resp.GetQuerynodeQueuedCleared()),
-		mlog.Int64("queuedNQCleared", resp.GetQueuedNqCleared()),
-		mlog.Err(err))
-	return resp, nil
+	return &internalpb.ClearReadTaskQueueResponse{
+		Status: merr.Status(merr.Wrap(merr.ErrServiceUnimplemented, "ClearReadTaskQueue is deprecated; no queues were cleared")),
+	}, nil
 }
 
 // Deprecated: QueryView migration APIs wait for the accepted view to become Up.
