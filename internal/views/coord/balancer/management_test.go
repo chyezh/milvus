@@ -65,18 +65,24 @@ func TestManualBalance(t *testing.T) {
 		source                 int64
 		destinations, segments []int64
 		err                    error
+		message                string
 	}{
-		{"unknown source", 99, []int64{2}, []int64{101}, merr.ErrNodeNotFound},
-		{"unknown destination", 1, []int64{99}, []int64{101}, merr.ErrNodeNotFound},
-		{"one missing segment rejects whole request", 1, []int64{2}, []int64{101, 999}, merr.ErrSegmentNotFound},
-		{"all missing segments", 1, []int64{2}, []int64{998, 999}, merr.ErrSegmentNotFound},
-		{"unloaded partition", 1, []int64{2}, []int64{201}, merr.ErrSegmentNotFound},
-		{"source only", 1, []int64{1}, []int64{101}, merr.ErrParameterInvalid},
-		{"missing segment before source-only destination", 1, []int64{1}, []int64{999}, merr.ErrSegmentNotFound},
+		{"unknown source", 99, []int64{2}, []int64{101}, merr.ErrNodeNotFound, "source node not found in any replica"},
+		{"unknown destination", 1, []int64{99}, []int64{101}, merr.ErrNodeNotFound, "destination node not found in the same replica"},
+		{"one missing segment rejects whole request", 1, []int64{2}, []int64{101, 999}, merr.ErrSegmentNotFound, "segment not found in source node"},
+		{"all missing segments", 1, []int64{2}, []int64{998, 999}, merr.ErrSegmentNotFound, "segment not found in source node"},
+		{"unloaded partition", 1, []int64{2}, []int64{201}, merr.ErrSegmentNotFound, "segment not found in source node"},
+		{"source only", 1, []int64{1}, []int64{101}, merr.ErrParameterInvalid, "no destination query node other than source"},
+		{"missing segment before source-only destination", 1, []int64{1}, []int64{999}, merr.ErrSegmentNotFound, "segment not found in source node"},
+		{"mixed selection before source-only destination", 1, []int64{1}, []int64{101, 999}, merr.ErrSegmentNotFound, "segment not found in source node"},
+		{"mixed selection before invalid destination", 1, []int64{99}, []int64{101, 999}, merr.ErrSegmentNotFound, "segment not found in source node"},
+		{"mixed selection with automatic destination", 1, nil, []int64{101, 999}, merr.ErrSegmentNotFound, "segment not found in source node"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := b.MoveSegments(t.Context(), 1, tc.source, tc.destinations, tc.segments)
 			require.ErrorIs(t, err, tc.err)
+			require.ErrorContains(t, err, tc.message)
+			require.Equal(t, map[int64]int64{101: 1, 102: 1}, flattenAssignments(source.Build()))
 			require.Empty(t, accepted)
 		})
 	}
@@ -95,6 +101,11 @@ func TestManualBalance(t *testing.T) {
 			}
 		}
 	}
+	accepted = nil
+	_, err = b.MoveSegments(t.Context(), 1, 1, []int64{2}, []int64{101, 102})
+	require.NoError(t, err)
+	require.Len(t, accepted, 1)
+	require.Equal(t, map[int64]int64{101: 2, 102: 2}, flattenAssignments(accepted[0]))
 	accepted = nil
 	_, err = b.MoveSegments(t.Context(), 1, 1, nil, nil)
 	require.NoError(t, err)
@@ -148,6 +159,21 @@ func TestManualBalance(t *testing.T) {
 	c.PublishNode(2, &NodeInfo{NodeID: 2, Alive: true, Stopping: true, ResourceGroup: "rg1"})
 	_, err = b.MoveSegments(t.Context(), 1, 1, []int64{2}, []int64{101})
 	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+
+	// A single-node replica has no automatic destination. Missing source data
+	// must still take precedence, including when the request also selects data
+	// that is present. Neither failure may publish a partial migration.
+	policy.Plan(c, []qviews.ShardID{id})
+	pl, err := b.Placement(t.Context(), 1)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1}, pl.Nodes[id.ReplicaID])
+	_, err = b.MoveSegments(t.Context(), 1, 1, nil, []int64{101, 999})
+	require.ErrorIs(t, err, merr.ErrSegmentNotFound)
+	require.ErrorContains(t, err, "segment not found in source node")
+	require.Empty(t, accepted)
+	_, err = b.MoveSegments(t.Context(), 1, 1, nil, []int64{101})
+	require.ErrorIs(t, err, merr.ErrParameterInvalid)
+	require.Empty(t, accepted)
 }
 
 func TestManualPlacePartialSubmission(t *testing.T) {

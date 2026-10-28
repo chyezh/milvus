@@ -1263,7 +1263,11 @@ owns operation-specific filtering and validation, may remove entries, and decide
 whether missing matches are errors. The segment-move adapter implements source
 and target semantics, segment matching, replica/RG eligibility and configuration
 checks inside this callback. ManualPlace does not impose those policies or read
-ReplicaManager. It rejects additions without a captured manager/source, which
+ReplicaManager. The segment adapter validates all requested source segments
+before checking destinations, and validates every selected shard before changing
+assignments. Invalid requests therefore submit no views, including mixed
+valid/missing segment requests when no other query node is available.
+ManualPlace rejects additions without a captured manager/source, which
 cannot participate in its source-version submission protocol.
 
 Data integrity is a mandatory ManualPlace invariant. Before any submission, each

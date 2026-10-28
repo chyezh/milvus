@@ -16,7 +16,7 @@ func (b *DefaultBalancer) MoveSegments(ctx context.Context, collectionID, source
 			return merr.WrapErrParameterInvalidMsg("source query node is required")
 		}
 		if b.cache.GetNode(source) == nil {
-			return merr.WrapErrNodeNotFound(source)
+			return merr.WrapErrNodeNotFound(source, "source node not found in any replica")
 		}
 		if collectionID != 0 {
 			collection := b.cache.GetCollection(collectionID)
@@ -29,25 +29,34 @@ func (b *DefaultBalancer) MoveSegments(ctx context.Context, collectionID, source
 		for _, segment := range segments {
 			wanted[segment] = false
 		}
-		placements := make(map[int64]*CollectionPlacement)
-		rows := make(map[int64]int64)
+		// Validate the complete source selection before destinations or mutations.
+		// A mixed valid/missing request must fail independently of replica size.
 		for id, builder := range builders {
 			matching := false
 			for _, ids := range builder.Assignments()[source] {
 				for _, segment := range ids {
 					if _, selected := wanted[segment]; len(wanted) == 0 || selected {
 						matching = true
-						break
+						if selected {
+							wanted[segment] = true
+						}
 					}
-				}
-				if matching {
-					break
 				}
 			}
 			if !matching {
 				delete(builders, id)
-				continue
 			}
+		}
+		for _, segment := range segments {
+			if !wanted[segment] {
+				return merr.WrapErrSegmentNotFound(segment, "segment not found in source node")
+			}
+		}
+
+		placements := make(map[int64]*CollectionPlacement)
+		rows := make(map[int64]int64)
+		targets := make(map[qviews.ShardID][]int64, len(builders))
+		for id, builder := range builders {
 			meta := builder.Build().GetMeta()
 			pl := placements[meta.GetCollectionId()]
 			if pl == nil {
@@ -69,6 +78,28 @@ func (b *DefaultBalancer) MoveSegments(ctx context.Context, collectionID, source
 			slices.Sort(candidates)
 			candidates = slices.Compact(candidates)
 			candidates = slices.DeleteFunc(candidates, func(node int64) bool { return node == source })
+			if len(candidates) == 0 {
+				return merr.WrapErrParameterInvalidMsg("no destination query node other than source")
+			}
+			for _, node := range candidates {
+				if !slices.Contains(pl.Nodes[meta.GetReplicaId()], node) {
+					return merr.WrapErrNodeNotFound(node, "destination node not found in the same replica")
+				}
+				if _, ok := rows[node]; !ok {
+					entry := b.cache.GetNode(node)
+					if entry == nil || !entry.Info().Alive || entry.Info().Stopping {
+						return merr.WrapErrServiceUnavailableMsg("destination node %d is unavailable", node)
+					}
+					rows[node] = entry.Info().TargetLogicalSize
+				}
+			}
+			targets[id] = candidates
+		}
+
+		// All request validation succeeded; now edit the detached builders.
+		for id, builder := range builders {
+			meta := builder.Build().GetMeta()
+			candidates := targets[id]
 			assignments := builder.Assignments()
 			// Iterate a snapshot: destinations are inserted into assignments below.
 			partitions := assignments[source]
@@ -78,21 +109,6 @@ func (b *DefaultBalancer) MoveSegments(ctx context.Context, collectionID, source
 					if _, requested := wanted[segment]; len(wanted) != 0 && !requested {
 						remaining = append(remaining, segment)
 						continue
-					}
-					if len(candidates) == 0 {
-						return merr.WrapErrParameterInvalidMsg("no destination query node other than source")
-					}
-					for _, node := range candidates {
-						if !slices.Contains(pl.Nodes[meta.GetReplicaId()], node) {
-							return merr.WrapErrNodeNotFound(node, "destination is outside the replica placement")
-						}
-						if _, ok := rows[node]; !ok {
-							entry := b.cache.GetNode(node)
-							if entry == nil || !entry.Info().Alive || entry.Info().Stopping {
-								return merr.WrapErrServiceUnavailableMsg("destination node %d is unavailable", node)
-							}
-							rows[node] = entry.Info().TargetLogicalSize
-						}
 					}
 					target := candidates[0]
 					for _, node := range candidates[1:] {
@@ -109,9 +125,6 @@ func (b *DefaultBalancer) MoveSegments(ctx context.Context, collectionID, source
 							rows[target] += info.LogicalSize
 						}
 					}
-					if len(wanted) != 0 {
-						wanted[segment] = true
-					}
 				}
 				if len(remaining) == 0 {
 					delete(partitions, partition)
@@ -121,11 +134,6 @@ func (b *DefaultBalancer) MoveSegments(ctx context.Context, collectionID, source
 			}
 			if len(partitions) == 0 {
 				delete(assignments, source)
-			}
-		}
-		for segment, found := range wanted {
-			if !found {
-				return merr.WrapErrSegmentNotFound(segment, "segment not found in source placement")
 			}
 		}
 		for collection, placement := range placements {
