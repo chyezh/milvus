@@ -352,12 +352,12 @@ func (suite *OpsServiceSuite) TestTransferSegment() {
 	suite.ErrorIs(merr.CheckRPCCall(resp, err), failure)
 	req.CopyMode = true
 	resp, err = suite.server.TransferSegment(suite.T().Context(), req)
-	suite.ErrorIs(merr.CheckRPCCall(resp, err), merr.ErrServiceUnimplemented)
-	suite.Equal(2, calls)
+	suite.ErrorIs(merr.CheckRPCCall(resp, err), failure)
+	suite.Equal(3, calls)
 	suite.server.UpdateStateCode(commonpb.StateCode_Initializing)
 	resp, err = suite.server.TransferSegment(suite.T().Context(), req)
 	suite.ErrorIs(merr.CheckRPCCall(resp, err), merr.ErrServiceNotReady)
-	suite.Equal(2, calls)
+	suite.Equal(3, calls)
 }
 
 func (suite *OpsServiceSuite) TestTransferChannel() {
