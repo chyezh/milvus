@@ -1218,6 +1218,29 @@ configuration after release). Store versions increase across release/reload, so
 old Up views cannot satisfy the new load. A successful check describes a point
 in time during the call; subsequent configuration changes require a new poll.
 
+**Loaded feature statistics** use the same current-config readiness check over
+metadata's complete vchannel set. Counts, replica-number buckets and resource
+groups come from the returned immutable LoadConfig, not legacy collection or
+replica managers. A RootCoord collection snapshot excludes dropped collections.
+Nonempty preload hints are a partial load when they omit required field IDs;
+RequiredFields includes dynamic and flattened StructArray fields. Empty hints
+mean full preload. These statistics do not imply that fields outside explicit
+preload hints are inaccessible to lazy queries.
+
+**Cluster default placement changes** reconcile LoadConfigStore on startup,
+configuration notifications, periodic checks and retries. The watcher coalesces
+notifications; it unregisters handlers and cancels outstanding work on shutdown.
+Each collection update takes the normal exclusive collection broadcast lock,
+re-reads the current LoadConfig and cluster defaults, and skips released
+collections or user-specified placement unless force override is enabled.
+Replica counts are compared per resource group, including repeated group names.
+The explicit UpdateLoadConfig RPC uses the same AlterLoadConfig broadcast and
+ordered callback. Updates preserve partitions, field requirements and user
+intent, retain/reuse replica IDs where possible, and return after durable config
+application. They do not wait for QueryView Up while holding up updates to other
+collections; shared load readiness reports asynchronous convergence. No legacy
+replica promotion or Target/Distribution observer participates.
+
 **Query segment inspection**: `GetQuerySegmentInfo` / `GetLoadSegmentInfo`
 report the latest serving sealed-segment membership per vchannel from the
 Registry's Up views, restricted to replicas in the current LoadConfig. Choose
