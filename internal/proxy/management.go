@@ -576,73 +576,12 @@ func (node *Proxy) TransferSegment(w http.ResponseWriter, req *http.Request) {
 	w.Write([]byte(`{"msg": "OK"}`))
 }
 
+// Deprecated: channel migration is managed by the Streaming REST API.
+// Keep the legacy endpoint as a successful no-op for existing automation.
 func (node *Proxy) TransferChannel(w http.ResponseWriter, req *http.Request) {
-	err := req.ParseForm() //nolint:gosec // internal admin endpoint
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, `{"msg": "failed to transfer channel, %s"}`, err.Error()) //nolint:gosec // internal admin endpoint
-		return
-	}
-
-	request := &querypb.TransferChannelRequest{
-		Base: commonpbutil.NewMsgBase(),
-	}
-
-	source, err := strconv.ParseInt(req.FormValue("source_node_id"), 10, 64) //nolint:gosec // internal admin endpoint
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, `{"msg": failed to transfer channel", %s"}`, err.Error())
-		return
-	}
-	request.SourceNodeID = source
-
-	target := req.FormValue("target_node_id") //nolint:gosec // internal admin endpoint
-	if len(target) == 0 {
-		request.ToAllNodes = true
-	} else {
-		value, err := strconv.ParseInt(target, 10, 64)
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprintf(w, `{"msg": "failed to transfer channel, %s"}`, err.Error())
-			return
-		}
-		request.TargetNodeID = value
-	}
-
-	channel := req.FormValue("channel_name") //nolint:gosec // internal admin endpoint
-	if len(channel) == 0 {
-		request.TransferAll = true
-	} else {
-		request.ChannelName = channel
-	}
-
-	copyMode := req.FormValue("copy_mode") //nolint:gosec // internal admin endpoint
-	if len(copyMode) == 0 {
-		request.CopyMode = false
-	} else {
-		value, err := strconv.ParseBool(copyMode)
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprintf(w, `{"msg": "failed to transfer channel, %s"}`, err.Error()) //nolint:gosec // internal admin endpoint
-			return
-		}
-		request.CopyMode = value
-	}
-
-	resp, err := node.mixCoord.TransferChannel(req.Context(), request)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprintf(w, `{"msg": "failed to transfer channel, %s"}`, err.Error())
-		return
-	}
-
-	if !merr.Ok(resp) {
-		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprintf(w, `{"msg": "failed to transfer channel, %s"}`, resp.GetReason())
-		return
-	}
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"msg": "OK"}`))
+	w.Write([]byte(`{"msg": "deprecated: no migration performed; use /management/streaming/transfer on Coordinator"}`))
 }
 
 func (node *Proxy) CheckQueryNodeDistribution(w http.ResponseWriter, req *http.Request) {

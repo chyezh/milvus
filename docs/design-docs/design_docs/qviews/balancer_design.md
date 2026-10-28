@@ -224,6 +224,13 @@ including release/reload with identical configuration content.
 `LoadBalance` and `TransferSegment` use the synchronous, exact-version
 [Manual placement](#manual-placement) contract below.
 
+`TransferChannel` instead delegates to the WAL Balancer: it moves a whole
+PChannel between StreamingNodes and waits for target WAL assignment confirmation,
+not QueryView readiness. Coordinator `/management/streaming/transfer` uses the
+same operation. The old Proxy `/management/querycoord/transfer/channel` endpoint
+is a successful no-op with an explicit deprecated message. See
+[manual WAL migration](../../../agent_guides/streaming-system/coordination/channel_management.md#manual-wal-migration).
+
 `SuspendBalance` and `ResumeBalance` persist `false` or `true` to
 `queryView.balancer.optimization.enabled`. `CheckBalanceStatus` reads that same
 configuration. There is no separate administrative suspension flag. The existing

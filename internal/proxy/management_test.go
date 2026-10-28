@@ -666,71 +666,20 @@ func (s *ProxyManagementSuite) TestTransferSegment() {
 }
 
 func (s *ProxyManagementSuite) TestTransferChannel() {
-	s.Run("normal", func() {
-		s.SetupTest()
-		defer s.TearDownTest()
-
-		s.mixcoord.EXPECT().TransferChannel(mock.Anything, mock.Anything).Return(merr.Success(), nil)
-
-		req, err := http.NewRequest(http.MethodPost, management.RouteTransferChannel, strings.NewReader("source_node_id=1&target_node_id=1&segment_id=1&copy_mode=false"))
-		s.Require().NoError(err)
+	// No coordinator client is installed: even malformed legacy requests must
+	// succeed without parsing parameters or performing an RPC.
+	proxy := &Proxy{}
+	for _, body := range []string{"", "source_node_id=1&target_node_id=2", "source_node_id=invalid&copy_mode=%zz"} {
+		req := httptest.NewRequest(http.MethodPost, management.RouteTransferChannel, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		recorder := httptest.NewRecorder()
-		s.proxy.TransferChannel(recorder, req)
+		proxy.TransferChannel(recorder, req)
 		s.Equal(http.StatusOK, recorder.Code)
-		s.Equal(`{"msg": "OK"}`, recorder.Body.String())
-
-		// test use default param
-		req, err = http.NewRequest(http.MethodPost, management.RouteTransferChannel, strings.NewReader("source_node_id=1"))
-		s.Require().NoError(err)
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		recorder = httptest.NewRecorder()
-		s.proxy.TransferChannel(recorder, req)
-		s.Equal(http.StatusOK, recorder.Code)
-		s.Equal(`{"msg": "OK"}`, recorder.Body.String())
-	})
-
-	s.Run("return_error", func() {
-		s.SetupTest()
-		defer s.TearDownTest()
-
-		// test invalid request body
-		req, err := http.NewRequest(http.MethodPost, management.RouteTransferChannel, nil)
-		s.Require().NoError(err)
-		recorder := httptest.NewRecorder()
-		s.proxy.TransferChannel(recorder, req)
-		s.Equal(http.StatusBadRequest, recorder.Code)
-
-		// test miss requested param
-		req, err = http.NewRequest(http.MethodPost, management.RouteTransferChannel, strings.NewReader(""))
-		s.Require().NoError(err)
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		recorder = httptest.NewRecorder()
-		s.proxy.TransferChannel(recorder, req)
-		s.Equal(http.StatusBadRequest, recorder.Code)
-
-		// test rpc return error
-		s.mixcoord.EXPECT().TransferChannel(mock.Anything, mock.Anything).Return(nil, errors.New("mocked error"))
-		req, err = http.NewRequest(http.MethodPost, management.RouteTransferChannel, strings.NewReader("source_node_id=1&target_node_id=1&segment_id=1"))
-		s.Require().NoError(err)
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		recorder = httptest.NewRecorder()
-		s.proxy.TransferChannel(recorder, req)
-		s.Equal(http.StatusInternalServerError, recorder.Code)
-	})
-
-	s.Run("return_failure", func() {
-		s.SetupTest()
-		defer s.TearDownTest()
-
-		s.mixcoord.EXPECT().TransferChannel(mock.Anything, mock.Anything).Return(merr.Status(merr.ErrServiceNotReady), nil)
-		req, err := http.NewRequest(http.MethodPost, management.RouteTransferChannel, strings.NewReader("source_node_id=1"))
-		s.Require().NoError(err)
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		recorder := httptest.NewRecorder()
-		s.proxy.TransferChannel(recorder, req)
-		s.Equal(http.StatusInternalServerError, recorder.Code)
-	})
+		s.Equal("application/json", recorder.Header().Get("Content-Type"))
+		s.Contains(recorder.Body.String(), "deprecated")
+		s.Contains(recorder.Body.String(), "no migration performed")
+		s.Contains(recorder.Body.String(), "/management/streaming/transfer")
+	}
 }
 
 func (s *ProxyManagementSuite) TestCheckQueryNodeDistribution() {
