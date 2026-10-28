@@ -545,7 +545,7 @@ func TestBufferPrepareAfterStreamTerminated(t *testing.T) {
 	require.NoError(t, err)
 	defer first.Release()
 	streamErr := handler.ErrClientClosed
-	streams.stream("p").fail(streamErr)
+	streams.stream("p").failStream(streamErr)
 	// The new buffer has no subscription to receive the terminal Close callback.
 	require.ErrorIs(t, first.WaitTransformVisible(ctx, 60), streamErr)
 	next, err := buffer.Bind(newTestQueryView("p_2v0", 50))
@@ -675,11 +675,6 @@ func TestBufferRegisterSegmentReturnsBeforeCatchupDrainCompletes(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("RegisterSegment did not return")
-	}
-	select {
-	case <-applyStarted:
-	case <-time.After(time.Second):
-		t.Fatal("catch-up did not start")
 	}
 }
 

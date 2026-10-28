@@ -12,6 +12,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walsummary"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
@@ -42,6 +43,13 @@ func TestDispatchPipelinePreservesDeletesAcrossBothHandoffs(t *testing.T) {
 		}
 		stream := walsummary.NewDispatchStream(manager)
 		defer stream.Close()
+		// Production uses a resumable logical stream: Subscribe's request context
+		// ends after creation, while its physical subscription lives until Close.
+		// Preserve that ownership when connecting the two dispatchers directly.
+		var subscribeOriginal func(*walsummary.DispatchStream, context.Context, wal.TransformLogSubscriptionOption) (wal.TransformLogSubscription, error)
+		mockey.Mock((*walsummary.DispatchStream).Subscribe).Origin(&subscribeOriginal).To(func(s *walsummary.DispatchStream, _ context.Context, opt wal.TransformLogSubscriptionOption) (wal.TransformLogSubscription, error) {
+			return subscribeOriginal(s, ctx, opt)
+		}).Build()
 		streams := newFakeStreamManager()
 		mockey.Mock((*fakeStreamManager).AcquireStream).Return(stream, nil).Build()
 		var readOriginal func(*walsummary.Manager, context.Context, string, uint64, uint64, walsummary.ReadLimits) (walsummary.TransformBatch, error)
@@ -74,7 +82,10 @@ func TestDispatchPipelinePreservesDeletesAcrossBothHandoffs(t *testing.T) {
 		segment := &fakeSegment{id: 1, vchannel: "p_1v0"}
 		reg, err := buffer.RegisterSegment(ctx, segment)
 		require.NoError(t, err)
-		defer reg.Unregister()
+		defer func() {
+			release.Do(func() { close(resume) })
+			reg.Unregister()
+		}()
 		select {
 		case <-entered:
 		case <-ctx.Done():
