@@ -1071,7 +1071,8 @@ func (s *mixCoordImpl) TransferBatchSegment(w http.ResponseWriter, req *http.Req
 	w.Write([]byte(`{"msg": "OK"}`))
 }
 
-// TransferStreamingChannel handles the transfer and defreeze operation.
+// TransferStreamingChannel moves PChannels and waits for confirmed WAL assignment.
+// It does not defreeze nodes or wait for QueryView readiness.
 func (s *mixCoordImpl) TransferStreamingChannel(w http.ResponseWriter, req *http.Request) {
 	logger := mlog.With(mlog.String("Scope", "Rolling"))
 	if req.Method != http.MethodPost {
