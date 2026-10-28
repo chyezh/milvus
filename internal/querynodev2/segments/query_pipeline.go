@@ -294,6 +294,7 @@ func extractSegcoreResult(
 		}
 	}
 
+	projectAggregateValidity(req, merged.FieldsData)
 	return merged, nil
 }
 
@@ -355,6 +356,7 @@ func RunDelegatorQueryPipeline(
 		}
 	}
 
+	projectAggregateValidity(req, output.FieldsData)
 	return output, nil
 }
 
@@ -385,18 +387,18 @@ func convertSegcoreElementIndicesToInternal(src []*segcorepb.ElementIndices) []*
 
 // emptySegcoreResult creates an empty result with proper field schema.
 // For aggregation queries (GROUP BY / count(*) / sum / etc.), it generates
-// a semantically correct empty aggregation result (e.g., count=0) via
-// GroupAggReducer.EmptyAggResult, because FillRetrieveResultIfEmpty relies
+// an aggregate identity payload, because FillRetrieveResultIfEmpty relies
 // on OutputFieldsId which is intentionally empty for aggregation queries.
 func emptySegcoreResult(req *querypb.QueryRequest, schema *schemapb.CollectionSchema) (*segcorepb.RetrieveResults, error) {
 	hasAggregation := len(req.GetReq().GetGroupByFieldIds()) > 0 || len(req.GetReq().GetAggregates()) > 0
 	if hasAggregation {
 		reducer := agg.NewGroupAggReducer(req.GetReq().GetGroupByFieldIds(), req.GetReq().GetAggregates(), -1, schema)
-		emptyAgg, err := reducer.EmptyAggResult()
+		wire, err := reducer.EncodePartial(&agg.PartialAggregationResult{})
 		if err != nil {
 			return nil, err
 		}
-		return agg.AggResult2segcoreResult(emptyAgg), nil
+		projectAggregateValidity(req, wire.FieldsData)
+		return &segcorepb.RetrieveResults{FieldsData: wire.FieldsData, AllRetrieveCount: wire.AllRetrieveCount}, nil
 	}
 
 	empty := &segcorepb.RetrieveResults{}
@@ -404,4 +406,17 @@ func emptySegcoreResult(req *querypb.QueryRequest, schema *schemapb.CollectionSc
 		return nil, err
 	}
 	return empty, nil
+}
+
+// projectAggregateValidity is the response boundary for materialized aggregate
+// columns. Run it after ORDER BY/limit, which may rebuild their validity bitmap.
+// Aggregation reducers return owned field envelopes with read-only scalar data;
+// projection only writes the envelope's legacy validity copy.
+func projectAggregateValidity(req *querypb.QueryRequest, fields []*schemapb.FieldData) {
+	if len(req.GetReq().GetGroupByFieldIds()) == 0 && len(req.GetReq().GetAggregates()) == 0 {
+		return
+	}
+	for _, field := range fields {
+		typeutil.ProjectFieldDataValidDataForLegacy(field)
+	}
 }
