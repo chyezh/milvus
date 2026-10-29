@@ -401,7 +401,7 @@ func TestQueryPlanAllSubqueriesSkipped(t *testing.T) {
 		require.True(t, proto.Equal(view.Meta.Version, response.Plan.Version))
 		require.True(t, proto.Equal(req.ShardId, response.Plan.ShardId))
 		require.Nil(t, response.ExecutionSummary, "skipping is not evidence of partition/statistics pruning")
-		require.NoError(t, qviews.RestoreQueryPlanPayloads(response.Plan, req))
+		require.NoError(t, qviews.RestoreQueryPlanPayloads(response, req))
 		subs := response.Plan.GetLegacySearchRequest().GetSubReqs()
 		require.Len(t, subs, 2)
 		for i, sub := range subs {

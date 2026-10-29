@@ -90,9 +90,9 @@ func (s *shardViewQueryClient) Search(ctx context.Context, req *ShardSearchReque
 				},
 			}
 		},
-		beforeDispatch: func(ctx context.Context, plan *viewpb.QueryPlan, shardID qviews.ShardID) error {
+		beforeDispatch: func(ctx context.Context, response *viewpb.GetQueryPlanResponse, shardID qviews.ShardID) error {
 			stage = twoStageSearch{}
-			return s.prepareTwoStageSearch(ctx, plan, shardID, req.TotalChannelNum, &stage)
+			return s.prepareTwoStageSearch(ctx, response, shardID, req.TotalChannelNum, &stage)
 		},
 		dispatchNode: func(ctx context.Context, node qviews.WorkNode, plan *viewpb.QueryPlan, shardID qviews.ShardID) error {
 			resp, err := s.queryServiceClient.SearchOnView(ctx, node, &viewpb.SearchOnViewRequest{
@@ -169,7 +169,7 @@ type shardExecParams struct {
 	// consumeResponse accepts inline SN results before worker dispatch.
 	consumeResponse func(*viewpb.GetQueryPlanResponse) error
 	// beforeDispatch runs attempt-local preparatory execution before ANN fanout.
-	beforeDispatch func(context.Context, *viewpb.QueryPlan, qviews.ShardID) error
+	beforeDispatch func(context.Context, *viewpb.GetQueryPlanResponse, qviews.ShardID) error
 	// dispatchNode executes a Phase 2 RPC on a single work node.
 	// Called concurrently for each work node in the plan.
 	dispatchNode func(ctx context.Context, node qviews.WorkNode, plan *viewpb.QueryPlan, shardID qviews.ShardID) error
@@ -242,7 +242,7 @@ func (s *shardViewQueryClient) executeShard(
 		}
 
 		plan := response.GetPlan()
-		if err := qviews.RestoreQueryPlanPayloads(plan, planReq); err != nil {
+		if err := qviews.RestoreQueryPlanPayloads(response, planReq); err != nil {
 			return nil, err
 		}
 		// A newer advertised version does not certify removal of a dead QN.
@@ -270,7 +270,7 @@ func (s *shardViewQueryClient) executeShard(
 
 		// Phase 2: Fan out to all work nodes concurrently.
 		if params.beforeDispatch != nil {
-			err = params.beforeDispatch(ctx, plan, shardID)
+			err = params.beforeDispatch(ctx, response, shardID)
 		}
 		if err == nil {
 			err = s.fanOutToWorkNodes(ctx, workNodes, plan, shardID, params.dispatchNode)

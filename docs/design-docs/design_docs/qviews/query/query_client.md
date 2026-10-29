@@ -212,11 +212,14 @@ described above. Discovery itself does not choose or pin a query View.
 
 QueryViewClient owns the optional `autoIndex.twoStageSearch` execution. For a
 non-hybrid PURE_ANN_SEARCH_WITH_FILTER request meeting the configured TopK and
-sealed-segment thresholds, SN includes compact `SearchOptimizationInfo` after
+sealed-segment thresholds, SN includes compact `SearchOptimizationInfo` in
+`GetQueryPlanResponse.client_optimize_info` after
 partition/segment pruning: selected sealed count, vector dimension and index
 type. Other requests carry no such metadata. The admission threshold uses the
 selected segment count; actual filtered cardinalities drive the tuning hook.
-No per-segment row-count array or Schema is copied into the plan.
+The same `QueryPlanClientOptimizeInfo` groups the payload reuse markers consumed
+by client restoration. Neither belongs to the reusable worker plan. No
+per-segment row-count array or Schema is copied into the response.
 
 Within one shard attempt, the client first sends SearchOnView with FilterOnly
 and expression caching to QNs only. It retains the same View version, Schema,

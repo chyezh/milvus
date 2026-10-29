@@ -259,7 +259,8 @@ func (w *walAdaptorImpl) GetQueryPlan(ctx context.Context, req *viewpb.GetQueryP
 	if search != nil && !search.GetIsAdvanced() && optimizers.ShouldUseTwoStageSearch(&querypb.SearchRequest{Req: search}, math.MaxInt) {
 		count := queryPlanSealedSegmentCount(plan, lease.View)
 		if count > 0 && optimizers.ShouldUseTwoStageSearch(&querypb.SearchRequest{Req: search}, int(count)) {
-			plan.SearchOptimization, err = readRuntime.SearchOptimizationInfo(search.GetFieldId(), count)
+			response.ClientOptimizeInfo = &viewpb.QueryPlanClientOptimizeInfo{}
+			response.ClientOptimizeInfo.SearchOptimization, err = readRuntime.SearchOptimizationInfo(search.GetFieldId(), count)
 			if err != nil {
 				return nil, err
 			}
@@ -274,7 +275,7 @@ func (w *walAdaptorImpl) GetQueryPlan(ctx context.Context, req *viewpb.GetQueryP
 		mlog.Int("workNodeCount", len(plan.WorkNodes)),
 	)
 	// Preserve a full inter-phase serving window after planning completes.
-	qviews.OmitUnchangedQueryPayloads(plan, req)
+	qviews.OmitUnchangedQueryPayloads(response, req)
 	lease.Renew()
 	return response, nil
 }

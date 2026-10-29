@@ -23,8 +23,9 @@ type twoStageSearch struct {
 	completed bool
 }
 
-func (s *shardViewQueryClient) prepareTwoStageSearch(ctx context.Context, plan *viewpb.QueryPlan, shardID qviews.ShardID, channelNum int32, stage *twoStageSearch) error {
-	info := plan.GetSearchOptimization()
+func (s *shardViewQueryClient) prepareTwoStageSearch(ctx context.Context, response *viewpb.GetQueryPlanResponse, shardID qviews.ShardID, channelNum int32, stage *twoStageSearch) error {
+	plan := response.GetPlan()
+	info := response.GetClientOptimizeInfo().GetSearchOptimization()
 	req := plan.GetLegacySearchRequest()
 	if req.GetIsAdvanced() || info.GetSealedSegmentCount() == 0 ||
 		!optimizers.ShouldUseTwoStageSearch(&querypb.SearchRequest{Req: req}, int(info.GetSealedSegmentCount())) {

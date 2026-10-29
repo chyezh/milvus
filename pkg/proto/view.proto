@@ -295,6 +295,8 @@ message GetQueryPlanResponse {
     QueryPlan plan = 1;
     GrowingInlineResponse growing_inline_response = 2;
     ExecutionSummary execution_summary = 3;
+    // Consumed by QueryViewClient; not part of the reusable worker plan.
+    QueryPlanClientOptimizeInfo client_optimize_info = 4;
 }
 
 // Growing results computed during Phase 1, separate from the reusable query plan.
@@ -323,12 +325,6 @@ message QueryPlan {
         internal.RetrieveRequest legacy_retrieve_request = 6;
         StatisticsRequest statistics_request = 8;
     }
-    // Unchanged large payloads are omitted from request and borrowed from the
-    // original Phase 1 request by Proxy. All other optimized parameters remain
-    // explicit, including empty payloads when the optimizer clears a field.
-    QueryPayloadReuse reused_payloads = 7;
-    // Present only for eligible filter-first ANN searches. No per-segment metadata.
-    SearchOptimizationInfo search_optimization = 9;
 }
 
 message SearchOptimizationInfo {
@@ -443,4 +439,13 @@ message QueryOnViewRequest {
 message QueryOnViewResponse {
     // TODO: replace with native view result types once legacy internal protos are removed.
     internal.RetrieveResults legacy_results = 1;
+}
+
+// Phase 1 response metadata used only for client-side payload restoration and
+// search optimization. Worker execution receives the restored/optimized request.
+message QueryPlanClientOptimizeInfo {
+    // Restore only explicitly marked payloads, preserving intentional clearing.
+    QueryPayloadReuse reused_payloads = 1;
+    // Present only for eligible filter-first ANN searches.
+    SearchOptimizationInfo search_optimization = 2;
 }

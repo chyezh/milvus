@@ -31,15 +31,14 @@ func enableTwoStageSearch(t *testing.T) {
 	}
 }
 
-func twoStagePlan(id qviews.ShardID) *viewpb.QueryPlan {
+func twoStageResponse(id qviews.ShardID) *viewpb.GetQueryPlanResponse {
 	plan := newTestSearchQueryPlan(id, &viewpb.QueryPlanMVCC{GrowingTimetick: 100, TransformingTimetick: 90})
-	plan.SearchOptimization = &viewpb.SearchOptimizationInfo{SealedSegmentCount: 2, VectorDim: 128, IndexType: "HNSW"}
 	plan.GetLegacySearchRequest().Topk = 5
 	plan.GetLegacySearchRequest().SearchType = internalpb.SearchType_PURE_ANN_SEARCH_WITH_FILTER
 	plan.GetLegacySearchRequest().SchemaVersion = 7
 	plan.WorkNodes[0].SegmentSelection = &viewpb.SegmentSelection{Mode: viewpb.SegmentSelection_Include, SegmentIds: []int64{10, 20}}
 	plan.WorkNodes = append(plan.WorkNodes, &viewpb.QueryPlanWorkNode{Node: &viewpb.QueryPlanWorkNode_StreamingNode{StreamingNode: &viewpb.StreamingWorkNode{Pchannel: "p"}}})
-	return plan
+	return &viewpb.GetQueryPlanResponse{Plan: plan, ClientOptimizeInfo: &viewpb.QueryPlanClientOptimizeInfo{SearchOptimization: &viewpb.SearchOptimizationInfo{SealedSegmentCount: 2, VectorDim: 128, IndexType: "HNSW"}}}
 }
 
 func TestTwoStageSearchStatistics(t *testing.T) {
@@ -57,7 +56,8 @@ func TestTwoStageSearchStatistics(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			id := qviews.ShardID{VChannel: "p_1v0", ReplicaID: 1}
-			plan := twoStagePlan(id)
+			planResponse := twoStageResponse(id)
+			plan := planResponse.GetPlan()
 			original := proto.Clone(plan.GetLegacySearchRequest())
 			service := &fakeViewQueryServiceClient{}
 			calls := 0
@@ -87,7 +87,7 @@ func TestTwoStageSearchStatistics(t *testing.T) {
 			defer tune.UnPatch()
 			client := newShardViewQueryClient(1, nil, service)
 			var stage twoStageSearch
-			err := client.prepareTwoStageSearch(t.Context(), plan, id, 3, &stage)
+			err := client.prepareTwoStageSearch(t.Context(), planResponse, id, 3, &stage)
 			require.Equal(t, tc.wantErr, err != nil)
 			require.Equal(t, tc.completed, stage.completed)
 			require.Equal(t, tc.completed, optimized)
@@ -115,10 +115,11 @@ func TestTwoStageSearchRetriesEntireAttempt(t *testing.T) {
 	plans, filters, anns := 0, 0, 0
 	patchPlan := mockey.Mock((*fakeQueryPlanClient).GetQueryPlan).To(func(_ *fakeQueryPlanClient, _ context.Context, _ qviews.ShardID, _ *viewpb.GetQueryPlanRequest) (*viewpb.GetQueryPlanResponse, error) {
 		plans++
-		plan := twoStagePlan(id)
+		planResponse := twoStageResponse(id)
+		plan := planResponse.GetPlan()
 		plan.WorkNodes = plan.WorkNodes[:1]
 		plan.Version.QueryVersion = int64(plans)
-		return &viewpb.GetQueryPlanResponse{Plan: plan}, nil
+		return planResponse, nil
 	}).Build()
 	defer patchPlan.UnPatch()
 	patchRPC := mockey.Mock((*fakeViewQueryServiceClient).SearchOnView).To(func(_ *fakeViewQueryServiceClient, _ context.Context, _ qviews.WorkNode, req *viewpb.SearchOnViewRequest) (*viewpb.SearchOnViewResponse, error) {
@@ -145,7 +146,7 @@ func TestTwoStageSearchRetriesEntireAttempt(t *testing.T) {
 	defer client.replicas.Close()
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
-	plan, err := client.Search(ctx, &ShardSearchRequest{VChannel: id.VChannel, Req: twoStagePlan(id).GetLegacySearchRequest(), Reducer: fakeSearchResultReducer{}})
+	plan, err := client.Search(ctx, &ShardSearchRequest{VChannel: id.VChannel, Req: twoStageResponse(id).GetPlan().GetLegacySearchRequest(), Reducer: fakeSearchResultReducer{}})
 	require.NoError(t, err)
 	require.Equal(t, 2, plans)
 	require.Equal(t, 2, filters)
@@ -158,10 +159,11 @@ func TestTwoStageSearchSkipsIneligibleRequests(t *testing.T) {
 	for _, name := range []string{"no-sealed", "no-filter", "small-topk", "hybrid", "disabled"} {
 		t.Run(name, func(t *testing.T) {
 			id := qviews.ShardID{VChannel: "p_1v0", ReplicaID: 1}
-			plan := twoStagePlan(id)
+			planResponse := twoStageResponse(id)
+			plan := planResponse.GetPlan()
 			switch name {
 			case "no-sealed":
-				plan.SearchOptimization = nil
+				planResponse.ClientOptimizeInfo.SearchOptimization = nil
 			case "no-filter":
 				plan.GetLegacySearchRequest().SearchType = internalpb.SearchType_PURE_ANN_SEARCH_NO_FILTER
 			case "small-topk":
@@ -175,7 +177,7 @@ func TestTwoStageSearchSkipsIneligibleRequests(t *testing.T) {
 			// No service is installed: entering the filter round would panic.
 			client := newShardViewQueryClient(1, nil, nil)
 			var stage twoStageSearch
-			require.NoError(t, client.prepareTwoStageSearch(t.Context(), plan, id, 1, &stage))
+			require.NoError(t, client.prepareTwoStageSearch(t.Context(), planResponse, id, 1, &stage))
 			require.False(t, stage.completed)
 			require.Nil(t, stage.filters)
 		})
@@ -185,7 +187,7 @@ func TestTwoStageSearchSkipsIneligibleRequests(t *testing.T) {
 func TestTwoStageSearchCancellationJoinsFilterWorkers(t *testing.T) {
 	enableTwoStageSearch(t)
 	id := qviews.ShardID{VChannel: "p_1v0", ReplicaID: 1}
-	plan := twoStagePlan(id)
+	planResponse := twoStageResponse(id)
 	service := &fakeViewQueryServiceClient{}
 	entered, exited := make(chan struct{}), make(chan struct{})
 	patch := mockey.Mock((*fakeViewQueryServiceClient).SearchOnView).To(func(_ *fakeViewQueryServiceClient, ctx context.Context, _ qviews.WorkNode, _ *viewpb.SearchOnViewRequest) (*viewpb.SearchOnViewResponse, error) {
@@ -200,7 +202,7 @@ func TestTwoStageSearchCancellationJoinsFilterWorkers(t *testing.T) {
 	done := make(chan error, 1)
 	client := newShardViewQueryClient(1, nil, service)
 	var stage twoStageSearch
-	go func() { done <- client.prepareTwoStageSearch(ctx, plan, id, 1, &stage) }()
+	go func() { done <- client.prepareTwoStageSearch(ctx, planResponse, id, 1, &stage) }()
 	<-entered
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
