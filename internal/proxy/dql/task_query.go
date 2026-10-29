@@ -3,12 +3,14 @@ package dql
 import (
 	"context"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/cockroachdb/errors"
 	"github.com/samber/lo"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
@@ -24,11 +26,13 @@ import (
 	"github.com/milvus-io/milvus/internal/proxy/taskmodel"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/exprutil"
+	"github.com/milvus-io/milvus/internal/util/queryutil"
 	"github.com/milvus-io/milvus/internal/util/reduce"
 	"github.com/milvus-io/milvus/internal/util/reduce/orderby"
 	"github.com/milvus-io/milvus/internal/util/segcore"
 	"github.com/milvus-io/milvus/internal/util/shallowcopy"
 	"github.com/milvus-io/milvus/internal/views/queryclient"
+	"github.com/milvus-io/milvus/internal/views/viewerror"
 	"github.com/milvus-io/milvus/pkg/v3/common"
 	"github.com/milvus-io/milvus/pkg/v3/metrics"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
@@ -1130,26 +1134,94 @@ func (t *QueryTask) Execute(ctx context.Context) error {
 }
 
 func (t *QueryTask) executeByQueryView(ctx context.Context) error {
+	legacy := t.viewQueryClient.Legacy()
+	allowStreaming := queryclient.SupportsQueryStream(t.RetrieveRequest)
 	request := &queryclient.LegacyQueryRequest{
 		Req: t.RetrieveRequest, Plans: t.queryViewPlans, Schema: t.schema.CollectionSchema,
-		BarrierMVCC: t.MvccTimestamp,
+		BarrierMVCC: t.MvccTimestamp, AllowStreaming: allowStreaming,
 	}
 
-	result, err := t.viewQueryClient.Legacy().Query(ctx, request)
-	if err != nil {
-		return QueryViewLoadError(ctx, t.node, t.GetCollectionID(), t.GetPartitionIDs(), err)
-	}
-	for _, retrieveResult := range result.Results {
-		t.resultBuf.Insert(retrieveResult)
-	}
-	// Both frontiers belong to one complete Strong WAL snapshot, including
-	// successful empty shards. The last channel change is the CAS read boundary.
-	for _, plan := range result.Plans {
-		if t.actualChannelsMvcc != nil {
-			t.RecordChannelMvcc(plan.ShardID.VChannel, max(plan.Mvcc.GetGrowingTimetick(), plan.Mvcc.GetTransformingTimetick()))
+	enableReduceStream := legacy.ReduceStreamEnabled()
+	// Benchmark-only Query parameters; retained-plan requery stays on Batch.
+	if request.Plans == nil {
+		if value, err := funcutil.GetAttrByKeyFromRepeatedKV("enableReduceStream", t.request.GetQueryParams()); err == nil {
+			enabled, err := strconv.ParseBool(value)
+			if err != nil {
+				return merr.WrapErrParameterInvalidMsg("enableReduceStream must be a boolean, got %q", value)
+			}
+			if enabled && !allowStreaming {
+				return merr.WrapErrParameterInvalidMsg("enableReduceStream=true is not supported for this Query request")
+			}
+			enableReduceStream, request.EnableReduceStream = enabled, &enabled
+		}
+		if value, err := funcutil.GetAttrByKeyFromRepeatedKV("reduceStreamChunkBytes", t.request.GetQueryParams()); err == nil {
+			chunkBytes, err := strconv.Atoi(value)
+			if err != nil || chunkBytes <= 0 {
+				return merr.WrapErrParameterInvalidMsg("reduceStreamChunkBytes must be a positive integer, got %q", value)
+			}
+			request.ReduceStreamChunkBytes = chunkBytes
 		}
 	}
-	return nil
+	retryStreaming := request.Plans == nil && allowStreaming && enableReduceStream
+	maxAttempts := 1
+	if retryStreaming {
+		maxAttempts = max(1, legacy.MaxRetries())
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		result, err := legacy.Query(ctx, request)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if retryStreaming && viewerror.AsViewError(err).IsRetryable() {
+				lastErr = err
+				continue
+			}
+			return QueryViewLoadError(ctx, t.node, t.GetCollectionID(), t.GetPartitionIDs(), err)
+		}
+		if result == nil {
+			return merr.WrapErrServiceInternalMsg("QueryView Query returned a nil result")
+		}
+		if result.Stream == nil {
+			for _, retrieveResult := range result.Results {
+				t.resultBuf.Insert(retrieveResult)
+			}
+		} else {
+			reducedResult, recvErr := t.consumeQueryResultStream(result.Stream)
+			retryable := recvErr != nil && viewerror.AsViewError(recvErr).IsRetryable()
+			closeErr := result.Stream.Close()
+			if recvErr != nil {
+				attemptErr := merr.Combine(recvErr, closeErr)
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				if retryable {
+					lastErr = attemptErr
+					continue
+				}
+				return QueryViewLoadError(ctx, t.node, t.GetCollectionID(), t.GetPartitionIDs(), attemptErr)
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+			for _, plan := range result.Plans {
+				reducedResult.FeatureBits |= queryclient.ExecutionSummaryFeatureBits(plan.ExecutionSummary)
+			}
+			t.resultBuf.Insert(reducedResult)
+		}
+
+		// Both frontiers belong to the final successful Strong WAL snapshot,
+		// including successful empty shards.
+		for _, plan := range result.Plans {
+			if t.actualChannelsMvcc != nil {
+				t.RecordChannelMvcc(plan.ShardID.VChannel, max(plan.Mvcc.GetGrowingTimetick(), plan.Mvcc.GetTransformingTimetick()))
+			}
+		}
+		return nil
+	}
+	return QueryViewLoadError(ctx, t.node, t.GetCollectionID(), t.GetPartitionIDs(), lastErr)
 }
 
 func (t *QueryTask) PostExecute(ctx context.Context) error {
@@ -1169,6 +1241,15 @@ func (t *QueryTask) PostExecute(ctx context.Context) error {
 	t.totalRelatedDataSize = 0
 	t.storageCost = segcore.StorageCost{}
 	var execBits uint64
+	collectResult := func(res *internalpb.RetrieveResults) {
+		toReduceResults = append(toReduceResults, res)
+		t.allQueryCnt += res.GetAllRetrieveCount()
+		t.storageCost.ScannedRemoteBytes += res.GetScannedRemoteBytes()
+		t.storageCost.ScannedTotalBytes += res.GetScannedTotalBytes()
+		t.totalRelatedDataSize += res.GetCostAggregation().GetTotalRelatedDataSize()
+		execBits |= res.GetFeatureBits()
+		log.Debug(ctx, "proxy receives one query result", mlog.Int64("sourceID", res.GetBase().GetSourceID()))
+	}
 	select {
 	case <-t.TraceCtx().Done():
 		log.Warn(ctx, "proxy", mlog.Int64("Query: wait to finish failed, timeout!, msgID:", t.ID()))
@@ -1176,13 +1257,7 @@ func (t *QueryTask) PostExecute(ctx context.Context) error {
 	default:
 		log.Debug(ctx, "all queries are finished or canceled")
 		t.resultBuf.Range(func(res *internalpb.RetrieveResults) bool {
-			toReduceResults = append(toReduceResults, res)
-			t.allQueryCnt += res.GetAllRetrieveCount()
-			t.storageCost.ScannedRemoteBytes += res.GetScannedRemoteBytes()
-			t.storageCost.ScannedTotalBytes += res.GetScannedTotalBytes()
-			t.totalRelatedDataSize += res.GetCostAggregation().GetTotalRelatedDataSize()
-			execBits |= res.GetFeatureBits()
-			log.Debug(ctx, "proxy receives one query result", mlog.Int64("sourceID", res.GetBase().GetSourceID()))
+			collectResult(res)
 			return true
 		})
 	}
@@ -1282,6 +1357,101 @@ func (t *QueryTask) formatTimeFields(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+func (t *QueryTask) consumeQueryResultStream(stream queryutil.ReduceStream) (*internalpb.RetrieveResults, error) {
+	output := &internalpb.RetrieveResults{
+		Status: merr.Success(),
+		Ids:    &schemapb.IDs{},
+	}
+	maxOutputSize := paramtable.Get().QuotaConfig.MaxOutputSize.GetAsInt64()
+	var outputSize int64
+	for {
+		chunk, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if chunk == nil {
+			return nil, merr.WrapErrServiceInternalMsg("final Query ReduceStream returned a nil Chunk")
+		}
+		if !merr.Ok(chunk.GetStatus()) {
+			return nil, merr.Error(chunk.GetStatus())
+		}
+
+		rowCount := queryutil.GetRowCount(chunk)
+		if rowCount == 0 && len(output.GetFieldsData()) == 0 && chunk.GetElementLevel() {
+			output.ElementLevel = true
+		}
+		if rowCount > 0 {
+			if len(chunk.GetFieldsData()) == 0 {
+				return nil, merr.WrapErrServiceInternalMsg("final Query Chunk contains rows without field data")
+			}
+			idCount := typeutil.GetSizeOfIDs(chunk.GetIds())
+			if idCount > 0 && idCount != rowCount {
+				return nil, merr.WrapErrServiceInternalMsg(
+					"final Query Chunk ID count %d does not match row count %d", idCount, rowCount)
+			}
+			if chunk.GetElementLevel() && len(chunk.GetElementIndices()) != rowCount {
+				return nil, merr.WrapErrServiceInternalMsg(
+					"final Query Chunk element index count %d does not match row count %d", len(chunk.GetElementIndices()), rowCount)
+			}
+			if (len(output.GetFieldsData()) > 0 || output.GetElementLevel()) && output.GetElementLevel() != chunk.GetElementLevel() {
+				return nil, merr.WrapErrServiceInternalMsg("final Query Chunks have inconsistent element-level flags")
+			}
+			if len(output.GetFieldsData()) == 0 {
+				output.ElementLevel = chunk.GetElementLevel()
+				output.FieldsData = typeutil.PrepareResultFieldData(chunk.GetFieldsData(), max(t.GetLimit(), int64(rowCount)))
+			}
+			if len(output.GetFieldsData()) != len(chunk.GetFieldsData()) {
+				return nil, merr.WrapErrServiceInternalMsg(
+					"final Query Chunk field count %d does not match %d", len(chunk.GetFieldsData()), len(output.GetFieldsData()))
+			}
+			indexComputer := typeutil.NewFieldDataIdxComputer(chunk.GetFieldsData())
+			for row := 0; row < rowCount; row++ {
+				fieldIndexes := indexComputer.Compute(int64(row))
+				outputSize += typeutil.AppendFieldData(output.FieldsData, chunk.GetFieldsData(), int64(row), fieldIndexes...)
+				if idCount > 0 {
+					typeutil.AppendPKs(output.Ids, typeutil.GetPK(chunk.GetIds(), int64(row)))
+				}
+				if chunk.GetElementLevel() {
+					indices := chunk.GetElementIndices()[row]
+					output.ElementIndices = append(output.ElementIndices, indices)
+					outputSize += int64(proto.Size(indices))
+				}
+			}
+			if outputSize > maxOutputSize {
+				return nil, merr.WrapErrParameterInvalidMsg(
+					"query results exceed the maxOutputSize Limit %d", maxOutputSize)
+			}
+		}
+
+		if output.GetBase() == nil && chunk.GetBase() != nil {
+			output.Base = proto.Clone(chunk.GetBase()).(*commonpb.MsgBase)
+		}
+		if output.GetReqID() == 0 {
+			output.ReqID = chunk.GetReqID()
+		}
+		output.SealedSegmentIDsRetrieved = append(output.SealedSegmentIDsRetrieved, chunk.GetSealedSegmentIDsRetrieved()...)
+		output.ChannelIDsRetrieved = append(output.ChannelIDsRetrieved, chunk.GetChannelIDsRetrieved()...)
+		output.GlobalSealedSegmentIDs = append(output.GlobalSealedSegmentIDs, chunk.GetGlobalSealedSegmentIDs()...)
+		output.AllRetrieveCount += chunk.GetAllRetrieveCount()
+		output.HasMoreResult = output.GetHasMoreResult() || chunk.GetHasMoreResult()
+		output.ScannedRemoteBytes += chunk.GetScannedRemoteBytes()
+		output.ScannedTotalBytes += chunk.GetScannedTotalBytes()
+		output.FeatureBits |= chunk.GetFeatureBits()
+		output.MvccTimestamp = max(output.GetMvccTimestamp(), chunk.GetMvccTimestamp())
+		if cost := chunk.GetCostAggregation(); cost != nil {
+			totalRelatedDataSize := output.GetCostAggregation().GetTotalRelatedDataSize() + cost.GetTotalRelatedDataSize()
+			if output.GetCostAggregation() == nil || output.GetCostAggregation().GetResponseTime() < cost.GetResponseTime() {
+				output.CostAggregation = proto.Clone(cost).(*internalpb.CostAggregation)
+			}
+			output.CostAggregation.TotalRelatedDataSize = totalRelatedDataSize
+		}
+	}
+	return output, nil
 }
 
 func (t *QueryTask) IsSubTask() bool {
