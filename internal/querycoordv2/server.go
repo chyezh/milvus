@@ -72,7 +72,6 @@ import (
 var Params = params.Params
 
 type Server struct {
-	loadInfos           *loadmgr.LoadInfoStore
 	ctx                 context.Context
 	cancel              context.CancelFunc
 	wg                  sync.WaitGroup

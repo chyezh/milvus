@@ -582,14 +582,6 @@ Ready is a preparation boundary, not a promise of zero lag after future writes.
 Queries wait for their own Transform MVCC; that check must prove application
 for their selected physical resources, not only remote receipt.
 
-The QueryNode-wide catch-up worker count is
-`max(1, floor(hardware.GetCPUNum() * ratio))`, configured by
-`queryNode.queryView.transformLogDrainConcurrencyRatio` (default `0.25`).
-Configuration changes resize the existing pool. Shrinking completes in-flight
-pages and preserves queued registrations; growing starts more workers. The node
-context cancellation unregisters the watcher and stops the pool. There is no
-separate Segment catch-up worker pool.
-
 Catch-up applies bounded pages on a shared worker pool, yielding after each
 page. A registration awaiting transport coverage parks its state and releases
 the worker. Arrivals schedule pending registrations under the same VChannel
