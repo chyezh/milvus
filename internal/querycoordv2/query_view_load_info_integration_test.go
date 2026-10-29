@@ -16,14 +16,14 @@ import (
 	kvfactory "github.com/milvus-io/milvus/internal/util/dependency/kv"
 	"github.com/milvus-io/milvus/internal/views/coord/loadmgr"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 type loadInfoIndexSourceForTest struct{ types.MixCoord }
 
-func (*loadInfoIndexSourceForTest) QueryViewCollectionIndexInfos(int64) []*indexpb.IndexInfo {
+func (*loadInfoIndexSourceForTest) QueryViewCollectionIndexInfos(int64, ...int64) []*indexpb.IndexInfo {
 	panic("patch with mockey")
 }
 
@@ -32,13 +32,13 @@ func TestQueryViewLoadInfoInitializationAndRecovery(t *testing.T) {
 	storage := etcdkv.NewEtcdKV(client, "query-view-load-info-"+uuid.NewString())
 	t.Cleanup(func() { require.NoError(t, storage.RemoveWithPrefix(context.Background(), "")) })
 	ctx := t.Context()
-	snapshot := &querypb.GetQueryViewLoadInfoResponse{
-		Status: merr.Success(), CollectionID: 1, Version: 9,
-		PartitionIDs: []int64{10}, RequiredFields: []*messagespb.LoadFieldConfig{{FieldId: 100}},
+	snapshot := &viewpb.CollectionLoadConfig{
+		CollectionID: 1, Version: 9,
+		PartitionIds: []int64{10}, RequiredFields: []*viewpb.LoadFieldConfig{{FieldId: 100}},
 	}
-	require.NoError(t, queryview.NewLoadInfoCatalog(storage).SaveLoadInfo(ctx, snapshot))
+	require.NoError(t, queryview.NewCollectionLoadInfoCatalog(storage).Save(ctx, snapshot))
 	indexes := []*indexpb.IndexInfo{{FieldID: 100, IndexID: 200}, {FieldID: 101, IndexID: 201}}
-	patch := mockey.Mock((*loadInfoIndexSourceForTest).QueryViewCollectionIndexInfos).To(func(_ *loadInfoIndexSourceForTest, id int64) []*indexpb.IndexInfo {
+	patch := mockey.Mock((*loadInfoIndexSourceForTest).QueryViewCollectionIndexInfos).To(func(_ *loadInfoIndexSourceForTest, id int64, ids ...int64) []*indexpb.IndexInfo {
 		require.EqualValues(t, 1, id)
 		return indexes
 	}).Build()
@@ -50,29 +50,25 @@ func TestQueryViewLoadInfoInitializationAndRecovery(t *testing.T) {
 			s.mixCoord = &loadInfoIndexSourceForTest{}
 		}
 		require.NoError(t, s.initMeta())
-		// The integrated QueryView runtime owns load metadata; initMeta only
-		// initializes the legacy coordinator metadata needed during recovery.
-		deps := newDefaultQViewsRuntimeDependencies(storage, client, s.store, nil, s.mixCoord)
+		require.Empty(t, s.meta.GetAll(ctx))
+		// QueryView runtime owns load recovery; initMeta only restores resource groups.
+		deps := newDefaultQViewsRuntimeDependencies(storage, client, nil, s.mixCoord)
 		t.Cleanup(func() {
 			deps.queryNodeManager.Close()
 			deps.streamingNodeHandler.Close()
 			deps.streamingCoordClient.Close()
 		})
-		configs, err := loadmgr.RecoverLoadConfigStore(ctx, s.store, deps.loadInfos)
+		configs, err := loadmgr.RecoverLoadConfigStore(ctx, deps.loadConfigDependencies)
 		require.NoError(t, err)
-		s.qviewsRuntime = &qviewsRuntime{loadConfigStore: configs, loadInfos: deps.loadInfos}
+		configs.StopPlanning(1) // the durable Release callback replays after recovery
+		s.qviewsRuntime = &qviewsRuntime{loadConfigStore: configs}
 		s.UpdateStateCode(commonpb.StateCode_Healthy)
 		resp, err := s.GetQueryViewLoadInfo(ctx, &querypb.GetQueryViewLoadInfoRequest{CollectionID: 1, Version: 9})
 		require.NoError(t, err)
 		require.NoError(t, merr.Error(resp.Status))
 		require.EqualValues(t, 9, resp.Version)
 		require.Equal(t, []int64{10}, resp.PartitionIDs)
-		if withIndexSource {
-			require.Len(t, resp.IndexInfoList, 1)
-			require.EqualValues(t, 200, resp.IndexInfoList[0].IndexID)
-		} else {
-			require.Empty(t, resp.IndexInfoList)
-		}
+		require.Empty(t, resp.IndexInfoList, "recovery never resolves current indexes into retained requirements")
 		resp, err = s.GetQueryViewLoadInfo(ctx, &querypb.GetQueryViewLoadInfoRequest{CollectionID: 1})
 		require.NoError(t, err)
 		require.ErrorIs(t, merr.Error(resp.Status), merr.ErrCollectionNotLoaded,

@@ -126,7 +126,7 @@ class ChunkedSegmentSealedImpl : public SegmentSealed {
                              bool sorted = false)
         : ChunkedSegmentSealedImpl(
               std::make_shared<const SealedFieldLayout>(
-                  schema.get(), LoadScope::FromLegacySchema(*schema)),
+                  schema, LoadScope::FromLegacySchema(*schema)),
               index_meta,
               config,
               segment_id,
@@ -282,7 +282,7 @@ class ChunkedSegmentSealedImpl : public SegmentSealed {
     void
     Reopen(milvus::OpContext* op_ctx,
            const milvus::proto::segcore::SegmentLoadInfo& info,
-           const Schema* schema,
+           SchemaPtr schema,
            const LoadScope& scope) {
         Reopen(op_ctx,
                info,
@@ -660,8 +660,7 @@ class ChunkedSegmentSealedImpl : public SegmentSealed {
     bool
     is_field_exist(FieldId field_id) const override {
         auto schema_snapshot = CaptureFieldLayout();
-        return schema_snapshot->get_fields().find(field_id) !=
-               schema_snapshot->get_fields().end();
+        return schema_snapshot->has_field(field_id);
     }
 
     void
@@ -1505,6 +1504,7 @@ class ChunkedSegmentSealedImpl : public SegmentSealed {
     bool
     generate_interim_index(
         const FieldMeta& field_meta,
+        const SealedFieldLayoutPtr& layout,
         int64_t num_rows,
         const std::shared_ptr<ChunkedColumnInterface>& loaded_column,
         milvus::OpContext* op_ctx,
@@ -2342,7 +2342,6 @@ class ChunkedSegmentSealedImpl : public SegmentSealed {
     std::unordered_set<FieldId> pending_text_index_fields_;
 
     // only useful in binlog
-    IndexMetaPtr col_index_meta_;
     SegcoreConfig segcore_config_;
 
     SegmentStats stats_{};
@@ -2363,7 +2362,7 @@ class ChunkedSegmentSealedImpl : public SegmentSealed {
     struct TestFieldLayout : SealedFieldLayoutPtr {
         TestFieldLayout(const SchemaPtr& schema)
             : SealedFieldLayoutPtr(std::make_shared<const SealedFieldLayout>(
-                  schema.get(), LoadScope::FromLegacySchema(*schema))) {
+                  schema, LoadScope::FromLegacySchema(*schema))) {
         }
         TestFieldLayout(const SealedFieldLayoutPtr& fields)
             : SealedFieldLayoutPtr(fields) {
@@ -2710,6 +2709,7 @@ class ChunkedSegmentSealedImpl : public SegmentSealed {
         });
         auto generated_interim = generate_interim_index(
             (*staged_state->fields)[FieldId(info.field_id)],
+            staged_state->fields,
             num_rows,
             loaded_column,
             op_ctx,
@@ -2731,7 +2731,9 @@ class ChunkedSegmentSealedImpl : public SegmentSealed {
         int64_t num_rows,
         const std::shared_ptr<ChunkedColumnInterface>& loaded_column,
         milvus::OpContext* op_ctx = nullptr) {
-        return generate_interim_index((*CaptureFieldLayout())[field_id],
+        auto layout = CaptureFieldLayout();
+        return generate_interim_index((*layout)[field_id],
+                                      layout,
                                       num_rows,
                                       loaded_column,
                                       op_ctx,
@@ -2873,7 +2875,7 @@ CreateSealedSegment(
     bool is_sorted_by_pk = false) {
     return std::make_unique<ChunkedSegmentSealedImpl>(
         std::make_shared<const SealedFieldLayout>(
-            schema.get(), LoadScope::FromLegacySchema(*schema)),
+            schema, LoadScope::FromLegacySchema(*schema)),
         index_meta,
         segcore_config,
         segment_id,

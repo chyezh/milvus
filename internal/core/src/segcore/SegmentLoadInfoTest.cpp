@@ -76,7 +76,7 @@ namespace {
 SealedFieldLayoutPtr
 LoadFieldsFor(const SchemaPtr& schema) {
     return std::make_shared<const SealedFieldLayout>(
-        schema.get(), LoadScope::FromLegacySchema(*schema));
+        schema, LoadScope::FromLegacySchema(*schema));
 }
 }  // namespace
 
@@ -4083,8 +4083,8 @@ TEST(SegmentLoadInfoLifetimeTest, SelectionSurvivesSchemaRetirement) {
 TEST(SealedFieldLayoutTest, ExplicitEmptyScopeDoesNotLoadAllFields) {
     auto schema = std::make_shared<Schema>();
     auto id = schema->AddDebugField("value", DataType::INT64);
-    SealedFieldLayout empty(schema.get(), LoadScope({}));
-    SealedFieldLayout selected(schema.get(), LoadScope({id.get()}));
+    SealedFieldLayout empty(schema, LoadScope({}));
+    SealedFieldLayout selected(schema, LoadScope({id.get()}));
     EXPECT_FALSE(empty.IsFieldInLoadScope(id));
     EXPECT_FALSE(empty.ShouldLoadField(id));
     EXPECT_TRUE(selected.IsFieldInLoadScope(id));
@@ -4097,10 +4097,10 @@ TEST(SealedFieldLayoutTest, ExplicitScopeIsIndependentOfLegacySchemaScope) {
     auto a = schema->AddDebugField("a", DataType::INT64);
     auto b = schema->AddDebugField("b", DataType::INT64);
     schema->UpdateLoadFields({a.get()});
-    SealedFieldLayout selected(schema.get(), LoadScope({b.get()}));
+    SealedFieldLayout selected(schema, LoadScope({b.get()}));
     EXPECT_FALSE(selected.IsFieldInLoadScope(a));
     EXPECT_FALSE(selected.has_field(a));
-    EXPECT_EQ(selected.get_fields().size(), 1);
+    EXPECT_EQ(selected.get_field_ids().size(), 1);
     EXPECT_TRUE(selected.ShouldLoadField(b));
     EXPECT_FALSE(schema->IsFieldInLoadScope(b));
 }
@@ -4117,7 +4117,7 @@ TEST(SealedFieldLayoutTest, PhysicalDependenciesDoNotGrantLogicalAccess) {
     EXPECT_FALSE(scope.Contains(ttl));
     EXPECT_TRUE(scope.Requires(pk));
     EXPECT_TRUE(scope.Requires(ttl));
-    SealedFieldLayout layout(schema.get(), scope);
+    SealedFieldLayout layout(schema, scope);
     EXPECT_TRUE(layout.ShouldLoadField(pk));
     EXPECT_TRUE(layout.ShouldLoadField(ttl));
     EXPECT_TRUE(layout.ShouldLoadField(value));

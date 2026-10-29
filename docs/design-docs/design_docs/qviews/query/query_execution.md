@@ -293,6 +293,11 @@ Collection through queueing, native completion and result conversion, including
 cancellation. Releasing a View cannot revoke an executing task's handles. See
 [QN resource preparation](../qnview/querynode_queryview_resource_preparation.md).
 
+The agreed, pending shared-layout refactor in that document additionally lets
+retained ReadStates/layouts keep versioned Collection metadata alive beyond the
+creating View. This does not change the task's exact Plan Schema, LoadScope or
+MVCC, and does not make the physical base's current state a query-schema source.
+
 Phase 2 receives `SegmentSelection` from its worker plan. An absent selection
 means `All`; `Include` and `Exclude` constrain IDs within the existing View and
 request partition scope; `None` selects no sealed segments. Filtering preserves
