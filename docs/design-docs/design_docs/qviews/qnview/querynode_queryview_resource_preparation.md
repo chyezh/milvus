@@ -563,7 +563,13 @@ runs outside registration locks and only schedules reconciliation. The temporary
 resource catch-up goroutine exits after installing it; no per-Segment failure
 waiter remains while the resource serves queries.
 
-Catchup uses bounded pages on a shared worker pool. A registration awaiting
+Catchup uses bounded pages on a shared worker pool. Its QueryNode-wide worker
+count is `max(1, floor(hardware.GetCPUNum() * ratio))`, configured by
+`queryNode.queryView.transformLogDrainConcurrencyRatio` (default `0.25`).
+Configuration changes resize the existing node-wide pool. Shrinking completes
+in-flight pages and preserves queued registrations; growing starts more workers.
+Node context cancellation unregisters the watcher and stops the worker pool.
+This pool runs Segment catch-up; there is no separate Segment catch-up pool. A registration awaiting
 transport coverage parks its state and releases the worker. Arrivals schedule
 pending registrations under the same VChannel lock used for the final empty
 check and attachment to the live dispatch set. A queued/running bit coalesces
