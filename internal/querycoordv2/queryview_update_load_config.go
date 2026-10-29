@@ -3,17 +3,15 @@ package querycoordv2
 import (
 	"context"
 	"maps"
-	"slices"
 
+	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
 	"github.com/milvus-io/milvus/internal/views/coord/loadmgr"
-	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
-	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
-// updateLoadConfig changes placement through the same ordered callback as Load.
+// updateLoadConfig applies placement under the same resource guards as Load.
 // Cluster reconciliation resolves defaults and user intent under the collection
 // lock, so a concurrent release cannot be undone by a stale watcher snapshot.
 func (s *Server) updateLoadConfig(ctx context.Context, ids []int64, replicas int32, groups []string) error {
@@ -50,45 +48,13 @@ func (s *Server) updateCollectionLoadConfig(ctx context.Context, id int64, repli
 			return nil
 		}
 	}
-	if replicas == 0 {
-		replicas = int32(len(current.Replicas))
-	}
-	if replicas < 0 {
-		return merr.WrapErrParameterInvalidMsg("replica number must be positive")
-	}
-	actual := make(map[string]int)
-	for _, replica := range current.Replicas {
-		actual[replica.ResourceGroup]++
-	}
-	if len(groups) == 0 {
-		if int(replicas) == len(current.Replicas) {
-			return nil
-		}
-		groups = slices.Sorted(maps.Keys(actual))
-	}
-	expected, err := utils.ReplicaNumberByResourceGroup(groups, replicas)
-	if err != nil {
+	// Only borrow the resource guard: configuration reconciliation does not
+	// create another WAL operation or wait for QueryView resource preparation.
+	if err := s.qviewsRuntime.loadManager.UpdateReplicaConfig(ctx, id, replicas, groups); err != nil {
 		return err
 	}
-	// Compare multiplicities, not just the set of resource group names.
-	if maps.Equal(actual, expected) {
-		return nil
-	}
-	if _, err := utils.AssignReplica(ctx, s.meta, groups, replicas, false); err != nil {
-		return err
-	}
-	header := loadConfigIntoAlterLoadConfigHeader(current)
-	priority := current.Replicas[0].Priority
-	header.Replicas, err = s.generateQViewsReplicaConfigs(ctx, current, qviewsExpectedLoadConfig{ReplicaNumber: expected, Priority: priority})
-	if err != nil {
-		return err
-	}
-	msg := message.NewAlterLoadConfigMessageBuilderV2().WithHeader(header).
-		WithBody(&messagespb.AlterLoadConfigMessageBody{}).WithControlChannelBroadcast().MustBuildBroadcast()
-	// Broadcast waits for durable application, not resource preparation. Each
-	// collection can converge independently; loadstatus observes the new version.
-	_, err = broadcaster.Broadcast(ctx, msg)
-	return err
+	meta.GlobalFailedLoadCache.Remove(id)
+	return nil
 }
 
 // clusterDefaultPlacementChange uses only immutable local load metadata. Always

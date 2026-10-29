@@ -499,6 +499,26 @@ broadcast completion callback to update `CollectionLoadManager`. StreamingNode d
 persist a vchannel-local load config; QueryView metadata identifies the versioned load
 info used when the local state machine acquires resources.
 
+`AlterCollection` and `AlterDatabase` already carry replica-count/resource-group
+intent in their durable messages. Their ACK callbacks pass this intent directly to
+`CollectionLoadManager.UpdateReplicaConfig`. The manager constructs the complete
+configuration and reuses the application path of `ApplyLoadConfig`. They reuse surviving ReplicaIDs
+and preserve partition, field and user-placement intent. An unloaded collection
+stays unloaded. The enclosing exclusive collection/database guard supplies
+serialization; recursively calling the `UpdateLoadConfig` RPC would reacquire
+a conflicting guard and deadlock. Replaying an already applied placement is a
+no-op. A missing resource group does not prevent metadata-cache invalidation.
+
+The cluster load-configuration watcher uses the same configuration construction
+and `ApplyLoadConfig` path without broadcasting an `AlterLoadConfig` message.
+It acquires the collection resource guard, rereads current desired state and
+cluster settings, and persists under that guard. This serializes it with release,
+explicit load and collection/database ALTER; a stale watcher snapshot cannot
+resurrect a released collection or override newly committed user placement.
+The periodically retried cluster configuration is its reconciliation source.
+External `UpdateLoadConfig` requests also acquire the collection guard and apply
+through the manager directly; they do not create another WAL operation.
+
 **Release semantics (Option A)**: `ReleaseCollection` removes LoadConfig; its
 source hook clears the cache desired field and enqueues the collection. Orphan
 views are detected by Phase 1 and released via `RequestRelease`. No separate

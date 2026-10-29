@@ -395,13 +395,15 @@ func (s *Server) initQueryCoord() error {
 
 func (s *Server) initQViewsRuntime() error {
 	mlog.Info(s.ctx, "init query view runtime")
-	runtime, err := newQViewsRuntime(s.ctx, newDefaultQViewsRuntimeDependencies(
+	deps := newDefaultQViewsRuntimeDependencies(
 		s.kv,
 		s.etcdCli,
 		s.store,
 		s.meta.ResourceManager,
 		s.mixCoord,
-	))
+	)
+	deps.replicaResources = s.meta
+	runtime, err := newQViewsRuntime(s.ctx, deps)
 	if err != nil {
 		return err
 	}
