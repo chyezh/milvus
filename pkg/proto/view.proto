@@ -327,6 +327,19 @@ message QueryPlan {
     // original Phase 1 request by Proxy. All other optimized parameters remain
     // explicit, including empty payloads when the optimizer clears a field.
     QueryPayloadReuse reused_payloads = 7;
+    // Present only for eligible filter-first ANN searches. No per-segment metadata.
+    SearchOptimizationInfo search_optimization = 9;
+}
+
+message SearchOptimizationInfo {
+    uint32 sealed_segment_count = 1;
+    int64 vector_dim = 2;
+    string index_type = 3;
+}
+
+message SearchExecutionOptions {
+    bool filter_only = 1;
+    bool enable_expr_cache = 2;
 }
 
 // Diagnostic facts for the successful execution attempt, never execution controls.
@@ -410,6 +423,7 @@ message SearchOnViewRequest {
     QueryPlanMVCC mvcc = 4;
     SegmentSelection segment_selection = 5;
     repeated SegmentSelection sub_selections = 6;
+    SearchExecutionOptions execution_options = 7;
 }
 
 message SearchOnViewResponse {
