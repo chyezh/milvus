@@ -184,6 +184,17 @@ Completed. The existing collection broadcast resource lock serializes these
 publications. Persistence failures retry in Committing; no QueryView Up wait is
 performed while holding this lock.
 
+If DataView reconciliation returns no version, DataCoord checks the collection
+by ID directly against RootCoord metadata, including unavailable states. Only
+Dropping, Dropped, or a nonexistent collection removes the obligation; Creating
+and Restoring still require publication. A confirmed deleted/nonexistent collection
+has no remaining DataView publication obligation: the callback skips publication
+and finishes the commit, including replay of an already Completed job. It does
+not roll back Committing jobs or recreate a deleted DataView. A live collection
+without a published version, or a metadata lookup failure, still retries. The
+check does not depend on process-local DataView drop markers and therefore also
+covers callback replay after coordinator recovery.
+
 A subsequent initial Load starts from the already published DataView. On an
 already loaded collection, clients use refresh-load to wait for serving views
 that cover the committed DataVersion. Import Completed alone is not a statement
