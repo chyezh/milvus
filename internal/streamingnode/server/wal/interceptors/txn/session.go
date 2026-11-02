@@ -48,6 +48,7 @@ type TxnSession struct {
 	doneWait         chan struct{}                // The channel for waiting the transaction committed.
 	rollback         bool                         // The flag indicates the transaction is rollbacked.
 	cleanupCallbacks []func()                     // The cleanup callbacks function for the session.
+	hasNonInsert     bool                         // A successful body requires Transform consumption.
 	metricsGuard     *metricsutil.TxnMetricsGuard // The metrics guard for the session.
 }
 
@@ -66,13 +67,11 @@ func (s *TxnSession) AddNewMessage(ctx context.Context, timetick uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// if the txn is expired, return error.
-	if err := s.checkIfExpired(timetick); err != nil {
-		return err
-	}
-
 	if s.state != message.TxnStateInFlight {
 		return status.NewInvalidTransactionState("AddNewMessage", message.TxnStateInFlight, s.state)
+	}
+	if err := s.checkIfExpired(timetick); err != nil {
+		return err
 	}
 	s.inFlightCount++
 	return nil
@@ -80,9 +79,12 @@ func (s *TxnSession) AddNewMessage(ctx context.Context, timetick uint64) error {
 
 // AddNewMessageDoneAndKeepalive decreases the in flight count of the session and keepalive the session.
 // notify the committedWait channel if the in flight count is 0 and committed waited.
-func (s *TxnSession) AddNewMessageDoneAndKeepalive(timetick uint64) {
+func (s *TxnSession) AddNewMessageDoneAndKeepalive(timetick uint64, typ message.MessageType) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if typ != message.MessageTypeInsert {
+		s.hasNonInsert = true
+	}
 
 	// make a refresh lease here.
 	if s.lastTimetick < timetick {
@@ -93,6 +95,14 @@ func (s *TxnSession) AddNewMessageDoneAndKeepalive(timetick uint64) {
 	if s.doneWait != nil && s.inFlightCount == 0 {
 		close(s.doneWait)
 	}
+}
+
+// IsInsertOnly is stable after RequestCommitAndWait succeeds. Record successful
+// body types before releasing their in-flight slots, including recovered bodies.
+func (s *TxnSession) IsInsertOnly() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bodyCount > 0 && !s.hasNonInsert
 }
 
 // AddNewMessageFail decreases the in flight count of the session but not refresh the lease.
@@ -265,12 +275,13 @@ func (s *TxnSession) getDoneChan(timetick uint64, state message.TxnState) (<-cha
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err := s.checkIfExpired(timetick); err != nil {
-		return nil, err
-	}
-
+	// An admitted/committed transaction must never become a retryable expiry
+	// merely because its lease elapsed. Resolve its state before checking TTL.
 	if s.state != message.TxnStateInFlight {
 		return nil, status.NewInvalidTransactionState("GetWaitChan", message.TxnStateInFlight, s.state)
+	}
+	if err := s.checkIfExpired(timetick); err != nil {
+		return nil, err
 	}
 	s.state = state
 

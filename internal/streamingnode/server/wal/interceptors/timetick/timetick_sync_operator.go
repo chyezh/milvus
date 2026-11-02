@@ -28,13 +28,31 @@ var _ inspector.TimeTickSyncOperator = &timeTickSyncOperator{}
 // NewTimeTickSyncOperator creates a new time tick sync operator.
 func newTimeTickSyncOperator(param *interceptors.InterceptorBuildParam) *timeTickSyncOperator {
 	metrics := metricsutil.NewTimeTickMetrics(param.ChannelInfo.Name)
+	var recovered []*ack.AckDetail
+	if param.InitialRecoverSnapshot != nil && param.InitialRecoverSnapshot.TxnBuffer != nil {
+		for id, builder := range param.InitialRecoverSnapshot.TxnBuffer.GetUncommittedMessageBuilder() {
+			session, err := param.TxnManager.GetSessionOfTxn(id)
+			if err != nil {
+				panic(err) // The manager and ACK state are built from the same startup snapshot.
+			}
+			begin, bodies := builder.Messages()
+			for _, msg := range append([]message.ImmutableMessage{begin}, bodies...) {
+				recovered = append(recovered, &ack.AckDetail{
+					Message: msg, TxnSession: session,
+					// The barrier fences every old-writer append, including its
+					// transient concurrency boundary that is not recorded in WAL.
+					EndTimestamp: param.LastTimeTickMessage.TimeTick(),
+				})
+			}
+		}
+	}
 	return &timeTickSyncOperator{
 		logger: resource.Resource().Logger().With(
 			mlog.FieldComponent("timetick-sync"),
 			mlog.Any("pchannel", param.ChannelInfo),
 		),
 		interceptorBuildParam: param,
-		ackManager:            ack.NewAckManager(param.LastTimeTickMessage.TimeTick(), param.LastConfirmedMessageID, metrics),
+		ackManager:            ack.NewAckManager(param.LastTimeTickMessage.TimeTick(), param.LastConfirmedMessageID, metrics, recovered...),
 		ackDetails:            ack.NewAckDetails(),
 		sourceID:              paramtable.GetNodeID(),
 		metrics:               metrics,
@@ -161,9 +179,10 @@ func (impl *timeTickSyncOperator) sendTsMsgToWAL(ctx context.Context,
 	persist bool,
 	appender func(ctx context.Context, msg message.MutableMessage) (message.MessageID, error),
 ) error {
+	var channels []string
 	msg := NewTimeTickMsg(ts, lastConfirmedMessageID, impl.sourceID, persist)
 	if len(impl.queryBarriers) != 0 {
-		channels := make([]string, 0, len(impl.queryBarriers))
+		channels = make([]string, 0, len(impl.queryBarriers))
 		for channel := range impl.queryBarriers {
 			channels = append(channels, channel)
 		}
@@ -185,6 +204,19 @@ func (impl *timeTickSyncOperator) sendTsMsgToWAL(ctx context.Context,
 		})
 	}
 
+	// ACKed data already forms a complete durable prefix. Publish its query
+	// targets before the confirmation can reach any WAL/WAB consumer and
+	// expose a newer View. Queries still wait for runtime data visibility.
+	impl.MVCCManager().QueryMVCC().Publish(func(yield func(message.ImmutableMessage, bool) bool) {
+		impl.ackDetails.Range(func(detail *ack.AckDetail) bool {
+			if detail.IsSync || detail.Err != nil {
+				return true
+			}
+			insertOnly := detail.Message.MessageType() == message.MessageTypeCommitTxn && detail.TxnSession != nil && detail.TxnSession.IsInsertOnly()
+			return yield(detail.Message, insertOnly)
+		})
+	}, ts, channels)
+
 	// Append it to wal.
 	msgID, err := appender(ctx, msg)
 	if err != nil {
@@ -205,11 +237,11 @@ func (impl *timeTickSyncOperator) sendTsMsgToWAL(ctx context.Context,
 		}
 		return true
 	})
-	// Ack details has been committed to wal, clear it.
-	impl.ackDetails.Clear()
 	tsMsg := msg.IntoImmutableMessage(msgID)
 	// Add it into write ahead buffer.
 	impl.interceptorBuildParam.WriteAheadBuffer.Append(msgs, tsMsg)
+
+	impl.ackDetails.Clear()
 	impl.lastPublishedTick = ts
 	return nil
 }

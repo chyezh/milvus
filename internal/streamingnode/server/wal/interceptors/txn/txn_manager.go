@@ -32,7 +32,7 @@ func NewTxnManager(pchannel types.PChannelInfo, uncommittedTxnBuilders map[messa
 		)
 		for _, msg := range body {
 			session.AddNewMessage(context.Background(), msg.TimeTick())
-			session.AddNewMessageDoneAndKeepalive(msg.TimeTick())
+			session.AddNewMessageDoneAndKeepalive(msg.TimeTick(), msg.MessageType())
 		}
 		sessions[session.TxnContext().TxnID] = session
 		recoveredSessions[session.TxnContext().TxnID] = struct{}{}
@@ -184,7 +184,9 @@ func (m *TxnManager) GetSessionOfTxn(id message.TxnID) (*TxnSession, error) {
 
 	session, ok := m.sessions[id]
 	if !ok {
-		return nil, status.NewTransactionExpired("txn %d not found in manager", id)
+		// Cleanup removes committed as well as expired transactions. Absence is
+		// not evidence that a Commit failed; its result may also have aged out.
+		return nil, status.NewTransactionNotFound(id)
 	}
 	return session, nil
 }
