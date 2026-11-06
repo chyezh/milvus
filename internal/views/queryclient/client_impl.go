@@ -21,8 +21,10 @@ type ViewQueryClientConfig struct {
 	// QueryHook is initialized and owned by the hosting process.
 	QueryHook optimizers.QueryHook
 	// LoadInfoClient confirms current load state when an initialized directory is empty.
-	LoadInfoClient LoadInfoClient
-	MaxRetries     int // Maximum per-shard attempts; zero defaults to 3. At least one full candidate pass is allowed.
+	LoadInfoClient         LoadInfoClient
+	MaxRetries             int  // Maximum per-shard attempts; zero defaults to 3. At least one full candidate pass is allowed.
+	EnableReduceStream     bool // Route supported requests through Streaming Reduce.
+	ReduceStreamChunkBytes int  // Chunk reducible-payload byte threshold; must be positive when enabled.
 }
 
 // viewQueryClientImpl implements ViewQueryClient.
@@ -58,15 +60,10 @@ func NewViewQueryClient(
 	retrieveReducerBuilder reducer.RetrieveResultReducerBuilder,
 	requeryRunner RequeryRunner,
 ) ViewQueryClient {
-	if cfg.MaxRetries <= 0 {
-		cfg.MaxRetries = defaultMaxRetries
-	}
-	shardClient := newShardViewQueryClient(cfg.MaxRetries, queryPlanClient, queryServiceClient)
-	shardClient.queryHook = cfg.QueryHook
-	shardClient.loadChecks = newCollectionLoadChecks(cfg.LoadInfoClient)
+	legacy := newLegacyClient(cfg, queryPlanClient, queryServiceClient, shardResolver)
 	return &viewQueryClientImpl{
-		shardClient:            shardClient,
-		legacyClient:           &legacyClient{shardClient: shardClient, shardResolver: shardResolver},
+		shardClient:            legacy.shardClient,
+		legacyClient:           legacy,
 		shardResolver:          shardResolver,
 		fieldFetchPlanner:      fieldFetchPlanner,
 		rerankerBuilder:        rerankerBuilder,

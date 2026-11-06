@@ -81,7 +81,12 @@ func newDefaultProxyViewQueryClient(etcdCli *clientv3.Client, vchannelProvider r
 		queryNodeClient.QueryViewClient(),
 	)
 	client := queryclient.NewLegacyViewQueryClient(
-		queryclient.ViewQueryClientConfig{LoadInfoClient: loadInfoClient, QueryHook: hook},
+		queryclient.ViewQueryClientConfig{
+			LoadInfoClient:         loadInfoClient,
+			QueryHook:              hook,
+			EnableReduceStream:     paramtable.Get().ProxyCfg.EnableReduceStream.GetAsBool(),
+			ReduceStreamChunkBytes: paramtable.Get().ProxyCfg.ReduceStreamChunkBytes.GetAsInt(),
+		},
 		queryPlanClient,
 		queryServiceClient,
 		shardResolver,
