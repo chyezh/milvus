@@ -43,9 +43,8 @@ func TestOpenerAdaptorFailure(t *testing.T) {
 	basicOpener := mock_walimpls.NewMockOpenerImpls(t)
 	errExpected := errors.New("test")
 	basicOpener.EXPECT().Open(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, boo *walimpls.OpenOption) (walimpls.WALImpls, error) {
-		require.NotNil(t, boo.RecoveryCheckpoint)
-		require.Equal(t, message.WALNameTest, boo.RecoveryCheckpoint.WALName())
-		require.Equal(t, "0", boo.RecoveryCheckpoint.Marshal())
+		// This catalog has no retention ledger, so it cannot clear backlog.
+		require.Nil(t, boo.RecoveryCheckpoint)
 		return nil, errExpected
 	})
 
@@ -63,6 +62,37 @@ func TestOpenerAdaptorFailure(t *testing.T) {
 	l, err := opener.Open(context.Background(), &wal.OpenOption{})
 	assert.ErrorIs(t, err, errExpected)
 	assert.Nil(t, l)
+}
+
+func TestColdOpenHonorsReplayRetention(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		mockey.PatchConvey("cold open uses the protected position before admitting a new writer", t, func() {
+			catalog := &mock_metastore.MockStreamingNodeCataLog{}
+			cp := &streamingpb.WALCheckpoint{Term: 7, TimeTick: 1000, MessageId: message.MustMarshalMessageID(rmq.NewRmqID(100))}
+			mockey.Mock((*mock_metastore.MockStreamingNodeCataLog).GetConsumeCheckpoint).Return(cp, nil).Build()
+			resource.InitForTest(t, resource.OptStreamingNodeCatalog(catalog))
+			mockey.Mock(utility.AuthorizeWALTruncation).To(func(_ context.Context, actual metastore.StreamingNodeCataLog, channel string, term int64, requested *streamingpb.WALCheckpoint) (message.MessageID, error) {
+				require.Same(t, catalog, actual)
+				require.Same(t, cp, requested)
+				require.Equal(t, "p", channel)
+				require.EqualValues(t, 7, term, "term 8 has not acquired the backend writer yet")
+				if failed {
+					return nil, context.DeadlineExceeded
+				}
+				return rmq.NewRmqID(10), nil
+			}).Build()
+			o := &openerAdaptorImpl{}
+			name, bound, err := o.determineWALName(t.Context(), &wal.OpenOption{Channel: types.PChannelInfo{Name: "p", Term: 8}})
+			if failed {
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				require.Nil(t, bound)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, message.WALNameRocksmq, name)
+				require.True(t, bound.EQ(rmq.NewRmqID(10)))
+			}
+		})
+	}
 }
 
 func TestOpenRWWALCleansRecoveredShardManagerOnReplicateRecoveryFailure(t *testing.T) {

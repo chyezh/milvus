@@ -10,6 +10,7 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walevent"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
@@ -105,7 +106,7 @@ func (rs *recoveryStorageImpl) persistDirtySnapshot(ctx context.Context, lvl mlo
 		}
 		rs.simpleTruncateCheckpoint(ctx, snapshot.Checkpoint)
 	}
-	return
+	return err
 }
 
 func (rs *recoveryStorageImpl) buildRecoverySnapshot(snapshot *dirtyPersistSnapshot) (*metastore.WALRecoverySnapshot, error) {
@@ -231,7 +232,16 @@ func (rs *recoveryStorageImpl) simpleTruncateCheckpoint(ctx context.Context, che
 	if rs.truncator == nil || checkpoint == nil || checkpoint.MessageID == nil {
 		return
 	}
-	_ = rs.truncator.Truncate(ctx, checkpoint.MessageID)
+	bound, err := utility.AuthorizeWALTruncation(ctx, resource.Resource().StreamingNodeCatalog(), rs.channel.Name, rs.channel.Term, checkpoint.IntoProto())
+	if err != nil {
+		rs.Logger().Warn(ctx, "failed to authorize WAL truncation", mlog.Err(err))
+		return
+	}
+	if bound != nil {
+		if err := rs.truncator.Truncate(ctx, bound); err != nil {
+			rs.Logger().Warn(ctx, "failed to truncate WAL", mlog.Err(err))
+		}
+	}
 }
 
 func retryOperationWithBackoff(ctx context.Context, logger *mlog.Logger, op func(ctx context.Context) error) error {

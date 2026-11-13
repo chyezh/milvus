@@ -1475,3 +1475,18 @@ message WALObjectDeletion {
     string operation_id = 2;
     bool done = 3;
 }
+
+// A finite bootstrap's physical replay obligation. It protects the paired
+// restart MessageID, including transactions spanning its logical TimeTick.
+message WALReplayPin {
+    string pin_id = 1;
+    int64 source_term = 2;
+    WALCheckpoint checkpoint = 3;
+}
+
+// Truncation authorization is durable before the backend call. New pins behind
+// this watermark are rejected, including while an old call is still in flight.
+message WALReplayRetentionState {
+    WALCheckpoint truncated = 1;
+    map<string, WALReplayPin> pins = 2;
+}

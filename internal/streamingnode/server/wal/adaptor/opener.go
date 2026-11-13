@@ -151,7 +151,12 @@ func (o *openerAdaptorImpl) determineWALName(ctx context.Context, opt *wal.OpenO
 		fields = append(fields, utility.AlterWALStateLogFields(checkpoint.AlterWalState)...)
 		mlog.Info(ctx, "get checkpoint from catalog", fields...)
 		walName = checkpoint.MessageID.WALName()
-		recoveryCheckpoint = checkpoint.MessageID
+		// Before producer admission, use the persisted owner's term. The CAS
+		// authorizes only its durable checkpoint and protects old-term pins too.
+		recoveryCheckpoint, err = utility.AuthorizeWALTruncation(ctx, catalog, opt.Channel.Name, cpProto.Term, cpProto)
+		if err != nil {
+			return message.WALNameUnknown, nil, merr.Wrap(err, "authorize WAL cold-open backlog clearing")
+		}
 	}
 
 	if walName == message.WALNameUnknown {
