@@ -25,6 +25,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/walimplstest"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
@@ -132,4 +133,76 @@ func TestWALReplicaGRPCResumeAndPrimaryTermChange(t *testing.T) {
 		_, err = rpc.Recv()
 		require.Error(t, err)
 	})
+}
+
+func TestReplicaEventStreamSendBudget(t *testing.T) {
+	for _, outcome := range []string{"blocked", "idle", "send-error", "source-close", "canceled", "evicted"} {
+		t.Run(outcome, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			source := walevent.NewSource(7, 1, 1024, func(context.Context, walevent.Event) error { return nil })
+			defer source.Close()
+			reader, err := source.Subscribe(walevent.Cursor{Term: 7})
+			require.NoError(t, err)
+			defer reader.Close()
+			if outcome != "idle" {
+				_, err = source.Publish(ctx, walevent.QueryViewIntentBatch{})
+				require.NoError(t, err)
+			}
+			if outcome == "evicted" {
+				_, err = source.Publish(ctx, walevent.QueryViewIntentBatch{})
+				require.NoError(t, err)
+			}
+			started, finished := make(chan struct{}), make(chan struct{})
+			done := make(chan error, 1)
+			go func() {
+				done <- serveReplicaEventReader(ctx, reader, 20*time.Millisecond, func(ctx context.Context, _ walevent.Event) error {
+					defer close(finished)
+					close(started)
+					if outcome == "idle" || outcome == "send-error" {
+						return merr.ErrServiceInternal
+					}
+					<-ctx.Done()
+					return ctx.Err()
+				})
+			}()
+			switch outcome {
+			case "idle":
+				select {
+				case err := <-done:
+					t.Fatalf("idle stream hit send deadline: %v", err)
+				case <-time.After(60 * time.Millisecond):
+				}
+				_, err = source.Publish(ctx, walevent.QueryViewIntentBatch{})
+				require.NoError(t, err)
+			case "source-close":
+				<-started
+				source.Close()
+			case "canceled":
+				<-started
+				cancel()
+			}
+			err = <-done
+			switch outcome {
+			case "idle", "send-error":
+				require.ErrorIs(t, err, merr.ErrServiceInternal)
+			case "canceled":
+				require.ErrorIs(t, err, context.Canceled)
+			case "blocked":
+				require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+			case "evicted":
+				var reset *walevent.ResetError
+				require.ErrorAs(t, err, &reset)
+			case "source-close":
+				require.True(t, status.AsStreamingError(err).IsOnShutdown())
+			}
+			if outcome != "evicted" {
+				select {
+				case <-finished:
+				case <-time.After(time.Second):
+					t.Fatal("stream worker did not exit")
+				}
+			}
+		})
+	}
 }

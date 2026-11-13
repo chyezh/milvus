@@ -1366,6 +1366,16 @@ message WALReplicaSnapshot {
     map<string, uint64> query_barriers = 8;
 }
 
+// Bootstrap framing, outside the ordered business event stream. Every frame
+// belongs to one immutable metadata image at the same WALTerm/Seq cut.
+message WALReplicaSnapshotChunk {
+    WALReplicaCursor cursor = 1;
+    uint64 total_bytes = 2;
+    uint64 offset = 3;
+    bytes sha256 = 4;
+    bytes data = 5;
+}
+
 // Transactions preserve their assembled logical boundary. The ordinary outer
 // message alone does not serialize the in-memory transaction body.
 message WALReplicaEntry {

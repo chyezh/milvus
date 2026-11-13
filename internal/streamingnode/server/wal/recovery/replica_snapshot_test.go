@@ -76,7 +76,8 @@ func TestReplicaMetadataSeparatesCatalogFromPendingStorage(t *testing.T) {
 	m.applyStorage(walevent.StoragePublished{Catalog: &streamingpb.WALReplicaCatalogPublication{Segments: []*streamingpb.SegmentAssignmentMeta{segment}}})
 	materialized.TransformMaterializedTimeTick = 40
 	m.applyStorage(walevent.StoragePublished{Segments: []*streamingpb.SegmentAssignmentMeta{segment}, VChannels: []*streamingpb.VChannelMeta{materialized}})
-	snap := m.snapshot(walevent.Cursor{Term: 7, Seq: 8})
+	snap, err := m.snapshot(walevent.Cursor{Term: 7, Seq: 8}, walevent.MaxSnapshotBytes)
+	require.NoError(t, err)
 	require.EqualValues(t, 40, snap.Segments[0].CheckpointTimeTick)
 	require.EqualValues(t, 50, snap.Storage.Segments[0].CheckpointTimeTick)
 	require.EqualValues(t, 50, snap.Storage.Vchannels[0].TransformMaterializedTimeTick)
@@ -112,6 +113,26 @@ func TestReplicaMetadataSeparatesCatalogFromPendingStorage(t *testing.T) {
 	m.applyStorage(walevent.StoragePublished{Segments: []*streamingpb.SegmentAssignmentMeta{newStorage}})
 	m.applyCatalog(&streamingpb.WALReplicaCatalogPublication{Segments: []*streamingpb.SegmentAssignmentMeta{newStorage}})
 	require.Empty(t, m.storage)
+}
+
+func TestReplicaSnapshotBudgetsRejectCompleteImage(t *testing.T) {
+	m := newReplicaMetadata()
+	m.vchannels["v"] = &streamingpb.VChannelMeta{Vchannel: "v"}
+	image, err := m.snapshot(walevent.Cursor{Term: 7}, walevent.MaxSnapshotBytes)
+	require.NoError(t, err)
+	size := proto.Size(image)
+	_, err = m.snapshot(walevent.Cursor{Term: 7}, size)
+	require.NoError(t, err)
+	rejected, err := m.snapshot(walevent.Cursor{Term: 7}, size-1)
+	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+	require.Nil(t, rejected)
+	for i := 0; i < walevent.MaxSnapshotRecords; i++ {
+		m.segments[int64(i)] = &streamingpb.SegmentAssignmentMeta{SegmentId: int64(i)}
+	}
+	rejected, err = m.snapshot(walevent.Cursor{Term: 7}, walevent.MaxSnapshotBytes)
+	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+	require.Nil(t, rejected)
+	require.Len(t, m.segments, walevent.MaxSnapshotRecords, "failed export must preserve every metadata record")
 }
 
 func TestReplicaMetadataKeepsVolatileScopedFrontiers(t *testing.T) {

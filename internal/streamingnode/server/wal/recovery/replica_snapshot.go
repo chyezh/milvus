@@ -78,8 +78,9 @@ func (r *recoveryStorageImpl) CutReplicaSnapshot(ctx context.Context) (*streamin
 	reader, err := r.events.Cut(ctx, func(cursor walevent.Cursor) error {
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		snapshot = r.replicaMetadata.snapshot(cursor)
-		return nil
+		var err error
+		snapshot, err = r.replicaMetadata.snapshot(cursor, walevent.MaxSnapshotBytes)
+		return err
 	})
 	if err != nil {
 		return nil, nil, err
@@ -198,7 +199,13 @@ func (m *replicaMetadata) applyVChannel(meta *streamingpb.VChannelMeta, baseOnly
 	m.vchannels[meta.GetVchannel()] = clone
 }
 
-func (m *replicaMetadata) snapshot(cursor walevent.Cursor) *streamingpb.WALReplicaSnapshot {
+func (m *replicaMetadata) snapshot(cursor walevent.Cursor, maxBytes int) (*streamingpb.WALReplicaSnapshot, error) {
+	// Check cardinality before allocating the repeated-field slices, and wire
+	// size before cloning any nested schemas, segment metadata or View payloads.
+	// A baseline is all-or-nothing; never truncate metadata to fit the budget.
+	if len(m.vchannels)+len(m.segments)+len(m.materialized)+len(m.storage)+len(m.views)+len(m.barriers) > walevent.MaxSnapshotRecords {
+		return nil, merr.WrapErrServiceUnavailable("WAL replica snapshot record budget exhausted")
+	}
 	result := &streamingpb.WALReplicaSnapshot{
 		Cursor: cursor.IntoProto(), Checkpoint: m.checkpoint, Observed: m.observed,
 		Vchannels: slices.Collect(maps.Values(m.vchannels)), Segments: slices.Collect(maps.Values(m.segments)),
@@ -207,7 +214,10 @@ func (m *replicaMetadata) snapshot(cursor walevent.Cursor) *streamingpb.WALRepli
 		},
 		QueryViews: slices.Collect(maps.Values(m.views)), QueryBarriers: m.barriers,
 	}
+	if proto.Size(result) > maxBytes {
+		return nil, merr.WrapErrServiceUnavailable("WAL replica snapshot byte budget exhausted")
+	}
 	// The source gate orders the cut; the clone gives the transport ownership
 	// without retaining a lock while it encodes or sends the image.
-	return proto.CloneOf(result)
+	return proto.CloneOf(result), nil
 }

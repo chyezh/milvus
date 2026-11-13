@@ -15,19 +15,28 @@ import (
 // The local path calls Consumer.Apply directly; it does not serialize or make
 // an RPC to itself. Remote readers use exactly the same Consumer.Apply contract.
 type Source struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	gate     chan struct{} // serializes publication and metadata cuts
-	consumer *Consumer
-	mu       sync.Mutex // journal, closure and subscription boundary
-	changed  chan struct{}
-	closed   error
-	applied  Cursor
-	journal  []journalEntry
-	start    int
-	count    int
-	bytes    int
-	maxBytes int
+	ctx        context.Context
+	cancel     context.CancelFunc
+	gate       chan struct{} // serializes publication and metadata cuts
+	consumer   *Consumer
+	mu         sync.Mutex // journal, closure and subscription boundary
+	changed    chan struct{}
+	closed     error
+	applied    Cursor
+	journal    []journalEntry
+	start      int
+	count      int
+	bytes      int
+	maxBytes   int
+	readers    int
+	maxReaders int
+}
+
+// SourceOption bounds resources that are independent of journal retention.
+type SourceOption func(*Source)
+
+func WithMaxReaders(limit int) SourceOption {
+	return func(s *Source) { s.maxReaders = limit }
 }
 
 type journalEntry struct {
@@ -35,17 +44,26 @@ type journalEntry struct {
 	bytes int
 }
 
-func NewSource(term int64, maxEvents, maxBytes int, apply Applier) *Source {
+func NewSource(term int64, maxEvents, maxBytes int, apply Applier, options ...SourceOption) *Source {
 	if term <= 0 || maxEvents <= 0 || maxBytes <= 0 {
 		panic("WAL event source requires positive term and journal bounds")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Source{
+	s := &Source{
 		ctx: ctx, cancel: cancel,
 		gate: make(chan struct{}, 1), consumer: NewConsumer(Cursor{Term: term}, apply),
 		changed: make(chan struct{}), applied: Cursor{Term: term},
 		journal: make([]journalEntry, maxEvents), maxBytes: maxBytes,
+		maxReaders: 32,
 	}
+	for _, option := range options {
+		option(s)
+	}
+	if s.maxReaders <= 0 {
+		cancel()
+		panic("WAL event source requires a positive reader limit")
+	}
+	return s
 }
 
 // Publish freezes producer-owned metadata before it enters the ordered stream.
@@ -114,10 +132,22 @@ func (s *Source) Cut(ctx context.Context, capture func(Cursor) error) (*Reader, 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := capture(cursor); err != nil {
+	reader, err := s.Subscribe(cursor)
+	if err != nil {
 		return nil, err
 	}
-	return s.Subscribe(cursor)
+	if err := capture(cursor); err != nil {
+		reader.Close()
+		return nil, err
+	}
+	s.mu.Lock()
+	err = s.closed
+	s.mu.Unlock()
+	if err != nil {
+		reader.Close()
+		return nil, err
+	}
+	return reader, nil
 }
 
 // Subscribe resumes strictly after an applied cursor. Validation shares the
@@ -129,6 +159,10 @@ func (s *Source) Subscribe(after Cursor) (*Reader, error) {
 	if err := s.checkCursorLocked(after); err != nil {
 		return nil, err
 	}
+	if s.readers >= s.maxReaders {
+		return nil, merr.WrapErrServiceUnavailable("WAL event source reader budget exhausted")
+	}
+	s.readers++
 	return &Reader{source: s, after: after, done: make(chan struct{})}, nil
 }
 
@@ -239,4 +273,11 @@ func (r *Reader) Next(ctx context.Context) (Event, error) {
 	}
 }
 
-func (r *Reader) Close() { r.once.Do(func() { close(r.done) }) }
+func (r *Reader) Close() {
+	r.once.Do(func() {
+		close(r.done)
+		r.source.mu.Lock()
+		r.source.readers--
+		r.source.mu.Unlock()
+	})
+}

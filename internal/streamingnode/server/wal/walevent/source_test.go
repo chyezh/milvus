@@ -25,6 +25,53 @@ func testContext(t *testing.T) context.Context {
 	return ctx
 }
 
+func TestSourceReaderBudget(t *testing.T) {
+	require.Panics(t, func() { NewSource(1, 1, 1, nil, WithMaxReaders(0)) })
+	s := NewSource(7, 2, 1024, func(context.Context, Event) error { return nil }, WithMaxReaders(2))
+	defer s.Close()
+	first, err := s.Subscribe(Cursor{Term: 7})
+	require.NoError(t, err)
+	second, err := s.Cut(t.Context(), func(Cursor) error { return nil })
+	require.NoError(t, err)
+	_, err = s.Subscribe(Cursor{Term: 7})
+	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+	_, err = s.Cut(t.Context(), func(Cursor) error { t.Fatal("exhausted reader budget must reject before copying metadata"); return nil })
+	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+	// Capacity pressure never blocks the primary's local Apply.
+	cursor, err := s.Publish(t.Context(), testCheckpoint(10))
+	require.NoError(t, err)
+	first.Close()
+	first.Close()
+	replacement, err := s.Subscribe(cursor)
+	require.NoError(t, err)
+	_, err = s.Subscribe(cursor)
+	require.Error(t, err, "double Close must not free another reader's slot")
+	second.Close()
+	replacement.Close()
+	require.Zero(t, s.readers)
+	s.Close()
+	_, err = s.Subscribe(cursor)
+	require.Error(t, err)
+}
+
+func TestSourceCloseDuringMetadataCaptureReleasesReader(t *testing.T) {
+	s := NewSource(7, 1, 1024, func(context.Context, Event) error { return nil }, WithMaxReaders(1))
+	entered, release := make(chan struct{}), make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		reader, err := s.Cut(t.Context(), func(Cursor) error { close(entered); <-release; return nil })
+		if reader != nil {
+			reader.Close()
+		}
+		done <- err
+	}()
+	<-entered
+	s.Close()
+	close(release)
+	require.ErrorIs(t, <-done, merr.ErrServiceUnavailable)
+	require.Zero(t, s.readers)
+}
+
 func TestSourceLocalAndRemotePrefix(t *testing.T) {
 	ctx := testContext(t)
 	var local, remote []uint64
