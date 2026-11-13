@@ -10,6 +10,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus/internal/metastore"
+	replicaclient "github.com/milvus-io/milvus/internal/streamingnode/client/replica"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors"
@@ -78,6 +79,7 @@ type openerAdaptorImpl struct {
 	lifetime            *typeutil.Lifetime
 	mu                  sync.Mutex                               // protects openerCache
 	openerCache         map[message.WALName]walimpls.OpenerImpls // cache of opened walimpls.OpenerImpls, dynamically created based on walName
+	replicaClient       *replicaclient.Client                    // shares node discovery and RPC connections across RO runtimes
 	idAllocator         *typeutil.IDAllocator
 	walInstances        *typeutil.ConcurrentMap[int64, wal.WAL] // store all wal instances allocated by these allocator.
 	interceptorBuilders []interceptors.InterceptorBuilder
@@ -569,6 +571,10 @@ func (o *openerAdaptorImpl) Close() {
 		opener.Close()
 	}
 	o.openerCache = nil
+	if o.replicaClient != nil {
+		o.replicaClient.Close()
+		o.replicaClient = nil
+	}
 
 	o.Logger().Info(context.TODO(), "wal opener closed")
 }

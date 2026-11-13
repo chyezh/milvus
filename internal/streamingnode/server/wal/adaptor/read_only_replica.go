@@ -32,6 +32,7 @@ type readOnlyReplica struct {
 	walName    message.WALName
 	cancel     context.CancelFunc
 	closeOnce  sync.Once
+	onClose    func()
 	refresh    atomic.Bool
 	followDone chan struct{}
 }
@@ -144,6 +145,9 @@ func (r *readOnlyReplica) Close() {
 		r.storage.Close()
 		if r.followDone != nil {
 			<-r.followDone
+		}
+		if r.onClose != nil {
+			r.onClose()
 		}
 	})
 }
