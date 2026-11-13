@@ -92,8 +92,9 @@ type StreamingNodeInfoWithResourceGroup struct {
 // StreamingNodeStatus is the information of a streaming node.
 type StreamingNodeStatus struct {
 	StreamingNodeInfo
-	Metrics StreamingNodeMetrics
-	Err     error
+	ResourceGroup string
+	Metrics       StreamingNodeMetrics
+	Err           error
 }
 
 // IsHealthy returns whether the streaming node is healthy.

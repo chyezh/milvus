@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bytedance/mockey"
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -103,7 +104,7 @@ func TestBalancer(t *testing.T) {
 				Channel: &streamingpb.PChannelInfo{
 					Name:       "test-channel-1",
 					Term:       1,
-					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
 				},
 				State: streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
 				Node:  &streamingpb.StreamingNodeInfo{ServerId: 1},
@@ -112,7 +113,7 @@ func TestBalancer(t *testing.T) {
 				Channel: &streamingpb.PChannelInfo{
 					Name:       "test-channel-2",
 					Term:       1,
-					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
 				},
 				State: streamingpb.PChannelMetaState_PCHANNEL_META_STATE_UNAVAILABLE,
 				Node:  &streamingpb.StreamingNodeInfo{ServerId: 4},
@@ -121,7 +122,7 @@ func TestBalancer(t *testing.T) {
 				Channel: &streamingpb.PChannelInfo{
 					Name:       "test-channel-3",
 					Term:       2,
-					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
 				},
 				State: streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNING,
 				Node:  &streamingpb.StreamingNodeInfo{ServerId: 2},
@@ -131,7 +132,7 @@ func TestBalancer(t *testing.T) {
 	catalog.EXPECT().SavePChannels(mock.Anything, mock.Anything).Return(nil).Maybe()
 	catalog.EXPECT().GetReplicateConfiguration(mock.Anything).Return(nil, nil)
 
-	// Test for lower datanode and proxy version protection.
+	// Legacy node versions no longer determine WAL access mode.
 	metaRoot := paramtable.Get().EtcdCfg.MetaRootPath.GetValue()
 	proxyPath1 := path.Join(metaRoot, sessionutil.DefaultServiceRoot, typeutil.ProxyRole+"-1")
 	r := sessionutil.SessionRaw{Version: "2.5.11", ServerID: 1}
@@ -153,7 +154,7 @@ func TestBalancer(t *testing.T) {
 	doneErr := errors.New("done")
 	err = b.WatchChannelAssignments(context.Background(), func(param balancer.WatchChannelAssignmentsCallbackParam) error {
 		for _, relation := range param.Relations {
-			assert.Equal(t, relation.Channel.AccessMode, types.AccessModeRO)
+			assert.Equal(t, relation.Channel.AccessMode, types.AccessModeRW)
 		}
 		if len(param.Relations) == 3 {
 			return doneErr
@@ -737,7 +738,6 @@ func TestBalancer_PrimaryResourceGroupChangeTriggersBalance(t *testing.T) {
 	channel.ResetStaticPChannelStatsManager()
 	channel.RecoverPChannelStatsManager([]string{})
 
-	rgHints := make(chan string, 8)
 	streamingNodeManager := mock_manager.NewMockManagerClient(t)
 	streamingNodeManager.EXPECT().WatchNodeChanged(mock.Anything).Return(make(chan struct{}), nil)
 	streamingNodeManager.EXPECT().Assign(mock.Anything, mock.Anything).Return(nil).Maybe()
@@ -747,17 +747,14 @@ func TestBalancer_PrimaryResourceGroupChangeTriggersBalance(t *testing.T) {
 			StreamingNodeInfo: types.StreamingNodeInfo{ServerID: 1, Address: "localhost:1"},
 		},
 	}, nil).Maybe()
-	streamingNodeManager.EXPECT().CollectAllStatus(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, resourceGroupHint string) (map[int64]*types.StreamingNodeStatus, error) {
-		rgHints <- resourceGroupHint
+	collectPatch := mockey.Mock((*mock_manager.MockManagerClient).CollectAllStatus).To(func(_ context.Context, hint string) (map[int64]*types.StreamingNodeStatus, error) {
+		assert.Empty(t, hint, "replica planning must collect every RG")
 		return map[int64]*types.StreamingNodeStatus{
-			1: {
-				StreamingNodeInfo: types.StreamingNodeInfo{
-					ServerID: 1,
-					Address:  "localhost:1",
-				},
-			},
+			1: {StreamingNodeInfo: types.StreamingNodeInfo{ServerID: 1, Address: "localhost:1"}, ResourceGroup: "rg-old"},
+			2: {StreamingNodeInfo: types.StreamingNodeInfo{ServerID: 2, Address: "localhost:2"}, ResourceGroup: "rg-new"},
 		}, nil
-	}).Maybe()
+	}).Build()
+	defer collectPatch.UnPatch()
 
 	catalog := mock_metastore.NewMockStreamingCoordCataLog(t)
 	s := sessionutil.NewMockSession(t)
@@ -793,22 +790,18 @@ func TestBalancer_PrimaryResourceGroupChangeTriggersBalance(t *testing.T) {
 	defer b.Close()
 
 	assert.Eventually(t, func() bool {
-		select {
-		case hint := <-rgHints:
-			return hint == "rg-old"
-		default:
+		assignment, err := b.GetLatestChannelAssignment()
+		if err != nil || len(assignment.Relations) != 1 {
 			return false
 		}
+		plan := assignment.PChannelView.Channels[types.ChannelID{Name: "test-channel"}].ReplicaPlan()
+		return len(plan.GetReplicas()) == 2 && assignment.Relations[0].Node.ServerID == 1
 	}, 3*time.Second, 10*time.Millisecond)
 
 	assert.NoError(t, paramtable.Get().Save(paramtable.Get().StreamingCfg.PrimaryResourceGroup.Key, "rg-new"))
 	assert.Eventually(t, func() bool {
-		select {
-		case hint := <-rgHints:
-			return hint == "rg-new"
-		default:
-			return false
-		}
+		assignment, err := b.GetLatestChannelAssignment()
+		return err == nil && len(assignment.Relations) == 1 && assignment.Relations[0].Node.ServerID == 2
 	}, time.Second, 10*time.Millisecond)
 }
 

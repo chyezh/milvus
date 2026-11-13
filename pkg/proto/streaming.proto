@@ -66,6 +66,24 @@ message PChannelMeta {
     repeated PChannelAssignmentLog histories =
         4;  // keep the meta info assignment log that used to be assigned to.
     uint64 last_assign_timestamp_seconds = 5; // The last assigned timestamp in seconds.
+    WALReplicaPlan replica_plan = 6;
+}
+
+// A complete desired assignment for one PChannel. WAL term fences the writer;
+// revision orders membership and placement changes within the same term.
+message WALReplicaPlan {
+    uint64 revision = 1;
+    int64 wal_term = 2;
+    uint64 next_replica_id = 3;
+    repeated WALReplicaAssignment replicas = 4;
+}
+
+message WALReplicaAssignment {
+    uint64 replica_id = 1;
+    string resource_group = 2;
+    // Nil means this RG currently has no eligible SN. Keep the member identity.
+    StreamingNodeInfo node = 3;
+    PChannelAccessMode access_mode = 4;
 }
 
 // CChannelMeta is the meta information of a control channel.

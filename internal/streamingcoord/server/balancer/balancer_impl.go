@@ -26,7 +26,6 @@ import (
 )
 
 const (
-	versionChecker260 = "<2.6.0-dev"
 	versionChecker265 = "<2.6.6-dev"
 	versionChecker300 = "<3.0.0-beta"
 )
@@ -66,12 +65,11 @@ func RecoverBalancer(
 		primaryRGChangedCh:     make(chan struct{}, 1),
 	}
 	b.SetLogger(logger)
-	ready260Future, err := b.checkIfAllNodeGreaterThan260AndWatch(ctx)
-	if err != nil {
+	if err := manager.MarkStreamingHasEnabled(ctx); err != nil {
 		return nil, err
 	}
 	b.watchPrimaryResourceGroupChanges()
-	go b.execute(ready260Future)
+	go b.execute()
 	return b, nil
 }
 
@@ -323,7 +321,7 @@ func (b *balancerImpl) Close() {
 }
 
 // execute the balancer.
-func (b *balancerImpl) execute(ready260Future *syncutil.Future[error]) {
+func (b *balancerImpl) execute() {
 	b.Logger().Info(b.backgroundTaskNotifier.Context(), "balancer start to execute")
 	defer func() {
 		b.backgroundTaskNotifier.Finish(struct{}{})
@@ -352,10 +350,6 @@ func (b *balancerImpl) execute(ready260Future *syncutil.Future[error]) {
 		// Wait for next balance trigger.
 		// Maybe trigger by timer or by request.
 		nextTimer, nextBalanceInterval := balanceTimer.NextTimer()
-		var ready260 <-chan struct{}
-		if ready260Future != nil {
-			ready260 = ready260Future.Done()
-		}
 
 		b.Logger().Info(b.backgroundTaskNotifier.Context(), "balance wait", mlog.Duration("nextBalanceInterval", nextBalanceInterval))
 		select {
@@ -364,13 +358,6 @@ func (b *balancerImpl) execute(ready260Future *syncutil.Future[error]) {
 		case newReq := <-b.reqCh:
 			newReq.apply(b)
 			b.applyAllRequest()
-		case <-ready260:
-			if err := ready260Future.Get(); err != nil {
-				b.Logger().Warn(b.backgroundTaskNotifier.Context(), "fail to block until all node is greater than 2.6.0", mlog.Err(err))
-				return
-			}
-			b.Logger().Info(b.backgroundTaskNotifier.Context(), "all nodes is greater than 2.6.0, start to open read-write wal")
-			ready260Future = nil
 		case <-nextTimer:
 			// balance triggered by timer.
 		case _, ok := <-nodeChanged:
@@ -411,71 +398,6 @@ func (b *balancerImpl) execute(ready260Future *syncutil.Future[error]) {
 		b.Logger().Info(b.backgroundTaskNotifier.Context(), "apply balance success")
 		balanceTimer.DisableBackoff()
 	}
-}
-
-// checkIfAllNodeGreaterThan260AndWatch check if all node is greater than 2.6.0.
-// It will return a future if there's any node with version < 2.6.0,
-// and the future will be set when the all node version is greater than 2.6.0.
-func (b *balancerImpl) checkIfAllNodeGreaterThan260AndWatch(ctx context.Context) (*syncutil.Future[error], error) {
-	f := syncutil.NewFuture[error]()
-	if b.channelMetaManager.IsStreamingEnabledOnce() {
-		// Once the streaming is enabled, we can not check the node version anymore.
-		// because the first channel-assignment is generated after the old node is down.
-		return nil, nil
-	}
-
-	if greaterThan260, err := b.checkIfAllNodeGreaterThan260(ctx); err != nil || greaterThan260 {
-		return nil, err
-	}
-	go func() {
-		err := b.blockUntilAllNodeIsGreaterThan260AtBackground(ctx)
-		f.Set(err)
-	}()
-	return f, nil
-}
-
-// checkIfAllNodeGreaterThan260 check if all node is greater than 2.6.0.
-func (b *balancerImpl) checkIfAllNodeGreaterThan260(ctx context.Context) (bool, error) {
-	expectedRoles := []string{typeutil.ProxyRole, typeutil.DataNodeRole, typeutil.QueryNodeRole}
-	for _, role := range expectedRoles {
-		if greaterThan260, err := b.checkIfRoleGreaterThan260(ctx, role); err != nil || !greaterThan260 {
-			return greaterThan260, err
-		}
-	}
-	b.Logger().Info(ctx, "all nodes is greater than 2.6.0 when checking")
-	return true, b.channelMetaManager.MarkStreamingHasEnabled(ctx)
-}
-
-// checkIfRoleGreaterThan260 check if the role is greater than 2.6.0.
-func (b *balancerImpl) checkIfRoleGreaterThan260(ctx context.Context, role string) (bool, error) {
-	logger := b.Logger().With(mlog.String("role", role))
-	rb := resolver.NewSessionBuilder(resource.Resource().ETCD(),
-		discoverer.OptSDPrefix(sessionutil.GetSessionPrefixByRole(role)),
-		discoverer.OptSDVersionRange(versionChecker260))
-	defer rb.Close()
-
-	r := rb.Resolver()
-	state, err := r.GetLatestState(ctx)
-	if err != nil {
-		logger.Warn(ctx, "fail to get latest state", mlog.Err(err))
-		return false, err
-	}
-	if len(state.Sessions()) > 0 {
-		logger.Info(ctx, "node is not greater than 2.6.0 when checking", mlog.Int("sessionCount", len(state.Sessions())))
-		return false, nil
-	}
-	return true, nil
-}
-
-// blockUntilAllNodeIsGreaterThan260AtBackground block until all node is greater than 2.6.0 at background.
-func (b *balancerImpl) blockUntilAllNodeIsGreaterThan260AtBackground(ctx context.Context) error {
-	expectedRoles := []string{typeutil.ProxyRole, typeutil.DataNodeRole, typeutil.QueryNodeRole}
-	for _, role := range expectedRoles {
-		if err := b.blockUntilRoleGreaterThanVersion(ctx, role, versionChecker260); err != nil {
-			return err
-		}
-	}
-	return b.channelMetaManager.MarkStreamingHasEnabled(ctx)
 }
 
 // blockUntilExpectedInitialStreamingNodeNumReached block until the expected initial streaming node number is reached.
@@ -573,27 +495,18 @@ func (b *balancerImpl) balance(ctx context.Context) (bool, error) {
 
 	rgName := paramtable.Get().StreamingCfg.PrimaryResourceGroup.GetValue()
 	b.Logger().Info(ctx, "collect all status...", mlog.String("resourceGroupHint", rgName))
-	nodeStatus, err := b.fetchStreamingNodeStatus(ctx, rgName)
+	nodeStatus, err := b.fetchStreamingNodeStatus(ctx, "")
 	if err != nil {
 		return false, err
 	}
 
-	// call the balance strategy to generate the expected layout.
-	accessMode := types.AccessModeRO
-	if b.channelMetaManager.IsStreamingEnabledOnce() {
-		accessMode = types.AccessModeRW
-	}
-	currentLayout := generateCurrentLayout(pchannelView, nodeStatus, accessMode)
-	expectedLayout, err := b.policy.Balance(currentLayout)
+	plans, err := planWALReplicas(pchannelView, nodeStatus, rgName, b.policy)
 	if err != nil {
-		return false, merr.Wrap(err, "fail to balance")
+		return false, err
 	}
-
-	b.Logger().Info(ctx, "balance policy generate result success, try to assign...", mlog.Stringer("expectedLayout", expectedLayout))
-	// bookkeeping the meta assignment started.
-	modifiedChannels, err := b.channelMetaManager.AssignPChannels(ctx, expectedLayout.ChannelAssignment)
+	modifiedChannels, err := b.channelMetaManager.AssignReplicaPlans(ctx, plans)
 	if err != nil {
-		return false, merr.Wrap(err, "fail to assign pchannels")
+		return false, merr.Wrap(err, "persist WAL replica plans")
 	}
 
 	if len(modifiedChannels) == 0 {
@@ -654,6 +567,11 @@ func (b *balancerImpl) applyBalanceResultToStreamingNode(ctx context.Context, mo
 	// generate balance operations and applied them.
 	for _, channel := range modifiedChannels {
 		channel := channel
+		if channel.IsAssigned() {
+			// Membership-only changes retain the running writer. Reissuing
+			// Open at the same term is not a writer lifecycle transition.
+			continue
+		}
 		g.Go(func() error {
 			// ownerLost is true if the streaming node of any read-write assignment history has left the session view.
 			ownerLost := false
@@ -720,54 +638,6 @@ func (b *balancerImpl) waitNodeLostGracePeriod(ctx context.Context, meta *channe
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
-	}
-}
-
-// generateCurrentLayout generate layout from all nodes info and meta.
-func generateCurrentLayout(view *channel.PChannelView, allNodesStatus map[int64]*types.StreamingNodeStatus, accessMode types.AccessMode) (layout CurrentLayout) {
-	channelsToNodes := make(map[types.ChannelID]int64, len(view.Channels))
-	channels := make(map[channel.ChannelID]types.PChannelInfo, len(view.Channels))
-	expectedAccessMode := make(map[types.ChannelID]types.AccessMode, len(view.Channels))
-
-	for id, meta := range view.Channels {
-		expectedAccessMode[id] = accessMode
-		channels[id] = meta.ChannelInfo()
-		if !meta.IsAssigned() {
-			// dead or expired relationship.
-			mlog.Warn(context.TODO(), "channel is not assigned to any server",
-				mlog.Stringer("channel", id),
-				mlog.Int64("term", meta.CurrentTerm()),
-				mlog.Int64("serverID", meta.CurrentServerID()),
-				mlog.String("state", meta.State().String()),
-			)
-			continue
-		}
-		if nodeStatus, ok := allNodesStatus[meta.CurrentServerID()]; ok && nodeStatus.IsHealthy() {
-			channelsToNodes[id] = meta.CurrentServerID()
-		} else {
-			// dead or expired relationship.
-			mlog.Warn(context.TODO(), "channel of current server id is not healthy or not alive",
-				mlog.Stringer("channel", id),
-				mlog.Int64("term", meta.CurrentTerm()),
-				mlog.Int64("serverID", meta.CurrentServerID()),
-				mlog.Err(nodeStatus.ErrorOfNode()),
-			)
-		}
-	}
-	allNodesInfo := make(map[int64]types.StreamingNodeStatus, len(allNodesStatus))
-	for serverID, nodeStatus := range allNodesStatus {
-		// filter out the unhealthy nodes.
-		if nodeStatus.IsHealthy() {
-			allNodesInfo[serverID] = *nodeStatus
-		}
-	}
-	return CurrentLayout{
-		Config:             newCommonBalancePolicyConfig(),
-		Channels:           channels,
-		Stats:              view.Stats,
-		AllNodesInfo:       allNodesInfo,
-		ChannelsToNodes:    channelsToNodes,
-		ExpectedAccessMode: expectedAccessMode,
 	}
 }
 

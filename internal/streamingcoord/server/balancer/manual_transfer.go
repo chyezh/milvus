@@ -6,6 +6,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/balancer/channel"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
+	"github.com/milvus-io/milvus/pkg/v3/common"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/util/contextutil"
@@ -70,13 +71,39 @@ func (b *balancerImpl) transferChannels(ctx context.Context, req TransferChannel
 	}
 	b.Logger().Info(ctx, "transfer WAL channels", mlog.Int64("source", req.SourceNodeID),
 		mlog.Int64("target", req.TargetNodeID), mlog.String("channel", req.ChannelName), mlog.Int("pchannelCount", len(assignments)))
-	modified, err := b.channelMetaManager.AssignPChannels(ctx, assignments)
+	modified, err := b.channelMetaManager.AssignReplicaPlans(ctx, replicaPlansForTransfer(view, nodes, assignments))
 	if err != nil {
 		return merr.Wrap(err, "persist manual WAL assignment")
 	}
 	// On cancellation or failure the durable ASSIGNING state is left for normal
 	// balancing to recover; never acknowledge a merely persisted intent as success.
 	return b.applyBalanceResultToStreamingNode(ctx, modified)
+}
+
+// A manual writer transfer updates the same complete plan as auto balancing.
+// Followers outside the destination RG retain their placements and identities.
+func replicaPlansForTransfer(view *channel.PChannelView, nodes map[int64]*types.StreamingNodeStatus, assignments map[types.ChannelID]types.PChannelInfoAssigned) map[types.ChannelID]channel.ReplicaPlanTarget {
+	plans := make(map[types.ChannelID]channel.ReplicaPlanTarget, len(assignments))
+	for id, assignment := range assignments {
+		target := channel.ReplicaPlanTarget{Nodes: make(map[string]*types.StreamingNodeInfo)}
+		for _, member := range view.Channels[id].ReplicaPlan().GetReplicas() {
+			var node *types.StreamingNodeInfo
+			if member.Node != nil {
+				info := types.NewStreamingNodeInfoFromProto(member.Node)
+				node = &info
+			}
+			target.Nodes[member.ResourceGroup] = node
+		}
+		group := nodes[assignment.Node.ServerID].ResourceGroup
+		if group == "" {
+			group = common.DefaultResourceGroupName
+		}
+		target.PrimaryResourceGroup = group
+		node := assignment.Node
+		target.Nodes[group] = &node
+		plans[id] = target
+	}
+	return plans
 }
 
 func planChannelTransfer(view *channel.PChannelView, nodes map[int64]*types.StreamingNodeStatus, req TransferChannelsRequest) (map[types.ChannelID]types.PChannelInfoAssigned, error) {

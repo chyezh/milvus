@@ -283,11 +283,11 @@ func TestCollectAllStatusWithResourceGroupFilter(t *testing.T) {
 	assert.NotContains(t, nodes, int64(3))
 	assert.NotContains(t, nodes, int64(4))
 
-	// Empty resource group falls back to __default_resource_group when unlabeled legacy nodes exist.
+	// Empty hint collects all resource groups, including unlabeled nodes.
 	callCount = 0
 	nodes, err = m.CollectAllStatus(context.Background(), "")
 	assert.NoError(t, err)
-	assert.Len(t, nodes, 1)
+	assert.Len(t, nodes, 4)
 	assert.Contains(t, nodes, int64(4))
 
 	// Hint __default_resource_group - should only return status from server 4.
@@ -429,9 +429,9 @@ func TestCollectAllStatusWithEmptyResourceGroupAndExplicitDefaultRG(t *testing.T
 
 	nodes, err := m.CollectAllStatus(context.Background(), "")
 	assert.NoError(t, err)
-	assert.Len(t, nodes, 1)
+	assert.Len(t, nodes, 2)
 	assert.Contains(t, nodes, int64(1))
-	assert.NotContains(t, nodes, int64(2))
+	assert.Contains(t, nodes, int64(2))
 
 	managerService.EXPECT().Close().Return()
 	rb.EXPECT().Close().Return()

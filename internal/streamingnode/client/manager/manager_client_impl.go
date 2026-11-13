@@ -16,6 +16,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
@@ -83,8 +84,8 @@ func (c *managerClientImpl) GetAllStreamingNodes(ctx context.Context) (map[int64
 }
 
 // CollectAllStatus collects status in underlying streamingnodes.
-// If resourceGroupHint has discovered nodes, only nodes in that resource group are collected.
-// Otherwise, it falls back to another discovered resource group.
+// An empty hint collects every RG. An explicit hint selects that group when
+// present, otherwise it falls back to another discovered resource group.
 func (c *managerClientImpl) CollectAllStatus(ctx context.Context, resourceGroupHint string) (map[int64]*types.StreamingNodeStatus, error) {
 	if !c.lifetime.Add(typeutil.LifetimeStateWorking) {
 		return nil, status.NewOnShutdownError("manager client is closing")
@@ -101,9 +102,8 @@ func (c *managerClientImpl) CollectAllStatus(ctx context.Context, resourceGroupH
 	}
 	resourceGroupHint = filterStreamingNodeStatusByResourceGroupHint(state, resourceGroupHint)
 
-	// Collect status from the selected resource group only. The hint fallback
-	// is decided from service discovery before RPC to avoid broadcasting to
-	// resource groups that will not be used for WAL balance.
+	// Replica planning needs the complete topology. Only an explicit hint
+	// narrows collection to one resource group.
 	result, err := c.getAllStreamingNodeStatus(ctx, state, resourceGroupHint)
 	if err != nil {
 		return nil, err
@@ -121,6 +121,10 @@ func (c *managerClientImpl) CollectAllStatus(ctx context.Context, resourceGroupH
 				result[serverID].Err = types.ErrNotAlive
 			} else if session.Stopping {
 				result[serverID].Err = types.ErrStopping
+			} else if session.Address != result[serverID].Address || normalizedResourceGroup(session.GetResourceGroupName()) != result[serverID].ResourceGroup {
+				// Do not combine health from the old registration with a new
+				// address or RG. Retry against a consistent topology next round.
+				result[serverID].Err = types.ErrNotAlive
 			}
 		}
 	}
@@ -128,7 +132,6 @@ func (c *managerClientImpl) CollectAllStatus(ctx context.Context, resourceGroupH
 }
 
 func filterStreamingNodeStatusByResourceGroupHint(state discoverer.VersionedState, resourceGroupHint string) string {
-	resourceGroupHint = effectiveResourceGroupHintForCollectAllStatus(state, resourceGroupHint)
 	if resourceGroupHint == "" {
 		return ""
 	}
@@ -142,17 +145,11 @@ func filterStreamingNodeStatusByResourceGroupHint(state discoverer.VersionedStat
 	return ""
 }
 
-func effectiveResourceGroupHintForCollectAllStatus(state discoverer.VersionedState, resourceGroupHint string) string {
-	if resourceGroupHint != "" {
-		return resourceGroupHint
+func normalizedResourceGroup(rg string) string {
+	if rg == "" {
+		return common.DefaultResourceGroupName
 	}
-	for _, session := range state.Sessions() {
-		rg := session.GetResourceGroupName()
-		if rg == "" || rg == common.DefaultResourceGroupName {
-			return common.DefaultResourceGroupName
-		}
-	}
-	return ""
+	return rg
 }
 
 type resourceGroupSessionStats struct {
@@ -205,6 +202,7 @@ func (c *managerClientImpl) getAllStreamingNodeStatus(ctx context.Context, state
 	g.SetLimit(16)
 	var mu sync.Mutex
 	result := make(map[int64]*types.StreamingNodeStatus, len(state.Sessions()))
+	operationTimeout := paramtable.Get().StreamingCfg.WALBalancerOperationTimeout.GetAsDurationByParse()
 	for serverID, session := range state.Sessions() {
 		serverID := serverID
 		address := session.Address
@@ -217,21 +215,27 @@ func (c *managerClientImpl) getAllStreamingNodeStatus(ctx context.Context, state
 		}
 		g.Go(func() error {
 			ctx := contextutil.WithPickServerID(ctx, serverID)
+			ctx, cancel := context.WithTimeout(ctx, operationTimeout)
+			defer cancel()
 			resp, err := manager.CollectStatus(ctx, &streamingpb.StreamingNodeManagerCollectStatusRequest{})
 			mu.Lock()
 			defer mu.Unlock()
 
-			if err != nil {
-				mlog.Warn(ctx, "collect status failed, skip", mlog.Int64("serverID", serverID), mlog.Err(err))
-				return err
-			}
 			result[serverID] = &types.StreamingNodeStatus{
 				StreamingNodeInfo: types.StreamingNodeInfo{
 					ServerID: serverID,
 					Address:  address,
 				},
-				Metrics: types.NewStreamingNodeBalanceAttrsFromProto(resp.Metrics),
-				Err:     err,
+				ResourceGroup: rg,
+				Err:           err,
+			}
+			if err != nil {
+				mlog.Warn(ctx, "collect status failed", mlog.Int64("serverID", serverID), mlog.Err(err))
+				return err
+			}
+			result[serverID].Metrics = types.NewStreamingNodeBalanceAttrsFromProto(resp.GetMetrics())
+			if session.Stopping {
+				result[serverID].Err = types.ErrStopping
 			}
 			mlog.Debug(ctx, "collect status success", mlog.Int64("serverID", serverID), mlog.Any("status", resp))
 			return nil

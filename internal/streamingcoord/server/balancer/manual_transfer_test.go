@@ -105,13 +105,13 @@ func TestTransferChannelsWaitsForWALConfirmation(t *testing.T) {
 					}
 					return nil
 				}
-				mockey.Mock((*channel.ChannelManager).AssignPChannels).To(func(_ *channel.ChannelManager, _ context.Context, assignments map[types.ChannelID]types.PChannelInfoAssigned) (map[types.ChannelID]*channel.PChannelMeta, error) {
+				mockey.Mock((*channel.ChannelManager).AssignReplicaPlans).To(func(_ *channel.ChannelManager, _ context.Context, assignments map[types.ChannelID]channel.ReplicaPlanTarget) (map[types.ChannelID]*channel.PChannelMeta, error) {
 					if err := failAt("persist-intent"); err != nil {
 						return nil, err
 					}
 					m := p.CopyForWrite()
 					a := assignments[p.ChannelID()]
-					m.TryAssignToServerID(a.Channel.AccessMode, a.Node)
+					m.TryAssignToServerID(types.AccessModeRW, *a.Nodes[a.PrimaryResourceGroup])
 					return map[types.ChannelID]*channel.PChannelMeta{p.ChannelID(): m.PChannelMeta}, nil
 				}).Build()
 				mockey.Mock((*mock_manager.MockManagerClient).Remove).To(func(_ *mock_manager.MockManagerClient, _ context.Context, a types.PChannelInfoAssigned) error {
@@ -285,10 +285,10 @@ func TestTransferChannelsPartialAssignmentCanResume(t *testing.T) {
 		mockey.Mock((*balancerImpl).GetAllStreamingNodes).Return(map[int64]*types.StreamingNodeInfoWithResourceGroup{1: {}}, nil).Build()
 		mockey.Mock((*balancerImpl).fetchStreamingNodeStatus).Return(map[int64]*types.StreamingNodeStatus{2: {StreamingNodeInfo: types.StreamingNodeInfo{ServerID: 2}}}, nil).Build()
 		durable := make(map[types.ChannelID]*channel.PChannelMeta)
-		mockey.Mock((*channel.ChannelManager).AssignPChannels).To(func(_ *channel.ChannelManager, _ context.Context, assignments map[types.ChannelID]types.PChannelInfoAssigned) (map[types.ChannelID]*channel.PChannelMeta, error) {
+		mockey.Mock((*channel.ChannelManager).AssignReplicaPlans).To(func(_ *channel.ChannelManager, _ context.Context, assignments map[types.ChannelID]channel.ReplicaPlanTarget) (map[types.ChannelID]*channel.PChannelMeta, error) {
 			for id, assignment := range assignments {
 				next := view.Channels[id].CopyForWrite()
-				next.TryAssignToServerID(assignment.Channel.AccessMode, assignment.Node)
+				next.TryAssignToServerID(types.AccessModeRW, *assignment.Nodes[assignment.PrimaryResourceGroup])
 				durable[id] = next.PChannelMeta
 			}
 			return maps.Clone(durable), nil

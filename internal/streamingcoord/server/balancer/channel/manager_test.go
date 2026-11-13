@@ -782,7 +782,7 @@ func TestChannelManager_AddPChannels(t *testing.T) {
 	assert.Len(t, view.Channels, 4)
 }
 
-func TestChannelManager_AddPChannels_ROWhenStreamingNotEnabled(t *testing.T) {
+func TestChannelManager_AddPChannels_RWWhenStreamingNotEnabled(t *testing.T) {
 	ResetStaticPChannelStatsManager()
 	RecoverPChannelStatsManager([]string{})
 
@@ -804,13 +804,13 @@ func TestChannelManager_AddPChannels_ROWhenStreamingNotEnabled(t *testing.T) {
 	m, err := RecoverChannelManager(ctx, "test-channel")
 	assert.NoError(t, err)
 
-	err = m.AddPChannels(ctx, []string{"new-ro-channel"})
+	err = m.AddPChannels(ctx, []string{"new-rw-channel"})
 	assert.NoError(t, err)
 
 	view := m.CurrentPChannelsView()
-	ch, ok := view.Channels[ChannelID{Name: "new-ro-channel"}]
+	ch, ok := view.Channels[ChannelID{Name: "new-rw-channel"}]
 	assert.True(t, ok)
-	assert.Equal(t, types.AccessModeRO, ch.ChannelInfo().AccessMode)
+	assert.Equal(t, types.AccessModeRW, ch.ChannelInfo().AccessMode)
 }
 
 func TestChannelManager_AddPChannels_PersistFailureRollback(t *testing.T) {

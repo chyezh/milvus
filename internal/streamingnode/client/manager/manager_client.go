@@ -36,8 +36,8 @@ type ManagerClient interface {
 	// The resource group is obtained from the session's ServerLabels.
 	GetAllStreamingNodes(ctx context.Context) (map[int64]*types.StreamingNodeInfoWithResourceGroup, error)
 
-	// CollectAllStatus collects status of selected streamingnode, such as load balance attributes.
-	// The resourceGroupHint is preferred when it has discovered nodes; otherwise another resource group is selected before RPC.
+	// CollectAllStatus collects every resource group when resourceGroupHint is empty.
+	// An explicit hint selects that group, or a fallback group if it is absent.
 	CollectAllStatus(ctx context.Context, resourceGroupHint string) (map[int64]*types.StreamingNodeStatus, error)
 
 	// Assign a wal instance for the channel on streaming node of given server id.

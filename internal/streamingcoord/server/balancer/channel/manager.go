@@ -65,7 +65,7 @@ func RecoverChannelManager(ctx context.Context, incomingChannel ...string) (*Cha
 	if err != nil {
 		return nil, err
 	}
-	channels, metrics, err := recoverFromConfigurationAndMeta(ctx, streamingVersion, replicateConfig, incomingChannel...)
+	channels, metrics, err := recoverFromConfigurationAndMeta(ctx, replicateConfig, incomingChannel...)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +142,7 @@ func recoverCChannelMeta(ctx context.Context, incomingChannel ...string) (*strea
 }
 
 // recoverFromConfigurationAndMeta recovers the channel manager from configuration and meta.
-func recoverFromConfigurationAndMeta(ctx context.Context, streamingVersion *streamingpb.StreamingVersion, replicateConfig *replicateutil.ConfigHelper, incomingChannel ...string) (map[ChannelID]*PChannelMeta, *channelMetrics, error) {
+func recoverFromConfigurationAndMeta(ctx context.Context, replicateConfig *replicateutil.ConfigHelper, incomingChannel ...string) (map[ChannelID]*PChannelMeta, *channelMetrics, error) {
 	// Recover metrics.
 	metrics := newPChannelMetrics()
 
@@ -152,7 +152,6 @@ func recoverFromConfigurationAndMeta(ctx context.Context, streamingVersion *stre
 		return nil, metrics, err
 	}
 
-	// TODO: only support rw channel here now, add ro channel in future.
 	channels := make(map[ChannelID]*PChannelMeta, len(channelMetas))
 	for _, channel := range channelMetas {
 		c := newPChannelMetaFromProto(channel, replicateConfig)
@@ -162,14 +161,7 @@ func recoverFromConfigurationAndMeta(ctx context.Context, streamingVersion *stre
 
 	// Get new incoming meta from configuration.
 	for _, newChannel := range incomingChannel {
-		var c *PChannelMeta
-		if streamingVersion == nil {
-			// if streaming service has never been enabled, we treat all channels as read-only.
-			c = NewPChannelMeta(newChannel, types.AccessModeRO)
-		} else {
-			// once the streaming service is enabled, we treat all channels as read-write.
-			c = NewPChannelMeta(newChannel, types.AccessModeRW)
-		}
+		c := NewPChannelMeta(newChannel, types.AccessModeRW)
 		c.availableInReplication = isChannelAvailableInReplication(c.Name(), replicateConfig)
 		if _, ok := channels[c.ChannelID()]; !ok {
 			channels[c.ChannelID()] = c
@@ -285,12 +277,7 @@ func (cm *ChannelManager) AddPChannels(ctx context.Context, newChannels []string
 		if _, ok := cm.channels[id]; ok {
 			continue
 		}
-		var meta *PChannelMeta
-		if cm.streamingVersion == nil {
-			meta = NewPChannelMeta(name, types.AccessModeRO)
-		} else {
-			meta = NewPChannelMeta(name, types.AccessModeRW)
-		}
+		meta := NewPChannelMeta(name, types.AccessModeRW)
 		meta.availableInReplication = isChannelAvailableInReplication(name, cm.replicateConfig)
 		cm.channels[id] = meta
 		cm.metrics.AssignPChannelStatus(meta)
