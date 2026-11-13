@@ -31,9 +31,8 @@ func (gc *GarbageCollector) removeObject(ctx context.Context, key string) error 
 }
 
 func (gc *GarbageCollector) completeSharedWALDeletion(ctx context.Context, catalog metastore.WALSharedObjectRetentionCatalog, operation *streamingpb.WALObjectDeletion) error {
-	if operation.Done {
-		return nil
-	}
+	// A completed intent still fences new readers, but a delayed PUT may have
+	// recreated the immutable key. Re-delete it when a later GC walk finds it.
 	if err := gc.Option.Cli.Remove(ctx, operation.ObjectKey); err != nil {
 		return err
 	}

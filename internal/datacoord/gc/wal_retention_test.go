@@ -93,9 +93,15 @@ func TestSharedWALGCResumesAmbiguousDeletion(t *testing.T) {
 	pending, err = catalog.ListPendingSharedWALObjectDeletions(ctx, 10)
 	require.NoError(t, err)
 	require.Empty(t, pending)
+	require.NoError(t, gc.Option.Cli.Write(ctx, file, []byte("delayed PUT")))
 	fail = mockey.Mock((*storage.LocalChunkManager).Remove).Return(merr.ErrServiceUnavailable).Build()
-	require.NoError(t, restarted.removeObject(ctx, file), "Done must not send another physical delete")
+	require.ErrorIs(t, restarted.removeObject(ctx, file), merr.ErrServiceUnavailable)
 	fail.UnPatch()
+	require.NoError(t, restarted.removeObjectsWithPrefix(ctx, path.Dir(file)))
+	exists, err = gc.Option.Cli.Exist(ctx, file)
+	require.NoError(t, err)
+	require.False(t, exists, "a completed intent must not hide a resurrected object from GC")
+	require.Error(t, catalog.RetainSharedWALObjects(ctx, &streamingpb.WALObjectRetentionRoot{RootId: "after-completion", Runtime: runtime, ObjectKeys: []string{file}}))
 }
 
 func TestSharedWALGCFailsClosed(t *testing.T) {
