@@ -11513,6 +11513,10 @@ type WALReplayPin struct {
 	PinId      string         `protobuf:"bytes,1,opt,name=pin_id,json=pinId,proto3" json:"pin_id,omitempty"`
 	SourceTerm int64          `protobuf:"varint,2,opt,name=source_term,json=sourceTerm,proto3" json:"source_term,omitempty"`
 	Checkpoint *WALCheckpoint `protobuf:"bytes,3,opt,name=checkpoint,proto3" json:"checkpoint,omitempty"`
+	// Bootstrap completion and installation are fenced by this exact receiver
+	// and source term. A later writer can retire its obsolete replay pin; the
+	// receiver's installed query/object ownership remains independent.
+	Runtime *viewpb.StreamingWorkNode `protobuf:"bytes,4,opt,name=runtime,proto3" json:"runtime,omitempty"`
 }
 
 func (x *WALReplayPin) Reset() {
@@ -11564,6 +11568,13 @@ func (x *WALReplayPin) GetSourceTerm() int64 {
 func (x *WALReplayPin) GetCheckpoint() *WALCheckpoint {
 	if x != nil {
 		return x.Checkpoint
+	}
+	return nil
+}
+
+func (x *WALReplayPin) GetRuntime() *viewpb.StreamingWorkNode {
+	if x != nil {
+		return x.Runtime
 	}
 	return nil
 }
@@ -13515,7 +13526,7 @@ var file_streaming_proto_rawDesc = []byte{
 	0x79, 0x12, 0x21, 0x0a, 0x0c, 0x6f, 0x70, 0x65, 0x72, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x5f, 0x69,
 	0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x6f, 0x70, 0x65, 0x72, 0x61, 0x74, 0x69,
 	0x6f, 0x6e, 0x49, 0x64, 0x12, 0x12, 0x0a, 0x04, 0x64, 0x6f, 0x6e, 0x65, 0x18, 0x03, 0x20, 0x01,
-	0x28, 0x08, 0x52, 0x04, 0x64, 0x6f, 0x6e, 0x65, 0x22, 0x8d, 0x01, 0x0a, 0x0c, 0x57, 0x41, 0x4c,
+	0x28, 0x08, 0x52, 0x04, 0x64, 0x6f, 0x6e, 0x65, 0x22, 0xcd, 0x01, 0x0a, 0x0c, 0x57, 0x41, 0x4c,
 	0x52, 0x65, 0x70, 0x6c, 0x61, 0x79, 0x50, 0x69, 0x6e, 0x12, 0x15, 0x0a, 0x06, 0x70, 0x69, 0x6e,
 	0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x70, 0x69, 0x6e, 0x49, 0x64,
 	0x12, 0x1f, 0x0a, 0x0b, 0x73, 0x6f, 0x75, 0x72, 0x63, 0x65, 0x5f, 0x74, 0x65, 0x72, 0x6d, 0x18,
@@ -13524,7 +13535,11 @@ var file_streaming_proto_rawDesc = []byte{
 	0x03, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x25, 0x2e, 0x6d, 0x69, 0x6c, 0x76, 0x75, 0x73, 0x2e, 0x70,
 	0x72, 0x6f, 0x74, 0x6f, 0x2e, 0x73, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x69, 0x6e, 0x67, 0x2e, 0x57,
 	0x41, 0x4c, 0x43, 0x68, 0x65, 0x63, 0x6b, 0x70, 0x6f, 0x69, 0x6e, 0x74, 0x52, 0x0a, 0x63, 0x68,
-	0x65, 0x63, 0x6b, 0x70, 0x6f, 0x69, 0x6e, 0x74, 0x22, 0x8c, 0x02, 0x0a, 0x17, 0x57, 0x41, 0x4c,
+	0x65, 0x63, 0x6b, 0x70, 0x6f, 0x69, 0x6e, 0x74, 0x12, 0x3e, 0x0a, 0x07, 0x72, 0x75, 0x6e, 0x74,
+	0x69, 0x6d, 0x65, 0x18, 0x04, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x24, 0x2e, 0x6d, 0x69, 0x6c, 0x76,
+	0x75, 0x73, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2e, 0x76, 0x69, 0x65, 0x77, 0x2e, 0x53, 0x74,
+	0x72, 0x65, 0x61, 0x6d, 0x69, 0x6e, 0x67, 0x57, 0x6f, 0x72, 0x6b, 0x4e, 0x6f, 0x64, 0x65, 0x52,
+	0x07, 0x72, 0x75, 0x6e, 0x74, 0x69, 0x6d, 0x65, 0x22, 0x8c, 0x02, 0x0a, 0x17, 0x57, 0x41, 0x4c,
 	0x52, 0x65, 0x70, 0x6c, 0x61, 0x79, 0x52, 0x65, 0x74, 0x65, 0x6e, 0x74, 0x69, 0x6f, 0x6e, 0x53,
 	0x74, 0x61, 0x74, 0x65, 0x12, 0x43, 0x0a, 0x09, 0x74, 0x72, 0x75, 0x6e, 0x63, 0x61, 0x74, 0x65,
 	0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x25, 0x2e, 0x6d, 0x69, 0x6c, 0x76, 0x75, 0x73,
@@ -14348,60 +14363,61 @@ var file_streaming_proto_depIdxs = []int32{
 	207, // 233: milvus.proto.streaming.WALQueryViewRetention.view:type_name -> milvus.proto.view.QueryViewMeta
 	206, // 234: milvus.proto.streaming.WALQueryViewRetention.runtimes:type_name -> milvus.proto.view.StreamingWorkNode
 	113, // 235: milvus.proto.streaming.WALReplayPin.checkpoint:type_name -> milvus.proto.streaming.WALCheckpoint
-	113, // 236: milvus.proto.streaming.WALReplayRetentionState.truncated:type_name -> milvus.proto.streaming.WALCheckpoint
-	183, // 237: milvus.proto.streaming.WALReplayRetentionState.pins:type_name -> milvus.proto.streaming.WALReplayRetentionState.PinsEntry
-	63,  // 238: milvus.proto.streaming.BroadcastResponse.ResultsEntry.value:type_name -> milvus.proto.streaming.ProduceMessageResponseResult
-	15,  // 239: milvus.proto.streaming.FullStreamingNodeAssignmentWithVersion.WalReplicaPlansEntry.value:type_name -> milvus.proto.streaming.WALReplicaPlan
-	176, // 240: milvus.proto.streaming.WALReplayRetentionState.PinsEntry.value:type_name -> milvus.proto.streaming.WALReplayPin
-	208, // 241: milvus.proto.streaming.StreamingNodeStateService.GetComponentStates:input_type -> milvus.proto.milvus.GetComponentStatesRequest
-	26,  // 242: milvus.proto.streaming.StreamingCoordBroadcastService.Broadcast:input_type -> milvus.proto.streaming.BroadcastRequest
-	28,  // 243: milvus.proto.streaming.StreamingCoordBroadcastService.Ack:input_type -> milvus.proto.streaming.BroadcastAckRequest
-	30,  // 244: milvus.proto.streaming.StreamingCoordAssignmentService.UpdateReplicateConfiguration:input_type -> milvus.proto.streaming.UpdateReplicateConfigurationRequest
-	32,  // 245: milvus.proto.streaming.StreamingCoordAssignmentService.UpdateWALBalancePolicy:input_type -> milvus.proto.streaming.UpdateWALBalancePolicyRequest
-	36,  // 246: milvus.proto.streaming.StreamingCoordAssignmentService.AssignmentDiscover:input_type -> milvus.proto.streaming.AssignmentDiscoverRequest
-	139, // 247: milvus.proto.streaming.StreamingNodeHandlerService.GetCollectionSchema:input_type -> milvus.proto.streaming.StreamingNodeGetCollectionSchemaRequest
-	142, // 248: milvus.proto.streaming.StreamingNodeHandlerService.ValidateAnalyzer:input_type -> milvus.proto.streaming.StreamingNodeValidateAnalyzerRequest
-	127, // 249: milvus.proto.streaming.StreamingNodeHandlerService.SubscribeTransform:input_type -> milvus.proto.streaming.TransformRequest
-	145, // 250: milvus.proto.streaming.StreamingNodeHandlerService.SubscribeReplicas:input_type -> milvus.proto.streaming.ReplicaWatchRequest
-	118, // 251: milvus.proto.streaming.StreamingNodeHandlerService.RunAnalyzer:input_type -> milvus.proto.streaming.StreamingNodeRunAnalyzerRequest
-	51,  // 252: milvus.proto.streaming.StreamingNodeHandlerService.GetReplicateCheckpoint:input_type -> milvus.proto.streaming.GetReplicateCheckpointRequest
-	53,  // 253: milvus.proto.streaming.StreamingNodeHandlerService.GetSalvageCheckpoint:input_type -> milvus.proto.streaming.GetSalvageCheckpointRequest
-	55,  // 254: milvus.proto.streaming.StreamingNodeHandlerService.Produce:input_type -> milvus.proto.streaming.ProduceRequest
-	65,  // 255: milvus.proto.streaming.StreamingNodeHandlerService.Consume:input_type -> milvus.proto.streaming.ConsumeRequest
-	95,  // 256: milvus.proto.streaming.StreamingNodeManagerService.Assign:input_type -> milvus.proto.streaming.StreamingNodeManagerAssignRequest
-	97,  // 257: milvus.proto.streaming.StreamingNodeManagerService.Remove:input_type -> milvus.proto.streaming.StreamingNodeManagerRemoveRequest
-	99,  // 258: milvus.proto.streaming.StreamingNodeManagerService.CollectStatus:input_type -> milvus.proto.streaming.StreamingNodeManagerCollectStatusRequest
-	171, // 259: milvus.proto.streaming.StreamingNodeReplicaService.GetWALReplicaEndpoint:input_type -> milvus.proto.streaming.WALReplicaEndpointRequest
-	18,  // 260: milvus.proto.streaming.StreamingNodeReplicaService.ReconcileWALReplicas:input_type -> milvus.proto.streaming.ReconcileWALReplicasRequest
-	161, // 261: milvus.proto.streaming.StreamingNodeReplicaService.SubscribeWALEvents:input_type -> milvus.proto.streaming.WALReplicaSubscribeRequest
-	164, // 262: milvus.proto.streaming.StreamingNodeReplicaService.BootstrapWALReplica:input_type -> milvus.proto.streaming.WALReplicaBootstrapRequest
-	209, // 263: milvus.proto.streaming.StreamingNodeStateService.GetComponentStates:output_type -> milvus.proto.milvus.ComponentStates
-	27,  // 264: milvus.proto.streaming.StreamingCoordBroadcastService.Broadcast:output_type -> milvus.proto.streaming.BroadcastResponse
-	29,  // 265: milvus.proto.streaming.StreamingCoordBroadcastService.Ack:output_type -> milvus.proto.streaming.BroadcastAckResponse
-	31,  // 266: milvus.proto.streaming.StreamingCoordAssignmentService.UpdateReplicateConfiguration:output_type -> milvus.proto.streaming.UpdateReplicateConfigurationResponse
-	35,  // 267: milvus.proto.streaming.StreamingCoordAssignmentService.UpdateWALBalancePolicy:output_type -> milvus.proto.streaming.UpdateWALBalancePolicyResponse
-	39,  // 268: milvus.proto.streaming.StreamingCoordAssignmentService.AssignmentDiscover:output_type -> milvus.proto.streaming.AssignmentDiscoverResponse
-	140, // 269: milvus.proto.streaming.StreamingNodeHandlerService.GetCollectionSchema:output_type -> milvus.proto.streaming.StreamingNodeGetCollectionSchemaResponse
-	143, // 270: milvus.proto.streaming.StreamingNodeHandlerService.ValidateAnalyzer:output_type -> milvus.proto.streaming.StreamingNodeValidateAnalyzerResponse
-	131, // 271: milvus.proto.streaming.StreamingNodeHandlerService.SubscribeTransform:output_type -> milvus.proto.streaming.TransformResponse
-	149, // 272: milvus.proto.streaming.StreamingNodeHandlerService.SubscribeReplicas:output_type -> milvus.proto.streaming.ReplicaWatchResponse
-	123, // 273: milvus.proto.streaming.StreamingNodeHandlerService.RunAnalyzer:output_type -> milvus.proto.streaming.StreamingNodeRunAnalyzerResponse
-	52,  // 274: milvus.proto.streaming.StreamingNodeHandlerService.GetReplicateCheckpoint:output_type -> milvus.proto.streaming.GetReplicateCheckpointResponse
-	54,  // 275: milvus.proto.streaming.StreamingNodeHandlerService.GetSalvageCheckpoint:output_type -> milvus.proto.streaming.GetSalvageCheckpointResponse
-	59,  // 276: milvus.proto.streaming.StreamingNodeHandlerService.Produce:output_type -> milvus.proto.streaming.ProduceResponse
-	74,  // 277: milvus.proto.streaming.StreamingNodeHandlerService.Consume:output_type -> milvus.proto.streaming.ConsumeResponse
-	96,  // 278: milvus.proto.streaming.StreamingNodeManagerService.Assign:output_type -> milvus.proto.streaming.StreamingNodeManagerAssignResponse
-	98,  // 279: milvus.proto.streaming.StreamingNodeManagerService.Remove:output_type -> milvus.proto.streaming.StreamingNodeManagerRemoveResponse
-	104, // 280: milvus.proto.streaming.StreamingNodeManagerService.CollectStatus:output_type -> milvus.proto.streaming.StreamingNodeManagerCollectStatusResponse
-	206, // 281: milvus.proto.streaming.StreamingNodeReplicaService.GetWALReplicaEndpoint:output_type -> milvus.proto.view.StreamingWorkNode
-	19,  // 282: milvus.proto.streaming.StreamingNodeReplicaService.ReconcileWALReplicas:output_type -> milvus.proto.streaming.ReconcileWALReplicasResponse
-	170, // 283: milvus.proto.streaming.StreamingNodeReplicaService.SubscribeWALEvents:output_type -> milvus.proto.streaming.WALReplicaEvent
-	165, // 284: milvus.proto.streaming.StreamingNodeReplicaService.BootstrapWALReplica:output_type -> milvus.proto.streaming.WALReplicaBootstrapFrame
-	263, // [263:285] is the sub-list for method output_type
-	241, // [241:263] is the sub-list for method input_type
-	241, // [241:241] is the sub-list for extension type_name
-	241, // [241:241] is the sub-list for extension extendee
-	0,   // [0:241] is the sub-list for field type_name
+	206, // 236: milvus.proto.streaming.WALReplayPin.runtime:type_name -> milvus.proto.view.StreamingWorkNode
+	113, // 237: milvus.proto.streaming.WALReplayRetentionState.truncated:type_name -> milvus.proto.streaming.WALCheckpoint
+	183, // 238: milvus.proto.streaming.WALReplayRetentionState.pins:type_name -> milvus.proto.streaming.WALReplayRetentionState.PinsEntry
+	63,  // 239: milvus.proto.streaming.BroadcastResponse.ResultsEntry.value:type_name -> milvus.proto.streaming.ProduceMessageResponseResult
+	15,  // 240: milvus.proto.streaming.FullStreamingNodeAssignmentWithVersion.WalReplicaPlansEntry.value:type_name -> milvus.proto.streaming.WALReplicaPlan
+	176, // 241: milvus.proto.streaming.WALReplayRetentionState.PinsEntry.value:type_name -> milvus.proto.streaming.WALReplayPin
+	208, // 242: milvus.proto.streaming.StreamingNodeStateService.GetComponentStates:input_type -> milvus.proto.milvus.GetComponentStatesRequest
+	26,  // 243: milvus.proto.streaming.StreamingCoordBroadcastService.Broadcast:input_type -> milvus.proto.streaming.BroadcastRequest
+	28,  // 244: milvus.proto.streaming.StreamingCoordBroadcastService.Ack:input_type -> milvus.proto.streaming.BroadcastAckRequest
+	30,  // 245: milvus.proto.streaming.StreamingCoordAssignmentService.UpdateReplicateConfiguration:input_type -> milvus.proto.streaming.UpdateReplicateConfigurationRequest
+	32,  // 246: milvus.proto.streaming.StreamingCoordAssignmentService.UpdateWALBalancePolicy:input_type -> milvus.proto.streaming.UpdateWALBalancePolicyRequest
+	36,  // 247: milvus.proto.streaming.StreamingCoordAssignmentService.AssignmentDiscover:input_type -> milvus.proto.streaming.AssignmentDiscoverRequest
+	139, // 248: milvus.proto.streaming.StreamingNodeHandlerService.GetCollectionSchema:input_type -> milvus.proto.streaming.StreamingNodeGetCollectionSchemaRequest
+	142, // 249: milvus.proto.streaming.StreamingNodeHandlerService.ValidateAnalyzer:input_type -> milvus.proto.streaming.StreamingNodeValidateAnalyzerRequest
+	127, // 250: milvus.proto.streaming.StreamingNodeHandlerService.SubscribeTransform:input_type -> milvus.proto.streaming.TransformRequest
+	145, // 251: milvus.proto.streaming.StreamingNodeHandlerService.SubscribeReplicas:input_type -> milvus.proto.streaming.ReplicaWatchRequest
+	118, // 252: milvus.proto.streaming.StreamingNodeHandlerService.RunAnalyzer:input_type -> milvus.proto.streaming.StreamingNodeRunAnalyzerRequest
+	51,  // 253: milvus.proto.streaming.StreamingNodeHandlerService.GetReplicateCheckpoint:input_type -> milvus.proto.streaming.GetReplicateCheckpointRequest
+	53,  // 254: milvus.proto.streaming.StreamingNodeHandlerService.GetSalvageCheckpoint:input_type -> milvus.proto.streaming.GetSalvageCheckpointRequest
+	55,  // 255: milvus.proto.streaming.StreamingNodeHandlerService.Produce:input_type -> milvus.proto.streaming.ProduceRequest
+	65,  // 256: milvus.proto.streaming.StreamingNodeHandlerService.Consume:input_type -> milvus.proto.streaming.ConsumeRequest
+	95,  // 257: milvus.proto.streaming.StreamingNodeManagerService.Assign:input_type -> milvus.proto.streaming.StreamingNodeManagerAssignRequest
+	97,  // 258: milvus.proto.streaming.StreamingNodeManagerService.Remove:input_type -> milvus.proto.streaming.StreamingNodeManagerRemoveRequest
+	99,  // 259: milvus.proto.streaming.StreamingNodeManagerService.CollectStatus:input_type -> milvus.proto.streaming.StreamingNodeManagerCollectStatusRequest
+	171, // 260: milvus.proto.streaming.StreamingNodeReplicaService.GetWALReplicaEndpoint:input_type -> milvus.proto.streaming.WALReplicaEndpointRequest
+	18,  // 261: milvus.proto.streaming.StreamingNodeReplicaService.ReconcileWALReplicas:input_type -> milvus.proto.streaming.ReconcileWALReplicasRequest
+	161, // 262: milvus.proto.streaming.StreamingNodeReplicaService.SubscribeWALEvents:input_type -> milvus.proto.streaming.WALReplicaSubscribeRequest
+	164, // 263: milvus.proto.streaming.StreamingNodeReplicaService.BootstrapWALReplica:input_type -> milvus.proto.streaming.WALReplicaBootstrapRequest
+	209, // 264: milvus.proto.streaming.StreamingNodeStateService.GetComponentStates:output_type -> milvus.proto.milvus.ComponentStates
+	27,  // 265: milvus.proto.streaming.StreamingCoordBroadcastService.Broadcast:output_type -> milvus.proto.streaming.BroadcastResponse
+	29,  // 266: milvus.proto.streaming.StreamingCoordBroadcastService.Ack:output_type -> milvus.proto.streaming.BroadcastAckResponse
+	31,  // 267: milvus.proto.streaming.StreamingCoordAssignmentService.UpdateReplicateConfiguration:output_type -> milvus.proto.streaming.UpdateReplicateConfigurationResponse
+	35,  // 268: milvus.proto.streaming.StreamingCoordAssignmentService.UpdateWALBalancePolicy:output_type -> milvus.proto.streaming.UpdateWALBalancePolicyResponse
+	39,  // 269: milvus.proto.streaming.StreamingCoordAssignmentService.AssignmentDiscover:output_type -> milvus.proto.streaming.AssignmentDiscoverResponse
+	140, // 270: milvus.proto.streaming.StreamingNodeHandlerService.GetCollectionSchema:output_type -> milvus.proto.streaming.StreamingNodeGetCollectionSchemaResponse
+	143, // 271: milvus.proto.streaming.StreamingNodeHandlerService.ValidateAnalyzer:output_type -> milvus.proto.streaming.StreamingNodeValidateAnalyzerResponse
+	131, // 272: milvus.proto.streaming.StreamingNodeHandlerService.SubscribeTransform:output_type -> milvus.proto.streaming.TransformResponse
+	149, // 273: milvus.proto.streaming.StreamingNodeHandlerService.SubscribeReplicas:output_type -> milvus.proto.streaming.ReplicaWatchResponse
+	123, // 274: milvus.proto.streaming.StreamingNodeHandlerService.RunAnalyzer:output_type -> milvus.proto.streaming.StreamingNodeRunAnalyzerResponse
+	52,  // 275: milvus.proto.streaming.StreamingNodeHandlerService.GetReplicateCheckpoint:output_type -> milvus.proto.streaming.GetReplicateCheckpointResponse
+	54,  // 276: milvus.proto.streaming.StreamingNodeHandlerService.GetSalvageCheckpoint:output_type -> milvus.proto.streaming.GetSalvageCheckpointResponse
+	59,  // 277: milvus.proto.streaming.StreamingNodeHandlerService.Produce:output_type -> milvus.proto.streaming.ProduceResponse
+	74,  // 278: milvus.proto.streaming.StreamingNodeHandlerService.Consume:output_type -> milvus.proto.streaming.ConsumeResponse
+	96,  // 279: milvus.proto.streaming.StreamingNodeManagerService.Assign:output_type -> milvus.proto.streaming.StreamingNodeManagerAssignResponse
+	98,  // 280: milvus.proto.streaming.StreamingNodeManagerService.Remove:output_type -> milvus.proto.streaming.StreamingNodeManagerRemoveResponse
+	104, // 281: milvus.proto.streaming.StreamingNodeManagerService.CollectStatus:output_type -> milvus.proto.streaming.StreamingNodeManagerCollectStatusResponse
+	206, // 282: milvus.proto.streaming.StreamingNodeReplicaService.GetWALReplicaEndpoint:output_type -> milvus.proto.view.StreamingWorkNode
+	19,  // 283: milvus.proto.streaming.StreamingNodeReplicaService.ReconcileWALReplicas:output_type -> milvus.proto.streaming.ReconcileWALReplicasResponse
+	170, // 284: milvus.proto.streaming.StreamingNodeReplicaService.SubscribeWALEvents:output_type -> milvus.proto.streaming.WALReplicaEvent
+	165, // 285: milvus.proto.streaming.StreamingNodeReplicaService.BootstrapWALReplica:output_type -> milvus.proto.streaming.WALReplicaBootstrapFrame
+	264, // [264:286] is the sub-list for method output_type
+	242, // [242:264] is the sub-list for method input_type
+	242, // [242:242] is the sub-list for extension type_name
+	242, // [242:242] is the sub-list for extension extendee
+	0,   // [0:242] is the sub-list for field type_name
 }
 
 func init() { file_streaming_proto_init() }

@@ -81,7 +81,7 @@ func (w *walAdaptorImpl) OpenReplicaBootstrap(ctx context.Context, _ *streamingp
 	b.pinID = uuid.NewString()
 	if err = retry.Do(ctx, func() error {
 		return catalog.PinWALReplay(ctx, runtime.Pchannel, &streamingpb.WALReplayPin{
-			PinId: b.pinID, SourceTerm: runtime.WalTerm, Checkpoint: b.snapshot.Checkpoint,
+			PinId: b.pinID, SourceTerm: runtime.WalTerm, Checkpoint: b.snapshot.Checkpoint, Runtime: runtime,
 		})
 	}, retry.Attempts(3), retry.Sleep(10*time.Millisecond)); err != nil {
 		return nil, err

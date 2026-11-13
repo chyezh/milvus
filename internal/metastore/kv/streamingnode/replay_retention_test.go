@@ -67,6 +67,79 @@ func TestWALReplayPinsProtectPhysicalPositionAcrossTakeover(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestWALBootstrapReplayPinRetiresOnlyAfterCompletionIsFenced(t *testing.T) {
+	c, _, store := retentionCatalogs(t)
+	ctx := t.Context()
+	cp := replayTestCheckpoint(100, 1000)
+	require.NoError(t, store.Save(ctx, buildConsumeCheckpointKey("p"), checkpointBytesOf(t, cp)))
+	runtime := retentionRuntime()
+	runtime.WalTerm = 7
+	pin := &streamingpb.WALReplayPin{PinId: "bootstrap", SourceTerm: 7, Checkpoint: replayTestCheckpoint(10, 100), Runtime: runtime}
+	require.Error(t, c.PinWALReplay(ctx, "p", pin), "receiver must register before acquiring replay")
+	require.NoError(t, c.CreateWALReplicaRuntime(ctx, runtime))
+	require.NoError(t, c.PinWALReplay(ctx, "p", pin))
+	require.NoError(t, c.RetainWALObjects(ctx, "p", &streamingpb.WALObjectRetentionRoot{RootId: "query", Runtime: runtime, ObjectKeys: []string{"lazy-query-object"}}))
+	bound, err := c.AuthorizeWALTruncation(ctx, "p", 7, cp)
+	require.NoError(t, err)
+	require.True(t, proto.Equal(pin.Checkpoint.MessageId, bound.MessageId))
+	// An unrelated reader has no source completion fence and must survive.
+	ordinary := &streamingpb.WALReplayPin{PinId: "ordinary", SourceTerm: 7, Checkpoint: replayTestCheckpoint(20, 200)}
+	require.NoError(t, c.PinWALReplay(ctx, "p", ordinary))
+	cp.Term = 8
+	require.NoError(t, store.Save(ctx, buildConsumeCheckpointKey("p"), checkpointBytesOf(t, cp)))
+	c = NewCataLog(store).(*catalog)
+	bound, err = c.AuthorizeWALTruncation(ctx, "p", 8, cp)
+	require.NoError(t, err)
+	require.True(t, proto.Equal(ordinary.Checkpoint.MessageId, bound.MessageId))
+	require.Error(t, c.PinWALReplay(ctx, "p", pin))
+	require.Error(t, c.PrepareWALReplicaRuntime(ctx, runtime, &streamingpb.WALReplicaCursor{Term: 7, Seq: 42}))
+	state, err := c.loadReplayState(ctx, "p")
+	require.NoError(t, err)
+	require.NotContains(t, state.Pins, pin.PinId)
+	require.Contains(t, state.Pins, ordinary.PinId)
+	roots, err := c.ListWALObjectRetentionRoots(ctx, "p")
+	require.NoError(t, err)
+	require.Len(t, roots, 1, "takeover retires replay only, never query dependencies")
+}
+
+func TestWALBootstrapReplayAdmissionReclaimsObsoleteBudget(t *testing.T) {
+	c, _, store := retentionCatalogs(t)
+	ctx := t.Context()
+	cp := replayTestCheckpoint(100, 1000)
+	require.NoError(t, store.Save(ctx, buildConsumeCheckpointKey("p"), checkpointBytesOf(t, cp)))
+	runtime := retentionRuntime()
+	runtime.WalTerm = 7
+	require.NoError(t, c.CreateWALReplicaRuntime(ctx, runtime))
+	for i := range maxReplayPins {
+		require.NoError(t, c.PinWALReplay(ctx, "p", &streamingpb.WALReplayPin{PinId: fmt.Sprint(i), SourceTerm: 7, Checkpoint: cp, Runtime: runtime}))
+	}
+	cp.Term = 8
+	require.NoError(t, store.Save(ctx, buildConsumeCheckpointKey("p"), checkpointBytesOf(t, cp)))
+	runtime = proto.CloneOf(runtime)
+	runtime.RuntimeId++
+	runtime.WalTerm = 8
+	require.NoError(t, c.CreateWALReplicaRuntime(ctx, runtime))
+	pin := &streamingpb.WALReplayPin{PinId: "new", SourceTerm: 8, Checkpoint: cp, Runtime: runtime}
+	require.NoError(t, c.PinWALReplay(ctx, "p", pin))
+	state, err := c.loadReplayState(ctx, "p")
+	require.NoError(t, err)
+	require.Len(t, state.Pins, 1)
+	pin.Runtime.WalTerm = 7
+	require.Error(t, c.PinWALReplay(ctx, "p", pin))
+	pin.Runtime.WalTerm = 8
+	for _, mutate := range []func(*streamingpb.WALReplayPin){
+		func(p *streamingpb.WALReplayPin) { p.Runtime.NodeId = 0 },
+		func(p *streamingpb.WALReplayPin) { p.Runtime.Pchannel = "other" },
+		func(p *streamingpb.WALReplayPin) { p.Runtime.WalTerm-- },
+		func(p *streamingpb.WALReplayPin) { p.PinId = "different" },
+	} {
+		bad := proto.CloneOf(pin)
+		mutate(bad)
+		_, err := retireObsoleteBootstrapPins("p", 9, &streamingpb.WALReplayRetentionState{Pins: map[string]*streamingpb.WALReplayPin{"new": bad}})
+		require.ErrorIs(t, err, merr.ErrDataIntegrity)
+	}
+}
+
 func TestWALReplayPinAndTruncationRace(t *testing.T) {
 	for _, interleave := range []string{"pin-first", "truncate-first", "release-first", "takeover-first"} {
 		t.Run(interleave, func(t *testing.T) {

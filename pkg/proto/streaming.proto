@@ -1509,6 +1509,10 @@ message WALReplayPin {
     string pin_id = 1;
     int64 source_term = 2;
     WALCheckpoint checkpoint = 3;
+    // Bootstrap completion and installation are fenced by this exact receiver
+    // and source term. A later writer can retire its obsolete replay pin; the
+    // receiver's installed query/object ownership remains independent.
+    view.StreamingWorkNode runtime = 4;
 }
 
 // Truncation authorization is durable before the backend call. New pins behind

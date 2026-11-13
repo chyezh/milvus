@@ -87,6 +87,14 @@ func (c *catalog) PinWALReplay(ctx context.Context, channel string, pin *streami
 	if err != nil {
 		return err
 	}
+	if pin.Runtime != nil {
+		if pin.Runtime.WalTerm != pin.SourceTerm {
+			return merr.WrapErrServiceInternalMsg("WAL replay pin runtime does not match its source term")
+		}
+		if err := c.checkRuntimeRetention(ctx, channel, pin.Runtime); err != nil {
+			return err
+		}
+	}
 	owner, _, err := c.replayOwner(ctx, channel, pin.SourceTerm, pin.Checkpoint)
 	if err != nil {
 		return err
@@ -99,6 +107,10 @@ func (c *catalog) PinWALReplay(ctx context.Context, channel string, pin *streami
 		return merr.WrapErrServiceUnavailable("WAL replay pin was already released")
 	}
 	state, err := c.loadReplayState(ctx, channel)
+	if err != nil {
+		return err
+	}
+	saves, err := retireObsoleteBootstrapPins(channel, pin.SourceTerm, state)
 	if err != nil {
 		return err
 	}
@@ -117,7 +129,7 @@ func (c *catalog) PinWALReplay(ctx context.Context, channel string, pin *streami
 			}
 		}
 	}
-	normalized := &streamingpb.WALReplayPin{PinId: pin.PinId, SourceTerm: pin.SourceTerm, Checkpoint: replayCheckpoint(pin.Checkpoint)}
+	normalized := &streamingpb.WALReplayPin{PinId: pin.PinId, SourceTerm: pin.SourceTerm, Checkpoint: replayCheckpoint(pin.Checkpoint), Runtime: proto.CloneOf(pin.Runtime)}
 	if existing := state.Pins[pin.PinId]; existing != nil {
 		if !proto.Equal(existing, normalized) {
 			return merr.WrapErrDataIntegrityMsg("WAL replay pin identity was reused")
@@ -130,7 +142,32 @@ func (c *catalog) PinWALReplay(ctx context.Context, channel string, pin *streami
 	if err != nil {
 		return merr.WrapErrDataIntegrity(err, "encode WAL replay pin")
 	}
-	return c.commitRetention(ctx, channel, epoch, map[string]string{replayStateKey(channel): string(encoded)}, nil, predicates.ValueEqual(buildConsumeCheckpointKey(channel), owner))
+	saves[replayStateKey(channel)] = string(encoded)
+	return c.commitRetention(ctx, channel, epoch, saves, nil, predicates.ValueEqual(buildConsumeCheckpointKey(channel), owner))
+}
+
+// A fenced bootstrap cannot complete or install its candidate. Its replay pin
+// can therefore be retired after takeover even if the old source crashed before
+// Close. This never releases the receiver's independently owned query objects.
+// Untyped pins carry no such completion proof and require explicit release.
+func retireObsoleteBootstrapPins(channel string, term int64, state *streamingpb.WALReplayRetentionState) (map[string]string, error) {
+	saves := make(map[string]string)
+	for id, pin := range state.Pins {
+		if pin.GetRuntime() == nil {
+			continue
+		}
+		if err := validateRetentionRuntime(pin.Runtime); err != nil {
+			return nil, merr.WrapErrDataIntegrity(err, "invalid WAL bootstrap replay owner")
+		}
+		if pin.PinId != id || pin.Runtime.Pchannel != channel || pin.Runtime.WalTerm != pin.SourceTerm {
+			return nil, merr.WrapErrDataIntegrityMsg("WAL bootstrap replay owner disagrees with its pin")
+		}
+		if pin.SourceTerm < term {
+			delete(state.Pins, id)
+			saves[retentionKey(channel, "replay-released", id)] = id
+		}
+	}
+	return saves, nil
 }
 
 func (c *catalog) ReleaseWALReplay(ctx context.Context, channel, pinID string) error {
@@ -179,6 +216,10 @@ func (c *catalog) AuthorizeWALTruncation(ctx context.Context, channel string, te
 	if err != nil {
 		return nil, err
 	}
+	saves, err := retireObsoleteBootstrapPins(channel, term, state)
+	if err != nil {
+		return nil, err
+	}
 	safe := replayCheckpoint(requested)
 	var floor message.MessageID
 	if watermark := state.Truncated; watermark != nil {
@@ -218,14 +259,13 @@ func (c *catalog) AuthorizeWALTruncation(ctx context.Context, channel string, te
 			safe, id = replayCheckpoint(pin.Checkpoint), start
 		}
 	}
-	// Pins, including old-term pins, never disappear merely because the writer
-	// changed. Their owner must explicitly finish or fence the bootstrap first.
 	state.Truncated = safe
 	encoded, err := proto.Marshal(state)
 	if err != nil {
 		return nil, merr.WrapErrDataIntegrity(err, "encode WAL truncation authorization")
 	}
-	if err := c.commitRetention(ctx, channel, epoch, map[string]string{replayStateKey(channel): string(encoded)}, nil, predicates.ValueEqual(buildConsumeCheckpointKey(channel), owner)); err != nil {
+	saves[replayStateKey(channel)] = string(encoded)
+	if err := c.commitRetention(ctx, channel, epoch, saves, nil, predicates.ValueEqual(buildConsumeCheckpointKey(channel), owner)); err != nil {
 		return nil, err
 	}
 	return safe, nil
