@@ -139,6 +139,7 @@ func newRecoveryStorage(channel types.PChannelInfo, cp *utility.WALCheckpoint, o
 	cfg := newConfig()
 	metrics := newRecoveryStorageMetrics(channel)
 	rs := &recoveryStorageImpl{
+		replicaMetadata:        newReplicaMetadata(),
 		backgroundTaskNotifier: syncutil.NewAsyncTaskNotifier[struct{}](),
 		cfg:                    cfg,
 		mu:                     sync.Mutex{},
@@ -176,6 +177,7 @@ func newRecoveryStorage(channel types.PChannelInfo, cp *utility.WALCheckpoint, o
 // recoveryStorageImpl is a component that manages the recovery info for the streaming service.
 // It will consume the message from the wal, consume the message in wal, and update the checkpoint for it.
 type recoveryStorageImpl struct {
+	replicaMetadata  *replicaMetadata
 	readOnly         bool
 	observedTimeTick uint64
 	events           *walevent.Source
@@ -219,6 +221,8 @@ func (r *recoveryStorageImpl) installCheckpoint(checkpoint *WALCheckpoint) {
 		checkpoint = &WALCheckpoint{}
 	}
 	r.checkpoint = checkpoint.Clone()
+	r.replicaMetadata.checkpoint = proto.CloneOf(checkpoint.IntoProto())
+	r.replicaMetadata.observed = proto.CloneOf(checkpoint.IntoProto())
 	r.observedTimeTick = checkpoint.TimeTick
 	if r.metrics != nil {
 		r.metrics.ObserveObservedTimeTick(checkpoint.TimeTick)
@@ -480,10 +484,11 @@ func (r *recoveryStorageImpl) consumeDirtySnapshot() *dirtyPersistSnapshot {
 		}
 	}
 	frozenCheckpoint := &WALCheckpoint{
-		MessageID: completedPoint.MessageID,
-		TimeTick:  completedPoint.TimeTick,
-		Magic:     r.checkpoint.Magic,
-		Term:      r.channel.Term,
+		LogGeneration: r.checkpoint.LogGeneration,
+		MessageID:     completedPoint.MessageID,
+		TimeTick:      completedPoint.TimeTick,
+		Magic:         r.checkpoint.Magic,
+		Term:          r.channel.Term,
 	}
 	// Freeze the latest control state with its own applied frontier. Its
 	// derived salvage metadata is saved before this checkpoint becomes visible.
@@ -527,7 +532,7 @@ func consumeCheckpointEqual(left, right *utility.WALCheckpoint) bool {
 	if left.TimeTick != right.TimeTick {
 		return false
 	}
-	if left.Magic != right.Magic {
+	if left.Magic != right.Magic || left.LogGeneration != right.LogGeneration {
 		return false
 	}
 	// A frontier below the global position covers no additional replay work.
@@ -564,6 +569,7 @@ func (r *recoveryStorageImpl) observeMessage(ctx context.Context, msg message.Im
 	// Scoped query progress follows the ordered prefix. Only persisted
 	// confirmations enter the recovery tracker and dirty a snapshot.
 	defer func() {
+		r.replicaMetadata.observe(msg)
 		r.observeQueryBarriers(ctx, msg)
 		if r.consumedThrough != nil && messageutil.IsTimeTickConfirmBarrier(msg.MessageType()) {
 			r.consumedThrough(msg.TimeTick())
@@ -781,9 +787,10 @@ func (r *recoveryStorageImpl) getCompletedCheckpoint() *WALCheckpoint {
 		return nil
 	}
 	return &WALCheckpoint{
-		MessageID: point.MessageID,
-		TimeTick:  point.TimeTick,
-		Magic:     r.checkpoint.Magic,
-		Term:      r.channel.Term,
+		LogGeneration: r.checkpoint.LogGeneration,
+		MessageID:     point.MessageID,
+		TimeTick:      point.TimeTick,
+		Magic:         r.checkpoint.Magic,
+		Term:          r.channel.Term,
 	}
 }

@@ -222,6 +222,7 @@ func (o *openerAdaptorImpl) openRWWAL(ctx context.Context, l walimpls.WALImpls, 
 		newRecoveryStreamBuilder(roWAL, param.WriteAheadBuffer, liveReady),
 		cp,
 		param.LastTimeTickMessage,
+		recovery.WithReplicaQueryViews(persistedViews),
 		recovery.WithQueryViewEventApplier(func(ctx context.Context, views []*viewpb.QueryViewOfShard) error {
 			snview.ApplyQueryViewIntents(ctx, resources.queryViewHandler, views)
 			return nil
@@ -508,6 +509,7 @@ func (o *openerAdaptorImpl) handleAlterWALAdvanceCheckpointsStage(ctx context.Co
 
 	// Update pchannel checkpoint: reset alterWALState and set position to new WAL initial position
 	finalCheckpoint := snapshot.Checkpoint.Clone()
+	finalCheckpoint.LogGeneration++
 	finalCheckpoint.MessageID = msgadaptor.MustGetMessageIDFromMQWrapperID(newWALInitialMsgID)
 	finalControl := proto.Clone(snapshot.PChannelControl).(*streamingpb.PChannelRecoveryControlMeta)
 	finalControl.AlterWalState = nil

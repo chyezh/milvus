@@ -23,6 +23,7 @@ func TestNewWALCheckpointFromProto(t *testing.T) {
 		MessageId:     messageID.IntoProto(),
 		TimeTick:      timeTick,
 		RecoveryMagic: recoveryMagic,
+		LogGeneration: 4,
 	}
 	checkpoint := NewWALCheckpointFromProto(protoCheckpoint)
 
@@ -40,6 +41,8 @@ func TestNewWALCheckpointFromProto(t *testing.T) {
 	assert.True(t, messageID.EQ(checkpoint3.MessageID))
 	assert.Equal(t, timeTick, checkpoint3.TimeTick)
 	assert.Equal(t, recoveryMagic, checkpoint3.Magic)
+	assert.EqualValues(t, 4, checkpoint2.LogGeneration)
+	assert.EqualValues(t, 4, checkpoint3.LogGeneration)
 
 	// The control fields advance atomically with the checkpoint: they round
 	// trip through the proto and survive Clone.

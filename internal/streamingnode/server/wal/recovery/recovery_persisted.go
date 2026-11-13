@@ -107,6 +107,7 @@ func (r *recoveryStorageImpl) recoverRecoveryInfoFromMeta(ctx context.Context, c
 		return err
 	}
 	r.Logger().Info(context.TODO(), "recover segment info done", mlog.Int("segments", len(segmentMetas)))
+	r.seedReplicaMetadata(vchannelMetas, segmentMetas)
 	return r.initRecoveryModules(ctx, vchannelMetas, segmentMetas, summaryManager)
 }
 
@@ -222,6 +223,7 @@ func (r *recoveryStorageImpl) migrateLegacyRecoveryInfo(
 	migratedCheckpoint.TimeTick = 0
 	migratedCheckpoint.Magic = utility.RecoveryMagicRecoveryStorageV2
 	migratedCheckpoint.Term = r.channel.Term
+	migratedCheckpoint.LogGeneration = r.checkpoint.LogGeneration
 	if err := r.persistLegacyRecoveryMigration(ctx, &legacyRecoveryMigration{
 		vchannels:         vchannels,
 		segments:          normalizedSegments,
@@ -784,12 +786,15 @@ func (r *recoveryStorageImpl) fenceConsumeCheckpoint(ctx context.Context, term i
 		// Unreachable: the checkpoint is loaded or initialized above.
 		return nil
 	}
-	if r.checkpoint.Term == term {
+	if r.checkpoint.Term == term && r.checkpoint.LogGeneration != 0 {
 		// Already claimed by this term: a reopen with no ownership change.
 		return nil
 	}
 	stamped := r.checkpoint.Clone()
 	stamped.Term = term
+	if stamped.LogGeneration == 0 {
+		stamped.LogGeneration = 1
+	}
 	if err := resource.Resource().StreamingNodeCatalog().SaveRecoverySnapshot(ctx, r.channel.Name, &metastore.WALRecoverySnapshot{
 		ConsumeCheckpoint: stamped.IntoProto(),
 	}); err != nil {

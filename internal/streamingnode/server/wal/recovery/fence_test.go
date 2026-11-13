@@ -6,9 +6,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/bytedance/mockey"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/mocks/mock_metastore"
@@ -22,17 +23,17 @@ import (
 // preserved, because the claim is a fence, not an advancement.
 func TestFenceConsumeCheckpointStampsOwnTerm(t *testing.T) {
 	rs := newTestRecoveryStorage(t, &WALCheckpoint{MessageID: walimplstest.NewTestMessageID(1)})
+	defer rs.closeRecoveryResources()
 	rs.checkpoint.TimeTick = 42
 
 	var received *streamingpb.WALCheckpoint
-	catalog := mock_metastore.NewMockStreamingNodeCataLog(t)
-	catalog.EXPECT().SaveRecoverySnapshot(mock.Anything, "test-pchannel",
-		mock.MatchedBy(func(snapshot *metastore.WALRecoverySnapshot) bool {
-			require.NotNil(t, snapshot)
-			require.NotNil(t, snapshot.ConsumeCheckpoint)
-			received = snapshot.ConsumeCheckpoint
-			return true
-		})).Return(nil)
+	catalog := &mock_metastore.MockStreamingNodeCataLog{}
+	patch := mockey.Mock((*mock_metastore.MockStreamingNodeCataLog).SaveRecoverySnapshot).To(func(_ *mock_metastore.MockStreamingNodeCataLog, _ context.Context, name string, snapshot *metastore.WALRecoverySnapshot) error {
+		require.Equal(t, "test-pchannel", name)
+		received = proto.CloneOf(snapshot.ConsumeCheckpoint)
+		return nil
+	}).Build()
+	defer patch.UnPatch()
 	resource.InitForTest(t, resource.OptStreamingNodeCatalog(catalog))
 
 	require.NoError(t, rs.fenceConsumeCheckpoint(context.Background(), 3))
@@ -42,15 +43,26 @@ func TestFenceConsumeCheckpointStampsOwnTerm(t *testing.T) {
 	// Later advancements carry the term, so the compare-and-swap keeps
 	// accepting this publisher.
 	assert.Equal(t, int64(3), rs.checkpoint.Term)
+	require.EqualValues(t, 1, rs.checkpoint.LogGeneration)
+	require.NoError(t, rs.fenceConsumeCheckpoint(context.Background(), 4))
+	require.EqualValues(t, 1, received.LogGeneration, "writer takeover keeps physical log identity")
 }
 
 // TestFenceConsumeCheckpointSkipsWhenAlreadyClaimed proves a reopen that does
 // not change ownership writes nothing: the recorded term already matches.
 func TestFenceConsumeCheckpointSkipsWhenAlreadyClaimed(t *testing.T) {
 	rs := newTestRecoveryStorage(t, &WALCheckpoint{MessageID: walimplstest.NewTestMessageID(1)})
+	defer rs.closeRecoveryResources()
 	rs.checkpoint.Term = 7
+	rs.checkpoint.LogGeneration = 1
 	// No catalog expectation: any catalog call fails the test.
-	resource.InitForTest(t, resource.OptStreamingNodeCatalog(mock_metastore.NewMockStreamingNodeCataLog(t)))
+	catalog := &mock_metastore.MockStreamingNodeCataLog{}
+	patch := mockey.Mock((*mock_metastore.MockStreamingNodeCataLog).SaveRecoverySnapshot).To(func(_ *mock_metastore.MockStreamingNodeCataLog, _ context.Context, _ string, _ *metastore.WALRecoverySnapshot) error {
+		t.Error("already fenced checkpoint must not be persisted again")
+		return nil
+	}).Build()
+	defer patch.UnPatch()
+	resource.InitForTest(t, resource.OptStreamingNodeCatalog(catalog))
 
 	require.NoError(t, rs.fenceConsumeCheckpoint(context.Background(), 7))
 }

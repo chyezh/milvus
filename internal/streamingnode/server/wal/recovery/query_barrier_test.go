@@ -25,7 +25,7 @@ func TestMVCCBarrierConsumptionIsPassiveAndScoped(t *testing.T) {
 			require.EqualValues(t, 110, tick)
 			return true
 		}).Build()
-		r := &recoveryStorageImpl{vchannelManager: &vchannel.PChannelRecoveryManager{}, summaryManager: walsummary.NewManager(walsummary.ManagerConfig{}), dirtyCounter: 7}
+		r := &recoveryStorageImpl{replicaMetadata: newReplicaMetadata(), vchannelManager: &vchannel.PChannelRecoveryManager{}, summaryManager: walsummary.NewManager(walsummary.ManagerConfig{}), dirtyCounter: 7}
 		msg := message.NewMVCCBarrierMessageBuilderV2().WithHeader(&message.MVCCBarrierMessageHeader{Vchannels: []string{"v", "v2"}}).WithBody(&message.MVCCBarrierMessageBody{}).WithAllVChannel().WithNotPersisted().MustBuildMutable().WithTimeTick(110).WithLastConfirmed(walimplstest.NewTestMessageID(1)).IntoImmutableMessage(walimplstest.NewTestMessageID(1))
 		released := false
 		r.consumedThrough = func(tick uint64) {

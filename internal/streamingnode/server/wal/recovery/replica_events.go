@@ -3,6 +3,8 @@ package recovery
 import (
 	"context"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walevent"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
@@ -25,11 +27,17 @@ func (r *recoveryStorageImpl) applyEvent(ctx context.Context, event walevent.Eve
 		if r.applyQueryViews == nil {
 			return merr.WrapErrServiceInternalMsg("WAL QueryView event applier is not installed")
 		}
-		return r.applyQueryViews(ctx, payload.Views)
+		if err := r.applyQueryViews(ctx, payload.Views); err != nil {
+			return err
+		}
+		r.mu.Lock()
+		r.replicaMetadata.applyViews(payload.Views)
+		r.mu.Unlock()
 	case walevent.CheckpointPublished:
 		checkpoint := utility.NewWALCheckpointFromProto(payload.Checkpoint)
 		r.mu.Lock()
 		r.checkpoint = checkpoint
+		r.replicaMetadata.checkpoint = proto.CloneOf(payload.Checkpoint)
 		r.mu.Unlock()
 		r.metrics.ObServePersistedMetrics(checkpoint.TimeTick)
 	case walevent.StoragePublished:
@@ -56,6 +64,9 @@ func (r *recoveryStorageImpl) applyEvent(ctx context.Context, event walevent.Eve
 				return err
 			}
 		}
+		r.mu.Lock()
+		r.replicaMetadata.applyStorage(payload)
+		r.mu.Unlock()
 	default:
 		return merr.WrapErrServiceInternalMsg("unsupported WAL replica event %T", payload)
 	}

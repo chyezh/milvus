@@ -1246,13 +1246,16 @@ var StreamingNodeManagerService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	StreamingNodeReplicaService_SubscribeWALEvents_FullMethodName = "/milvus.proto.streaming.StreamingNodeReplicaService/SubscribeWALEvents"
+	StreamingNodeReplicaService_ReconcileWALReplicas_FullMethodName = "/milvus.proto.streaming.StreamingNodeReplicaService/ReconcileWALReplicas"
+	StreamingNodeReplicaService_SubscribeWALEvents_FullMethodName   = "/milvus.proto.streaming.StreamingNodeReplicaService/SubscribeWALEvents"
 )
 
 // StreamingNodeReplicaServiceClient is the client API for StreamingNodeReplicaService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type StreamingNodeReplicaServiceClient interface {
+	// Admit the full plan without waiting for another node to become ready.
+	ReconcileWALReplicas(ctx context.Context, in *ReconcileWALReplicasRequest, opts ...grpc.CallOption) (*ReconcileWALReplicasResponse, error)
 	// Resume strictly after the locally applied cursor; never skip missing history.
 	SubscribeWALEvents(ctx context.Context, in *WALReplicaSubscribeRequest, opts ...grpc.CallOption) (StreamingNodeReplicaService_SubscribeWALEventsClient, error)
 }
@@ -1263,6 +1266,15 @@ type streamingNodeReplicaServiceClient struct {
 
 func NewStreamingNodeReplicaServiceClient(cc grpc.ClientConnInterface) StreamingNodeReplicaServiceClient {
 	return &streamingNodeReplicaServiceClient{cc}
+}
+
+func (c *streamingNodeReplicaServiceClient) ReconcileWALReplicas(ctx context.Context, in *ReconcileWALReplicasRequest, opts ...grpc.CallOption) (*ReconcileWALReplicasResponse, error) {
+	out := new(ReconcileWALReplicasResponse)
+	err := c.cc.Invoke(ctx, StreamingNodeReplicaService_ReconcileWALReplicas_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *streamingNodeReplicaServiceClient) SubscribeWALEvents(ctx context.Context, in *WALReplicaSubscribeRequest, opts ...grpc.CallOption) (StreamingNodeReplicaService_SubscribeWALEventsClient, error) {
@@ -1301,6 +1313,8 @@ func (x *streamingNodeReplicaServiceSubscribeWALEventsClient) Recv() (*WALReplic
 // All implementations should embed UnimplementedStreamingNodeReplicaServiceServer
 // for forward compatibility
 type StreamingNodeReplicaServiceServer interface {
+	// Admit the full plan without waiting for another node to become ready.
+	ReconcileWALReplicas(context.Context, *ReconcileWALReplicasRequest) (*ReconcileWALReplicasResponse, error)
 	// Resume strictly after the locally applied cursor; never skip missing history.
 	SubscribeWALEvents(*WALReplicaSubscribeRequest, StreamingNodeReplicaService_SubscribeWALEventsServer) error
 }
@@ -1309,6 +1323,9 @@ type StreamingNodeReplicaServiceServer interface {
 type UnimplementedStreamingNodeReplicaServiceServer struct {
 }
 
+func (UnimplementedStreamingNodeReplicaServiceServer) ReconcileWALReplicas(context.Context, *ReconcileWALReplicasRequest) (*ReconcileWALReplicasResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReconcileWALReplicas not implemented")
+}
 func (UnimplementedStreamingNodeReplicaServiceServer) SubscribeWALEvents(*WALReplicaSubscribeRequest, StreamingNodeReplicaService_SubscribeWALEventsServer) error {
 	return status.Errorf(codes.Unimplemented, "method SubscribeWALEvents not implemented")
 }
@@ -1322,6 +1339,24 @@ type UnsafeStreamingNodeReplicaServiceServer interface {
 
 func RegisterStreamingNodeReplicaServiceServer(s grpc.ServiceRegistrar, srv StreamingNodeReplicaServiceServer) {
 	s.RegisterService(&StreamingNodeReplicaService_ServiceDesc, srv)
+}
+
+func _StreamingNodeReplicaService_ReconcileWALReplicas_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReconcileWALReplicasRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StreamingNodeReplicaServiceServer).ReconcileWALReplicas(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StreamingNodeReplicaService_ReconcileWALReplicas_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StreamingNodeReplicaServiceServer).ReconcileWALReplicas(ctx, req.(*ReconcileWALReplicasRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _StreamingNodeReplicaService_SubscribeWALEvents_Handler(srv interface{}, stream grpc.ServerStream) error {
@@ -1351,7 +1386,12 @@ func (x *streamingNodeReplicaServiceSubscribeWALEventsServer) Send(m *WALReplica
 var StreamingNodeReplicaService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "milvus.proto.streaming.StreamingNodeReplicaService",
 	HandlerType: (*StreamingNodeReplicaServiceServer)(nil),
-	Methods:     []grpc.MethodDesc{},
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ReconcileWALReplicas",
+			Handler:    _StreamingNodeReplicaService_ReconcileWALReplicas_Handler,
+		},
+	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "SubscribeWALEvents",

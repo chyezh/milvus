@@ -652,7 +652,7 @@ func TestBalancer_WithRecoveryLag(t *testing.T) {
 					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
 				},
 				State: streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
-				Node:  &streamingpb.StreamingNodeInfo{ServerId: 1},
+				Node:  &streamingpb.StreamingNodeInfo{ServerId: 1, Address: "localhost:1"},
 			},
 			{
 				Channel: &streamingpb.PChannelInfo{
@@ -661,7 +661,7 @@ func TestBalancer_WithRecoveryLag(t *testing.T) {
 					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
 				},
 				State: streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
-				Node:  &streamingpb.StreamingNodeInfo{ServerId: 1},
+				Node:  &streamingpb.StreamingNodeInfo{ServerId: 1, Address: "localhost:1"},
 			},
 			{
 				Channel: &streamingpb.PChannelInfo{
@@ -670,7 +670,7 @@ func TestBalancer_WithRecoveryLag(t *testing.T) {
 					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
 				},
 				State: streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
-				Node:  &streamingpb.StreamingNodeInfo{ServerId: 1},
+				Node:  &streamingpb.StreamingNodeInfo{ServerId: 1, Address: "localhost:1"},
 			},
 			{
 				Channel: &streamingpb.PChannelInfo{
@@ -679,7 +679,7 @@ func TestBalancer_WithRecoveryLag(t *testing.T) {
 					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
 				},
 				State: streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
-				Node:  &streamingpb.StreamingNodeInfo{ServerId: 2},
+				Node:  &streamingpb.StreamingNodeInfo{ServerId: 2, Address: "localhost:2"},
 			},
 		}, nil
 	})
@@ -710,7 +710,9 @@ func TestBalancer_WithRecoveryLag(t *testing.T) {
 	lag.Store(false)
 	b.Trigger(context.Background())
 	doneErr := errors.New("done")
-	b.WatchChannelAssignments(context.Background(), func(param balancer.WatchChannelAssignmentsCallbackParam) error {
+	balancedCtx, cancelBalanced := context.WithTimeout(ctx, 10*time.Second)
+	defer cancelBalanced()
+	err = b.WatchChannelAssignments(balancedCtx, func(param balancer.WatchChannelAssignmentsCallbackParam) error {
 		counts := map[int64]int{}
 		for _, relation := range param.Relations {
 			assert.Equal(t, relation.Channel.AccessMode, types.AccessModeRW)
@@ -721,6 +723,7 @@ func TestBalancer_WithRecoveryLag(t *testing.T) {
 		}
 		return nil
 	})
+	require.ErrorIs(t, err, doneErr)
 }
 
 func TestBalancer_PrimaryResourceGroupChangeTriggersBalance(t *testing.T) {

@@ -31,6 +31,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/options"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/walimplstest"
 )
@@ -58,22 +59,46 @@ func TestReplicaSubscriptionFromRealWAL(t *testing.T) {
 	require.NoError(t, err)
 	closePrimary := sync.OnceFunc(w.Close)
 	defer closePrimary()
-	// This fixture starts with an empty catalog and WAL. Capturing that empty
-	// baseline exercises the real source without pretending to test bootstrap.
-	var baseline walevent.Cursor
-	var checkpoint *recovery.WALCheckpoint
-	reader, err := primary.Events().Cut(ctx, func(cursor walevent.Cursor) error {
-		baseline = cursor
-		checkpoint = primary.GetCheckpoint(ctx)
-		return nil
-	})
+	created, err := w.Append(ctx, message.NewCreateCollectionMessageBuilderV1().WithVChannel("replica-rpc_2v0").
+		WithHeader(&message.CreateCollectionMessageHeader{CollectionId: 2}).
+		WithBody(&msgpb.CreateCollectionRequest{CollectionSchema: &schemapb.CollectionSchema{Name: "baseline", Version: 1}}).MustBuildMutable())
 	require.NoError(t, err)
-	reader.Close()
+	resource.Resource().TimeTickInspector().TriggerSync(channel, false)
+	provider := primary.(interface {
+		CutReplicaSnapshot(context.Context) (*streamingpb.WALReplicaSnapshot, *walevent.Reader, error)
+	})
+	var snapshot *streamingpb.WALReplicaSnapshot
+	require.Eventually(t, func() bool {
+		var reader *walevent.Reader
+		snapshot, reader, err = provider.CutReplicaSnapshot(ctx)
+		require.NoError(t, err)
+		reader.Close()
+		return snapshot.GetObserved().GetTimeTick() >= created.TimeTick
+	}, 5*time.Second, time.Millisecond)
+	// The source exposes no tail in its metadata image. Use the real ordered
+	// WAL scanner to rebuild an already nonempty channel before subscribing.
+	scanner, err := w.Read(ctx, wal.ReadOption{DeliverPolicy: options.DeliverPolicyStartFrom(message.MustUnmarshalMessageID(snapshot.Checkpoint.MessageId)), IgnorePauseConsumption: true})
+	require.NoError(t, err)
+	defer scanner.Close()
 	roChannel := channel
 	roChannel.AccessMode = types.AccessModeRO
-	ro, err := recovery.NewReadOnlyRecoveryStorage(recovery.ReadOnlyConfig{Channel: roChannel, Applied: baseline, Checkpoint: checkpoint, Modules: vchannel.PChannelManagerConfig{Logger: mlog.With()}})
+	ro, err := recovery.BootstrapReadOnlyRecoveryStorage(ctx, recovery.ReadOnlyConfig{Channel: roChannel, Modules: vchannel.PChannelManagerConfig{Logger: mlog.With()}}, snapshot, func(ctx context.Context) (message.ImmutableMessage, error) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case msg, ok := <-scanner.Chan():
+			if !ok {
+				return nil, scanner.Error()
+			}
+			return msg, nil
+		}
+	})
 	require.NoError(t, err)
 	defer ro.Close()
+	baselineSchema, err := ro.VChannelManager().Module("replica-rpc_2v0").GetSchemaVersion(2, 1)
+	require.NoError(t, err)
+	require.Equal(t, "baseline", baselineSchema.Schema.Name)
+	scanner.Close()
 	manager := mockey.Mock((*schemaRPCManager).GetAvailableWAL).Return(w, nil).Build()
 	defer manager.UnPatch()
 	listener := bufconn.Listen(65536)

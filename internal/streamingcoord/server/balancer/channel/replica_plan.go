@@ -2,6 +2,7 @@ package channel
 
 import (
 	"context"
+	"slices"
 	"sort"
 
 	"google.golang.org/protobuf/proto"
@@ -60,6 +61,37 @@ func (cm *ChannelManager) AssignReplicaPlans(ctx context.Context, targets map[Ch
 	return updated, nil
 }
 
+// CompleteReplicaRetirements removes only exact, drained placements. A delayed
+// report from an older plan cannot retire a replacement on the same server or
+// an incarnation of the member that has since rejoined its resource group.
+func (cm *ChannelManager) CompleteReplicaRetirements(ctx context.Context, id ChannelID, reports []*streamingpb.WALReplicaObservation) error {
+	cm.cond.LockAndBroadcast()
+	defer cm.cond.L.Unlock()
+	current, ok := cm.channels[id]
+	if !ok {
+		return ErrChannelNotExist
+	}
+	plan := current.ReplicaPlan()
+	if len(plan.GetRetiringReplicas()) == 0 {
+		return nil
+	}
+	before := len(plan.RetiringReplicas)
+	plan.RetiringReplicas = slices.DeleteFunc(plan.RetiringReplicas, func(retired *streamingpb.WALReplicaAssignment) bool {
+		return slices.ContainsFunc(reports, func(report *streamingpb.WALReplicaObservation) bool {
+			return report.GetState() == streamingpb.WALReplicaState_WAL_REPLICA_STATE_CLOSED &&
+				report.GetReplicaId() == retired.ReplicaId && report.GetReplicaRevision() == retired.ReplicaRevision &&
+				report.GetNodeId() == retired.GetNode().GetServerId()
+		})
+	})
+	if len(plan.RetiringReplicas) == before {
+		return nil
+	}
+	plan.Revision++
+	mutable := current.CopyForWrite()
+	mutable.inner.ReplicaPlan = plan
+	return cm.updatePChannelMeta(ctx, []*streamingpb.PChannelMeta{mutable.IntoRawMeta()})
+}
+
 func (m *mutablePChannel) assignReplicaPlan(target ReplicaPlanTarget) (bool, error) {
 	primary := target.Nodes[target.PrimaryResourceGroup]
 	if primary == nil {
@@ -86,9 +118,10 @@ func (m *mutablePChannel) assignReplicaPlan(target ReplicaPlanTarget) (bool, err
 	m.TryAssignToServerID(types.AccessModeRW, *primary)
 	previous := m.inner.ReplicaPlan
 	plan := &streamingpb.WALReplicaPlan{
-		Revision:      previous.GetRevision(),
-		WalTerm:       m.CurrentTerm(),
-		NextReplicaId: previous.GetNextReplicaId(),
+		Revision:         previous.GetRevision(),
+		WalTerm:          m.CurrentTerm(),
+		NextReplicaId:    previous.GetNextReplicaId(),
+		RetiringReplicas: proto.CloneOf(previous).GetRetiringReplicas(),
 	}
 	oldMembers := make(map[string]*streamingpb.WALReplicaAssignment)
 	for _, member := range previous.GetReplicas() {
@@ -96,11 +129,13 @@ func (m *mutablePChannel) assignReplicaPlan(target ReplicaPlanTarget) (bool, err
 	}
 	for _, group := range groups {
 		member := &streamingpb.WALReplicaAssignment{
-			ResourceGroup: group,
-			AccessMode:    streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+			ResourceGroup:   group,
+			AccessMode:      streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+			ReplicaRevision: 1,
 		}
 		if old, ok := oldMembers[group]; ok {
 			member.ReplicaId = old.ReplicaId
+			member.ReplicaRevision = old.ReplicaRevision
 		} else {
 			plan.NextReplicaId++
 			member.ReplicaId = plan.NextReplicaId
@@ -111,8 +146,30 @@ func (m *mutablePChannel) assignReplicaPlan(target ReplicaPlanTarget) (bool, err
 		if group == target.PrimaryResourceGroup {
 			member.AccessMode = streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE
 		}
+		if old := oldMembers[group]; old != nil {
+			if !proto.Equal(old.Node, member.Node) || old.AccessMode != member.AccessMode ||
+				(member.AccessMode == streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE && previous.WalTerm != plan.WalTerm) {
+				member.ReplicaRevision++
+			}
+			if old.Node != nil && !proto.Equal(old.Node, member.Node) {
+				plan.RetiringReplicas = append(plan.RetiringReplicas, proto.CloneOf(old))
+			}
+			delete(oldMembers, group)
+		}
 		plan.Replicas = append(plan.Replicas, member)
 	}
+	for _, old := range oldMembers {
+		if old.Node != nil {
+			plan.RetiringReplicas = append(plan.RetiringReplicas, proto.CloneOf(old))
+		}
+	}
+	sort.Slice(plan.RetiringReplicas, func(i, j int) bool {
+		a, b := plan.RetiringReplicas[i], plan.RetiringReplicas[j]
+		if a.ReplicaId != b.ReplicaId {
+			return a.ReplicaId < b.ReplicaId
+		}
+		return a.ReplicaRevision < b.ReplicaRevision
+	})
 	if proto.Equal(previous, plan) {
 		return false, nil
 	}

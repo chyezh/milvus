@@ -26,6 +26,7 @@ func NewWALCheckpointFromProto(cp *streamingpb.WALCheckpoint) *WALCheckpoint {
 		TimeTick:                  cp.TimeTick,
 		Magic:                     cp.RecoveryMagic,
 		Term:                      cp.Term,
+		LogGeneration:             cp.LogGeneration,
 		ControlCheckpointTimeTick: cp.ControlCheckpointTimeTick,
 		ReplicateConfig:           cp.ReplicateConfig,
 		ReplicateCheckpoint:       cp.ReplicateCheckpoint,
@@ -43,7 +44,8 @@ type WALCheckpoint struct {
 	// older than the recorded one must never advance it (its takeover has been
 	// superseded), or WAL truncation would outrun the successor's inherited
 	// manifest coverage.
-	Term int64
+	Term          int64
+	LogGeneration uint64
 	// ControlCheckpointTimeTick covers the embedded control effects, which may
 	// be ahead of the global replay position. It never authorizes WAL truncation.
 	ControlCheckpointTimeTick uint64
@@ -63,6 +65,7 @@ func (c *WALCheckpoint) IntoProto() *streamingpb.WALCheckpoint {
 		TimeTick:                  c.TimeTick,
 		RecoveryMagic:             c.Magic,
 		Term:                      c.Term,
+		LogGeneration:             c.LogGeneration,
 		ControlCheckpointTimeTick: c.ControlCheckpointTimeTick,
 		ReplicateConfig:           c.ReplicateConfig,
 		ReplicateCheckpoint:       c.ReplicateCheckpoint,
@@ -80,6 +83,7 @@ func (c *WALCheckpoint) Clone() *WALCheckpoint {
 		TimeTick:                  c.TimeTick,
 		Magic:                     c.Magic,
 		Term:                      c.Term,
+		LogGeneration:             c.LogGeneration,
 		ControlCheckpointTimeTick: c.ControlCheckpointTimeTick,
 		ReplicateConfig:           proto.Clone(c.ReplicateConfig).(*commonpb.ReplicateConfiguration),
 		ReplicateCheckpoint:       proto.Clone(c.ReplicateCheckpoint).(*commonpb.ReplicateCheckpoint),

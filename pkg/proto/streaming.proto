@@ -76,6 +76,8 @@ message WALReplicaPlan {
     int64 wal_term = 2;
     uint64 next_replica_id = 3;
     repeated WALReplicaAssignment replicas = 4;
+    // Former placements remain explicit until their exact instance is drained.
+    repeated WALReplicaAssignment retiring_replicas = 5;
 }
 
 message WALReplicaAssignment {
@@ -84,6 +86,34 @@ message WALReplicaAssignment {
     // Nil means this RG currently has no eligible SN. Keep the member identity.
     StreamingNodeInfo node = 3;
     PChannelAccessMode access_mode = 4;
+    // Independent local lifecycle revision. A remote primary term change alone
+    // does not replace an unchanged read-only runtime.
+    uint64 replica_revision = 5;
+}
+
+enum WALReplicaState {
+    WAL_REPLICA_STATE_CLOSED = 0;
+    WAL_REPLICA_STATE_PREPARING = 1;
+    WAL_REPLICA_STATE_READY = 2;
+    WAL_REPLICA_STATE_FAILED = 3;
+}
+
+message WALReplicaObservation {
+    uint64 replica_id = 1;
+    uint64 replica_revision = 2;
+    int64 node_id = 3;
+    WALReplicaState state = 4;
+    int64 source_term = 5;
+}
+
+message ReconcileWALReplicasRequest {
+    string pchannel = 1;
+    WALReplicaPlan plan = 2;
+}
+
+message ReconcileWALReplicasResponse {
+    uint64 plan_revision = 1;
+    repeated WALReplicaObservation replicas = 2;
 }
 
 // CChannelMeta is the meta information of a control channel.
@@ -1014,6 +1044,9 @@ message WALCheckpoint {
     // Only filters control effects during replay; never advances WAL truncation.
     // Absent in older checkpoints, whose global time_tick is the recovery floor.
     uint64 control_checkpoint_time_tick = 8;
+    // Stable across writer terms, advanced only when the underlying WAL is
+    // replaced. Physical IDs from different log generations are incomparable.
+    uint64 log_generation = 9;
 }
 
 message PChannelRecoveryControlMeta {
@@ -1319,6 +1352,20 @@ message WALReplicaSubscribeRequest {
     WALReplicaCursor after = 2;
 }
 
+// A metadata-only cut of the applied event prefix. Replay complete WAL messages
+// from checkpoint through observed before installing storage and query intent.
+// No WAL payloads, local readiness, or primary runtime handles enter this image.
+message WALReplicaSnapshot {
+    WALReplicaCursor cursor = 1;
+    WALCheckpoint checkpoint = 2;
+    WALCheckpoint observed = 3;
+    repeated VChannelMeta vchannels = 4;
+    repeated SegmentAssignmentMeta segments = 5;
+    WALReplicaStoragePublication storage = 6;
+    repeated view.QueryViewOfShard query_views = 7;
+    map<string, uint64> query_barriers = 8;
+}
+
 // Transactions preserve their assembled logical boundary. The ordinary outer
 // message alone does not serialize the in-memory transaction body.
 message WALReplicaEntry {
@@ -1363,6 +1410,8 @@ message WALReplicaEvent {
 
 // Primary-to-replica transport, independent of producer/consumer connections.
 service StreamingNodeReplicaService {
+    // Admit the full plan without waiting for another node to become ready.
+    rpc ReconcileWALReplicas(ReconcileWALReplicasRequest) returns (ReconcileWALReplicasResponse) {};
     // Resume strictly after the locally applied cursor; never skip missing history.
     rpc SubscribeWALEvents(WALReplicaSubscribeRequest) returns (stream WALReplicaEvent) {};
 }

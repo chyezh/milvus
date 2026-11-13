@@ -144,7 +144,7 @@ type mutablePChannel struct {
 
 // TryAssignToServerID assigns the channel to a server.
 func (m *mutablePChannel) TryAssignToServerID(accessMode types.AccessMode, streamingNode types.StreamingNodeInfo) bool {
-	if m.ChannelInfo().AccessMode == accessMode && m.CurrentServerID() == streamingNode.ServerID && m.inner.State == streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED {
+	if m.ChannelInfo().AccessMode == accessMode && m.CurrentServerID() == streamingNode.ServerID && m.inner.Node.GetAddress() == streamingNode.Address && m.inner.State == streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED {
 		// if the channel is already assigned to the server, return false.
 		return false
 	}

@@ -40,6 +40,7 @@ func TestReplicaPlanIdentityAndTerm(t *testing.T) {
 	require.Len(t, plan.Replicas, 3)
 	for i, member := range plan.Replicas {
 		require.Equal(t, uint64(i+1), member.ReplicaId)
+		require.EqualValues(t, 1, member.ReplicaRevision)
 		if member.ResourceGroup == "b" {
 			require.Equal(t, streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE, member.AccessMode)
 		} else {
@@ -59,6 +60,9 @@ func TestReplicaPlanIdentityAndTerm(t *testing.T) {
 	require.True(t, changed)
 	require.Equal(t, int64(2), m.CurrentTerm())
 	require.Equal(t, uint64(1), m.ReplicaPlan().Replicas[0].ReplicaId)
+	require.EqualValues(t, 2, m.ReplicaPlan().Replicas[0].ReplicaRevision)
+	require.EqualValues(t, 1, m.ReplicaPlan().Replicas[1].ReplicaRevision)
+	require.Len(t, m.ReplicaPlan().RetiringReplicas, 1)
 	require.Nil(t, m.ReplicaPlan().Replicas[3].Node)
 
 	// Retirement followed by rejoin must not reuse the old member identity.
@@ -72,6 +76,8 @@ func TestReplicaPlanIdentityAndTerm(t *testing.T) {
 	plan = m.ReplicaPlan()
 	require.Equal(t, int64(3), plan.WalTerm)
 	require.Equal(t, uint64(5), plan.Replicas[2].ReplicaId)
+	require.EqualValues(t, 2, plan.Replicas[0].ReplicaRevision, "a remote term change preserves the RO instance")
+	require.Len(t, plan.RetiringReplicas, 2)
 	require.Len(t, m.AssignHistories(), 1)
 	require.Equal(t, int64(2), m.AssignHistories()[0].Node.ServerID)
 	plan.Replicas[0].ResourceGroup = "mutated"
@@ -82,6 +88,13 @@ func TestReplicaPlanIdentityAndTerm(t *testing.T) {
 	_, err = m.assignReplicaPlan(target)
 	require.NoError(t, err)
 	require.Equal(t, int64(4), m.CurrentTerm())
+	require.EqualValues(t, 2, m.ReplicaPlan().Replicas[2].ReplicaRevision, "same-node writer recovery replaces the local instance")
+	m.AssignToServerDone()
+	target.Nodes["c"].Address = "c3"
+	_, err = m.assignReplicaPlan(target)
+	require.NoError(t, err)
+	require.EqualValues(t, 5, m.CurrentTerm())
+	require.Equal(t, "c3", m.inner.Node.Address, "writer projection and full plan publish the same endpoint")
 }
 
 func TestReplicaPlanRejectsInvalidPlacement(t *testing.T) {
@@ -144,4 +157,28 @@ func TestReplicaPlanCatalogCommit(t *testing.T) {
 	require.ErrorIs(t, err, ErrChannelNotExist)
 	_, err = m.AssignReplicaPlans(ctx, map[ChannelID]ReplicaPlanTarget{id: {}})
 	require.Error(t, err)
+	require.NoError(t, m.CompleteReplicaRetirements(ctx, id, nil))
+	require.ErrorIs(t, m.CompleteReplicaRetirements(ctx, ChannelID{Name: "missing"}, nil), ErrChannelNotExist)
+	// Move the RO within its RG, keeping the former exact placement until a
+	// matching drain acknowledgement has itself been committed to the catalog.
+	target.Nodes["b"] = &types.StreamingNodeInfo{ServerID: 3, Address: "b2"}
+	_, err = m.AssignReplicaPlans(ctx, map[ChannelID]ReplicaPlanTarget{id: target})
+	require.NoError(t, err)
+	retired := m.channels[id].ReplicaPlan().RetiringReplicas[0]
+	report := &streamingpb.WALReplicaObservation{ReplicaId: retired.ReplicaId, ReplicaRevision: retired.ReplicaRevision, NodeId: 3, State: streamingpb.WALReplicaState_WAL_REPLICA_STATE_CLOSED}
+	require.NoError(t, m.CompleteReplicaRetirements(ctx, id, []*streamingpb.WALReplicaObservation{report}))
+	require.Len(t, m.channels[id].ReplicaPlan().RetiringReplicas, 1, "replacement cannot acknowledge the old server's drain")
+	report.NodeId = retired.Node.ServerId
+	report.State = streamingpb.WALReplicaState_WAL_REPLICA_STATE_PREPARING
+	require.NoError(t, m.CompleteReplicaRetirements(ctx, id, []*streamingpb.WALReplicaObservation{report}))
+	require.Len(t, m.channels[id].ReplicaPlan().RetiringReplicas, 1)
+	report.State = streamingpb.WALReplicaState_WAL_REPLICA_STATE_CLOSED
+	persistErr = merr.WrapErrServiceUnavailable("drain commit failed")
+	require.ErrorIs(t, m.CompleteReplicaRetirements(ctx, id, []*streamingpb.WALReplicaObservation{report}), persistErr)
+	require.Len(t, m.channels[id].ReplicaPlan().RetiringReplicas, 1)
+	persistErr = nil
+	before := m.channels[id].ReplicaPlan().Revision
+	require.NoError(t, m.CompleteReplicaRetirements(ctx, id, []*streamingpb.WALReplicaObservation{report}))
+	require.Empty(t, m.channels[id].ReplicaPlan().RetiringReplicas)
+	require.Equal(t, before+1, m.channels[id].ReplicaPlan().Revision)
 }

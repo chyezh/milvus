@@ -2,6 +2,7 @@ package walmanager
 
 import (
 	"context"
+	"sync"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
@@ -55,6 +56,7 @@ func newManager(opener wal.Opener) Manager {
 	return &managerImpl{
 		lifetime:      typeutil.NewGenericLifetime[managerState](managerOpenable | managerRemoveable | managerGetable),
 		wltMap:        typeutil.NewConcurrentMap[string, *walLifetime](),
+		replicas:      typeutil.NewConcurrentMap[string, *replicaController](),
 		opener:        opener,
 		logger:        resource.Resource().Logger().With(mlog.FieldComponent("wal-manager")),
 		openingCtx:    openingCtx,
@@ -64,9 +66,11 @@ func newManager(opener wal.Opener) Manager {
 
 // All management operation for a wal will be serialized with order of term.
 type managerImpl struct {
-	lifetime *typeutil.GenericLifetime[managerState]
+	lifetime     *typeutil.GenericLifetime[managerState]
+	assignmentMu sync.Mutex // selects one management protocol per channel
 
 	wltMap        *typeutil.ConcurrentMap[string, *walLifetime]
+	replicas      *typeutil.ConcurrentMap[string, *replicaController]
 	opener        wal.Opener // wal allocator
 	logger        *mlog.Logger
 	openingCtx    context.Context    // done when the manager is closing, all wal open operations are canceled.
@@ -88,7 +92,14 @@ func (m *managerImpl) Open(ctx context.Context, channel types.PChannelInfo) (err
 		m.logger.Info(ctx, "open wal success", mlog.String("channel", channel.String()))
 	}()
 
-	return m.getWALLifetime(channel.Name).Open(ctx, channel)
+	m.assignmentMu.Lock()
+	if _, planned := m.replicas.Get(channel.Name); planned {
+		m.assignmentMu.Unlock()
+		return status.NewIgnoreOperation("channel %s is managed by a replica plan", channel.Name)
+	}
+	lifetime := m.getWALLifetime(channel.Name)
+	m.assignmentMu.Unlock()
+	return lifetime.Open(ctx, channel)
 }
 
 // Remove removes the wal instance for the channel.
@@ -106,7 +117,14 @@ func (m *managerImpl) Remove(ctx context.Context, channel types.PChannelInfo) (e
 		m.logger.Info(ctx, "remove wal success", mlog.String("channel", channel.Name), mlog.Int64("term", channel.Term))
 	}()
 
-	return m.getWALLifetime(channel.Name).Remove(ctx, channel.Term)
+	m.assignmentMu.Lock()
+	if _, planned := m.replicas.Get(channel.Name); planned {
+		m.assignmentMu.Unlock()
+		return status.NewIgnoreOperation("channel %s is managed by a replica plan", channel.Name)
+	}
+	lifetime := m.getWALLifetime(channel.Name)
+	m.assignmentMu.Unlock()
+	return lifetime.Remove(ctx, channel.Term)
 }
 
 // GetAvailableWAL returns a available wal instance for the channel.
@@ -118,7 +136,7 @@ func (m *managerImpl) GetAvailableWAL(channel types.PChannelInfo) (wal.WAL, erro
 	}
 	defer m.lifetime.Done()
 
-	l := m.getWALLifetime(channel.Name).GetWAL()
+	l := m.getCurrentWAL(channel.Name)
 	if l == nil || !l.IsAvailable() {
 		return nil, status.NewChannelNotExist(channel.Name)
 	}
@@ -139,7 +157,7 @@ func (m *managerImpl) GetAvailableRawWALByPChannel(pchannel string) (wal.WAL, er
 	}
 	defer m.lifetime.Done()
 
-	l := m.getWALLifetime(pchannel).GetWAL()
+	l := m.getCurrentWAL(pchannel)
 	if l == nil || !l.IsAvailable() {
 		return nil, status.NewChannelNotExist(pchannel)
 	}
@@ -159,6 +177,12 @@ func (m *managerImpl) Metrics() (*types.StreamingNodeMetrics, error) {
 		}
 		return true
 	})
+	m.replicas.Range(func(_ string, controller *replicaController) bool {
+		if l := controller.getWAL(); l != nil {
+			metrics[l.Channel().ChannelID()] = l.Metrics()
+		}
+		return true
+	})
 	return &types.StreamingNodeMetrics{
 		WALMetrics: metrics,
 	}, nil
@@ -171,6 +195,10 @@ func (m *managerImpl) Close() {
 	m.cancelOpening()
 	m.lifetime.Wait()
 	// close all underlying walLifetime.
+	m.replicas.Range(func(_ string, controller *replicaController) bool {
+		controller.close()
+		return true
+	})
 	m.wltMap.Range(func(channel string, wlt *walLifetime) bool {
 		wlt.Close()
 		return true

@@ -206,6 +206,7 @@ func TestHandleAlterWALAdvanceCheckpointsStageKeepsReplicateCheckpoint(t *testin
 		Checkpoint: &recovery.WALCheckpoint{
 			MessageID:                 rmq.NewRmqID(1),
 			TimeTick:                  100,
+			LogGeneration:             3,
 			ControlCheckpointTimeTick: 120,
 			AlterWalState: &streamingpb.AlterWALState{
 				TargetWalName: commonpb.WALName_Kafka,
@@ -233,6 +234,7 @@ func TestHandleAlterWALAdvanceCheckpointsStageKeepsReplicateCheckpoint(t *testin
 
 	// The local checkpoint moves to the initial position of the new backend.
 	assert.Equal(t, commonpb.WALName_Kafka, persisted.GetMessageId().GetWALName())
+	assert.EqualValues(t, 4, persisted.LogGeneration)
 	assert.Equal(t, uint64(120), persisted.GetControlCheckpointTimeTick())
 	assert.Nil(t, persisted.GetAlterWalState())
 

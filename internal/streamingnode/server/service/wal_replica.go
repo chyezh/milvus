@@ -22,6 +22,18 @@ func NewReplicaService(manager walmanager.Manager) streamingpb.StreamingNodeRepl
 	return &replicaServiceImpl{walManager: manager}
 }
 
+func (hs *replicaServiceImpl) ReconcileWALReplicas(ctx context.Context, req *streamingpb.ReconcileWALReplicasRequest) (*streamingpb.ReconcileWALReplicasResponse, error) {
+	manager, ok := hs.walManager.(walmanager.ReplicaPlanManager)
+	if !ok {
+		return nil, status.NewGRPCStatusFromStreamingError(status.NewOnShutdownError("WAL replica plan manager is unavailable")).Err()
+	}
+	response, err := manager.ReconcileWALReplicas(ctx, req)
+	if err != nil {
+		return nil, status.NewGRPCStatusFromStreamingError(status.AsStreamingError(err)).Err()
+	}
+	return response, nil
+}
+
 func (hs *replicaServiceImpl) SubscribeWALEvents(req *streamingpb.WALReplicaSubscribeRequest, rpc streamingpb.StreamingNodeReplicaService_SubscribeWALEventsServer) error {
 	err := hs.serveWALEvents(req, rpc)
 	if err == nil || errors.IsAny(err, context.Canceled, context.DeadlineExceeded) {
