@@ -63,6 +63,7 @@ type ShardViewManager struct {
 	pendingPersists []*viewpb.QueryViewOfShard
 	pendingSyncs    []syncEntry
 	pendingRemovals []*CoordQueryViewStateMachine
+	pendingDrains   []*CoordQueryViewStateMachine
 
 	// dataViewRefs acquires DataViewRefs for resident QueryViews so the
 	// published per-segment LogicalSize footprint stays visible while a view is
@@ -114,6 +115,7 @@ func newShardViewManager(
 	}
 	for _, view := range recoveredViews {
 		sm := RecoverCoordQueryViewStateMachineWithRef(view, nil)
+		m.configureReplicaDrain(sm)
 		recovered = append(recovered, sm)
 		m.views[sm.Version()] = sm
 	}
@@ -171,6 +173,7 @@ func RecoverShardViewManager(
 		}
 
 		sm := RecoverCoordQueryViewStateMachineWithRef(view, ref)
+		m.configureReplicaDrain(sm)
 		if m.loadInfoRefs != nil {
 			sm.releaseLoadInfo, err = m.loadInfoRefs.AcquireLoadInfo(ctx, view.GetMeta().GetCollectionId(), view.GetMeta().GetLoadInfoVersion())
 			if err != nil {
@@ -509,6 +512,7 @@ func (m *ShardViewManager) addPreparing(ctx context.Context, builder *qviews.Que
 		view.Meta.TransformStartAfterTimetick = m.views[*source].View().GetMeta().GetTransformStartAfterTimetick()
 	}
 	sm := NewCoordQueryViewStateMachineWithRef(view, ref)
+	m.configureReplicaDrain(sm)
 	sm.releaseLoadInfo = releaseLoadInfo
 	sm.preparation = preparation
 	if preparation != nil {
@@ -627,6 +631,10 @@ func (m *ShardViewManager) processStateMachine(sm *CoordQueryViewStateMachine) {
 	// 2. ConsumeFlush sync effects → collect into pending batch.
 	if len(flush.Sync) > 0 {
 		m.pendingSyncs = append(m.pendingSyncs, syncEntry{sm: sm, views: flush.Sync})
+	}
+
+	if flush.Drain != nil {
+		m.pendingDrains = append(m.pendingDrains, sm)
 	}
 
 	// 3. Handle cascading effects based on current state.
@@ -807,6 +815,10 @@ func (m *ShardViewManager) consumeDirtyEventLocked() dirtyViewEvent {
 			m.finalizeRemoval(target)
 		})
 	}
+	for _, sm := range m.pendingDrains {
+		event.drains = append(event.drains, queryViewDrain{meta: sm.View().Meta, onDrained: m.makeOnReplicasDrained(sm.Version())})
+	}
+	m.pendingDrains = nil
 	m.pendingPersists = nil
 	m.pendingSyncs = nil
 	m.pendingRemovals = nil
@@ -1082,5 +1094,29 @@ func (m *ShardViewManager) abortRecovery() {
 	}
 	for _, ref := range refs {
 		ref.Deref()
+	}
+}
+
+// Standalone managers have no remote holders. The production flush scheduler
+// carries the durable catalog and enables the gate before any reports arrive.
+func (m *ShardViewManager) configureReplicaDrain(sm *CoordQueryViewStateMachine) {
+	if scheduler, ok := m.eventSubmitter.(*DirtyViewFlushScheduler); ok {
+		sm.requireReplicaDrain = scheduler.replicaRetention != nil
+	}
+}
+
+func (m *ShardViewManager) makeOnReplicasDrained(version qviews.QueryViewVersion) func() {
+	return func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		sm := m.views[version]
+		if m.closed || sm == nil {
+			return
+		}
+		sm.onReplicasDrained()
+		m.processStateMachine(sm)
+		event := m.consumeDirtyEventLocked()
+		m.publishStatsLocked()
+		m.submitDirtyEvent(event)
 	}
 }

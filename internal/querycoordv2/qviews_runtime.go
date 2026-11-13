@@ -24,7 +24,9 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/metastore/kv/queryview"
+	streamingcatalog "github.com/milvus-io/milvus/internal/metastore/kv/streamingnode"
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	qnmanager "github.com/milvus-io/milvus/internal/querynodev2/client/manager"
 	streamingcoordclient "github.com/milvus-io/milvus/internal/streamingcoord/client"
@@ -77,6 +79,7 @@ type qviewsRuntime struct {
 }
 
 type qviewsRuntimeDependencies struct {
+	replicaRetention       metastore.WALQueryViewRetentionCatalog
 	replicaResources       loadmgr.ReplicaConfigResources
 	loadConfigDependencies loadmgr.LoadConfigStoreDependencies
 	dataViewReconciler     qvresource.DataViewReconciler
@@ -143,7 +146,12 @@ func newQViewsRuntime(ctx context.Context, deps qviewsRuntimeDependencies) (*qvi
 	}
 	feedback := viewfeedback.New(loadConfigStore, deps.dataViewProvider)
 	reliableSyncer := syncer.NewReliableSyncer(deps.viewSyncClient, feedback, deps.pchannels)
-	shardViewRegistry, err := coordview.RecoverShardViewRegistryWithDataViews(ctx, deps.queryViewCatalog, reliableSyncer, deps.dataViewProvider, loadConfigStore)
+	var shardViewRegistry *coordview.ShardViewRegistry
+	if deps.replicaRetention != nil {
+		shardViewRegistry, err = coordview.RecoverShardViewRegistryWithWALReplicas(ctx, deps.queryViewCatalog, reliableSyncer, deps.dataViewProvider, deps.replicaRetention, loadConfigStore)
+	} else {
+		shardViewRegistry, err = coordview.RecoverShardViewRegistryWithDataViews(ctx, deps.queryViewCatalog, reliableSyncer, deps.dataViewProvider, loadConfigStore)
+	}
 	if err != nil {
 		nodePublisher.Close()
 		_ = reliableSyncer.Close()
@@ -325,6 +333,7 @@ func newDefaultQViewsRuntimeDependencies(
 			return schema.GetVersion(), nil
 		},
 		queryViewCatalog:            queryview.NewQueryViewCatalog(metaKV, "coord"),
+		replicaRetention:            streamingcatalog.NewCataLog(metaKV).(metastore.WALQueryViewRetentionCatalog),
 		queryNodeClient:             queryNodeManager,
 		resourceGroupManager:        resourceGroupManager,
 		dataViewProvider:            dataViewProvider,

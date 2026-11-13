@@ -6,6 +6,7 @@ import (
 
 	"golang.org/x/exp/maps"
 
+	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/metastore/kv/queryview"
 	"github.com/milvus-io/milvus/internal/views/coord/coordview/syncer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
@@ -52,7 +53,7 @@ type ShardViewRegistry struct {
 // DataView-backed runtimes must use RecoverShardViewRegistryWithDataViews before
 // enabling DataView GC; the standalone form does not own DataView references.
 func RecoverShardViewRegistry(ctx context.Context, catalog queryview.QueryViewCatalog, s syncer.ReliableSyncer) (*ShardViewRegistry, error) {
-	return recoverShardViewRegistry(ctx, catalog, s, nil)
+	return recoverShardViewRegistry(ctx, catalog, s, nil, nil)
 }
 
 // RecoverShardViewRegistryWithDataViews rebuilds exact-version references before
@@ -61,10 +62,10 @@ func RecoverShardViewRegistryWithDataViews(ctx context.Context, catalog queryvie
 	if dataViewRefs == nil {
 		return nil, merr.WrapErrServiceInternalMsg("DataView-backed registry requires a reference provider")
 	}
-	return recoverShardViewRegistry(ctx, catalog, s, dataViewRefs, loadInfoRefs...)
+	return recoverShardViewRegistry(ctx, catalog, s, dataViewRefs, nil, loadInfoRefs...)
 }
 
-func recoverShardViewRegistry(ctx context.Context, catalog queryview.QueryViewCatalog, s syncer.ReliableSyncer, dataViewRefs DataViewRefProvider, loadInfoRefs ...LoadInfoRefProvider) (*ShardViewRegistry, error) {
+func recoverShardViewRegistry(ctx context.Context, catalog queryview.QueryViewCatalog, s syncer.ReliableSyncer, dataViewRefs DataViewRefProvider, retention metastore.WALQueryViewRetentionCatalog, loadInfoRefs ...LoadInfoRefProvider) (*ShardViewRegistry, error) {
 	views, err := catalog.ListQueryViews(ctx)
 	if err != nil {
 		return nil, err
@@ -84,6 +85,7 @@ func recoverShardViewRegistry(ctx context.Context, catalog queryview.QueryViewCa
 		s,
 		paramtable.Get().MetaStoreCfg.MaxEtcdTxnNum.GetAsInt(),
 		nodescheduler.Get(),
+		retention,
 	)
 	batch := flushScheduler.Begin()
 	shards := make(map[qviews.ShardID]*ShardViewManager, len(byShardID))
@@ -542,4 +544,14 @@ func (r *ShardViewRegistry) PublishCollectionSchema(collectionID int64, version 
 	for _, manager := range managers {
 		manager.PublishSchema(version)
 	}
+}
+
+// RecoverShardViewRegistryWithWALReplicas restores shared references before
+// admitting replica bootstrap and requires all retained copies to drain before
+// releasing QueryNodes. The runtime obligations survive coordinator restart.
+func RecoverShardViewRegistryWithWALReplicas(ctx context.Context, catalog queryview.QueryViewCatalog, s syncer.ReliableSyncer, dataViewRefs DataViewRefProvider, retention metastore.WALQueryViewRetentionCatalog, loadInfoRefs ...LoadInfoRefProvider) (*ShardViewRegistry, error) {
+	if dataViewRefs == nil || retention == nil {
+		return nil, merr.WrapErrServiceInternalMsg("replicated QueryView registry requires DataView and WAL retention providers")
+	}
+	return recoverShardViewRegistry(ctx, catalog, s, dataViewRefs, retention, loadInfoRefs...)
 }

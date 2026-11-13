@@ -9,6 +9,7 @@ import (
 
 	"github.com/cockroachdb/errors"
 
+	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/metastore/kv/queryview"
 	"github.com/milvus-io/milvus/internal/views/coord/coordview/syncer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
@@ -26,6 +27,7 @@ type dirtyViewEvent struct {
 	persists     []*viewpb.QueryViewOfShard
 	syncs        []syncer.SyncView
 	afterPersist []func()
+	drains       []queryViewDrain
 }
 
 type dirtyViewEventSubmitter interface {
@@ -35,10 +37,11 @@ type dirtyViewEventSubmitter interface {
 }
 
 func (e dirtyViewEvent) empty() bool {
-	return len(e.persists) == 0 && len(e.syncs) == 0 && len(e.afterPersist) == 0
+	return len(e.persists) == 0 && len(e.syncs) == 0 && len(e.afterPersist) == 0 && len(e.drains) == 0
 }
 
 type pendingDirtyViewEvent struct {
+	drains       map[qviews.QueryViewKey]queryViewDrain
 	notBefore    time.Time
 	persists     map[qviews.QueryViewKey]*viewpb.QueryViewOfShard
 	syncs        map[dirtyViewSyncKey]syncer.SyncView
@@ -53,6 +56,7 @@ type dirtyViewSyncKey struct {
 func newPendingDirtyViewEvent() *pendingDirtyViewEvent {
 	return &pendingDirtyViewEvent{
 		persists: make(map[qviews.QueryViewKey]*viewpb.QueryViewOfShard),
+		drains:   make(map[qviews.QueryViewKey]queryViewDrain),
 		syncs:    make(map[dirtyViewSyncKey]syncer.SyncView),
 	}
 }
@@ -70,6 +74,9 @@ func (e *pendingDirtyViewEvent) merge(event dirtyViewEvent) {
 		e.syncs[key] = view
 	}
 	e.afterPersist = append(e.afterPersist, event.afterPersist...)
+	for _, drain := range event.drains {
+		e.drains[drain.key()] = drain
+	}
 }
 
 func (e *pendingDirtyViewEvent) operationCount() int {
@@ -88,10 +95,12 @@ func queryViewKeyFromProto(view *viewpb.QueryViewOfShard) qviews.QueryViewKey {
 // disjoint batches to the node-level NodeScheduler. Effects within one ShardID
 // lane are serialized; different lanes may execute concurrently.
 type DirtyViewFlushScheduler struct {
-	catalog       queryview.QueryViewCatalog
-	syncer        syncer.ReliableSyncer
-	maxTxnOps     int
-	nodeScheduler nodescheduler.Scheduler
+	catalog          queryview.QueryViewCatalog
+	replicaRetention metastore.WALQueryViewRetentionCatalog
+	drains           map[qviews.QueryViewKey]*queryViewDrainTask
+	syncer           syncer.ReliableSyncer
+	maxTxnOps        int
+	nodeScheduler    nodescheduler.Scheduler
 
 	mu          sync.Mutex
 	pending     map[qviews.ShardID]*pendingDirtyViewEvent
@@ -132,11 +141,12 @@ func newDirtyViewFlushScheduler(
 	s syncer.ReliableSyncer,
 	maxTxnOps int,
 	nodeScheduler nodescheduler.Scheduler,
+	retention ...metastore.WALQueryViewRetentionCatalog,
 ) *DirtyViewFlushScheduler {
 	if maxTxnOps <= 0 {
 		maxTxnOps = 1
 	}
-	return &DirtyViewFlushScheduler{
+	scheduler := &DirtyViewFlushScheduler{
 		catalog:       catalog,
 		syncer:        s,
 		maxTxnOps:     maxTxnOps,
@@ -147,8 +157,13 @@ func newDirtyViewFlushScheduler(
 		inflight:      make(map[qviews.ShardID]struct{}),
 		held:          make(map[qviews.ShardID]struct{}),
 		tasks:         make(map[*dirtyViewFlushTask]nodescheduler.TaskHandle),
+		drains:        make(map[qviews.QueryViewKey]*queryViewDrainTask),
 		notify:        make(chan struct{}, 1),
 	}
+	if len(retention) > 0 {
+		scheduler.replicaRetention = retention[0]
+	}
+	return scheduler
 }
 
 // Begin opens an explicit batching window. Existing tasks continue running;
@@ -351,6 +366,7 @@ func (s *DirtyViewFlushScheduler) flushBatch(
 	persists := make([]*viewpb.QueryViewOfShard, 0)
 	viewsByNode := make(map[qviews.WorkNodeKey][]syncer.SyncView)
 	afterPersist := make([]func(), 0)
+	drains := make([]queryViewDrain, 0)
 	for _, event := range batch {
 		for _, view := range event.persists {
 			persists = append(persists, view)
@@ -360,6 +376,9 @@ func (s *DirtyViewFlushScheduler) flushBatch(
 			viewsByNode[nodeKey] = append(viewsByNode[nodeKey], view)
 		}
 		afterPersist = append(afterPersist, event.afterPersist...)
+		for _, drain := range event.drains {
+			drains = append(drains, drain)
+		}
 	}
 	if len(persists) > 0 {
 		if err := s.persistViews(ctx, persists); err != nil {
@@ -374,6 +393,7 @@ func (s *DirtyViewFlushScheduler) flushBatch(
 			return err
 		}
 	}
+	s.scheduleReplicaDrains(drains)
 	return nil
 }
 
@@ -423,7 +443,7 @@ func (s *DirtyViewFlushScheduler) Flush(ctx context.Context) error {
 	}
 	for {
 		s.mu.Lock()
-		idle := len(s.pending) == 0 && len(s.inflight) == 0 && len(s.tasks) == 0 && s.queuedTasks == 0
+		idle := len(s.pending) == 0 && len(s.inflight) == 0 && len(s.tasks) == 0 && len(s.drains) == 0 && s.queuedTasks == 0
 		notify := s.notify
 		s.mu.Unlock()
 		if idle {
@@ -458,6 +478,9 @@ func (s *DirtyViewFlushScheduler) Close() {
 	clear(s.delayed)
 	for _, handle := range s.tasks {
 		handles = append(handles, handle)
+	}
+	for _, task := range s.drains {
+		handles = append(handles, task.handle)
 	}
 	s.signalLocked()
 	s.mu.Unlock()

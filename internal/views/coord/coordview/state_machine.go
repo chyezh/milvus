@@ -33,6 +33,11 @@ type CoordQueryViewStateMachine struct {
 	snState  qviews.QueryViewState
 	qnStates map[int64]qviews.QueryViewState
 
+	// The shared QN/DataView resources outlive every retained WAL copy.
+	// Production managers enable this before exposing the state machine.
+	requireReplicaDrain bool
+	replicasDrained     bool
+
 	// Per-QN ready segment IDs reported during Preparing.
 	// Used by Balancer/Manager for progress tracking and decision-making.
 	qnReadySegments map[int64][]int64
@@ -56,10 +61,11 @@ type CoordQueryViewStateMachine struct {
 type queryViewFlush struct {
 	Persist *viewpb.QueryViewOfShard
 	Sync    []qviews.QueryViewAtWorkNode
+	Drain   *viewpb.QueryViewMeta
 }
 
 func (f queryViewFlush) Empty() bool {
-	return f.Persist == nil && len(f.Sync) == 0
+	return f.Persist == nil && len(f.Sync) == 0 && f.Drain == nil
 }
 
 // NewCoordQueryViewStateMachine creates a state machine for a freshly
@@ -296,8 +302,39 @@ func (sm *CoordQueryViewStateMachine) EnterDropping() {
 	if sm.state != qviews.QueryViewStateUnrecoverable {
 		return
 	}
+	sm.startDropping()
+}
+
+func (sm *CoordQueryViewStateMachine) startDropping() {
 	sm.state = qviews.QueryViewStateDropping
-	sm.pending.Sync = sm.syncViewsForState(qviews.QueryViewStateDropped)
+	if sm.requireReplicaDrain && !sm.replicasDrained {
+		sm.pending.Drain = proto.CloneOf(sm.view.Meta)
+	}
+	sm.pending.Sync = sm.droppingTargets()
+}
+
+// Until the durable all-copy drain completes, only the WAL receives Dropped.
+// Its event stream drives each follower's local drain independently. Shared
+// QueryNodes remain loaded even when the primary has already reported Dropped.
+func (sm *CoordQueryViewStateMachine) droppingTargets() []qviews.QueryViewAtWorkNode {
+	views := sm.syncViewsForState(qviews.QueryViewStateDropped)
+	if sm.requireReplicaDrain && !sm.replicasDrained {
+		return views[:1]
+	}
+	return views
+}
+
+func (sm *CoordQueryViewStateMachine) onReplicasDrained() {
+	if sm.state != qviews.QueryViewStateDropping || sm.replicasDrained {
+		return
+	}
+	sm.replicasDrained = true
+	if sm.allNodesDropped() {
+		sm.state = qviews.QueryViewStateDropped
+		sm.pending.Persist = sm.viewWithState(qviews.QueryViewStateDropped)
+		return
+	}
+	sm.pending.Sync = sm.droppingTargets()
 }
 
 // ConsumeFlush atomically drains the latest pending persist and sync effects.
@@ -377,8 +414,7 @@ func (sm *CoordQueryViewStateMachine) handleDown(report qviews.QueryViewAtWorkNo
 		return
 	}
 	if report.State() == qviews.QueryViewStateDown || report.State() == qviews.QueryViewStateDropped {
-		sm.state = qviews.QueryViewStateDropping
-		sm.pending.Sync = sm.syncViewsForState(qviews.QueryViewStateDropped)
+		sm.startDropping()
 		return
 	}
 	// SN not Down yet → re-push Down.
@@ -397,7 +433,7 @@ func (sm *CoordQueryViewStateMachine) handleDropping(report qviews.QueryViewAtWo
 		return
 	}
 	// Node not Dropped → re-push Dropped.
-	sm.pending.Sync = sm.syncViewsForState(qviews.QueryViewStateDropped)
+	sm.pending.Sync = sm.droppingTargets()
 }
 
 // transitionToUnrecoverable persists Unrecoverable and stays.
@@ -474,6 +510,9 @@ func (sm *CoordQueryViewStateMachine) allNodesReady() bool {
 }
 
 func (sm *CoordQueryViewStateMachine) allNodesDropped() bool {
+	if sm.requireReplicaDrain && !sm.replicasDrained {
+		return false
+	}
 	if sm.snState != qviews.QueryViewStateDropped {
 		return false
 	}

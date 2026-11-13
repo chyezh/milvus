@@ -1487,6 +1487,14 @@ message WALReplicaRuntimeRetention {
     WALReplicaRuntimeRetentionState state = 3;
 }
 
+// Shared QueryView resources cannot be dropped until every retained runtime
+// has drained. Retirement closes admission before checking the holders.
+message WALQueryViewRetention {
+    view.QueryViewMeta view = 1;
+    bool retiring = 2;
+    repeated view.StreamingWorkNode runtimes = 3;
+}
+
 // Authorization survives the issuing writer. Once present, the object can
 // never be retained again, even when a delayed deletion has not finished yet.
 message WALObjectDeletion {
