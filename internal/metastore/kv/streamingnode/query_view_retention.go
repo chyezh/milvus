@@ -119,7 +119,23 @@ func (c *catalog) updateQueryViewHolder(ctx context.Context, runtime *viewpb.Str
 		}
 		if !slices.ContainsFunc(stored.Runtimes, func(holder *viewpb.StreamingWorkNode) bool { return proto.Equal(holder, runtime) }) {
 			if len(stored.Runtimes) >= maxReplicaRuntimeObligations {
-				return merr.WrapErrServiceUnavailable("WAL QueryView holder budget exhausted")
+				// Failed bootstraps release the whole runtime, including Views
+				// acquired by the source before the receiver saw the snapshot.
+				// Compact only durably drained owners; absence is not a release.
+				active := stored.Runtimes[:0]
+				for _, holder := range stored.Runtimes {
+					owner, err := c.loadReplicaRuntime(ctx, holder)
+					if err != nil {
+						return err
+					}
+					if owner == nil || owner.State != streamingpb.WALReplicaRuntimeRetentionState_WAL_REPLICA_RUNTIME_RELEASED {
+						active = append(active, holder)
+					}
+				}
+				stored.Runtimes = active
+				if len(stored.Runtimes) >= maxReplicaRuntimeObligations {
+					return merr.WrapErrServiceUnavailable("WAL QueryView holder budget exhausted")
+				}
 			}
 			stored.Runtimes = append(stored.Runtimes, proto.CloneOf(runtime))
 		}

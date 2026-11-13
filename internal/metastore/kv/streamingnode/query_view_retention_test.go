@@ -76,6 +76,44 @@ func TestWALQueryViewReleaseBeforeAcquireAndVersionIsolation(t *testing.T) {
 	require.ErrorIs(t, c.RetainWALQueryView(ctx, runtime, view), merr.ErrDataIntegrity)
 }
 
+func TestWALQueryViewAdmissionCompactsDrainedBootstraps(t *testing.T) {
+	c, _, store := retentionCatalogs(t)
+	ctx := t.Context()
+	view := retainedQueryView()
+	var live *viewpb.StreamingWorkNode
+	for i := range maxReplicaRuntimeObligations {
+		runtime := retentionRuntime()
+		runtime.RuntimeId += uint64(i)
+		require.NoError(t, c.CreateWALReplicaRuntime(ctx, runtime))
+		require.NoError(t, c.RetainWALQueryView(ctx, runtime, view))
+		if i == 0 {
+			live = runtime
+		} else {
+			require.NoError(t, c.ReleaseWALReplicaRuntime(ctx, runtime))
+		}
+	}
+	// Recover the catalog to rule out any process-local drain bookkeeping.
+	c = NewCataLog(store).(*catalog)
+	next := retentionRuntime()
+	next.RuntimeId += maxReplicaRuntimeObligations
+	require.NoError(t, c.CreateWALReplicaRuntime(ctx, next))
+	require.NoError(t, c.RetainWALQueryView(ctx, next, view))
+	channel, key, normalized, err := queryViewRetentionIdentity(view)
+	require.NoError(t, err)
+	stored, err := c.loadQueryViewRetention(ctx, channel, key, normalized)
+	require.NoError(t, err)
+	require.Len(t, stored.Runtimes, 2)
+	require.True(t, proto.Equal(live, stored.Runtimes[0]))
+	require.NoError(t, c.ReleaseWALReplicaRuntime(ctx, next))
+	drained, err := c.RetireWALQueryView(ctx, view)
+	require.NoError(t, err)
+	require.False(t, drained, "compaction must keep the live query owner")
+	require.NoError(t, c.ReleaseWALReplicaRuntime(ctx, live))
+	drained, err = c.RetireWALQueryView(ctx, view)
+	require.NoError(t, err)
+	require.True(t, drained)
+}
+
 func TestWALQueryViewAdmissionRaces(t *testing.T) {
 	for _, operation := range []string{"retire", "release-view", "release-runtime", "retire-races-acquire"} {
 		t.Run(operation, func(t *testing.T) {
