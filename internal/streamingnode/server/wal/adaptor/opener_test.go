@@ -43,6 +43,9 @@ func TestOpenerAdaptorFailure(t *testing.T) {
 	basicOpener := mock_walimpls.NewMockOpenerImpls(t)
 	errExpected := errors.New("test")
 	basicOpener.EXPECT().Open(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, boo *walimpls.OpenOption) (walimpls.WALImpls, error) {
+		require.NotNil(t, boo.RecoveryCheckpoint)
+		require.Equal(t, message.WALNameTest, boo.RecoveryCheckpoint.WALName())
+		require.Equal(t, "0", boo.RecoveryCheckpoint.Marshal())
 		return nil, errExpected
 	})
 

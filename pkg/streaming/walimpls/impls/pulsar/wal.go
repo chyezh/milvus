@@ -18,7 +18,7 @@ var _ walimpls.WALImpls = (*walImpl)(nil)
 
 type walImpl struct {
 	*helper.WALHelper
-	c                  pulsar.Client // shared by readers, truncate and the backlog clear helper.
+	c                  pulsar.Client // shared by readers and the backlog clear helper.
 	producer           *walProducer  // nil for a read-only wal.
 	backlogClearHelper *backlogClearHelper
 	tenant             tenant
@@ -101,24 +101,11 @@ func (w *walImpl) Truncate(ctx context.Context, id message.MessageID) error {
 	if w.Channel().AccessMode != types.AccessModeRW {
 		panic("truncate on a wal that is not in read-write mode")
 	}
-	if w.backlogClearHelper != nil {
-		// The backlogClearHelper is always non-nil currently, so we can determine the truncate position
-		return nil
-	}
-	topic := w.tenant.MustGetFullTopicName(w.Channel().Name)
-	cursor, err := w.c.Subscribe(pulsar.ConsumerOptions{
-		Topic:                    topic,
-		SubscriptionName:         truncateCursorSubscriptionName,
-		Type:                     pulsar.Exclusive,
-		MaxPendingChunkedMessage: 1, // We cannot set it to 0, because the 0 means 100.
-		ReceiverQueueSize:        1, // We cannot set it to 0, because the 0 means 1000.
-		StartMessageIDInclusive:  true,
-	})
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	defer cursor.Close()
-	return cursor.Seek(id.(pulsarID).PulsarID())
+	w.backlogClearHelper.AdvanceCheckpoint(id)
+	return nil
 }
 
 func (w *walImpl) Close() {

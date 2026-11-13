@@ -93,7 +93,7 @@ func (o *openerAdaptorImpl) Open(ctx context.Context, opt *wal.OpenOption) (wal.
 	defer o.lifetime.Done()
 
 	// Determine which walName to use
-	walName, err := o.determineWALName(ctx, opt)
+	walName, checkpoint, err := o.determineWALName(ctx, opt)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +109,7 @@ func (o *openerAdaptorImpl) Open(ctx context.Context, opt *wal.OpenOption) (wal.
 
 	// Open the underlying WAL implementation
 	l, err := openerImpl.Open(ctx, &walimpls.OpenOption{
-		Channel: opt.Channel,
+		Channel: opt.Channel, RecoveryCheckpoint: checkpoint,
 	})
 	if err != nil {
 		logger.Warn(ctx, "open wal impls failed", mlog.Err(err))
@@ -134,12 +134,13 @@ func (o *openerAdaptorImpl) Open(ctx context.Context, opt *wal.OpenOption) (wal.
 }
 
 // determineWALName determines which walName to use for the given channel.
-func (o *openerAdaptorImpl) determineWALName(ctx context.Context, opt *wal.OpenOption) (message.WALName, error) {
+func (o *openerAdaptorImpl) determineWALName(ctx context.Context, opt *wal.OpenOption) (message.WALName, message.MessageID, error) {
 	walName := message.WALNameUnknown
+	var recoveryCheckpoint message.MessageID
 	catalog := resource.Resource().StreamingNodeCatalog()
 	cpProto, err := catalog.GetConsumeCheckpoint(ctx, opt.Channel.Name)
 	if err != nil {
-		return message.WALNameUnknown, errors.Wrap(err, "failed to get checkpoint from catalog")
+		return message.WALNameUnknown, nil, merr.Wrap(err, "failed to get checkpoint from catalog")
 	}
 	if cpProto != nil {
 		checkpoint := utility.NewWALCheckpointFromProto(cpProto)
@@ -152,6 +153,7 @@ func (o *openerAdaptorImpl) determineWALName(ctx context.Context, opt *wal.OpenO
 		fields = append(fields, utility.AlterWALStateLogFields(checkpoint.AlterWalState)...)
 		mlog.Info(ctx, "get checkpoint from catalog", fields...)
 		walName = checkpoint.MessageID.WALName()
+		recoveryCheckpoint = checkpoint.MessageID
 	}
 
 	if walName == message.WALNameUnknown {
@@ -163,7 +165,7 @@ func (o *openerAdaptorImpl) determineWALName(ctx context.Context, opt *wal.OpenO
 		// Use wal selector to choose one
 		walName = util.MustSelectWALName()
 	}
-	return walName, nil
+	return walName, recoveryCheckpoint, nil
 }
 
 // getOrCreateOpenerImpl gets an existing opener from cache or creates a new one.

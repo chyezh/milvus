@@ -3,6 +3,7 @@ package walimpls
 import (
 	"context"
 
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
@@ -10,6 +11,10 @@ import (
 // OpenOption is the option for allocating wal impls instance.
 type OpenOption struct {
 	Channel types.PChannelInfo // Channel to open.
+	// RecoveryCheckpoint is the durable physical restart boundary, including
+	// any earlier transaction messages required by LastConfirmedMessageID.
+	// Backends must not clear unpublished recovery data just to admit a writer.
+	RecoveryCheckpoint message.MessageID
 }
 
 // Validate validates the OpenOption.

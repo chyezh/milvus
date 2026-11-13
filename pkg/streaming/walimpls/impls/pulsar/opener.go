@@ -12,10 +12,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
-const (
-	truncateCursorSubscriptionName = "truncate-cursor"
-	defaultBacklogSize             = 100 * 1024 * 1024 // default 100MB
-)
+const defaultBacklogSize = 100 * 1024 * 1024 // default 100MB
 
 var _ walimpls.OpenerImpls = (*openerImpl)(nil)
 
@@ -61,7 +58,11 @@ func (o *openerImpl) Open(ctx context.Context, opt *walimpls.OpenOption) (walimp
 		backlogAutoClearBytes = defaultBacklogSize
 	}
 	// The backlog clear helper starts before the producer, because a backlog exceeded topic rejects producer creation.
-	w.backlogClearHelper = newBacklogClearHelper(o.c, opt.Channel, backlogAutoClearBytes, o.tenant)
+	var err error
+	w.backlogClearHelper, err = newBacklogClearHelper(ctx, o.c, opt.Channel, backlogAutoClearBytes, o.tenant, opt.RecoveryCheckpoint)
+	if err != nil {
+		return nil, err
+	}
 	producer, err := newWALProducer(ctx, o.newProducerClient, o.tenant.MustGetFullTopicName(opt.Channel.Name), w.Log())
 	if err != nil {
 		w.Close()
