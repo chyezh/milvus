@@ -90,6 +90,8 @@ func NewReadOnlyRecoveryStorage(cfg ReadOnlyConfig, opts ...RecoveryStorageOptio
 
 func (r *ReadOnlyRecoveryStorage) Applied() walevent.Cursor { return r.consumer.Cursor() }
 
+func (r *ReadOnlyRecoveryStorage) ApplyError() error { return r.consumer.Err() }
+
 func (r *ReadOnlyRecoveryStorage) Apply(ctx context.Context, event walevent.Event) error {
 	r.applyMu.RLock()
 	defer r.applyMu.RUnlock()

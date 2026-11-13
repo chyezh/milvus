@@ -3,6 +3,7 @@ package adaptor
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/queryplan/provider"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
@@ -26,11 +27,13 @@ type readOnlyReplica struct {
 	*ratelimit.MuxRateLimitObserverRegistryImpl
 	*replicaQueryRuntime
 	*snview.SNQueryViewHandler
-	storage   *recovery.ReadOnlyRecoveryStorage
-	channel   types.PChannelInfo
-	walName   message.WALName
-	cancel    context.CancelFunc
-	closeOnce sync.Once
+	storage    *recovery.ReadOnlyRecoveryStorage
+	channel    types.PChannelInfo
+	walName    message.WALName
+	cancel     context.CancelFunc
+	closeOnce  sync.Once
+	refresh    atomic.Bool
+	followDone chan struct{}
 }
 
 var (
@@ -131,5 +134,8 @@ func (r *readOnlyReplica) Close() {
 		r.lifetime.Wait()
 		r.CloseForHandoff()
 		r.storage.Close()
+		if r.followDone != nil {
+			<-r.followDone
+		}
 	})
 }

@@ -170,7 +170,7 @@ func (c *replicaController) run() {
 		}
 		c.mu.Lock()
 		plan := c.plan
-		if plan == nil || (c.appliedRevision == plan.Revision && c.lastErr == nil && (c.current == nil || c.current.IsAvailable())) {
+		if plan == nil || (c.appliedRevision == plan.Revision && c.lastErr == nil && (c.current == nil || (c.current.IsAvailable() && !replicaRefreshRequired(c.current)))) {
 			c.mu.Unlock()
 			continue
 		}
@@ -185,6 +185,11 @@ func (c *replicaController) run() {
 		}
 		c.mu.Unlock()
 	}
+}
+
+func replicaRefreshRequired(current wal.WAL) bool {
+	provider, ok := current.(wal.ReplicaRefreshProvider)
+	return ok && provider.ReplicaRefreshRequired()
 }
 
 func (c *replicaController) closeCurrent() {
@@ -221,29 +226,30 @@ func (c *replicaController) apply(ctx context.Context, plan *streamingpb.WALRepl
 	c.mu.Lock()
 	current, assignment, sourceTerm, sourceNode := c.current, c.assignment, c.sourceTerm, c.sourceNode
 	c.mu.Unlock()
-	if current != nil && current.IsAvailable() && assignment.ReplicaId == local.ReplicaId && assignment.ReplicaRevision == local.ReplicaRevision {
+	if current != nil && current.IsAvailable() && !replicaRefreshRequired(current) && assignment.ReplicaId == local.ReplicaId && assignment.ReplicaRevision == local.ReplicaRevision {
 		if sourceTerm == plan.WalTerm && sourceNode == source.Node {
 			return nil
 		}
 		updater, ok := current.(wal.ReplicaSourceUpdater)
-		if local.AccessMode != streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY || !ok {
+		if local.AccessMode != streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY {
 			return merr.WrapErrServiceInternalMsg("WAL replica cannot change source without replacing its local revision")
 		}
-		if err := updater.UpdateReplicaSource(ctx, source); err != nil {
-			return err
+		if ok {
+			if err := updater.UpdateReplicaSource(ctx, source); err != nil {
+				return err
+			}
+			c.mu.Lock()
+			c.sourceTerm = plan.WalTerm
+			c.sourceNode = source.Node
+			c.mu.Unlock()
+			return nil
 		}
-		c.mu.Lock()
-		c.sourceTerm = plan.WalTerm
-		c.sourceNode = source.Node
-		c.mu.Unlock()
-		return nil
 	}
 	// A query-only runtime can continue serving its existing Views while the
-	// replacement writer recovers. It owns no writer side effects. A former RW
+	// replacement baseline or writer recovers. It owns no writer side effects. A former RW
 	// must still finish Close before any replacement can acquire write authority.
-	promoting := current != nil && current.IsAvailable() && assignment.AccessMode == streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY &&
-		local.AccessMode == streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE
-	if !promoting {
+	retaining := current != nil && current.IsAvailable() && assignment.AccessMode == streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY
+	if !retaining {
 		c.closeCurrent()
 	}
 	if local.AccessMode == streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE {
@@ -256,7 +262,7 @@ func (c *replicaController) apply(ctx context.Context, plan *streamingpb.WALRepl
 	}
 	c.mu.Lock()
 	c.opening = proto.CloneOf(local)
-	if !promoting {
+	if !retaining {
 		c.assignment = proto.CloneOf(local)
 	}
 	c.mu.Unlock()
@@ -279,7 +285,7 @@ func (c *replicaController) apply(ctx context.Context, plan *streamingpb.WALRepl
 		c.mu.Lock()
 		c.opening = nil
 		c.mu.Unlock()
-		if !promoting {
+		if !retaining {
 			c.closeCurrent()
 		}
 		return err
@@ -291,7 +297,7 @@ func (c *replicaController) apply(ctx context.Context, plan *streamingpb.WALRepl
 		c.mu.Lock()
 		c.opening = nil
 		c.mu.Unlock()
-		if !promoting {
+		if !retaining {
 			c.closeCurrent()
 		}
 		return context.Canceled
@@ -299,11 +305,11 @@ func (c *replicaController) apply(ctx context.Context, plan *streamingpb.WALRepl
 	c.current, c.assignment, c.sourceTerm = opened, proto.CloneOf(local), plan.WalTerm
 	c.opening = nil
 	c.sourceNode = source.Node
-	if promoting {
+	if retaining {
 		c.draining = assignment
 	}
 	c.mu.Unlock()
-	if promoting {
+	if retaining {
 		current.Close()
 		c.mu.Lock()
 		c.draining = nil

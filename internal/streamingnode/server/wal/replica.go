@@ -17,3 +17,9 @@ type ReplicaEventProvider interface {
 type ReplicaSourceUpdater interface {
 	UpdateReplicaSource(context.Context, types.PChannelInfoAssigned) error
 }
+
+// ReplicaRefreshProvider asks the lifecycle owner to prepare a replacement
+// baseline. A rejected resume does not invalidate queries on the old prefix.
+type ReplicaRefreshProvider interface {
+	ReplicaRefreshRequired() bool
+}

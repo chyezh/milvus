@@ -34,6 +34,14 @@ func (c *Consumer) Cursor() Cursor {
 	return c.cursor
 }
 
+// Err returns a terminal application failure. Transport errors and rejected
+// cursors leave the installed prefix intact and do not poison the consumer.
+func (c *Consumer) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.failure
+}
+
 // Apply discards duplicate events in the same term and rejects gaps and term
 // changes before invoking the applier. Only a successful Apply advances Seq.
 func (c *Consumer) Apply(ctx context.Context, event Event) error {
