@@ -31,6 +31,8 @@ type replicaController struct {
 	operationCancel  context.CancelFunc
 	current          wal.WAL
 	assignment       *streamingpb.WALReplicaAssignment
+	draining         *streamingpb.WALReplicaAssignment
+	opening          *streamingpb.WALReplicaAssignment
 	sourceTerm       int64
 	sourceNode       types.StreamingNodeInfo
 	appliedRevision  uint64
@@ -119,7 +121,8 @@ func (c *replicaController) observationLocked() *streamingpb.ReconcileWALReplica
 			continue
 		}
 		state := streamingpb.WALReplicaState_WAL_REPLICA_STATE_PREPARING
-		if (c.appliedRevision == c.plan.Revision && c.lastErr != nil) || (c.current != nil && !c.current.IsAvailable()) {
+		currentMatches := c.assignment != nil && c.assignment.ReplicaId == member.ReplicaId && c.assignment.ReplicaRevision == member.ReplicaRevision
+		if (c.appliedRevision == c.plan.Revision && c.lastErr != nil) || (currentMatches && c.current != nil && !c.current.IsAvailable()) {
 			state = streamingpb.WALReplicaState_WAL_REPLICA_STATE_FAILED
 		} else if c.current != nil && c.current.IsAvailable() && c.appliedRevision == c.plan.Revision {
 			state = streamingpb.WALReplicaState_WAL_REPLICA_STATE_READY
@@ -131,8 +134,10 @@ func (c *replicaController) observationLocked() *streamingpb.ReconcileWALReplica
 			continue
 		}
 		state := streamingpb.WALReplicaState_WAL_REPLICA_STATE_CLOSED
-		if c.assignment != nil && c.assignment.ReplicaId == retired.ReplicaId && c.assignment.ReplicaRevision == retired.ReplicaRevision {
-			state = streamingpb.WALReplicaState_WAL_REPLICA_STATE_PREPARING
+		for _, active := range []*streamingpb.WALReplicaAssignment{c.assignment, c.draining, c.opening} {
+			if active != nil && active.ReplicaId == retired.ReplicaId && active.ReplicaRevision == retired.ReplicaRevision {
+				state = streamingpb.WALReplicaState_WAL_REPLICA_STATE_PREPARING
+			}
 		}
 		response.Replicas = append(response.Replicas, c.observation(retired, state))
 	}
@@ -233,7 +238,14 @@ func (c *replicaController) apply(ctx context.Context, plan *streamingpb.WALRepl
 		c.mu.Unlock()
 		return nil
 	}
-	c.closeCurrent()
+	// A query-only runtime can continue serving its existing Views while the
+	// replacement writer recovers. It owns no writer side effects. A former RW
+	// must still finish Close before any replacement can acquire write authority.
+	promoting := current != nil && current.IsAvailable() && assignment.AccessMode == streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY &&
+		local.AccessMode == streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE
+	if !promoting {
+		c.closeCurrent()
+	}
 	if local.AccessMode == streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE {
 		if c.failedWriterTerm >= plan.WalTerm {
 			return merr.WrapErrServiceUnavailable("failed WAL writer requires a new term before reopening")
@@ -243,7 +255,10 @@ func (c *replicaController) apply(ctx context.Context, plan *streamingpb.WALRepl
 		c.failedWriterTerm = plan.WalTerm
 	}
 	c.mu.Lock()
-	c.assignment = proto.CloneOf(local)
+	c.opening = proto.CloneOf(local)
+	if !promoting {
+		c.assignment = proto.CloneOf(local)
+	}
 	c.mu.Unlock()
 	option := &wal.OpenOption{
 		Channel: types.PChannelInfo{Name: c.pchannel, Term: plan.WalTerm, AccessMode: types.AccessMode(local.AccessMode)},
@@ -261,19 +276,39 @@ func (c *replicaController) apply(ctx context.Context, plan *streamingpb.WALRepl
 		opened, err = c.opener.Open(ctx, option)
 	}
 	if err != nil {
-		c.closeCurrent()
+		c.mu.Lock()
+		c.opening = nil
+		c.mu.Unlock()
+		if !promoting {
+			c.closeCurrent()
+		}
 		return err
 	}
 	c.mu.Lock()
 	if ctx.Err() != nil || !c.sameLocalTarget(c.plan, plan) {
 		c.mu.Unlock()
 		opened.Close()
-		c.closeCurrent()
+		c.mu.Lock()
+		c.opening = nil
+		c.mu.Unlock()
+		if !promoting {
+			c.closeCurrent()
+		}
 		return context.Canceled
 	}
 	c.current, c.assignment, c.sourceTerm = opened, proto.CloneOf(local), plan.WalTerm
+	c.opening = nil
 	c.sourceNode = source.Node
+	if promoting {
+		c.draining = assignment
+	}
 	c.mu.Unlock()
+	if promoting {
+		current.Close()
+		c.mu.Lock()
+		c.draining = nil
+		c.mu.Unlock()
+	}
 	return nil
 }
 

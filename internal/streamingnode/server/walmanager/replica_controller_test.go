@@ -246,3 +246,144 @@ func TestReplicaControllerSupersededOpenCannotBecomeReady(t *testing.T) {
 		require.Equal(t, 1, closed.Times())
 	})
 }
+
+func promotedControllerPlan(previous *streamingpb.WALReplicaPlan) *streamingpb.WALReplicaPlan {
+	plan := proto.CloneOf(previous)
+	plan.Revision++
+	plan.WalTerm++
+	for _, member := range plan.Replicas {
+		plan.RetiringReplicas = append(plan.RetiringReplicas, proto.CloneOf(member))
+		member.ReplicaRevision++
+	}
+	plan.Replicas[0].AccessMode = streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY
+	plan.Replicas[1].AccessMode = streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE
+	return plan
+}
+
+func TestReplicaControllerPromotionKeepsQueriesUntilWriterIsPrepared(t *testing.T) {
+	mockey.PatchConvey("promotion retains the old RO while the RW candidate opens and tracks its eventual drain", t, func() {
+		old, writer := &controllerTestWAL{}, &controllerTestWAL{}
+		opening, prepared := make(chan struct{}), make(chan struct{})
+		closing, drained := make(chan struct{}), make(chan struct{})
+		mockey.Mock((*controllerTestOpener).Open).To(func(_ *controllerTestOpener, ctx context.Context, option *wal.OpenOption) (wal.WAL, error) {
+			if option.Channel.AccessMode == types.AccessModeRO {
+				return old, nil
+			}
+			close(opening)
+			select {
+			case <-prepared:
+				return writer, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}).Build()
+		mockey.Mock((*controllerTestWAL).IsAvailable).Return(true).Build()
+		mockey.Mock((*controllerTestWAL).Close).To(func(w *controllerTestWAL) {
+			if w == old {
+				close(closing)
+				<-drained
+			}
+		}).Build()
+		c := newReplicaController(t.Context(), 2, "p", &controllerTestOpener{})
+		defer c.close()
+		plan := controllerTestPlan()
+		awaitReplicaState(t, c, plan, streamingpb.WALReplicaState_WAL_REPLICA_STATE_READY)
+		plan = promotedControllerPlan(plan)
+		_, err := c.reconcile(plan)
+		require.NoError(t, err)
+		<-opening
+		require.Same(t, old, c.getWAL(), "existing query resources remain available during writer recovery")
+		select {
+		case <-closing:
+			t.Fatal("RO closed before writer preparation")
+		default:
+		}
+		close(prepared)
+		<-closing
+		require.Same(t, writer, c.getWAL())
+		response, err := c.reconcile(plan)
+		require.NoError(t, err)
+		require.Len(t, response.Replicas, 2)
+		require.Equal(t, streamingpb.WALReplicaState_WAL_REPLICA_STATE_PREPARING, response.Replicas[1].State, "replacement publication is not the old runtime's drain acknowledgement")
+		close(drained)
+		awaitReplicaState(t, c, plan, streamingpb.WALReplicaState_WAL_REPLICA_STATE_READY)
+		response, err = c.reconcile(plan)
+		require.NoError(t, err)
+		require.Equal(t, streamingpb.WALReplicaState_WAL_REPLICA_STATE_CLOSED, response.Replicas[1].State)
+	})
+}
+
+func TestReplicaControllerFailedPromotionPreservesReadOnlyRuntime(t *testing.T) {
+	mockey.PatchConvey("failed writer preparation neither destroys the RO nor reuses the failed term", t, func() {
+		old := &controllerTestWAL{}
+		var attempts atomic.Int64
+		mockey.Mock((*controllerTestOpener).Open).To(func(_ *controllerTestOpener, _ context.Context, option *wal.OpenOption) (wal.WAL, error) {
+			if option.Channel.AccessMode == types.AccessModeRO {
+				return old, nil
+			}
+			attempts.Add(1)
+			return nil, merr.ErrServiceUnavailable
+		}).Build()
+		mockey.Mock((*controllerTestWAL).IsAvailable).Return(true).Build()
+		closed := mockey.Mock((*controllerTestWAL).Close).Return().Build()
+		c := newReplicaController(t.Context(), 2, "p", &controllerTestOpener{})
+		defer c.close()
+		plan := controllerTestPlan()
+		awaitReplicaState(t, c, plan, streamingpb.WALReplicaState_WAL_REPLICA_STATE_READY)
+		plan = promotedControllerPlan(plan)
+		awaitReplicaState(t, c, plan, streamingpb.WALReplicaState_WAL_REPLICA_STATE_FAILED)
+		require.Same(t, old, c.getWAL())
+		plan.Revision++
+		awaitReplicaState(t, c, plan, streamingpb.WALReplicaState_WAL_REPLICA_STATE_FAILED)
+		require.EqualValues(t, 1, attempts.Load())
+		require.Zero(t, closed.Times())
+	})
+}
+
+func TestReplicaControllerCanceledPromotionMustDrainItsCandidate(t *testing.T) {
+	mockey.PatchConvey("superseded promotion cannot acknowledge its candidate closed before Close returns", t, func() {
+		old, candidate := &controllerTestWAL{}, &controllerTestWAL{}
+		opening, closing, drained := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		mockey.Mock((*controllerTestOpener).Open).To(func(_ *controllerTestOpener, ctx context.Context, option *wal.OpenOption) (wal.WAL, error) {
+			if option.Channel.AccessMode == types.AccessModeRO {
+				return old, nil
+			}
+			close(opening)
+			<-ctx.Done()
+			return candidate, nil
+		}).Build()
+		mockey.Mock((*controllerTestWAL).IsAvailable).Return(true).Build()
+		mockey.Mock((*controllerTestWAL).Close).To(func(w *controllerTestWAL) {
+			if w == candidate {
+				close(closing)
+				<-drained
+			}
+		}).Build()
+		c := newReplicaController(t.Context(), 2, "p", &controllerTestOpener{})
+		defer c.close()
+		plan := controllerTestPlan()
+		awaitReplicaState(t, c, plan, streamingpb.WALReplicaState_WAL_REPLICA_STATE_READY)
+		plan = promotedControllerPlan(plan)
+		_, err := c.reconcile(plan)
+		require.NoError(t, err)
+		<-opening
+		plan.Revision++
+		plan.WalTerm++
+		plan.RetiringReplicas = append(plan.RetiringReplicas, proto.CloneOf(plan.Replicas[1]))
+		plan.Replicas = plan.Replicas[:1]
+		plan.Replicas[0].AccessMode = streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE
+		plan.Replicas[0].ReplicaRevision++
+		_, err = c.reconcile(plan)
+		require.NoError(t, err)
+		<-closing
+		require.Same(t, old, c.getWAL())
+		response, err := c.reconcile(plan)
+		require.NoError(t, err)
+		require.Len(t, response.Replicas, 2)
+		for _, report := range response.Replicas {
+			require.Equal(t, streamingpb.WALReplicaState_WAL_REPLICA_STATE_PREPARING, report.State)
+		}
+		close(drained)
+		awaitReplicaState(t, c, plan, streamingpb.WALReplicaState_WAL_REPLICA_STATE_CLOSED)
+	})
+}
