@@ -53,7 +53,7 @@ func (o *openerAdaptorImpl) OpenReadOnlyReplica(ctx context.Context, opt *wal.Op
 		return nil, err
 	}
 	defer transfer.Close()
-	r, err := newReadOnlyReplica(ctx, readOnlyReplicaConfig(opt.Channel), transfer.Snapshot, transfer.Replay, source.ResolveMVCC)
+	r, err := newReadOnlyReplica(ctx, readOnlyReplicaConfig(opt.Channel), transfer.Snapshot, transfer.Replay, source.ResolveMVCC, retention.views)
 	if err != nil {
 		return nil, err
 	}

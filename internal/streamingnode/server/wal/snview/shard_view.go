@@ -38,7 +38,8 @@ type snShardView struct {
 	catalog         metastore.StreamingNodeCataLog
 	resMgr          StreamingNodeResourceManager
 	leaseDuration   time.Duration
-	onEmpty         func(*snShardView) // called (under mu) when the last view entry is removed
+	onReport        func(*viewpb.QueryViewMeta) // Non-blocking local lifecycle observer.
+	onEmpty         func(*snShardView)          // called (under mu) when the last view entry is removed
 }
 
 // snViewEntry pairs an ApplyView (carrying the OnReport callback) with its state machine.
@@ -207,19 +208,11 @@ func (s *snShardView) applyOneLocked(av *handler.ApplyView) {
 			// A missing teardown view means the SN has already lost its local
 			// state and resources. Report Dropped so Coord can finish cleanup
 			// and notify all QueryNodes.
-			if av.OnReport != nil {
-				pb := av.View.IntoProto()
-				pb.Meta.State = viewpb.QueryViewState(qviews.QueryViewStateDropped)
-				av.OnReport(qviews.NewQueryViewAtWorkNodeFromProto(pb))
-			}
+			s.reportAbsent(av, qviews.QueryViewStateDropped)
 		default:
 			// View unknown to this node (e.g., state lost after restart).
 			// Report Unrecoverable so Coord can generate a replacement view.
-			if av.OnReport != nil {
-				pb := av.View.IntoProto()
-				pb.Meta.State = viewpb.QueryViewState(qviews.QueryViewStateUnrecoverable)
-				av.OnReport(qviews.NewQueryViewAtWorkNodeFromProto(pb))
-			}
+			s.reportAbsent(av, qviews.QueryViewStateUnrecoverable)
 		}
 		return
 	}
@@ -331,6 +324,9 @@ func (s *snShardView) notifyRecoveringDone(version qviews.QueryViewVersion) {
 // Caller must hold s.mu.
 func (s *snShardView) consumeReport(entry *snViewEntry) {
 	report := entry.sm.ConsumeReport()
+	if report != nil && s.onReport != nil {
+		s.onReport(report.Meta)
+	}
 	if report != nil && entry.OnReport != nil {
 		qvobserve.Observe(s.ctx, qvobserve.StreamingNodeReportViewEvent{View: entry.View.QueryViewKey(), State: qviews.QueryViewState(report.Meta.State)})
 		entry.OnReport(qviews.NewQueryViewAtWorkNodeFromProto(report))
@@ -583,4 +579,17 @@ func (s *snShardView) publishReplicaLocked(entry *snViewEntry) {
 
 func collectionIDForEntry(entry *snViewEntry) int64 {
 	return entry.sm.Meta().GetCollectionId()
+}
+
+// A missing local View has no resources to drain. Still notify the runtime
+// owner so a bootstrap obligation can be released without a Coord callback.
+func (s *snShardView) reportAbsent(view *handler.ApplyView, state qviews.QueryViewState) {
+	report := view.View.IntoProto()
+	report.Meta.State = viewpb.QueryViewState(state)
+	if s.onReport != nil {
+		s.onReport(report.Meta)
+	}
+	if view.OnReport != nil {
+		view.OnReport(qviews.NewQueryViewAtWorkNodeFromProto(report))
+	}
 }

@@ -42,7 +42,7 @@ func TestReadOnlyReplicaHasNoWriterCapabilities(t *testing.T) {
 		require.Equal(t, "v", vchannel)
 		require.Equal(t, commonpb.ConsistencyLevel_Strong, req.GetConsistencyLevel())
 		return remoteMVCC, nil
-	}, recovery.WithNodeScheduler(scheduler))
+	}, nil, recovery.WithNodeScheduler(scheduler))
 	require.NoError(t, err)
 	defer r.Close()
 	cancel()
@@ -114,13 +114,13 @@ func TestReadOnlyReplicaRejectsFailedBootstrap(t *testing.T) {
 	defer scheduler.Close()
 	cfg, snapshot := readOnlyReplicaBaseline()
 	snapshot.Cursor.Term++
-	r, err := newReadOnlyReplica(t.Context(), cfg, snapshot, nil, nil, recovery.WithNodeScheduler(scheduler))
+	r, err := newReadOnlyReplica(t.Context(), cfg, snapshot, nil, nil, nil, recovery.WithNodeScheduler(scheduler))
 	require.Error(t, err)
 	require.Nil(t, r)
 	snapshot.Cursor.Term--
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	r, err = newReadOnlyReplica(ctx, cfg, snapshot, nil, nil, recovery.WithNodeScheduler(scheduler))
+	r, err = newReadOnlyReplica(ctx, cfg, snapshot, nil, nil, nil, recovery.WithNodeScheduler(scheduler))
 	require.ErrorIs(t, err, context.Canceled)
 	require.Nil(t, r)
 }

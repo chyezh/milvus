@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/views/optimizer"
@@ -78,6 +80,7 @@ type SNQueryViewHandler struct {
 	resMgr         StreamingNodeResourceManager
 	localOptimizer optimizer.LocalOptimizer
 	leaseDuration  time.Duration
+	onReport       func(*viewpb.QueryViewMeta)
 }
 
 // recoverSNQueryViewHandler reconstructs the handler from persisted views
@@ -88,6 +91,7 @@ func recoverSNQueryViewHandler(
 	catalog metastore.StreamingNodeCataLog,
 	resMgr StreamingNodeResourceManager,
 	views []*viewpb.QueryViewOfShard,
+	observers ...func(*viewpb.QueryViewMeta),
 ) *SNQueryViewHandler {
 	h := &SNQueryViewHandler{
 		replicas:       newReplicaDirectory(),
@@ -98,6 +102,10 @@ func recoverSNQueryViewHandler(
 		resMgr:         resMgr,
 		localOptimizer: optimizer.NewNoopLocalOptimizer(),
 		leaseDuration:  max(0, paramtable.Get().QueryViewCfg.LeaseDuration.GetAsDurationByParse()),
+	}
+
+	if len(observers) > 0 {
+		h.onReport = observers[0]
 	}
 
 	grouped := make(map[qviews.ShardID]map[qviews.QueryViewVersion]*snQueryViewStateMachine)
@@ -119,6 +127,7 @@ func recoverSNQueryViewHandler(
 	for shardID, shardViews := range grouped {
 		shard := recoverSnShardView(ctx, pchannel, shardID, shardViews, catalog, resMgr)
 		shard.replicas = h.replicas
+		shard.onReport = h.onReport
 		for _, entry := range shard.views {
 			shard.publishReplicaLocked(entry)
 		}
@@ -158,16 +167,46 @@ func RecoverPChannelSNQueryViewHandler(
 	return recoverSNQueryViewHandler(ctx, pchannel, catalog, resMgr, views)
 }
 
-// NewReadOnlyPChannelSNQueryViewHandler installs query runtime without a catalog
-// writer. Up targets from the reconciled baseline prepare locally before being
-// advertised; subsequent intents use the same state machine as the primary.
+// NewReadOnlyPChannelSNQueryViewHandler installs the source's target intents,
+// not its local readiness. Only Up targets may become serving after local
+// preparation; Preparing targets continue to wait for a subsequent Up event.
+// The optional observer runs under a shard lock and must not block or do I/O.
 func NewReadOnlyPChannelSNQueryViewHandler(
 	ctx context.Context,
 	pchannel string,
 	resMgr StreamingNodeResourceManager,
-	upViews []*viewpb.QueryViewOfShard,
+	views []*viewpb.QueryViewOfShard,
+	observers ...func(*viewpb.QueryViewMeta),
 ) *SNQueryViewHandler {
-	return recoverSNQueryViewHandler(ctx, pchannel, nil, resMgr, upViews)
+	h := recoverSNQueryViewHandler(ctx, pchannel, nil, resMgr, nil, observers...)
+	views = slices.Clone(views)
+	// VChannel modules are shared across query replicas. Register oldest
+	// requirements first across all shards, as in writer crash recovery.
+	slices.SortFunc(views, func(a, b *viewpb.QueryViewOfShard) int {
+		av, bv := qviews.FromProtoQueryViewVersion(a.Meta.Version), qviews.FromProtoQueryViewVersion(b.Meta.Version)
+		if av.GT(bv) {
+			return 1
+		}
+		if bv.GT(av) {
+			return -1
+		}
+		return 0
+	})
+	for _, view := range views {
+		initial := proto.CloneOf(view)
+		switch initial.Meta.State {
+		case viewpb.QueryViewState_QueryViewStateUp, viewpb.QueryViewState_QueryViewStatePreparing:
+			initial.Meta.State = viewpb.QueryViewState_QueryViewStatePreparing
+		default:
+			// A new runtime has no requests or resources for retired targets.
+			initial.Meta.State = viewpb.QueryViewState_QueryViewStateDropped
+		}
+		h.ApplyViews([]handler.ApplyView{{View: qviews.NewQueryViewAtWorkNodeFromProto(initial)}})
+		if view.Meta.State == viewpb.QueryViewState_QueryViewStateUp {
+			h.ApplyViews([]handler.ApplyView{{View: qviews.NewQueryViewAtWorkNodeFromProto(proto.CloneOf(view))}})
+		}
+	}
+	return h
 }
 
 func OldestUpDataVersions(views []*viewpb.QueryViewOfShard) map[string]qviews.DataVersion {
@@ -243,6 +282,7 @@ func (h *SNQueryViewHandler) getOrCreateShard(shardID qviews.ShardID) *snShardVi
 			catalog:       h.catalog,
 			resMgr:        h.resMgr,
 			onEmpty:       h.makeOnEmpty(shardID),
+			onReport:      h.onReport,
 			leaseDuration: h.leaseDuration,
 		}
 		h.shards[shardID] = shard

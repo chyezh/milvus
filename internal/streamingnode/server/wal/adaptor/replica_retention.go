@@ -11,12 +11,14 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
+	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 	"github.com/milvus-io/milvus/pkg/v3/util/retry"
 )
 
 type replicaRuntimeRetention struct {
 	catalog metastore.WALReplicaRuntimeCatalog
 	runtime *viewpb.StreamingWorkNode
+	views   *replicaViewRetention
 }
 
 func createReplicaRuntimeRetention(ctx context.Context, opt *wal.OpenOption) (*replicaRuntimeRetention, error) {
@@ -29,11 +31,16 @@ func createReplicaRuntimeRetention(ctx context.Context, opt *wal.OpenOption) (*r
 	if !ok {
 		return nil, merr.WrapErrServiceUnavailable("WAL replica runtime retention catalog is unavailable")
 	}
+	viewCatalog, ok := catalog.(metastore.WALQueryViewRetentionCatalog)
+	if !ok {
+		return nil, merr.WrapErrServiceUnavailable("WAL replica QueryView retention catalog is unavailable")
+	}
 	r := &replicaRuntimeRetention{catalog: catalog, runtime: &viewpb.StreamingWorkNode{
 		Pchannel: opt.Channel.Name, WalTerm: opt.Channel.Term, ReadOnly: true,
 		NodeId: member.Node.ServerId, RuntimeId: opt.RuntimeID,
 		WalReplicaId: member.ReplicaId, WalReplicaRevision: member.ReplicaRevision,
 	}}
+	r.views = newReplicaViewRetention(viewCatalog, r.runtime, nodescheduler.Get())
 	if err := retry.Do(ctx, func() error { return catalog.CreateWALReplicaRuntime(ctx, r.runtime) }, retry.Attempts(3), retry.Sleep(10*time.Millisecond)); err != nil {
 		// The create response may have been lost after committing. Fence that
 		// identity even when no bootstrap request was sent.
@@ -54,6 +61,7 @@ func (r *replicaRuntimeRetention) install(ctx context.Context, cursor *streaming
 // the release fence from reaching the catalog. A failed cleanup stays protected
 // durably and is visible to retention reconciliation.
 func (r *replicaRuntimeRetention) Close() {
+	r.views.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := retry.Do(ctx, func() error {

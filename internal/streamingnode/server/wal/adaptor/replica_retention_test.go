@@ -20,6 +20,7 @@ import (
 type runtimeRetentionCatalogStub struct {
 	metastore.StreamingNodeCataLog
 	metastore.WALReplicaRuntimeCatalog
+	metastore.WALQueryViewRetentionCatalog
 }
 
 func (*runtimeRetentionCatalogStub) CreateWALReplicaRuntime(context.Context, *viewpb.StreamingWorkNode) error {

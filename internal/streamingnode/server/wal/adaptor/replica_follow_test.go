@@ -23,7 +23,7 @@ func TestReplicaFollowResumesAppliedPrefix(t *testing.T) {
 		scheduler := nodescheduler.New(1)
 		defer scheduler.Close()
 		cfg, snapshot := readOnlyReplicaBaseline()
-		r, err := newReadOnlyReplica(t.Context(), cfg, snapshot, nil, nil, recovery.WithNodeScheduler(scheduler))
+		r, err := newReadOnlyReplica(t.Context(), cfg, snapshot, nil, nil, nil, recovery.WithNodeScheduler(scheduler))
 		require.NoError(t, err)
 		defer r.Close()
 		var attempts atomic.Int64
@@ -65,7 +65,7 @@ func TestReplicaFollowResetPreservesQueriesButApplyFailureFences(t *testing.T) {
 				scheduler := nodescheduler.New(1)
 				defer scheduler.Close()
 				cfg, snapshot := readOnlyReplicaBaseline()
-				r, err := newReadOnlyReplica(t.Context(), cfg, snapshot, nil, nil, recovery.WithNodeScheduler(scheduler))
+				r, err := newReadOnlyReplica(t.Context(), cfg, snapshot, nil, nil, nil, recovery.WithNodeScheduler(scheduler))
 				require.NoError(t, err)
 				defer r.Close()
 				attempt := mockey.Mock((*recovery.ReadOnlyRecoveryStorage).SubscribeAndApply).To(func(storage *recovery.ReadOnlyRecoveryStorage, ctx context.Context, _ streamingpb.StreamingNodeReplicaServiceClient, _ types.PChannelInfo, _ ...grpc.CallOption) error {
@@ -94,7 +94,7 @@ func TestReplicaFollowCloseInterruptsBackoff(t *testing.T) {
 		scheduler := nodescheduler.New(1)
 		defer scheduler.Close()
 		cfg, snapshot := readOnlyReplicaBaseline()
-		r, err := newReadOnlyReplica(t.Context(), cfg, snapshot, nil, nil, recovery.WithNodeScheduler(scheduler))
+		r, err := newReadOnlyReplica(t.Context(), cfg, snapshot, nil, nil, nil, recovery.WithNodeScheduler(scheduler))
 		require.NoError(t, err)
 		defer r.Close()
 		attempted := make(chan struct{})

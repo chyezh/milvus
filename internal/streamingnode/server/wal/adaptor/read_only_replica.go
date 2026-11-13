@@ -51,8 +51,14 @@ func newReadOnlyReplica(
 	snapshot *streamingpb.WALReplicaSnapshot,
 	replay recovery.ReplicaReplay,
 	resolveMVCC func(context.Context, *viewpb.GetQueryPlanRequest, string) (*viewpb.QueryPlanMVCC, error),
+	viewRetention *replicaViewRetention,
 	opts ...recovery.RecoveryStorageOption,
 ) (*readOnlyReplica, error) {
+	if viewRetention != nil {
+		if err := viewRetention.Retain(ctx, snapshot.QueryViews); err != nil {
+			return nil, err
+		}
+	}
 	available, cancel := context.WithCancel(context.Background())
 	r := &readOnlyReplica{
 		MuxRateLimitObserverRegistryImpl: ratelimit.NewMuxRateLimitObserverRegistry(),
@@ -68,6 +74,11 @@ func newReadOnlyReplica(
 	}
 	cfg.Channel = r.channel
 	opts = append(opts, recovery.WithQueryViewEventApplier(func(ctx context.Context, views []*viewpb.QueryViewOfShard) error {
+		if viewRetention != nil {
+			if err := viewRetention.Retain(ctx, views); err != nil {
+				return err
+			}
+		}
 		snview.ApplyQueryViewIntents(ctx, r.SNQueryViewHandler, views)
 		return nil
 	}))
@@ -84,7 +95,11 @@ func newReadOnlyReplica(
 	r.storage = storage
 	r.walName = message.WALName(snapshot.Checkpoint.MessageId.WALName)
 	r.viewResourceManager = storage.VChannelManager()
-	r.SNQueryViewHandler = snview.NewReadOnlyPChannelSNQueryViewHandler(available, r.channel.Name, r.viewResourceManager, snapshot.QueryViews)
+	var observer func(*viewpb.QueryViewMeta)
+	if viewRetention != nil {
+		observer = viewRetention.Report
+	}
+	r.SNQueryViewHandler = snview.NewReadOnlyPChannelSNQueryViewHandler(available, r.channel.Name, r.viewResourceManager, snapshot.QueryViews, observer)
 	r.queryViewHandler = r.SNQueryViewHandler
 	return r, nil
 }
