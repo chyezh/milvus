@@ -5,6 +5,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/internal/views/viewerror"
+	worknodehandler "github.com/milvus-io/milvus/internal/views/worknode/handler"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 )
@@ -36,6 +37,13 @@ func NewCompositeViewQueryServiceClient(streamingNode StreamingNodeViewQueryServ
 func (c *compositeViewQueryServiceClient) SearchOnView(ctx context.Context, node qviews.WorkNode, req *viewpb.SearchOnViewRequest) (*viewpb.SearchOnViewResponse, error) {
 	switch typed := node.(type) {
 	case qviews.StreamingNode:
+		if typed.NodeID != 0 {
+			var err error
+			ctx, err = worknodehandler.EncodeQueryReplicaToOutgoingContext(ctx, typed.IntoProto())
+			if err != nil {
+				return nil, err
+			}
+		}
 		return c.streamingNode.SearchOnView(ctx, types.PChannelInfo{Name: typed.PChannel}, req)
 	case qviews.QueryNode:
 		return c.queryNode.SearchOnView(ctx, typed.ID, req)
@@ -47,6 +55,13 @@ func (c *compositeViewQueryServiceClient) SearchOnView(ctx context.Context, node
 func (c *compositeViewQueryServiceClient) QueryOnView(ctx context.Context, node qviews.WorkNode, req *viewpb.QueryOnViewRequest) (*viewpb.QueryOnViewResponse, error) {
 	switch typed := node.(type) {
 	case qviews.StreamingNode:
+		if typed.NodeID != 0 {
+			var err error
+			ctx, err = worknodehandler.EncodeQueryReplicaToOutgoingContext(ctx, typed.IntoProto())
+			if err != nil {
+				return nil, err
+			}
+		}
 		return c.streamingNode.QueryOnView(ctx, types.PChannelInfo{Name: typed.PChannel}, req)
 	case qviews.QueryNode:
 		return c.queryNode.QueryOnView(ctx, typed.ID, req)

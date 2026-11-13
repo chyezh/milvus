@@ -33,9 +33,30 @@ func (s *Server) GetQueryPlan(ctx context.Context, req *viewpb.GetQueryPlanReque
 	if err != nil {
 		return nil, normalizeQueryPlanError(err)
 	}
+	var target *viewpb.StreamingWorkNode
+	if manager, ok := s.walManager.(wal.QueryReplicaManager); ok {
+		instance, ok := p.(wal.WAL)
+		if !ok {
+			return nil, viewerror.NewUnknownError("query plan provider has no WAL identity")
+		}
+		target, err = manager.QueryReplicaIdentity(instance)
+		if err != nil {
+			return nil, viewerror.NewViewInvalidated("query runtime changed before planning: %s", err)
+		}
+	}
 	resp, err := p.GetQueryPlan(ctx, req)
 	if err != nil {
 		return nil, normalizeQueryPlanError(err)
+	}
+	if target != nil {
+		for _, worker := range resp.GetPlan().GetWorkNodes() {
+			if sn := worker.GetStreamingNode(); sn != nil {
+				if sn.Pchannel != target.Pchannel {
+					return nil, viewerror.NewUnknownError("query plan contains another physical channel")
+				}
+				worker.Node = &viewpb.QueryPlanWorkNode_StreamingNode{StreamingNode: target}
+			}
+		}
 	}
 	return resp, nil
 }
@@ -80,7 +101,20 @@ func (s *Server) providerForVChannel(ctx context.Context, vchannel string) (prov
 	if pchannel.Name != expectedPChannel {
 		return nil, viewerror.NewUnknownError("query view pchannel metadata mismatch, expected %s, got %s", expectedPChannel, pchannel.Name)
 	}
-	rawWAL, err := s.walManager.GetAvailableWAL(pchannel)
+	target, err := worknodehandler.DecodeQueryReplicaFromIncomingContext(ctx)
+	if err != nil {
+		return nil, viewerror.NewUnknownError("%s", err)
+	}
+	var rawWAL wal.WAL
+	if target != nil {
+		manager, ok := s.walManager.(wal.QueryReplicaManager)
+		if !ok || target.Pchannel != pchannel.Name {
+			return nil, viewerror.NewViewInvalidated("query replica is unavailable")
+		}
+		rawWAL, err = manager.GetAvailableQueryReplica(target)
+	} else {
+		rawWAL, err = s.walManager.GetAvailableWAL(pchannel)
+	}
 	if err != nil {
 		return nil, viewerror.NewOnShutdownError("local WAL for vchannel %s is unavailable: %s", vchannel, err.Error())
 	}

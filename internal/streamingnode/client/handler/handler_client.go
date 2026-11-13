@@ -5,10 +5,12 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
+	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
 	"github.com/milvus-io/milvus/internal/json"
+	"github.com/milvus-io/milvus/internal/streamingnode/client/connection"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/assignment"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/consumer"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/producer"
@@ -133,8 +135,18 @@ type HandlerClient interface {
 	Close()
 }
 
+type HandlerClientOption func(*handlerClientImpl)
+
+// WithReplicaSessionDiscovery enables direct query dispatch to any SN replica,
+// including nodes that have no writer assignments.
+func WithReplicaSessionDiscovery(etcd *clientv3.Client) HandlerClientOption {
+	return func(client *handlerClientImpl) {
+		client.replicaConn, client.replicaResolver = connection.NewSession(etcd, "milvus.proto.view.QueryPlanService", "milvus.proto.view.ViewQueryService")
+	}
+}
+
 // NewHandlerClient creates a new handler client.
-func NewHandlerClient(w types.AssignmentDiscoverWatcher) HandlerClient {
+func NewHandlerClient(w types.AssignmentDiscoverWatcher, opts ...HandlerClientOption) HandlerClient {
 	rb := resolver.NewChannelAssignmentBuilder(w)
 	dialTimeout := paramtable.Get().StreamingNodeGrpcClientCfg.DialTimeout.GetAsDuration(time.Millisecond)
 	dialOptions := getDialOptions(rb)
@@ -160,6 +172,9 @@ func NewHandlerClient(w types.AssignmentDiscoverWatcher) HandlerClient {
 	}
 	hc.queryViewSyncClient = newQueryViewSyncClient(hc, conn)
 	hc.queryViewClient = newQueryViewClient(hc, conn)
+	for _, opt := range opts {
+		opt(hc)
+	}
 	return hc
 }
 

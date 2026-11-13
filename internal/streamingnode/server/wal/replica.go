@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walevent"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 )
 
@@ -22,4 +23,11 @@ type ReplicaSourceUpdater interface {
 // baseline. A rejected resume does not invalidate queries on the old prefix.
 type ReplicaRefreshProvider interface {
 	ReplicaRefreshRequired() bool
+}
+
+// QueryReplicaManager binds a query plan to the local instance that prepared
+// it, independently of later primary assignments or local baseline replacement.
+type QueryReplicaManager interface {
+	QueryReplicaIdentity(WAL) (*viewpb.StreamingWorkNode, error)
+	GetAvailableQueryReplica(*viewpb.StreamingWorkNode) (WAL, error)
 }

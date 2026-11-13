@@ -256,9 +256,15 @@ message QueryWorkNode {
     int64 node_id = 1;
 }
 
-// StreamingWorkNode identifies a streaming node by its bound physical channel.
+// StreamingWorkNode pins Phase 2 to the exact runtime that prepared the plan.
 message StreamingWorkNode {
     string pchannel = 1;
+    int64 node_id = 2;
+    uint64 wal_replica_id = 3;
+    uint64 wal_replica_revision = 4;
+    uint64 runtime_id = 5;
+    int64 wal_term = 6;
+    bool read_only = 7;
 }
 
 // QueryPlanWorkNode identifies a target work node for Phase 2 dispatch.

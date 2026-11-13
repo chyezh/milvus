@@ -65,7 +65,23 @@ func (s *PChannelViewQueryServer) taskProviderForVChannel(ctx context.Context, v
 	if pchannel.Name != expectedPChannel {
 		return nil, viewerror.NewUnknownError("query view pchannel metadata mismatch, expected %s, got %s", expectedPChannel, pchannel.Name)
 	}
-	rawWAL, err := s.walManager.GetAvailableWAL(pchannel)
+	target, err := worknodehandler.DecodeQueryReplicaFromIncomingContext(ctx)
+	if err != nil {
+		return nil, viewerror.NewUnknownError("%s", err)
+	}
+	var rawWAL wal.WAL
+	if target != nil {
+		manager, ok := s.walManager.(wal.QueryReplicaManager)
+		if !ok || target.Pchannel != pchannel.Name {
+			return nil, viewerror.NewViewInvalidated("query replica is unavailable")
+		}
+		rawWAL, err = manager.GetAvailableQueryReplica(target)
+		if err != nil {
+			return nil, viewerror.NewViewInvalidated("query runtime was replaced: %s", err)
+		}
+	} else {
+		rawWAL, err = s.walManager.GetAvailableWAL(pchannel)
+	}
 	if err != nil {
 		return nil, viewerror.NewOnShutdownError("local WAL for vchannel %s is unavailable: %s", vchannel, err.Error())
 	}

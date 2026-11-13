@@ -3,6 +3,7 @@ package qviews
 import (
 	"fmt"
 
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 )
 
@@ -71,13 +72,36 @@ func NewStreamingNodeFromVChannel(vchannel string) StreamingNode {
 
 // StreamingNode identifies a streaming node by its bound physical channel.
 type StreamingNode struct {
-	PChannel string
+	PChannel           string
+	NodeID             int64
+	WALReplicaID       uint64
+	WALReplicaRevision uint64
+	RuntimeID          uint64
+	WALTerm            int64
+	ReadOnly           bool
+}
+
+func StreamingNodeFromProto(node *viewpb.StreamingWorkNode) StreamingNode {
+	return StreamingNode{
+		PChannel: node.Pchannel, NodeID: node.NodeId, WALReplicaID: node.WalReplicaId,
+		WALReplicaRevision: node.WalReplicaRevision, RuntimeID: node.RuntimeId, WALTerm: node.WalTerm, ReadOnly: node.ReadOnly,
+	}
+}
+
+func (s StreamingNode) IntoProto() *viewpb.StreamingWorkNode {
+	return &viewpb.StreamingWorkNode{
+		Pchannel: s.PChannel, NodeId: s.NodeID, WalReplicaId: s.WALReplicaID,
+		WalReplicaRevision: s.WALReplicaRevision, RuntimeId: s.RuntimeID, WalTerm: s.WALTerm, ReadOnly: s.ReadOnly,
+	}
 }
 
 func (StreamingNode) isWorkNode()        {}
 func (StreamingNode) NodeType() NodeType { return NodeTypeStreamingNode }
 
 func (s StreamingNode) Key() WorkNodeKey {
+	if s.NodeID != 0 {
+		return fmt.Sprintf("%s@%s/%d/%d/%d/%d", s.NodeType(), s.PChannel, s.NodeID, s.WALReplicaID, s.WALReplicaRevision, s.RuntimeID)
+	}
 	return fmt.Sprintf("%s@%s", s.NodeType(), s.PChannel)
 }
 

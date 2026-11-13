@@ -29,7 +29,7 @@ func newWALAccesser(c *clientv3.Client) *walAccesserImpl {
 	// Create a new streaming coord client.
 	streamingCoordClient := client.NewClient(c)
 	// Create a new streamingnode handler client.
-	handlerClient := handler.NewHandlerClient(streamingCoordClient.Assignment())
+	handlerClient := handler.NewHandlerClient(streamingCoordClient.Assignment(), handler.WithReplicaSessionDiscovery(c))
 	w := &walAccesserImpl{
 		lifetime:             typeutil.NewLifetime(),
 		clusterID:            paramtable.Get().CommonCfg.ClusterPrefix.GetValue(),

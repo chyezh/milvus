@@ -3,6 +3,7 @@ package walmanager
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -12,6 +13,10 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
+
+// NodeID changes on process restart; within one node this counter also fences
+// same-term baseline replacement and recreation of a PChannel controller.
+var replicaRuntimeIDs atomic.Uint64
 
 // replicaController admits complete plans independently of runtime preparation.
 // One worker owns open/update/close, while read access keeps the current runtime
@@ -36,6 +41,7 @@ type replicaController struct {
 	sourceTerm       int64
 	sourceNode       types.StreamingNodeInfo
 	appliedRevision  uint64
+	runtimeID        uint64
 	failedWriterTerm int64
 	lastErr          error
 }
@@ -303,6 +309,7 @@ func (c *replicaController) apply(ctx context.Context, plan *streamingpb.WALRepl
 		return context.Canceled
 	}
 	c.current, c.assignment, c.sourceTerm = opened, proto.CloneOf(local), plan.WalTerm
+	c.runtimeID = replicaRuntimeIDs.Add(1)
 	c.opening = nil
 	c.sourceNode = source.Node
 	if retaining {

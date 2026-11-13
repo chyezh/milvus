@@ -3,9 +3,11 @@ package handler
 import (
 	"context"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
+	"github.com/milvus-io/milvus/internal/streamingnode/client/connection"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/lazygrpc"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/internal/views/viewerror"
@@ -92,6 +94,17 @@ func executeQueryPlanRPC[T any](
 	call func(context.Context, viewpb.QueryPlanServiceClient) (T, error),
 ) (T, error) {
 	pchannel := funcutil.ToPhysicalChannel(vchannel)
+	var zero T
+	target, err := worknodehandler.DecodeQueryReplicaFromOutgoingContext(ctx)
+	if err != nil {
+		return zero, err
+	}
+	if target != nil {
+		if target.Pchannel != pchannel {
+			return zero, viewerror.NewViewInvalidated("query planning channel does not match its target")
+		}
+		return executeReplicaRPC(ctx, qvc, target, method, viewpb.NewQueryPlanServiceClient, call)
+	}
 	logger := mlog.With(mlog.FieldPChannel(pchannel), mlog.String("handler", method))
 	return executeViewRPC(ctx, qvc, logger, pchannel, method, func(ctx context.Context, _ *types.PChannelInfoAssigned) (viewRPCResult[T], error) {
 		client, err := qvc.queryPlanService.GetService(ctx)
@@ -110,6 +123,17 @@ func executeViewQueryRPC[T any](
 	method string,
 	call func(context.Context, viewpb.ViewQueryServiceClient) (T, error),
 ) (T, error) {
+	var zero T
+	target, err := worknodehandler.DecodeQueryReplicaFromOutgoingContext(ctx)
+	if err != nil {
+		return zero, err
+	}
+	if target != nil {
+		if target.Pchannel != pchannel.Name {
+			return zero, viewerror.NewViewInvalidated("query plan physical channel does not match its target")
+		}
+		return executeReplicaRPC(ctx, qvc, target, method, viewpb.NewViewQueryServiceClient, call)
+	}
 	logger := mlog.With(mlog.FieldPChannel(pchannel.Name), mlog.String("handler", method))
 	return executeViewRPC(ctx, qvc, logger, pchannel.Name, method, func(ctx context.Context, _ *types.PChannelInfoAssigned) (viewRPCResult[T], error) {
 		client, err := qvc.viewQueryService.GetService(ctx)
@@ -119,6 +143,24 @@ func executeViewQueryRPC[T any](
 		resp, err := call(ctx, client)
 		return viewRPCResult[T]{resp: resp, err: err}, nil
 	})
+}
+
+// A Phase 2 plan belongs to a particular runtime. Failure is returned for
+// replanning; writer-assignment retries must never retarget this operation.
+func executeReplicaRPC[T, C any](ctx context.Context, qvc *queryViewClient, target *viewpb.StreamingWorkNode, method string,
+	create func(grpc.ClientConnInterface) C, call func(context.Context, C) (T, error),
+) (T, error) {
+	var zero T
+	if !qvc.owner.lifetime.Add(typeutil.LifetimeStateWorking) {
+		return zero, ErrClientClosed
+	}
+	defer qvc.owner.lifetime.Done()
+	if qvc.owner.replicaConn == nil {
+		return zero, viewerror.NewViewInvalidated("query replica session discovery is unavailable")
+	}
+	client := create(connection.ForNode(qvc.owner.replicaConn, target.NodeId))
+	result, err := call(ctx, client)
+	return result, viewerror.ConvertViewError(method, err)
 }
 
 func executeViewRPC[T any](

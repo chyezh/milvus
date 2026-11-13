@@ -408,7 +408,7 @@ func workNodesFromPlan(plan *viewpb.QueryPlan) []qviews.WorkNode {
 		case *viewpb.QueryPlanWorkNode_QueryNode:
 			nodes = append(nodes, qviews.NewQueryNode(v.QueryNode.NodeId))
 		case *viewpb.QueryPlanWorkNode_StreamingNode:
-			nodes = append(nodes, qviews.StreamingNode{PChannel: v.StreamingNode.Pchannel})
+			nodes = append(nodes, qviews.StreamingNodeFromProto(v.StreamingNode))
 		}
 	}
 	return nodes

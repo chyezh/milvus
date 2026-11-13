@@ -83,7 +83,7 @@ func WorkNodeSelection(plan *viewpb.QueryPlan, node WorkNode) *viewpb.QueryPlanW
 		if qn, ok := node.(QueryNode); ok && worker.GetQueryNode() != nil && worker.GetQueryNode().GetNodeId() == qn.ID {
 			return worker
 		}
-		if sn, ok := node.(StreamingNode); ok && worker.GetStreamingNode() != nil && worker.GetStreamingNode().GetPchannel() == sn.PChannel {
+		if sn, ok := node.(StreamingNode); ok && worker.GetStreamingNode() != nil && StreamingNodeFromProto(worker.GetStreamingNode()) == sn {
 			return worker
 		}
 	}

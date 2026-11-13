@@ -43,6 +43,8 @@ type handlerClientImpl struct {
 	lifetime                   *typeutil.Lifetime
 	service                    lazygrpc.Service[streamingpb.StreamingNodeHandlerServiceClient]
 	rb                         resolver.Builder
+	replicaConn                lazygrpc.Conn
+	replicaResolver            resolver.Builder
 	watcher                    assignment.Watcher
 	rebalanceTrigger           types.AssignmentRebalanceTrigger
 	newProducer                func(ctx context.Context, opts *producer.ProducerOptions, handler streamingpb.StreamingNodeHandlerServiceClient) (Producer, error)
@@ -421,6 +423,10 @@ func (hc *handlerClientImpl) Close() {
 	hc.watcher.Close()
 	hc.service.Close()
 	hc.rb.Close()
+	if hc.replicaConn != nil {
+		hc.replicaConn.Close()
+		hc.replicaResolver.Close()
+	}
 }
 
 // isPermanentFailureUntilNewAssignment checks if the error is permanent failure until new assignment.

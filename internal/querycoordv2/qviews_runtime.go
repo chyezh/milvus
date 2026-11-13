@@ -264,7 +264,7 @@ func newDefaultQViewsRuntimeDependencies(
 ) qviewsRuntimeDependencies {
 	queryNodeManager := qnmanager.NewManagerClient(etcdCli)
 	streamingCoordClient := streamingcoordclient.NewClient(etcdCli)
-	streamingNodeHandler := snhandler.NewHandlerClient(streamingCoordClient.Assignment())
+	streamingNodeHandler := snhandler.NewHandlerClient(streamingCoordClient.Assignment(), snhandler.WithReplicaSessionDiscovery(etcdCli))
 	var dataViewProvider balancer.DataViewProvider
 	if source, ok := mixCoord.(dataViewProviderSource); ok {
 		dataViewProvider = source.DataViewProvider()
