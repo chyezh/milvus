@@ -79,9 +79,18 @@ func TestReadOnlySummaryPublicationPreservesTailAndReaders(t *testing.T) {
 	retired.Chunks = retired.Chunks[1:]
 	retired.TransformFastForwardTimeTick = map[string]uint64{"v1": 10}
 	require.NoError(t, ro.ApplyStoragePublished(retired))
-	require.True(t, chunk.retired)
-	require.Len(t, ro.chunkIndex.chunks, 1)
+	require.False(t, chunk.retired)
+	require.Len(t, ro.chunkIndex.chunks, 2)
 	require.Len(t, chunk.GetVchannels(), 1, "an existing reader keeps immutable metadata")
+	// A local old View can start a new lazy read after the writer retired its
+	// history. Keeping only existing reader snapshots would silently skip it.
+	entries, err = ro.ReadTransformEntries(ctx, "v1", 0, 20)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	require.EqualValues(t, 10, entries[0].GetTimeTick())
+	require.Len(t, ro.PublishedManifest().Chunks, 1, "local retention must not rewrite the authoritative publication")
+	require.NoError(t, ro.ApplyStoragePublished(retired))
+	require.Len(t, ro.chunkIndex.chunks, 2, "repeated publication does not duplicate retained chunks")
 	entries, err = ro.ReadTransformEntries(ctx, "v1", 10, 20)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)

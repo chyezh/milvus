@@ -1,6 +1,9 @@
 package walsummary
 
 import (
+	"maps"
+	"sort"
+
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
@@ -15,8 +18,9 @@ func (m *Manager) PublishedManifest() *streamingpb.PChannelSummaryManifest {
 }
 
 // ApplyStoragePublished installs a manifest after its durable publication. It
-// performs no object I/O. Readers already holding a chunk snapshot keep it; new
-// readers see the new index together with the uncovered in-memory tail.
+// performs no object I/O. RO keeps its protected history until its own runtime
+// drains; a primary's GC frontier cannot invalidate a later lazy read on an old
+// local QueryView. The object-retention budget bounds that runtime's lifetime.
 func (m *Manager) ApplyStoragePublished(manifest *streamingpb.PChannelSummaryManifest) error {
 	if err := validateManifest(manifest); err != nil {
 		return err
@@ -58,10 +62,22 @@ func (m *Manager) installReadOnlyManifestLocked(manifest *streamingpb.PChannelSu
 		}
 	}
 	for _, chunk := range previous {
-		m.chunkIndex.remove(chunk.GetGeneration())
+		chunks = append(chunks, chunk)
 	}
+	sort.Slice(chunks, func(i, j int) bool { return chunks[i].GetGeneration() < chunks[j].GetGeneration() })
 	m.chunkIndex.chunks = chunks
-	m.manifest = manifest
+	// Keep the authoritative publication distinct from the local readable
+	// index. Both old and new objects were acquired before applying the event.
+	local := proto.CloneOf(manifest)
+	local.Chunks = make([]*streamingpb.PChannelSummaryChunkIndexEntry, 0, len(chunks))
+	for _, chunk := range chunks {
+		local.Chunks = append(local.Chunks, chunk.PChannelSummaryChunkIndexEntry)
+	}
+	if coverage := m.manifest.GetCoverage(); coverage != nil && local.Coverage != nil {
+		local.Coverage.StartTimeTick = min(local.Coverage.StartTimeTick, coverage.StartTimeTick)
+	}
+	local.TransformFastForwardTimeTick = maps.Clone(m.manifest.GetTransformFastForwardTimeTick())
+	m.manifest = local
 	m.latestCoveredTimeTick = manifest.GetCoverage().GetEndTimeTick()
 	m.restoredTimeTick = m.latestCoveredTimeTick
 	// RO never seals chunks. Drop only records replaced by published objects;
