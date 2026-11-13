@@ -9,6 +9,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walevent"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
+	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
@@ -37,6 +38,7 @@ func (hs *replicaServiceImpl) BootstrapWALReplica(req *streamingpb.WALReplicaBoo
 		if err == nil {
 			return nil
 		}
+		mlog.RatedWarn(ctx, 0.1, "WAL replica bootstrap failed", mlog.FieldPChannel(req.GetPchannel().GetName()), mlog.Err(err))
 		return status.NewGRPCStatusFromStreamingError(status.AsStreamingError(err)).Err()
 	}
 }
@@ -82,7 +84,7 @@ func (hs *replicaServiceImpl) serveReplicaBootstrap(ctx context.Context, req *st
 		if err != nil {
 			return err
 		}
-		if msg == nil || !msg.IsPersisted() || msg.TimeTick() <= through || msg.TimeTick() > upper {
+		if msg == nil || !msg.IsPersisted() || msg.TimeTick() <= snapshot.Checkpoint.TimeTick || msg.TimeTick() < through || msg.TimeTick() > upper {
 			return merr.WrapErrDataIntegrityMsg("protected WAL replay does not continue its snapshot prefix")
 		}
 		if msg.TimeTick() == upper && !proto.Equal(message.MustMarshalMessageID(msg.LastConfirmedMessageID()), snapshot.Observed.MessageId) {

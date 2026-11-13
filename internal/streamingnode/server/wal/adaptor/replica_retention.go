@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/milvus-io/milvus/internal/metastore"
+	"github.com/milvus-io/milvus/internal/storagev2/packed"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
@@ -19,6 +20,7 @@ type replicaRuntimeRetention struct {
 	catalog metastore.WALReplicaRuntimeCatalog
 	runtime *viewpb.StreamingWorkNode
 	views   *replicaViewRetention
+	objects *replicaObjectRetention
 }
 
 func createReplicaRuntimeRetention(ctx context.Context, opt *wal.OpenOption) (*replicaRuntimeRetention, error) {
@@ -35,12 +37,17 @@ func createReplicaRuntimeRetention(ctx context.Context, opt *wal.OpenOption) (*r
 	if !ok {
 		return nil, merr.WrapErrServiceUnavailable("WAL replica QueryView retention catalog is unavailable")
 	}
+	objectCatalog, ok := catalog.(replicaObjectCatalog)
+	if !ok {
+		return nil, merr.WrapErrServiceUnavailable("WAL replica object retention catalog is unavailable")
+	}
 	r := &replicaRuntimeRetention{catalog: catalog, runtime: &viewpb.StreamingWorkNode{
 		Pchannel: opt.Channel.Name, WalTerm: opt.Channel.Term, ReadOnly: true,
 		NodeId: member.Node.ServerId, RuntimeId: opt.RuntimeID,
 		WalReplicaId: member.ReplicaId, WalReplicaRevision: member.ReplicaRevision,
 	}}
 	r.views = newReplicaViewRetention(viewCatalog, r.runtime, nodescheduler.Get())
+	r.objects = newReplicaObjectRetention(objectCatalog, r.runtime, resource.Resource().ChunkManager(), packed.CreateStorageConfig())
 	if err := retry.Do(ctx, func() error { return catalog.CreateWALReplicaRuntime(ctx, r.runtime) }, retry.Attempts(3), retry.Sleep(10*time.Millisecond)); err != nil {
 		// The create response may have been lost after committing. Fence that
 		// identity even when no bootstrap request was sent.
@@ -62,6 +69,7 @@ func (r *replicaRuntimeRetention) install(ctx context.Context, cursor *streaming
 // durably and is visible to retention reconciliation.
 func (r *replicaRuntimeRetention) Close() {
 	r.views.Close()
+	r.objects.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := retry.Do(ctx, func() error {

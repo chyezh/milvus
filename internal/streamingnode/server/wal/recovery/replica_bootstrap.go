@@ -80,7 +80,7 @@ func (r *ReadOnlyRecoveryStorage) replayReplicaSnapshot(ctx context.Context, sna
 		if !msg.IsPersisted() || msg.TimeTick() <= snapshot.Checkpoint.TimeTick {
 			continue
 		}
-		if msg.TimeTick() <= through || msg.TimeTick() > upper {
+		if msg.TimeTick() < through || msg.TimeTick() > upper {
 			return merr.WrapErrDataIntegrityMsg("WAL replica replay is not the ordered snapshot prefix")
 		}
 		if msg.TimeTick() == upper && !proto.Equal(message.MustMarshalMessageID(msg.LastConfirmedMessageID()), snapshot.Observed.MessageId) {

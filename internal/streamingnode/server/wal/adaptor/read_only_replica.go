@@ -9,6 +9,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/recovery"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walevent"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/internal/views/viewerror"
 	"github.com/milvus-io/milvus/internal/views/viewquery"
@@ -27,14 +28,15 @@ type readOnlyReplica struct {
 	*ratelimit.MuxRateLimitObserverRegistryImpl
 	*replicaQueryRuntime
 	*snview.SNQueryViewHandler
-	storage    *recovery.ReadOnlyRecoveryStorage
-	channel    types.PChannelInfo
-	walName    message.WALName
-	cancel     context.CancelFunc
-	closeOnce  sync.Once
-	onClose    func()
-	refresh    atomic.Bool
-	followDone chan struct{}
+	storage           *recovery.ReadOnlyRecoveryStorage
+	channel           types.PChannelInfo
+	walName           message.WALName
+	cancel            context.CancelFunc
+	closeOnce         sync.Once
+	onClose           func()
+	refresh           atomic.Bool
+	followDone        chan struct{}
+	dependencyRefresh func() bool
 }
 
 var (
@@ -73,12 +75,21 @@ func newReadOnlyReplica(
 		return resolveMVCC(ctx, req, vchannel)
 	}
 	cfg.Channel = r.channel
-	opts = append(opts, recovery.WithQueryViewEventApplier(func(ctx context.Context, views []*viewpb.QueryViewOfShard) error {
-		if viewRetention != nil {
-			if err := viewRetention.Retain(ctx, views); err != nil {
-				return err
-			}
+	prepare := cfg.PrepareEvent
+	cfg.PrepareEvent = func(ctx context.Context, event walevent.Event) error {
+		var err error
+		if prepare != nil {
+			err = prepare(ctx, event)
 		}
+		if views, ok := event.Payload.(walevent.QueryViewIntentBatch); ok && viewRetention != nil && err == nil {
+			err = viewRetention.Retain(ctx, views.Views)
+		}
+		if err != nil && ctx.Err() == nil {
+			return walevent.NewBaselineRequired(walevent.Cursor{Term: event.Cursor.Term, Seq: event.Cursor.Seq - 1}, err)
+		}
+		return err
+	}
+	opts = append(opts, recovery.WithQueryViewEventApplier(func(ctx context.Context, views []*viewpb.QueryViewOfShard) error {
 		snview.ApplyQueryViewIntents(ctx, r.SNQueryViewHandler, views)
 		return nil
 	}))

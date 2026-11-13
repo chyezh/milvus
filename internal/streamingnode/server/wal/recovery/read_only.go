@@ -26,6 +26,9 @@ type ReadOnlyConfig struct {
 	Modules    vchannel.PChannelManagerConfig
 	Summary    walsummary.ManagerConfig
 	Manifest   *streamingpb.PChannelSummaryManifest
+	// PrepareEvent acquires dependencies before logical Apply. It may fail
+	// without invalidating the previously installed query prefix.
+	PrepareEvent walevent.Applier
 }
 
 // ReadOnlyRecoveryStorage uses the same Apply operation as the writer. Its
@@ -83,7 +86,7 @@ func NewReadOnlyRecoveryStorage(cfg ReadOnlyConfig, opts ...RecoveryStorageOptio
 	rs.vchannelManager = manager
 	ctx, cancel := context.WithCancel(context.Background())
 	return &ReadOnlyRecoveryStorage{
-		recoveryStorageImpl: rs, consumer: walevent.NewConsumer(cfg.Applied, rs.applyEvent),
+		recoveryStorageImpl: rs, consumer: walevent.NewConsumer(cfg.Applied, rs.applyEvent, walevent.WithPreparation(cfg.PrepareEvent)),
 		ctx: ctx, cancel: cancel,
 	}, nil
 }

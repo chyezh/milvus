@@ -78,7 +78,10 @@ func TestReplicaBootstrapGRPCRecovery(t *testing.T) {
 		var next atomic.Int64
 		mockey.Mock((*bootstrapTransfer).Next).To(func(context.Context) (message.ImmutableMessage, error) {
 			n := next.Add(1)
-			return bootstrapTick(uint64(n+1), n), nil
+			if n <= 2 {
+				return bootstrapTick(2, 1), nil
+			}
+			return bootstrapTick(3, 2), nil
 		}).Build()
 		var closed atomic.Bool
 		mockey.Mock((*bootstrapTransfer).Close).To(func() { closed.Store(true) }).Build()
@@ -106,7 +109,7 @@ func TestReplicaBootstrapGRPCRecovery(t *testing.T) {
 		require.NoError(t, err)
 		defer ro.Close()
 		require.NoError(t, transfer.Complete(ctx))
-		require.EqualValues(t, 2, next.Load())
+		require.EqualValues(t, 3, next.Load())
 		require.Eventually(t, closed.Load, time.Second, time.Millisecond)
 		require.EqualValues(t, 2, ro.Applied().Seq)
 	})

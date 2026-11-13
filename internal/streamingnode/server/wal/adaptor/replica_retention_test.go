@@ -10,8 +10,10 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/metastore"
+	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	"github.com/milvus-io/milvus/pkg/v3/objectstorage"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
@@ -21,6 +23,8 @@ type runtimeRetentionCatalogStub struct {
 	metastore.StreamingNodeCataLog
 	metastore.WALReplicaRuntimeCatalog
 	metastore.WALQueryViewRetentionCatalog
+	metastore.WALObjectRetentionCatalog
+	metastore.WALSharedObjectRetentionCatalog
 }
 
 func (*runtimeRetentionCatalogStub) CreateWALReplicaRuntime(context.Context, *viewpb.StreamingWorkNode) error {
@@ -40,7 +44,7 @@ func TestReplicaRuntimeRetentionOwnsCandidateAndDrainedRuntime(t *testing.T) {
 		t.Run(failure, func(t *testing.T) {
 			mockey.PatchConvey("cleanup is independent of an expired bootstrap context", t, func() {
 				catalog := &runtimeRetentionCatalogStub{}
-				resource.InitForTest(t, resource.OptStreamingNodeCatalog(catalog))
+				resource.InitForTest(t, resource.OptStreamingNodeCatalog(catalog), resource.OptChunkManager(storage.NewLocalChunkManager(objectstorage.RootPath(t.TempDir()))))
 				var created *viewpb.StreamingWorkNode
 				mockey.Mock((*runtimeRetentionCatalogStub).CreateWALReplicaRuntime).To(func(_ *runtimeRetentionCatalogStub, _ context.Context, runtime *viewpb.StreamingWorkNode) error {
 					created = proto.CloneOf(runtime)

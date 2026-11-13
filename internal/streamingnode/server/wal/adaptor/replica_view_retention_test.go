@@ -162,5 +162,9 @@ func TestReadOnlyReplicaRejectsUnprotectedQueryView(t *testing.T) {
 		err = r.storage.Apply(t.Context(), walevent.Event{Cursor: walevent.Cursor{Term: 7, Seq: 1}, Payload: walevent.QueryViewIntentBatch{Views: []*viewpb.QueryViewOfShard{replicaRetentionView(1)}}})
 		require.Error(t, err)
 		require.EqualValues(t, 0, r.storage.Applied().Seq)
+		require.NoError(t, r.storage.ApplyError(), "failed acquisition must leave the old query prefix usable")
+		var reset *walevent.ResetError
+		require.ErrorAs(t, err, &reset)
+		require.True(t, r.IsAvailable())
 	})
 }

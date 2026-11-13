@@ -78,6 +78,42 @@ func TestResourceResponseMustMatchRequestedView(t *testing.T) {
 	}
 }
 
+func TestProviderRetainsValidatedResourcesBeforeReturning(t *testing.T) {
+	mockey.PatchConvey("direct and deferred providers protect every refresh", t, func() {
+		client := &mocks.MockMixCoordClient{}
+		version := qviews.DataVersion{StreamingVersion: 10}
+		response := &datapb.GetStreamingNodeQueryViewResourcesResponse{Status: merr.Success(), CollectionId: 1, Vchannel: "v1", DataVersion: version.IntoProto()}
+		mockey.Mock((*mocks.MockMixCoordClient).GetStreamingNodeQueryViewResources).To(func(*mocks.MockMixCoordClient, context.Context, *datapb.GetStreamingNodeQueryViewResourcesRequest, ...grpc.CallOption) (*datapb.GetStreamingNodeQueryViewResourcesResponse, error) {
+			return proto.CloneOf(response), nil
+		}).Build()
+		failure := merr.WrapErrServiceUnavailable("resource was retired")
+		calls := 0
+		retain := WithResourceRetention(func(_ context.Context, got *datapb.GetStreamingNodeQueryViewResourcesResponse) error {
+			calls++
+			require.True(t, proto.Equal(response, got))
+			return failure
+		})
+		future := syncutil.NewFuture[types.MixCoordClient]()
+		future.Set(client)
+		deferred, err := (&Runtime{future: NewFutureProvider(future, retain)}).resolveProvider(t.Context())
+		require.NoError(t, err)
+		for _, provider := range []*Provider{NewProvider(client, retain), deferred} {
+			got, err := provider.fetchResources(t.Context(), 1, "v1", version, nil, 1)
+			require.ErrorIs(t, err, failure)
+			require.Nil(t, got)
+		}
+		require.Equal(t, 2, calls)
+		failure = nil
+		got, err := deferred.fetchResources(t.Context(), 1, "v1", version, nil, 1)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		response.CollectionId = 2
+		_, err = deferred.fetchResources(t.Context(), 1, "v1", version, nil, 1)
+		require.Error(t, err)
+		require.Equal(t, 3, calls, "invalid descriptors cannot acquire retention")
+	})
+}
+
 func TestRuntimeCloseDuringResourceFetch(t *testing.T) {
 	client := &mocks.MockMixCoordClient{}
 	schema := fieldTestSchema(1, 102)

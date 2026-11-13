@@ -9,6 +9,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
@@ -184,6 +185,9 @@ func (c *replicaController) run() {
 		c.operationCancel = cancel
 		c.mu.Unlock()
 		err := c.apply(ctx, plan)
+		if err != nil && ctx.Err() == nil {
+			mlog.RatedWarn(ctx, 0.1, "failed to prepare WAL replica", mlog.FieldPChannel(c.pchannel), mlog.FieldNodeID(c.nodeID), mlog.Uint64("planRevision", plan.Revision), mlog.Int64("term", plan.WalTerm), mlog.Err(err))
+		}
 		cancel()
 		c.mu.Lock()
 		if c.plan.Revision == plan.Revision {

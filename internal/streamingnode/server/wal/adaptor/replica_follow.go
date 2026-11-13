@@ -16,7 +16,9 @@ import (
 
 var _ wal.ReplicaRefreshProvider = (*readOnlyReplica)(nil)
 
-func (r *readOnlyReplica) ReplicaRefreshRequired() bool { return r.refresh.Load() }
+func (r *readOnlyReplica) ReplicaRefreshRequired() bool {
+	return r.refresh.Load() || (r.dependencyRefresh != nil && r.dependencyRefresh())
+}
 
 // startFollowing is called once, before publishing the runtime. A transport
 // attempt owns neither the installed state nor its query lifetime. The manager

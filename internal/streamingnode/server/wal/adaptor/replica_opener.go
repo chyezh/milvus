@@ -53,7 +53,12 @@ func (o *openerAdaptorImpl) OpenReadOnlyReplica(ctx context.Context, opt *wal.Op
 		return nil, err
 	}
 	defer transfer.Close()
-	r, err := newReadOnlyReplica(ctx, readOnlyReplicaConfig(opt.Channel), transfer.Snapshot, transfer.Replay, source.ResolveMVCC, retention.views)
+	if err := retention.objects.RetainSnapshot(ctx, transfer.Snapshot); err != nil {
+		return nil, err
+	}
+	config := readOnlyReplicaConfig(opt.Channel, idf.WithResourceRetention(retention.objects.RetainQueryResources))
+	config.PrepareEvent = retention.objects.PrepareEvent
+	r, err := newReadOnlyReplica(ctx, config, transfer.Snapshot, transfer.Replay, source.ResolveMVCC, retention.views)
 	if err != nil {
 		return nil, err
 	}
@@ -71,6 +76,7 @@ func (o *openerAdaptorImpl) OpenReadOnlyReplica(ctx context.Context, opt *wal.Op
 		retention.Close()
 	}
 	installed = true
+	r.dependencyRefresh = retention.objects.refresh.Load
 	r.startFollowing(source.Events(), opt.Primary.Channel)
 	o.walInstances.Insert(id, r)
 	return r, nil
@@ -86,7 +92,7 @@ func (o *openerAdaptorImpl) getReplicaClient() *replicaclient.Client {
 }
 
 // Use the same query modules as RW recovery, without any persistence capability.
-func readOnlyReplicaConfig(channel types.PChannelInfo) recovery.ReadOnlyConfig {
+func readOnlyReplicaConfig(channel types.PChannelInfo, idfOptions ...idf.ProviderOption) recovery.ReadOnlyConfig {
 	r := resource.Resource()
 	logger := r.Logger().With(mlog.String("pchannel", channel.Name), mlog.Int64("term", channel.Term))
 	return recovery.ReadOnlyConfig{
@@ -95,7 +101,7 @@ func readOnlyReplicaConfig(channel types.PChannelInfo) recovery.ReadOnlyConfig {
 			QueryRuntimeModuleBuilders: []queryresource.QueryRuntimeModuleBuilder{
 				queryresource.NewGrowingRuntimeModuleBuilder(nil),
 				queryresource.NewReadSchemaModuleBuilder(),
-				idf.NewFutureProvider(r.MixCoordClient(), idf.WithChunkManager(r.ChunkManager())),
+				idf.NewFutureProvider(r.MixCoordClient(), append(idfOptions, idf.WithChunkManager(r.ChunkManager()))...),
 			},
 			QueryStatsChunkManager:    r.ChunkManager(),
 			QueryViewLoadInfoProvider: queryresource.NewFutureLoadInfoProvider(r.MixCoordClient()),

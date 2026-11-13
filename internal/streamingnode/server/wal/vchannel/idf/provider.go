@@ -56,9 +56,16 @@ type Provider struct {
 	client                 datapb.DataCoordClient
 	chunkManager           storage.ChunkManager
 	sealedStatsLoadLimiter *syncutil.Semaphore
+	retainResources        func(context.Context, *datapb.GetStreamingNodeQueryViewResourcesResponse) error
 }
 
 type ProviderOption func(*Provider)
+
+// WithResourceRetention protects the exact remote descriptors before lazy
+// loading or an oracle refresh can depend on their immutable objects.
+func WithResourceRetention(retain func(context.Context, *datapb.GetStreamingNodeQueryViewResourcesResponse) error) ProviderOption {
+	return func(p *Provider) { p.retainResources = retain }
+}
 
 func WithChunkManager(chunkManager storage.ChunkManager) ProviderOption {
 	return func(p *Provider) {
@@ -81,6 +88,7 @@ type FutureProvider struct {
 	client                 *syncutil.Future[types.MixCoordClient]
 	chunkManager           storage.ChunkManager
 	sealedStatsLoadLimiter *syncutil.Semaphore
+	retainResources        func(context.Context, *datapb.GetStreamingNodeQueryViewResourcesResponse) error
 }
 
 func NewFutureProvider(client *syncutil.Future[types.MixCoordClient], opts ...ProviderOption) *FutureProvider {
@@ -91,6 +99,7 @@ func NewFutureProvider(client *syncutil.Future[types.MixCoordClient], opts ...Pr
 	return &FutureProvider{
 		client:                 client,
 		chunkManager:           provider.chunkManager,
+		retainResources:        provider.retainResources,
 		sealedStatsLoadLimiter: getGlobalSealedStatsLoadLimiter(),
 	}
 }
@@ -151,6 +160,7 @@ func (r *Runtime) resolveProvider(ctx context.Context) (*Provider, error) {
 	return &Provider{
 		client:                 client,
 		chunkManager:           r.future.chunkManager,
+		retainResources:        r.future.retainResources,
 		sealedStatsLoadLimiter: r.future.sealedStatsLoadLimiter,
 	}, nil
 }

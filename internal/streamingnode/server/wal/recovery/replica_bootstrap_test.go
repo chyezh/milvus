@@ -39,7 +39,7 @@ func TestReplicaBootstrapReplaysBeforeScopedQueryProgress(t *testing.T) {
 		WithLastConfirmed(walimplstest.NewTestMessageID(1)).IntoImmutableMessage(walimplstest.NewTestMessageID(5))
 	txn, err := message.NewImmutableTxnMessageBuilder(message.MustAsImmutableBeginTxnMessageV2(begin)).Build(message.MustAsImmutableCommitTxnMessageV2(commit))
 	require.NoError(t, err)
-	entries = append(entries[:1], txn, entries[1])
+	entries = append(entries[:1], txn, newAckTestTimeTickMessage(t, 5, 5), entries[1])
 	index := 0
 	scheduler := &recordingAckTaskScheduler{}
 	ro, err := BootstrapReadOnlyRecoveryStorage(t.Context(), readOnlyTestConfig(), image, func(context.Context) (message.ImmutableMessage, error) {
@@ -49,7 +49,7 @@ func TestReplicaBootstrapReplaysBeforeScopedQueryProgress(t *testing.T) {
 	}, WithNodeScheduler(scheduler))
 	require.NoError(t, err)
 	defer ro.Close()
-	require.Equal(t, 3, index)
+	require.Equal(t, 4, index)
 	require.Equal(t, walevent.Cursor{Term: 1, Seq: 42}, ro.Applied())
 	require.EqualValues(t, 10, ro.Metrics().RecoveryTimeTick)
 	deletes, err := ro.summaryManager.ReadTransformEntries(t.Context(), "v1", 0, 20)

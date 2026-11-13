@@ -34,7 +34,7 @@ func replicaOpenOption() *wal.OpenOption {
 }
 
 func TestReplicaOpenerOwnsRuntimeAfterComplete(t *testing.T) {
-	for _, failure := range []string{"bootstrap", "recovery", "complete", "install", "success"} {
+	for _, failure := range []string{"bootstrap", "objects", "recovery", "complete", "install", "success"} {
 		t.Run(failure, func(t *testing.T) {
 			mockey.PatchConvey("bootstrap must complete before an independently owned runtime is installed", t, func() {
 				resource.InitForTest(t)
@@ -44,7 +44,13 @@ func TestReplicaOpenerOwnsRuntimeAfterComplete(t *testing.T) {
 				created := mockey.Mock(replicaclient.NewClient).To(func(*clientv3.Client) *replicaclient.Client { return client }).Build()
 				closed := mockey.Mock((*replicaclient.Client).Close).Return().Build()
 				option := replicaOpenOption()
-				retention := &replicaRuntimeRetention{runtime: &viewpb.StreamingWorkNode{NodeId: 12, RuntimeId: option.RuntimeID}}
+				retention := &replicaRuntimeRetention{runtime: &viewpb.StreamingWorkNode{NodeId: 12, RuntimeId: option.RuntimeID}, objects: &replicaObjectRetention{}}
+				mockey.Mock((*replicaObjectRetention).RetainSnapshot).To(func(_ *replicaObjectRetention, _ context.Context, _ *streamingpb.WALReplicaSnapshot) error {
+					if failure == "objects" {
+						return io.ErrUnexpectedEOF
+					}
+					return nil
+				}).Build()
 				mockey.Mock(createReplicaRuntimeRetention).Return(retention, nil).Build()
 				released := mockey.Mock((*replicaRuntimeRetention).Close).Return().Build()
 				mockey.Mock((*replicaRuntimeRetention).install).To(func(_ *replicaRuntimeRetention, _ context.Context, cursor *streamingpb.WALReplicaCursor) error {

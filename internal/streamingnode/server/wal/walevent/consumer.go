@@ -21,11 +21,25 @@ type Consumer struct {
 	mu      sync.Mutex
 	cursor  Cursor
 	apply   Applier
+	prepare Applier
 	failure error
 }
 
-func NewConsumer(baseline Cursor, apply Applier) *Consumer {
-	return &Consumer{cursor: baseline, apply: apply}
+type ConsumerOption func(*Consumer)
+
+// WithPreparation acquires external dependencies before changing logical state.
+// Failure leaves the installed prefix usable; the subscription owner can retry
+// or prepare a replacement baseline. It must not mutate query-facing state.
+func WithPreparation(prepare Applier) ConsumerOption {
+	return func(c *Consumer) { c.prepare = prepare }
+}
+
+func NewConsumer(baseline Cursor, apply Applier, opts ...ConsumerOption) *Consumer {
+	c := &Consumer{cursor: baseline, apply: apply}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
 func (c *Consumer) Cursor() Cursor {
@@ -62,6 +76,11 @@ func (c *Consumer) Apply(ctx context.Context, event Event) error {
 	if event.Cursor.Seq != c.cursor.Seq+1 {
 		return newResetError(c.cursor, event.Cursor, "event sequence gap")
 	}
+	if c.prepare != nil {
+		if err := c.prepare(ctx, event); err != nil {
+			return err
+		}
+	}
 	if err := c.apply(ctx, event); err != nil {
 		c.failure = merr.Wrap(err, "apply WAL replica event")
 		return c.failure
@@ -87,6 +106,12 @@ func (e *ResetError) Unwrap() error { return e.cause }
 // local cursor; Requested identifies the primary's current baseline candidate.
 func NewResumeRequired(applied, current Cursor) *ResetError {
 	return newResetError(applied, current, "primary no longer retains the requested event prefix")
+}
+
+// NewBaselineRequired preserves a failed dependency acquisition as a reset
+// outcome. The event has not reached Apply, so the prior prefix may still serve.
+func NewBaselineRequired(applied Cursor, cause error) *ResetError {
+	return &ResetError{Applied: applied, Requested: applied, cause: merr.Wrap(cause, "WAL replica requires a protected baseline")}
 }
 
 func newResetError(applied, requested Cursor, reason string) *ResetError {

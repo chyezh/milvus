@@ -88,7 +88,7 @@ func newGrowingStatsStore(schema *schemapb.CollectionSchema, loadedFields []int6
 	}
 }
 
-func (s *growingStatsStore) registerSegment(segmentID int64, partitionID int64, createTimeTick uint64) {
+func (s *growingStatsStore) registerSegment(segmentID, partitionID int64, createTimeTick uint64) {
 	if segmentID == 0 {
 		return
 	}
@@ -102,7 +102,7 @@ func (s *growingStatsStore) registerSegment(segmentID int64, partitionID int64, 
 	}
 }
 
-func (s *growingStatsStore) getOrCreateSegment(segmentID int64, partitionID int64) *growingSegmentStats {
+func (s *growingStatsStore) getOrCreateSegment(segmentID, partitionID int64) *growingSegmentStats {
 	segment := s.segments[segmentID]
 	if segment == nil {
 		segment = &growingSegmentStats{
@@ -114,7 +114,7 @@ func (s *growingStatsStore) getOrCreateSegment(segmentID int64, partitionID int6
 	return segment
 }
 
-func (s *growingStatsStore) appendStats(segmentID int64, partitionID int64, stats bm25Stats) {
+func (s *growingStatsStore) appendStats(segmentID, partitionID int64, stats bm25Stats) {
 	if segmentID == 0 {
 		return
 	}
@@ -878,6 +878,11 @@ func (p *Provider) fetchResources(ctx context.Context, collectionID int64, vchan
 	}
 	if err := validateResourceResponseFor(collectionID, vchannel, version, response); err != nil {
 		return nil, err
+	}
+	if p.retainResources != nil {
+		if err := p.retainResources(ctx, response); err != nil {
+			return nil, err
+		}
 	}
 	return response, nil
 }
