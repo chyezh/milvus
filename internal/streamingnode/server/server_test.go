@@ -17,8 +17,10 @@ func TestServerRegistersReplicaTransport(t *testing.T) {
 	s := &Server{handlerService: service.NewHandlerService(nil), managerService: service.NewManagerService(nil)}
 	s.registerGRPCService(server)
 	info := server.GetServiceInfo()["milvus.proto.streaming.StreamingNodeReplicaService"]
-	require.Len(t, info.Methods, 1)
-	require.Equal(t, "SubscribeWALEvents", info.Methods[0].Name)
-	require.True(t, info.Methods[0].IsServerStream)
-	require.False(t, info.Methods[0].IsClientStream)
+	require.ElementsMatch(t, []grpc.MethodInfo{
+		{Name: "GetWALReplicaEndpoint"},
+		{Name: "ReconcileWALReplicas"},
+		{Name: "SubscribeWALEvents", IsServerStream: true},
+		{Name: "BootstrapWALReplica", IsServerStream: true},
+	}, info.Methods)
 }
