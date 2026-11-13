@@ -4,10 +4,13 @@ import (
 	"context"
 	"time"
 
+	"github.com/cockroachdb/errors"
+
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/storagev2/packed"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	"github.com/milvus-io/milvus/internal/views/viewerror"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
@@ -61,6 +64,16 @@ func (r *replicaRuntimeRetention) install(ctx context.Context, cursor *streaming
 	return retry.Do(ctx, func() error {
 		return r.catalog.InstallWALReplicaRuntime(ctx, r.runtime, cursor)
 	}, retry.Attempts(3), retry.Sleep(10*time.Millisecond))
+}
+
+func (r *replicaRuntimeRetention) validateServing(ctx context.Context) error {
+	if err := r.catalog.ValidateWALReplicaServing(ctx, r.runtime); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return errors.Join(viewerror.NewViewInvalidated("WAL replica serving authority could not be validated"), err)
+	}
+	return nil
 }
 
 // Called only after private construction fails or all installed query/storage

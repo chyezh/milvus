@@ -13,6 +13,7 @@ import (
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	"github.com/milvus-io/milvus/internal/views/viewerror"
 	"github.com/milvus-io/milvus/pkg/v3/objectstorage"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
@@ -37,6 +38,33 @@ func (*runtimeRetentionCatalogStub) InstallWALReplicaRuntime(context.Context, *v
 
 func (*runtimeRetentionCatalogStub) ReleaseWALReplicaRuntime(context.Context, *viewpb.StreamingWorkNode) error {
 	panic("mockey")
+}
+
+func (*runtimeRetentionCatalogStub) ValidateWALReplicaServing(context.Context, *viewpb.StreamingWorkNode) error {
+	panic("mockey")
+}
+
+func TestReadOnlyReplicaRequiresDurableServingAuthority(t *testing.T) {
+	mockey.PatchConvey("catalog failures discard results and preserve cancellation", t, func() {
+		r := &readOnlyReplica{}
+		require.True(t, viewerror.AsViewError(r.ValidateQueryServing(t.Context())).IsViewInvalidated())
+		catalog := &runtimeRetentionCatalogStub{}
+		retention := &replicaRuntimeRetention{catalog: catalog, runtime: &viewpb.StreamingWorkNode{NodeId: 123}}
+		r.validateServing = retention.validateServing
+		patch := mockey.Mock((*runtimeRetentionCatalogStub).ValidateWALReplicaServing).To(func(_ *runtimeRetentionCatalogStub, _ context.Context, runtime *viewpb.StreamingWorkNode) error {
+			require.EqualValues(t, 123, runtime.NodeId)
+			return nil
+		}).Build()
+		require.NoError(t, r.ValidateQueryServing(t.Context()))
+		patch.UnPatch()
+		mockey.Mock((*runtimeRetentionCatalogStub).ValidateWALReplicaServing).Return(merr.ErrServiceUnavailable).Build()
+		err := r.ValidateQueryServing(t.Context())
+		require.True(t, viewerror.AsViewError(err).IsViewInvalidated())
+		require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		require.ErrorIs(t, r.ValidateQueryServing(ctx), context.Canceled)
+	})
 }
 
 func TestReplicaRuntimeRetentionOwnsCandidateAndDrainedRuntime(t *testing.T) {

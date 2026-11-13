@@ -36,7 +36,16 @@ func (s *PChannelViewQueryServer) SearchOnView(ctx context.Context, req *viewpb.
 	if err != nil {
 		return nil, err
 	}
-	return viewquery.NewServer(provider, s.scheduler).SearchOnView(ctx, req)
+	resp, err := viewquery.NewServer(provider, s.scheduler).SearchOnView(ctx, req)
+	if err == nil {
+		if validator, ok := provider.(wal.QueryServingValidator); ok {
+			err = validator.ValidateQueryServing(ctx)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
 func (s *PChannelViewQueryServer) QueryOnView(ctx context.Context, req *viewpb.QueryOnViewRequest) (*viewpb.QueryOnViewResponse, error) {
@@ -47,7 +56,16 @@ func (s *PChannelViewQueryServer) QueryOnView(ctx context.Context, req *viewpb.Q
 	if err != nil {
 		return nil, err
 	}
-	return viewquery.NewServer(provider, s.scheduler).QueryOnView(ctx, req)
+	resp, err := viewquery.NewServer(provider, s.scheduler).QueryOnView(ctx, req)
+	if err == nil {
+		if validator, ok := provider.(wal.QueryServingValidator); ok {
+			err = validator.ValidateQueryServing(ctx)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
 func (s *PChannelViewQueryServer) taskProviderForVChannel(ctx context.Context, vchannel string) (viewquery.TaskProvider, error) {

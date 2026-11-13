@@ -99,9 +99,11 @@ func TestSummaryRetentionFailuresDoNotDelete(t *testing.T) {
 		patch := mockey.Mock(mockey.GetMethod(retention, "ListPendingWALObjectDeletions")).Return(nil, merr.ErrServiceUnavailable).Build()
 		require.ErrorIs(t, s.ResumeDeletions(t.Context(), 1), merr.ErrServiceUnavailable)
 		patch.UnPatch()
-		patch = mockey.Mock(mockey.GetMethod(retention, "SweepReleasedWALReplicaRoots")).Return(merr.ErrServiceUnavailable).Build()
-		require.ErrorIs(t, s.ResumeDeletions(t.Context(), 1), merr.ErrServiceUnavailable)
-		patch.UnPatch()
+		for _, method := range []string{"FenceLostWALReplicaRuntimes", "SweepReleasedWALReplicaRoots"} {
+			patch = mockey.Mock(mockey.GetMethod(retention, method)).Return(merr.ErrServiceUnavailable).Build()
+			require.ErrorIs(t, s.ResumeDeletions(t.Context(), 1), merr.ErrServiceUnavailable)
+			patch.UnPatch()
+		}
 		intent, err := retention.BeginWALObjectDeletion(t.Context(), s.pchannel, 1, key)
 		require.NoError(t, err)
 		require.NotNil(t, intent)

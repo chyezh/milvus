@@ -76,6 +76,7 @@ func (o *openerAdaptorImpl) OpenReadOnlyReplica(ctx context.Context, opt *wal.Op
 		retention.Close()
 	}
 	installed = true
+	r.validateServing = retention.validateServing
 	r.dependencyRefresh = retention.objects.refresh.Load
 	r.startFollowing(source.Events(), opt.Primary.Channel)
 	o.walInstances.Insert(id, r)

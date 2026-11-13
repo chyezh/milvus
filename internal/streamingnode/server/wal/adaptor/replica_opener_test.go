@@ -53,6 +53,7 @@ func TestReplicaOpenerOwnsRuntimeAfterComplete(t *testing.T) {
 				}).Build()
 				mockey.Mock(createReplicaRuntimeRetention).Return(retention, nil).Build()
 				released := mockey.Mock((*replicaRuntimeRetention).Close).Return().Build()
+				serving := mockey.Mock((*replicaRuntimeRetention).validateServing).Return(nil).Build()
 				mockey.Mock((*replicaRuntimeRetention).install).To(func(_ *replicaRuntimeRetention, _ context.Context, cursor *streamingpb.WALReplicaCursor) error {
 					require.Zero(t, o.walInstances.Len())
 					require.EqualValues(t, 7, cursor.Term)
@@ -111,6 +112,8 @@ func TestReplicaOpenerOwnsRuntimeAfterComplete(t *testing.T) {
 					require.True(t, actual.IsAvailable(), "assignment open context does not own local queries")
 					require.Zero(t, released.Times(), "transport cancellation cannot release the installed runtime's objects")
 					require.Same(t, client, o.getReplicaClient())
+					require.NoError(t, wal.Unwrap(actual).(wal.QueryServingValidator).ValidateQueryServing(t.Context()))
+					require.Equal(t, 1, serving.Times())
 					actual.Close()
 					require.Zero(t, o.walInstances.Len())
 					require.False(t, actual.IsAvailable())

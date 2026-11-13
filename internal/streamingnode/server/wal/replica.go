@@ -55,3 +55,11 @@ type QueryReplicaManager interface {
 type QueryReplicaEndpointProvider interface {
 	QueryReplicaEndpoint(*streamingpb.WALReplicaEndpointRequest) (*viewpb.StreamingWorkNode, error)
 }
+
+// QueryServingValidator fences publication after all query resource use has
+// finished. Callers must discard the complete response on failure. It covers
+// both Phase 1 (including inline results) and Phase 2; it is independent of the
+// writer term and does not grant another replica's resource readiness.
+type QueryServingValidator interface {
+	ValidateQueryServing(context.Context) error
+}

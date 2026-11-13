@@ -58,6 +58,11 @@ func (s *Server) GetQueryPlan(ctx context.Context, req *viewpb.GetQueryPlanReque
 			}
 		}
 	}
+	if validator, ok := p.(wal.QueryServingValidator); ok {
+		if err := validator.ValidateQueryServing(ctx); err != nil {
+			return nil, err
+		}
+	}
 	return resp, nil
 }
 

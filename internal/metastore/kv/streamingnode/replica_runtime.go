@@ -96,6 +96,13 @@ func (c *catalog) advanceReplicaRuntime(ctx context.Context, runtime *viewpb.Str
 	if state == streamingpb.WALReplicaRuntimeRetentionState_WAL_REPLICA_RUNTIME_RELEASED {
 		stored.State = state
 	} else {
+		fenced, err := c.loadRetentionValue(ctx, replicaNodeFenceKey(runtime))
+		if err != nil {
+			return err
+		}
+		if fenced != "" {
+			return merr.WrapErrServiceUnavailable("WAL replica node was fenced")
+		}
 		if stored.State == streamingpb.WALReplicaRuntimeRetentionState_WAL_REPLICA_RUNTIME_RELEASED {
 			return merr.WrapErrServiceUnavailable("WAL replica runtime was already released")
 		}
