@@ -52,6 +52,12 @@ type ManagerClient interface {
 	Close()
 }
 
+// ReplicaPlanClient delivers the persisted intent to one member. Preparation
+// runs on the node; this RPC only admits the plan and returns local progress.
+type ReplicaPlanClient interface {
+	ReconcileWALReplicas(context.Context, int64, *streamingpb.ReconcileWALReplicasRequest) (*streamingpb.ReconcileWALReplicasResponse, error)
+}
+
 // NewManagerClient creates a new manager client.
 func NewManagerClient(etcdCli *clientv3.Client) ManagerClient {
 	role := sessionutil.GetSessionPrefixByRole(typeutil.StreamingNodeRole)
@@ -68,10 +74,11 @@ func NewManagerClient(etcdCli *clientv3.Client) ManagerClient {
 		)
 	})
 	return &managerClientImpl{
-		lifetime: typeutil.NewLifetime(),
-		stopped:  make(chan struct{}),
-		rb:       rb,
-		service:  lazygrpc.WithServiceCreator(conn, streamingpb.NewStreamingNodeManagerServiceClient),
+		lifetime:       typeutil.NewLifetime(),
+		stopped:        make(chan struct{}),
+		rb:             rb,
+		service:        lazygrpc.WithServiceCreator(conn, streamingpb.NewStreamingNodeManagerServiceClient),
+		replicaService: lazygrpc.WithServiceCreator(conn, streamingpb.NewStreamingNodeReplicaServiceClient),
 	}
 }
 
@@ -89,6 +96,7 @@ func getDialOptions(rb resolver.Builder) []grpc.DialOption {
 			{
 				"name": []map[string]string{
 					{"service": "milvus.proto.streaming.StreamingNodeManagerService"},
+					{"service": "milvus.proto.streaming.StreamingNodeReplicaService"},
 				},
 				"waitForReady": true,
 				"retryPolicy":  retryPolicy,

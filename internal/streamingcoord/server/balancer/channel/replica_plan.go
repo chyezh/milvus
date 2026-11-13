@@ -92,6 +92,56 @@ func (cm *ChannelManager) CompleteReplicaRetirements(ctx context.Context, id Cha
 	return cm.updatePChannelMeta(ctx, []*streamingpb.PChannelMeta{mutable.IntoRawMeta()})
 }
 
+// ApplyReplicaObservations publishes only progress reported by the exact node,
+// plan and local incarnation. A follower's readiness never gates the writer's
+// discovery, and delayed reports cannot acknowledge a replacement assignment.
+func (cm *ChannelManager) ApplyReplicaObservations(ctx context.Context, id ChannelID, nodeID int64, response *streamingpb.ReconcileWALReplicasResponse) (bool, error) {
+	cm.cond.LockAndBroadcast()
+	defer cm.cond.L.Unlock()
+	current, ok := cm.channels[id]
+	if !ok {
+		return false, ErrChannelNotExist
+	}
+	plan := current.ReplicaPlan()
+	if plan == nil || response.GetPlanRevision() != plan.Revision {
+		return false, nil
+	}
+	for _, report := range response.Replicas {
+		if report.GetNodeId() != nodeID {
+			return false, merr.WrapErrServiceInternalMsg("WAL replica observation belongs to a different node")
+		}
+	}
+	mutable := current.CopyForWrite()
+	for _, member := range plan.Replicas {
+		if member.GetNode().GetServerId() != nodeID || member.AccessMode != streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE {
+			continue
+		}
+		for _, report := range response.Replicas {
+			if report.ReplicaId != member.ReplicaId || report.ReplicaRevision != member.ReplicaRevision {
+				continue
+			}
+			switch report.State {
+			case streamingpb.WALReplicaState_WAL_REPLICA_STATE_READY:
+				if report.SourceTerm == plan.WalTerm {
+					mutable.AssignToServerDone()
+				}
+			case streamingpb.WALReplicaState_WAL_REPLICA_STATE_FAILED:
+				// Unlike client write errors, a failed open is authoritative
+				// even before this term became discoverable as ASSIGNED.
+				mutable.inner.State = streamingpb.PChannelMetaState_PCHANNEL_META_STATE_UNAVAILABLE
+			}
+		}
+	}
+	if proto.Equal(mutable.inner, current.inner) {
+		return false, nil
+	}
+	if err := cm.updatePChannelMeta(ctx, []*streamingpb.PChannelMeta{mutable.IntoRawMeta()}); err != nil {
+		return false, err
+	}
+	cm.metrics.AssignPChannelStatus(cm.channels[id])
+	return true, nil
+}
+
 func (m *mutablePChannel) assignReplicaPlan(target ReplicaPlanTarget) (bool, error) {
 	primary := target.Nodes[target.PrimaryResourceGroup]
 	if primary == nil {
@@ -115,8 +165,14 @@ func (m *mutablePChannel) assignReplicaPlan(target ReplicaPlanTarget) (bool, err
 
 	// Only writer replacement/recovery advances WALTerm. A follower joining,
 	// moving within its RG, or becoming pending must not fence the writer.
-	m.TryAssignToServerID(types.AccessModeRW, *primary)
 	previous := m.inner.ReplicaPlan
+	// Re-delivery of an accepted asynchronous open must not burn its term.
+	// An explicit FAILED observation marks the projection unavailable before
+	// planning another attempt; a changed endpoint still fences immediately.
+	if previous == nil || !m.IsAssignedOrAssigning() || m.CurrentServerID() != primary.ServerID ||
+		m.inner.Node.GetAddress() != primary.Address || m.ChannelInfo().AccessMode != types.AccessModeRW {
+		m.TryAssignToServerID(types.AccessModeRW, *primary)
+	}
 	plan := &streamingpb.WALReplicaPlan{
 		Revision:         previous.GetRevision(),
 		WalTerm:          m.CurrentTerm(),
@@ -151,7 +207,7 @@ func (m *mutablePChannel) assignReplicaPlan(target ReplicaPlanTarget) (bool, err
 				(member.AccessMode == streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE && previous.WalTerm != plan.WalTerm) {
 				member.ReplicaRevision++
 			}
-			if old.Node != nil && !proto.Equal(old.Node, member.Node) {
+			if old.Node != nil && old.ReplicaRevision != member.ReplicaRevision {
 				plan.RetiringReplicas = append(plan.RetiringReplicas, proto.CloneOf(old))
 			}
 			delete(oldMembers, group)

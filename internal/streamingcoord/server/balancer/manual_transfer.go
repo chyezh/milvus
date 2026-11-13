@@ -3,11 +3,13 @@ package balancer
 import (
 	"context"
 	"sort"
+	"time"
 
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/balancer/channel"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v3/common"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
+	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/util/contextutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
@@ -26,7 +28,7 @@ type TransferChannelsRequest struct {
 }
 
 // TransferChannels runs in the same queue as automatic balancing. Success means
-// the old WALs were closed, the target SNs acknowledged Assign, and ASSIGNED was
+// the old WALs were closed, the target SNs reported READY, and ASSIGNED was
 // persisted. It is neither a QueryView readiness nor an in-flight query barrier.
 func (b *balancerImpl) TransferChannels(ctx context.Context, req TransferChannelsRequest) error {
 	if !b.lifetime.Add(typeutil.LifetimeStateWorking) {
@@ -77,7 +79,38 @@ func (b *balancerImpl) transferChannels(ctx context.Context, req TransferChannel
 	}
 	// On cancellation or failure the durable ASSIGNING state is left for normal
 	// balancing to recover; never acknowledge a merely persisted intent as success.
-	return b.applyBalanceResultToStreamingNode(ctx, modified)
+	return b.waitReplicaWritersReady(ctx, modified)
+}
+
+func (b *balancerImpl) waitReplicaWritersReady(ctx context.Context, channels map[types.ChannelID]*channel.PChannelMeta) error {
+	retry := time.NewTicker(100 * time.Millisecond)
+	defer retry.Stop()
+	for len(channels) != 0 {
+		if err := b.applyBalanceResultToStreamingNode(ctx, channels); err != nil {
+			return err
+		}
+		current := b.channelMetaManager.CurrentPChannelsView()
+		for id := range channels {
+			meta := current.Channels[id]
+			if meta.State() == streamingpb.PChannelMetaState_PCHANNEL_META_STATE_UNAVAILABLE {
+				return merr.WrapErrServiceUnavailableMsg("WAL %s writer preparation failed", meta.Name())
+			}
+			if meta.IsAssigned() {
+				delete(channels, id)
+			} else {
+				channels[id] = meta
+			}
+		}
+		if len(channels) == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-retry.C:
+		}
+	}
+	return nil
 }
 
 // A manual writer transfer updates the same complete plan as auto balancing.

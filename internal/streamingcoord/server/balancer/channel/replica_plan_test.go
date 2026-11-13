@@ -77,14 +77,18 @@ func TestReplicaPlanIdentityAndTerm(t *testing.T) {
 	require.Equal(t, int64(3), plan.WalTerm)
 	require.Equal(t, uint64(5), plan.Replicas[2].ReplicaId)
 	require.EqualValues(t, 2, plan.Replicas[0].ReplicaRevision, "a remote term change preserves the RO instance")
-	require.Len(t, plan.RetiringReplicas, 2)
+	require.Len(t, plan.RetiringReplicas, 3)
 	require.Len(t, m.AssignHistories(), 1)
 	require.Equal(t, int64(2), m.AssignHistories()[0].Node.ServerID)
 	plan.Replicas[0].ResourceGroup = "mutated"
 	require.Equal(t, "a", m.ReplicaPlan().Replicas[0].ResourceGroup)
 
-	// Recovery of an unacknowledged writer advances the term, even on the
-	// same node: a crashed source must not restart sequence zero in its term.
+	// Re-delivery during preparation preserves the accepted source lifetime.
+	_, err = m.assignReplicaPlan(target)
+	require.NoError(t, err)
+	require.EqualValues(t, 3, m.CurrentTerm())
+	// An explicit failure, including failure before READY, permits a new term.
+	m.inner.State = streamingpb.PChannelMetaState_PCHANNEL_META_STATE_UNAVAILABLE
 	_, err = m.assignReplicaPlan(target)
 	require.NoError(t, err)
 	require.Equal(t, int64(4), m.CurrentTerm())
@@ -181,4 +185,81 @@ func TestReplicaPlanCatalogCommit(t *testing.T) {
 	require.NoError(t, m.CompleteReplicaRetirements(ctx, id, []*streamingpb.WALReplicaObservation{report}))
 	require.Empty(t, m.channels[id].ReplicaPlan().RetiringReplicas)
 	require.Equal(t, before+1, m.channels[id].ReplicaPlan().Revision)
+}
+
+func TestReplicaObservationsRequireExactWriterIncarnation(t *testing.T) {
+	paramtable.Init()
+	catalog := catalogkv.NewCataLog(nil)
+	resource.InitForTest(resource.OptStreamingCatalog(catalog))
+	id := ChannelID{Name: "p"}
+	m := &ChannelManager{cond: syncutil.NewContextCond(&sync.Mutex{}), metrics: newPChannelMetrics(), channels: map[ChannelID]*PChannelMeta{id: NewPChannelMeta("p", types.AccessModeRW)}}
+	m.SetLogger(mlog.With())
+	var persistErr error
+	patch := mockey.Mock(mockey.GetMethod(catalog, "SavePChannels")).To(func(context.Context, []*streamingpb.PChannelMeta) error { return persistErr }).Build()
+	defer patch.UnPatch()
+	response := &streamingpb.ReconcileWALReplicasResponse{PlanRevision: 1}
+	changed, err := m.ApplyReplicaObservations(t.Context(), id, 1, response)
+	require.NoError(t, err)
+	require.False(t, changed)
+	_, err = m.ApplyReplicaObservations(t.Context(), ChannelID{Name: "missing"}, 1, response)
+	require.ErrorIs(t, err, ErrChannelNotExist)
+	target := ReplicaPlanTarget{PrimaryResourceGroup: "a", Nodes: map[string]*types.StreamingNodeInfo{"a": {ServerID: 1, Address: "a"}, "b": {ServerID: 2, Address: "b"}}}
+	_, err = m.AssignReplicaPlans(t.Context(), map[ChannelID]ReplicaPlanTarget{id: target})
+	require.NoError(t, err)
+	plan := m.channels[id].ReplicaPlan()
+	primary := plan.Replicas[0]
+	report := &streamingpb.WALReplicaObservation{NodeId: 1, ReplicaId: primary.ReplicaId, ReplicaRevision: primary.ReplicaRevision, SourceTerm: plan.WalTerm, State: streamingpb.WALReplicaState_WAL_REPLICA_STATE_READY}
+	response.Replicas = []*streamingpb.WALReplicaObservation{report}
+	// Neither stale plan, stale local revision, stale source term nor a
+	// follower's readiness can publish this writer in service discovery.
+	for _, mutation := range []func(*streamingpb.ReconcileWALReplicasResponse){
+		func(r *streamingpb.ReconcileWALReplicasResponse) { r.PlanRevision++ },
+		func(r *streamingpb.ReconcileWALReplicasResponse) { r.Replicas[0].ReplicaRevision++ },
+		func(r *streamingpb.ReconcileWALReplicasResponse) { r.Replicas[0].SourceTerm-- },
+		func(r *streamingpb.ReconcileWALReplicasResponse) {
+			r.Replicas[0].State = streamingpb.WALReplicaState_WAL_REPLICA_STATE_PREPARING
+		},
+		func(r *streamingpb.ReconcileWALReplicasResponse) {
+			r.Replicas[0].NodeId = 2
+			r.Replicas[0].ReplicaId = plan.Replicas[1].ReplicaId
+		},
+	} {
+		stale := proto.CloneOf(response)
+		mutation(stale)
+		changed, err := m.ApplyReplicaObservations(t.Context(), id, stale.Replicas[0].NodeId, stale)
+		require.NoError(t, err)
+		require.False(t, changed)
+		require.False(t, m.channels[id].IsAssigned())
+	}
+	_, err = m.ApplyReplicaObservations(t.Context(), id, 2, response)
+	require.ErrorIs(t, err, merr.ErrServiceInternal)
+	persistErr = merr.ErrServiceUnavailable
+	_, err = m.ApplyReplicaObservations(t.Context(), id, 1, response)
+	require.ErrorIs(t, err, persistErr)
+	require.False(t, m.channels[id].IsAssigned())
+	persistErr = nil
+	changed, err = m.ApplyReplicaObservations(t.Context(), id, 1, response)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.True(t, m.channels[id].IsAssigned())
+	report.State = streamingpb.WALReplicaState_WAL_REPLICA_STATE_FAILED
+	changed, err = m.ApplyReplicaObservations(t.Context(), id, 1, response)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, streamingpb.PChannelMetaState_PCHANNEL_META_STATE_UNAVAILABLE, m.channels[id].State())
+	_, err = m.AssignReplicaPlans(t.Context(), map[ChannelID]ReplicaPlanTarget{id: target})
+	require.NoError(t, err)
+	newPlan := m.channels[id].ReplicaPlan()
+	require.Equal(t, plan.WalTerm+1, newPlan.WalTerm)
+	require.Equal(t, primary.ReplicaRevision+1, newPlan.Replicas[0].ReplicaRevision)
+	// A failed open may not have an applied source term yet.
+	response.PlanRevision = newPlan.Revision
+	report.ReplicaRevision = newPlan.Replicas[0].ReplicaRevision
+	report.SourceTerm = 0
+	changed, err = m.ApplyReplicaObservations(t.Context(), id, 1, response)
+	require.NoError(t, err)
+	require.True(t, changed)
+	_, err = m.AssignReplicaPlans(t.Context(), map[ChannelID]ReplicaPlanTarget{id: target})
+	require.NoError(t, err)
+	require.Equal(t, newPlan.WalTerm+1, m.channels[id].CurrentTerm())
 }

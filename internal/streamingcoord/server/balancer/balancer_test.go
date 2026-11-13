@@ -43,8 +43,6 @@ func TestBalancer(t *testing.T) {
 
 	streamingNodeManager := mock_manager.NewMockManagerClient(t)
 	streamingNodeManager.EXPECT().WatchNodeChanged(mock.Anything).Return(make(chan struct{}), nil)
-	streamingNodeManager.EXPECT().Assign(mock.Anything, mock.Anything).Return(nil)
-	streamingNodeManager.EXPECT().Remove(mock.Anything, mock.Anything).Return(nil)
 	streamingNodeManager.EXPECT().GetAllStreamingNodes(mock.Anything).Return(map[int64]*types.StreamingNodeInfoWithResourceGroup{
 		1: {
 			StreamingNodeInfo: types.StreamingNodeInfo{ServerID: 1, Address: "localhost:1"},
@@ -91,7 +89,7 @@ func TestBalancer(t *testing.T) {
 	resource.InitForTest(
 		resource.OptETCD(etcdClient),
 		resource.OptStreamingCatalog(catalog),
-		resource.OptStreamingManagerClient(streamingNodeManager),
+		resource.OptStreamingManagerClient(withReplicaPlans(t, streamingNodeManager)),
 		resource.OptSession(s))
 	catalog.EXPECT().GetCChannel(mock.Anything).Return(nil, nil)
 	catalog.EXPECT().SaveCChannel(mock.Anything, mock.Anything).Return(nil)
@@ -318,8 +316,6 @@ func TestBalancerFreezeNodeInOtherResourceGroup(t *testing.T) {
 	}
 	streamingNodeManager := mock_manager.NewMockManagerClient(t)
 	streamingNodeManager.EXPECT().WatchNodeChanged(mock.Anything).Return(make(chan struct{}), nil)
-	streamingNodeManager.EXPECT().Assign(mock.Anything, mock.Anything).Return(nil).Maybe()
-	streamingNodeManager.EXPECT().Remove(mock.Anything, mock.Anything).Return(nil).Maybe()
 	// No .Maybe(): the freeze cleanup MUST call GetAllStreamingNodes every round,
 	// otherwise this test would silently pass on the buggy RG-filtered cleanup.
 	streamingNodeManager.EXPECT().GetAllStreamingNodes(mock.Anything).RunAndReturn(func(ctx context.Context) (map[int64]*types.StreamingNodeInfoWithResourceGroup, error) {
@@ -349,7 +345,7 @@ func TestBalancerFreezeNodeInOtherResourceGroup(t *testing.T) {
 	resource.InitForTest(
 		resource.OptETCD(etcdClient),
 		resource.OptStreamingCatalog(catalog),
-		resource.OptStreamingManagerClient(streamingNodeManager),
+		resource.OptStreamingManagerClient(withReplicaPlans(t, streamingNodeManager)),
 		resource.OptSession(s),
 	)
 	catalog.EXPECT().GetCChannel(mock.Anything).Return(nil, nil)
@@ -459,8 +455,6 @@ func TestBalancerWaitUntilSchemaDropReady(t *testing.T) {
 
 	streamingNodeManager := mock_manager.NewMockManagerClient(t)
 	streamingNodeManager.EXPECT().WatchNodeChanged(mock.Anything).Return(make(chan struct{}), nil).Maybe()
-	streamingNodeManager.EXPECT().Assign(mock.Anything, mock.Anything).Return(nil).Maybe()
-	streamingNodeManager.EXPECT().Remove(mock.Anything, mock.Anything).Return(nil).Maybe()
 	streamingNodeManager.EXPECT().GetAllStreamingNodes(mock.Anything).Return(map[int64]*types.StreamingNodeInfoWithResourceGroup{}, nil).Maybe()
 	streamingNodeManager.EXPECT().CollectAllStatus(mock.Anything, mock.Anything).Return(map[int64]*types.StreamingNodeStatus{}, nil).Maybe()
 
@@ -470,7 +464,7 @@ func TestBalancerWaitUntilSchemaDropReady(t *testing.T) {
 	resource.InitForTest(
 		resource.OptETCD(etcdClient),
 		resource.OptStreamingCatalog(catalog),
-		resource.OptStreamingManagerClient(streamingNodeManager),
+		resource.OptStreamingManagerClient(withReplicaPlans(t, streamingNodeManager)),
 		resource.OptSession(s),
 	)
 	catalog.EXPECT().GetCChannel(mock.Anything).Return(&streamingpb.CChannelMeta{Pchannel: "schema-drop-ready-channel"}, nil)
@@ -544,8 +538,6 @@ func TestBalancerWaitUntilSchemaDropReadySkipsAfterPersistedVersion(t *testing.T
 
 	streamingNodeManager := mock_manager.NewMockManagerClient(t)
 	streamingNodeManager.EXPECT().WatchNodeChanged(mock.Anything).Return(make(chan struct{}), nil).Maybe()
-	streamingNodeManager.EXPECT().Assign(mock.Anything, mock.Anything).Return(nil).Maybe()
-	streamingNodeManager.EXPECT().Remove(mock.Anything, mock.Anything).Return(nil).Maybe()
 	streamingNodeManager.EXPECT().GetAllStreamingNodes(mock.Anything).Return(map[int64]*types.StreamingNodeInfoWithResourceGroup{}, nil).Maybe()
 	streamingNodeManager.EXPECT().CollectAllStatus(mock.Anything, mock.Anything).Return(map[int64]*types.StreamingNodeStatus{}, nil).Maybe()
 
@@ -555,7 +547,7 @@ func TestBalancerWaitUntilSchemaDropReadySkipsAfterPersistedVersion(t *testing.T
 	resource.InitForTest(
 		resource.OptETCD(etcdClient),
 		resource.OptStreamingCatalog(catalog),
-		resource.OptStreamingManagerClient(streamingNodeManager),
+		resource.OptStreamingManagerClient(withReplicaPlans(t, streamingNodeManager)),
 		resource.OptSession(s),
 	)
 	catalog.EXPECT().GetCChannel(mock.Anything).Return(&streamingpb.CChannelMeta{Pchannel: "schema-drop-ready-skip-channel"}, nil)
@@ -589,8 +581,6 @@ func TestBalancer_WithRecoveryLag(t *testing.T) {
 	lag := atomic.NewBool(true)
 	streamingNodeManager := mock_manager.NewMockManagerClient(t)
 	streamingNodeManager.EXPECT().WatchNodeChanged(mock.Anything).Return(make(chan struct{}), nil)
-	streamingNodeManager.EXPECT().Assign(mock.Anything, mock.Anything).Return(nil)
-	streamingNodeManager.EXPECT().Remove(mock.Anything, mock.Anything).Return(nil)
 	streamingNodeManager.EXPECT().GetAllStreamingNodes(mock.Anything).Return(map[int64]*types.StreamingNodeInfoWithResourceGroup{
 		1: {
 			StreamingNodeInfo: types.StreamingNodeInfo{ServerID: 1, Address: "localhost:1"},
@@ -635,7 +625,7 @@ func TestBalancer_WithRecoveryLag(t *testing.T) {
 	resource.InitForTest(
 		resource.OptETCD(etcdClient),
 		resource.OptStreamingCatalog(catalog),
-		resource.OptStreamingManagerClient(streamingNodeManager),
+		resource.OptStreamingManagerClient(withReplicaPlans(t, streamingNodeManager)),
 		resource.OptSession(s),
 	)
 	catalog.EXPECT().GetCChannel(mock.Anything).Return(nil, nil)
@@ -743,8 +733,6 @@ func TestBalancer_PrimaryResourceGroupChangeTriggersBalance(t *testing.T) {
 
 	streamingNodeManager := mock_manager.NewMockManagerClient(t)
 	streamingNodeManager.EXPECT().WatchNodeChanged(mock.Anything).Return(make(chan struct{}), nil)
-	streamingNodeManager.EXPECT().Assign(mock.Anything, mock.Anything).Return(nil).Maybe()
-	streamingNodeManager.EXPECT().Remove(mock.Anything, mock.Anything).Return(nil).Maybe()
 	streamingNodeManager.EXPECT().GetAllStreamingNodes(mock.Anything).Return(map[int64]*types.StreamingNodeInfoWithResourceGroup{
 		1: {
 			StreamingNodeInfo: types.StreamingNodeInfo{ServerID: 1, Address: "localhost:1"},
@@ -765,7 +753,7 @@ func TestBalancer_PrimaryResourceGroupChangeTriggersBalance(t *testing.T) {
 	resource.InitForTest(
 		resource.OptETCD(etcdClient),
 		resource.OptStreamingCatalog(catalog),
-		resource.OptStreamingManagerClient(streamingNodeManager),
+		resource.OptStreamingManagerClient(withReplicaPlans(t, streamingNodeManager)),
 		resource.OptSession(s),
 	)
 	catalog.EXPECT().GetCChannel(mock.Anything).Return(nil, nil)
@@ -818,8 +806,6 @@ func TestBalancer_DynamicChannelFromProvider(t *testing.T) {
 
 	streamingNodeManager := mock_manager.NewMockManagerClient(t)
 	streamingNodeManager.EXPECT().WatchNodeChanged(mock.Anything).Return(make(chan struct{}), nil)
-	streamingNodeManager.EXPECT().Assign(mock.Anything, mock.Anything).Return(nil).Maybe()
-	streamingNodeManager.EXPECT().Remove(mock.Anything, mock.Anything).Return(nil).Maybe()
 	streamingNodeManager.EXPECT().GetAllStreamingNodes(mock.Anything).Return(map[int64]*types.StreamingNodeInfoWithResourceGroup{
 		1: {StreamingNodeInfo: types.StreamingNodeInfo{ServerID: 1, Address: "localhost:1"}},
 		2: {StreamingNodeInfo: types.StreamingNodeInfo{ServerID: 2, Address: "localhost:2"}},
@@ -835,7 +821,7 @@ func TestBalancer_DynamicChannelFromProvider(t *testing.T) {
 	resource.InitForTest(
 		resource.OptETCD(etcdClient),
 		resource.OptStreamingCatalog(catalog),
-		resource.OptStreamingManagerClient(streamingNodeManager),
+		resource.OptStreamingManagerClient(withReplicaPlans(t, streamingNodeManager)),
 		resource.OptSession(s),
 	)
 	catalog.EXPECT().GetCChannel(mock.Anything).Return(nil, nil)
@@ -902,8 +888,6 @@ func TestBalancer_DynamicChannelProviderClosed(t *testing.T) {
 
 	streamingNodeManager := mock_manager.NewMockManagerClient(t)
 	streamingNodeManager.EXPECT().WatchNodeChanged(mock.Anything).Return(make(chan struct{}), nil)
-	streamingNodeManager.EXPECT().Assign(mock.Anything, mock.Anything).Return(nil).Maybe()
-	streamingNodeManager.EXPECT().Remove(mock.Anything, mock.Anything).Return(nil).Maybe()
 	streamingNodeManager.EXPECT().GetAllStreamingNodes(mock.Anything).Return(map[int64]*types.StreamingNodeInfoWithResourceGroup{
 		1: {StreamingNodeInfo: types.StreamingNodeInfo{ServerID: 1, Address: "localhost:1"}},
 	}, nil).Maybe()
@@ -917,7 +901,7 @@ func TestBalancer_DynamicChannelProviderClosed(t *testing.T) {
 	resource.InitForTest(
 		resource.OptETCD(etcdClient),
 		resource.OptStreamingCatalog(catalog),
-		resource.OptStreamingManagerClient(streamingNodeManager),
+		resource.OptStreamingManagerClient(withReplicaPlans(t, streamingNodeManager)),
 		resource.OptSession(s),
 	)
 	catalog.EXPECT().GetCChannel(mock.Anything).Return(nil, nil)
@@ -1030,22 +1014,6 @@ func reassignFromLostNode(t *testing.T, removeErr error, grace string) time.Dura
 
 	streamingNodeManager := mock_manager.NewMockManagerClient(t)
 	streamingNodeManager.EXPECT().WatchNodeChanged(mock.Anything).Return(make(chan struct{}), nil)
-	streamingNodeManager.EXPECT().Remove(mock.Anything, mock.Anything).RunAndReturn(
-		func(ctx context.Context, assignment types.PChannelInfoAssigned) error {
-			mu.Lock()
-			defer mu.Unlock()
-			removedAt = time.Now()
-			return removeErr
-		})
-	streamingNodeManager.EXPECT().Assign(mock.Anything, mock.Anything).RunAndReturn(
-		func(ctx context.Context, assignment types.PChannelInfoAssigned) error {
-			assert.Equal(t, int64(1), assignment.Node.ServerID)
-			mu.Lock()
-			defer mu.Unlock()
-			assignedAt = time.Now()
-			assignOnce.Do(func() { close(assigned) })
-			return nil
-		})
 	streamingNodeManager.EXPECT().GetAllStreamingNodes(mock.Anything).Return(map[int64]*types.StreamingNodeInfoWithResourceGroup{
 		1: {StreamingNodeInfo: types.StreamingNodeInfo{ServerID: 1, Address: "localhost:1"}},
 	}, nil).Maybe()
@@ -1059,7 +1027,22 @@ func reassignFromLostNode(t *testing.T, removeErr error, grace string) time.Dura
 	resource.InitForTest(
 		resource.OptETCD(etcdClient),
 		resource.OptStreamingCatalog(catalog),
-		resource.OptStreamingManagerClient(streamingNodeManager),
+		resource.OptStreamingManagerClient(withReplicaPlans(t, streamingNodeManager, func(ctx context.Context, nodeID int64, req *streamingpb.ReconcileWALReplicasRequest) (*streamingpb.ReconcileWALReplicasResponse, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			if nodeID == 3 {
+				if removedAt.IsZero() {
+					removedAt = time.Now()
+				}
+				if removeErr != nil {
+					return nil, removeErr
+				}
+			} else {
+				assert.EqualValues(t, 1, nodeID)
+				assignOnce.Do(func() { assignedAt = time.Now(); close(assigned) })
+			}
+			return readyReplicaResponse(nodeID, req), nil
+		})),
 		resource.OptSession(s),
 	)
 	catalog.EXPECT().GetCChannel(mock.Anything).Return(nil, nil).Maybe()
@@ -1074,8 +1057,9 @@ func reassignFromLostNode(t *testing.T, removeErr error, grace string) time.Dura
 					Term:       1,
 					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
 				},
-				State: streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
-				Node:  &streamingpb.StreamingNodeInfo{ServerId: 3},
+				State:       streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+				Node:        &streamingpb.StreamingNodeInfo{ServerId: 3, Address: "localhost:3"},
+				ReplicaPlan: &streamingpb.WALReplicaPlan{Revision: 1, WalTerm: 1, NextReplicaId: 1, Replicas: []*streamingpb.WALReplicaAssignment{{ReplicaId: 1, ReplicaRevision: 1, ResourceGroup: "default", AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE, Node: &streamingpb.StreamingNodeInfo{ServerId: 3, Address: "localhost:3"}}}},
 			},
 		}, nil
 	})

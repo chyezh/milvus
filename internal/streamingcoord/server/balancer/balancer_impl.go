@@ -509,11 +509,19 @@ func (b *balancerImpl) balance(ctx context.Context) (bool, error) {
 		return false, merr.Wrap(err, "persist WAL replica plans")
 	}
 
-	if len(modifiedChannels) == 0 {
-		b.Logger().Info(ctx, "no change of balance result need to be applied")
-		return false, nil
+	// Preparation and retirement are asynchronous. Re-deliver unchanged
+	// durable plans as well, including after a coordinator restart.
+	if err := b.applyBalanceResultToStreamingNode(ctx, b.channelMetaManager.CurrentPChannelsView().Channels); err != nil {
+		return false, err
 	}
-	return true, b.applyBalanceResultToStreamingNode(ctx, modifiedChannels)
+	for _, meta := range b.channelMetaManager.CurrentPChannelsView().Channels {
+		if !meta.IsAssigned() {
+			// Use the normal bounded retry backoff while a writer prepares,
+			// instead of waiting an entire periodic rebalance interval.
+			return false, merr.WrapErrServiceUnavailableMsg("WAL %s writer is preparing", meta.Name())
+		}
+	}
+	return len(modifiedChannels) != 0, nil
 }
 
 // fetchStreamingNodeStatus fetch the streaming node status.
@@ -557,68 +565,13 @@ func (b *balancerImpl) fetchStreamingNodeStatus(ctx context.Context, rgName stri
 	return nodeStatus, nil
 }
 
-// applyBalanceResultToStreamingNode apply the balance result to streaming node.
-func (b *balancerImpl) applyBalanceResultToStreamingNode(ctx context.Context, modifiedChannels map[types.ChannelID]*channel.PChannelMeta) error {
-	b.Logger().Info(ctx, "balance result need to be applied...", mlog.Int("modifiedChannelCount", len(modifiedChannels)))
-
-	// different channel can be execute concurrently.
+// applyBalanceResultToStreamingNode reconciles each channel independently.
+func (b *balancerImpl) applyBalanceResultToStreamingNode(ctx context.Context, channels map[types.ChannelID]*channel.PChannelMeta) error {
 	g, _ := errgroup.WithContext(ctx)
-	opTimeout := paramtable.Get().StreamingCfg.WALBalancerOperationTimeout.GetAsDurationByParse()
-	// generate balance operations and applied them.
-	for _, channel := range modifiedChannels {
-		channel := channel
-		if channel.IsAssigned() {
-			// Membership-only changes retain the running writer. Reissuing
-			// Open at the same term is not a writer lifecycle transition.
-			continue
-		}
-		g.Go(func() error {
-			// ownerLost is true if the streaming node of any read-write assignment history has left the session view.
-			ownerLost := false
-			// all history channels should be remove from related nodes.
-			for _, assignment := range channel.AssignHistories() {
-				opCtx, cancel := context.WithTimeout(ctx, opTimeout)
-				defer cancel()
-				err := resource.Resource().StreamingNodeManagerClient().Remove(opCtx, assignment)
-				if errors.Is(err, types.ErrNotAlive) {
-					if assignment.Channel.AccessMode == types.AccessModeRW {
-						ownerLost = true
-					}
-					b.Logger().Warn(ctx, "streaming node of channel is not alive, wal close not confirmed", mlog.String("assignment", assignment.String()))
-					continue
-				}
-				if err != nil {
-					b.Logger().Warn(ctx, "fail to remove channel", mlog.String("assignment", assignment.String()), mlog.Err(err))
-					return err
-				}
-				b.Logger().Info(ctx, "remove channel success", mlog.String("assignment", assignment.String()))
-			}
-			if ownerLost {
-				if err := b.waitNodeLostGracePeriod(ctx, channel); err != nil {
-					return err
-				}
-			}
-
-			// assign the channel to the target node.
-			opCtx, cancel := context.WithTimeout(ctx, opTimeout)
-			defer cancel()
-			if err := resource.Resource().StreamingNodeManagerClient().Assign(opCtx, channel.CurrentAssignment()); err != nil {
-				b.Logger().Warn(ctx, "fail to assign channel", mlog.String("assignment", channel.CurrentAssignment().String()), mlog.Err(err))
-				return err
-			}
-			b.Logger().Info(ctx, "assign channel success", mlog.String("assignment", channel.CurrentAssignment().String()))
-
-			// bookkeeping the meta assignment done.
-			if err := b.channelMetaManager.AssignPChannelsDone(ctx, []types.ChannelID{channel.ChannelID()}); err != nil {
-				b.Logger().Warn(ctx, "fail to bookkeep pchannel assignment done", mlog.String("assignment", channel.CurrentAssignment().String()))
-				return err
-			}
-			return nil
-		})
+	g.SetLimit(16)
+	for _, meta := range channels {
+		g.Go(func() error { return b.reconcileReplicaPlan(ctx, meta) })
 	}
-	// TODO: Current implementation recovery will wait for all node reply,
-	// huge unavaiable time may be caused by this,
-	// should be fixed in future.
 	return g.Wait()
 }
 

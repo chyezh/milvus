@@ -27,9 +27,28 @@ type managerClientImpl struct {
 	lifetime *typeutil.Lifetime
 	stopped  chan struct{}
 
-	rb      resolver.Builder
-	service lazygrpc.Service[streamingpb.StreamingNodeManagerServiceClient]
+	rb             resolver.Builder
+	service        lazygrpc.Service[streamingpb.StreamingNodeManagerServiceClient]
+	replicaService lazygrpc.Service[streamingpb.StreamingNodeReplicaServiceClient]
 }
+
+func (c *managerClientImpl) ReconcileWALReplicas(ctx context.Context, nodeID int64, req *streamingpb.ReconcileWALReplicasRequest) (*streamingpb.ReconcileWALReplicasResponse, error) {
+	if !c.lifetime.Add(typeutil.LifetimeStateWorking) {
+		return nil, status.NewOnShutdownError("manager client is closing")
+	}
+	defer c.lifetime.Done()
+	client, err := c.replicaService.GetService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.ReconcileWALReplicas(contextutil.WithPickServerID(ctx, nodeID), req)
+	if picker.IsErrSubConnNoExist(err) {
+		return nil, types.ErrNotAlive
+	}
+	return resp, err
+}
+
+var _ ReplicaPlanClient = (*managerClientImpl)(nil)
 
 func (c *managerClientImpl) WatchNodeChanged(ctx context.Context) (<-chan struct{}, error) {
 	if !c.lifetime.Add(typeutil.LifetimeStateWorking) {
