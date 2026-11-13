@@ -10,6 +10,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/queryresource"
 	"github.com/milvus-io/milvus/internal/util/searchutil/optimizers"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
@@ -69,7 +70,27 @@ func (w *walAdaptorImpl) getQueryPlanMVCC(ctx context.Context, vchannel string, 
 	}, nil
 }
 
-func (w *walAdaptorImpl) GetQueryPlan(ctx context.Context, req *viewpb.GetQueryPlanRequest) (response *viewpb.GetQueryPlanResponse, err error) {
+// replicaQueryRuntime holds only query-side dependencies. The RW supplies a
+// local MVCC resolver; an RO supplies a source resolver and waits for the same
+// local Runtime visibility before constructing a plan.
+type replicaQueryRuntime struct {
+	lifetime            *typeutil.Lifetime
+	availableCtx        context.Context
+	queryViewHandler    *snview.SNQueryViewHandler
+	viewResourceManager *vchannel.PChannelRecoveryManager
+	resolveMVCC         func(context.Context, *viewpb.GetQueryPlanRequest, string) (*viewpb.QueryPlanMVCC, error)
+}
+
+func (w *walAdaptorImpl) GetQueryPlan(ctx context.Context, req *viewpb.GetQueryPlanRequest) (*viewpb.GetQueryPlanResponse, error) {
+	runtime := replicaQueryRuntime{
+		lifetime: w.lifetime, availableCtx: w.availableCtx,
+		queryViewHandler: w.queryViewHandler, viewResourceManager: w.viewResourceManager,
+		resolveMVCC: w.resolveQueryPlanMVCC,
+	}
+	return runtime.GetQueryPlan(ctx, req)
+}
+
+func (w *replicaQueryRuntime) GetQueryPlan(ctx context.Context, req *viewpb.GetQueryPlanRequest) (response *viewpb.GetQueryPlanResponse, err error) {
 	if !w.lifetime.Add(typeutil.LifetimeStateWorking) {
 		return nil, viewerror.NewOnShutdownError("wal is on shutdown")
 	}
@@ -128,7 +149,7 @@ func (w *walAdaptorImpl) GetQueryPlan(ctx context.Context, req *viewpb.GetQueryP
 	viewShardID := qviews.NewShardIDFromQVMeta(lease.Meta)
 	w.queryViewHandler.RecordShardAccess(viewShardID)
 
-	mvcc, err := w.resolveQueryPlanMVCC(ctx, req, shardID.VChannel)
+	mvcc, err := w.resolveMVCC(ctx, req, shardID.VChannel)
 	if err != nil {
 		return nil, err
 	}
