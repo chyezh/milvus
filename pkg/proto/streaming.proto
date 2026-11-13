@@ -1459,3 +1459,19 @@ service StreamingNodeReplicaService {
     // new baseline, rather than silently omitting events.
     rpc BootstrapWALReplica(WALReplicaBootstrapRequest) returns (stream WALReplicaBootstrapFrame) {};
 }
+
+// A durable obligation to retain exact immutable object keys. Root IDs are
+// unique and never reused; release records fence delayed acquisition retries.
+message WALObjectRetentionRoot {
+    string root_id = 1;
+    repeated string object_keys = 2;
+    bool released = 3;
+}
+
+// Authorization survives the issuing writer. Once present, the object can
+// never be retained again, even when a delayed deletion has not finished yet.
+message WALObjectDeletion {
+    string object_key = 1;
+    string operation_id = 2;
+    bool done = 3;
+}
