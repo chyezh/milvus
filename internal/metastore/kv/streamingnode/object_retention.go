@@ -47,7 +47,10 @@ func (c *catalog) loadRetentionValue(ctx context.Context, key string) (string, e
 // outside that transaction are valid only if its captured epoch still matches.
 // Epoch is never reset, including after the last root is released (no ABA).
 func (c *catalog) commitRetention(ctx context.Context, channel, epoch string, saves map[string]string, removals []string, guards ...predicates.Predicate) error {
-	epochKey := retentionPrefix(channel) + "epoch"
+	return c.commitRetentionAt(ctx, retentionPrefix(channel)+"epoch", epoch, saves, removals, guards...)
+}
+
+func (c *catalog) commitRetentionAt(ctx context.Context, epochKey, epoch string, saves map[string]string, removals []string, guards ...predicates.Predicate) error {
 	next := uuid.NewString()
 	saves[epochKey] = next
 	if len(saves)+len(removals) > c.metaKV.MaxTxnOps() {

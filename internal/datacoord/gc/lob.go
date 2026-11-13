@@ -321,7 +321,7 @@ func (lobCtx *lobGCContext) removeOrphanLOBFiles(ctx context.Context, orphanFile
 	for _, file := range orphanFiles {
 		filePath := file.FilePath
 		future := lobCtx.gc.Option.RemoveObjectPool.Submit(func() (struct{}, error) {
-			if err := lobCtx.gc.Option.Cli.Remove(ctx, filePath); err != nil {
+			if err := lobCtx.gc.removeObject(ctx, filePath); err != nil {
 				mlog.Warn(ctx, "failed to remove orphan LOB file",
 					mlog.String("filePath", filePath),
 					mlog.Err(err))

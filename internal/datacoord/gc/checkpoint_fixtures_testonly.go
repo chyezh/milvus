@@ -36,7 +36,9 @@ func MockCheckpointCatalog(t *testing.T, tick uint64) metastore.StreamingNodeCat
 	catalog := kvstreamingnode.NewCataLog(nil)
 	patch := mockey.Mock(mockey.GetMethod(catalog, "GetConsumeCheckpoint")).Return(&streamingpb.WALCheckpoint{TimeTick: tick}, nil).Build()
 	t.Cleanup(func() { patch.UnPatch() })
-	return catalog
+	// This fixture supplies only checkpoint reads. Do not advertise optional
+	// retention capabilities backed by the deliberately absent MetaKv.
+	return struct{ metastore.StreamingNodeCataLog }{catalog}
 }
 
 func (gc *GarbageCollector) CheckDroppedSegmentGCForTest(segment *meta.SegmentInfo, compactTo *meta.SegmentInfo, channelCP typeutil.UniqueSet, expire uint64) bool {

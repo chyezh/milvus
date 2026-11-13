@@ -34,6 +34,10 @@ func (c *catalog) loadReplicaRuntime(ctx context.Context, runtime *viewpb.Stream
 	if err != nil || value == "" {
 		return nil, err
 	}
+	return decodeReplicaRuntime(value, runtime)
+}
+
+func decodeReplicaRuntime(value string, runtime *viewpb.StreamingWorkNode) (*streamingpb.WALReplicaRuntimeRetention, error) {
 	stored := &streamingpb.WALReplicaRuntimeRetention{}
 	if err := proto.Unmarshal([]byte(value), stored); err != nil {
 		return nil, merr.WrapErrDataIntegrity(err, "decode WAL replica runtime obligation")

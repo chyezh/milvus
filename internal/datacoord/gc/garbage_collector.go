@@ -394,6 +394,9 @@ func (gc *GarbageCollector) work(ctx context.Context) {
 	go func() {
 		defer gc.wg.Done()
 		gc.runRecycleTaskWithPauser(ctx, "meta", gc.Option.CheckInterval, func(ctx context.Context, signal <-chan gcCmd) {
+			if err := gc.maintainSharedWALRetention(ctx); err != nil {
+				mlog.Warn(ctx, "failed to maintain WAL replica object retention", mlog.Err(err))
+			}
 			gc.recycleDataViews(ctx, signal)
 			gc.RecycleDroppedSegments(ctx, signal)
 			gc.RecycleChannelCPMeta(ctx, signal)
@@ -818,7 +821,7 @@ func (gc *GarbageCollector) recycleUnusedImportV3Prefixes(ctx context.Context) {
 			continue
 		}
 		prefix := path.Join(gc.Option.Cli.RootPath(), metautil.BuildImportV3JobPath(jobID)) + "/"
-		if err := gc.Option.Cli.RemoveWithPrefix(ctx, prefix); err != nil {
+		if err := gc.removeObjectsWithPrefix(ctx, prefix); err != nil {
 			mlog.Warn(ctx, "remove orphan import v3 prefix failed",
 				mlog.Int64("jobID", jobID), mlog.Err(err))
 			continue
@@ -956,7 +959,7 @@ func (gc *GarbageCollector) recycleUnusedBinLogWithChecker(ctx context.Context, 
 			logger := logger.With(mlog.String("file", file))
 			logger.Info(ctx, "garbageCollector recycleUnusedBinlogFiles remove file...")
 
-			if err := gc.Option.Cli.Remove(ctx, file); err != nil {
+			if err := gc.removeObject(ctx, file); err != nil {
 				logger.Warn(ctx, "garbageCollector recycleUnusedBinlogFiles remove file failed", mlog.Err(err))
 				unexpectedFailure.Inc()
 				return struct{}{}, err
@@ -1528,7 +1531,7 @@ func (gc *GarbageCollector) RemoveDroppedSegmentFiles(ctx context.Context, clone
 			return err
 		}
 		prefix := strings.TrimSuffix(basePath, "/") + "/"
-		if err := gc.Option.Cli.RemoveWithPrefix(ctx, prefix); err != nil && !copysegment.IsAbsentLocalPrefix(gc.Option.Cli, prefix, err) {
+		if err := gc.removeObjectsWithPrefix(ctx, prefix); err != nil && !copysegment.IsAbsentLocalPrefix(gc.Option.Cli, prefix, err) {
 			log.Warn(ctx, "GC V3 segment remove basePath failed",
 				mlog.String("basePath", basePath),
 				mlog.Err(err))
@@ -1823,7 +1826,7 @@ func (gc *GarbageCollector) RemoveObjectFiles(ctx context.Context, filePaths map
 	for filePath := range filePaths {
 		filePath := filePath
 		future := gc.Option.RemoveObjectPool.Submit(func() (struct{}, error) {
-			err := gc.Option.Cli.Remove(ctx, filePath)
+			err := gc.removeObject(ctx, filePath)
 			// ignore the error Key Not Found
 			if err != nil {
 				if !errors.Is(err, merr.ErrIoKeyNotFound) {
@@ -2239,7 +2242,7 @@ func (gc *GarbageCollector) RecycleUnusedIndexFilesV0(ctx context.Context) {
 
 			// buildID no longer exists in meta, remove all index files
 			logger.Info(ctx, "garbageCollector recycleUnusedIndexFilesV0 find meta has not exist, remove index files")
-			err = gc.Option.Cli.RemoveWithPrefix(ctx, key)
+			err = gc.removeObjectsWithPrefix(ctx, key)
 			if err != nil {
 				logger.Warn(ctx, "garbageCollector recycleUnusedIndexFilesV0 remove index files failed", mlog.Err(err))
 				return true
@@ -2274,7 +2277,7 @@ func (gc *GarbageCollector) RecycleUnusedIndexFilesV0(ctx context.Context) {
 					logger := logger.With(mlog.String("file", file))
 					logger.Info(ctx, "garbageCollector recycleUnusedIndexFilesV0 remove file...")
 
-					if err := gc.Option.Cli.Remove(ctx, file); err != nil {
+					if err := gc.removeObject(ctx, file); err != nil {
 						logger.Warn(ctx, "garbageCollector recycleUnusedIndexFilesV0 remove file failed", mlog.Err(err))
 						return struct{}{}, err
 					}
@@ -2469,7 +2472,7 @@ func (gc *GarbageCollector) recycleUnusedIndexFilesV1(ctx context.Context) {
 			return true
 		}
 		futures = append(futures, gc.Option.RemoveObjectPool.Submit(func() (struct{}, error) {
-			if err := gc.Option.Cli.Remove(ctx, file); err != nil {
+			if err := gc.removeObject(ctx, file); err != nil {
 				log.Warn(ctx, "recycleUnusedIndexFiles remove file failed", mlog.String("file", file), mlog.Err(err))
 				return struct{}{}, err
 			}
@@ -2577,7 +2580,7 @@ func (gc *GarbageCollector) RecycleUnusedAnalyzeFiles(ctx context.Context, signa
 			// taskID no longer exists in meta, remove all analysis files
 			mlog.Info(ctx, "garbageCollector recycleUnusedAnalyzeFiles find meta has not exist, remove index files",
 				mlog.Int64("taskID", taskID))
-			err = gc.Option.Cli.RemoveWithPrefix(ctx, key)
+			err = gc.removeObjectsWithPrefix(ctx, key)
 			if err != nil {
 				mlog.Warn(ctx, "garbageCollector recycleUnusedAnalyzeFiles remove analyze stats files failed",
 					mlog.Int64("taskID", taskID), mlog.String("prefix", key), mlog.Err(err))
@@ -2598,7 +2601,7 @@ func (gc *GarbageCollector) RecycleUnusedAnalyzeFiles(ctx context.Context, signa
 			}
 			// analyze stats files are laid out as analyze_stats/{taskID}/{version}/...
 			removePrefix := prefix + fmt.Sprintf("%d/%d/", taskID, i)
-			if err := gc.Option.Cli.RemoveWithPrefix(ctx, removePrefix); err != nil {
+			if err := gc.removeObjectsWithPrefix(ctx, removePrefix); err != nil {
 				mlog.Warn(ctx, "garbageCollector recycleUnusedAnalyzeFiles remove files with prefix failed",
 					mlog.Int64("taskID", taskID), mlog.String("removePrefix", removePrefix))
 				continue
@@ -2662,7 +2665,7 @@ func (gc *GarbageCollector) RecycleUnusedTextIndexFiles(ctx context.Context, sig
 						log := mlog.With(mlog.String("file", file))
 						log.Info(ctx, "garbageCollector recycleUnusedTextIndexFiles remove file...")
 
-						if err := gc.Option.Cli.Remove(ctx, file); err != nil {
+						if err := gc.removeObject(ctx, file); err != nil {
 							log.Warn(ctx, "garbageCollector recycleUnusedTextIndexFiles remove file failed", mlog.Err(err))
 							return struct{}{}, err
 						}
@@ -2749,7 +2752,7 @@ func (gc *GarbageCollector) RecycleUnusedJSONStatsFiles(ctx context.Context, sig
 						log := mlog.With(mlog.String("file", file))
 						log.Info(ctx, "garbageCollector recycleUnusedJSONStatsFiles remove file...")
 
-						if err := gc.Option.Cli.Remove(ctx, file); err != nil {
+						if err := gc.removeObject(ctx, file); err != nil {
 							log.Warn(ctx, "garbageCollector recycleUnusedJSONStatsFiles remove file failed", mlog.Err(err))
 							return struct{}{}, err
 						}
@@ -2798,7 +2801,7 @@ func (gc *GarbageCollector) RecycleUnusedJSONStatsFiles(ctx context.Context, sig
 				log := mlog.With(mlog.String("file", file))
 				log.Info(ctx, "garbageCollector recycleUnusedJSONStatsFiles remove file...")
 
-				if err := gc.Option.Cli.Remove(ctx, file); err != nil {
+				if err := gc.removeObject(ctx, file); err != nil {
 					log.Warn(ctx, "garbageCollector recycleUnusedJSONStatsFiles remove file failed", mlog.Err(err))
 					return struct{}{}, err
 				}
@@ -2879,7 +2882,7 @@ func (gc *GarbageCollector) RecycleUnusedJSONIndexFiles(ctx context.Context, sig
 						log := mlog.With(mlog.String("file", file))
 						log.Info(ctx, "garbageCollector recycleUnusedJSONIndexFiles remove file...")
 
-						if err := gc.Option.Cli.Remove(ctx, file); err != nil {
+						if err := gc.removeObject(ctx, file); err != nil {
 							log.Warn(ctx, "garbageCollector recycleUnusedJSONIndexFiles remove file failed", mlog.Err(err))
 							return struct{}{}, err
 						}
@@ -2982,14 +2985,14 @@ func (gc *GarbageCollector) recycleSnapshots(ctx context.Context, signal <-chan 
 
 			// Delete manifest directory using RemoveWithPrefix (no list needed)
 			// This removes all segment manifest files: manifests/{snapshot_id}/*.avro
-			if err := gc.Option.Cli.RemoveWithPrefix(ctx, manifestDir); err != nil {
+			if err := gc.removeObjectsWithPrefix(ctx, manifestDir); err != nil {
 				snapshotLog.Warn(ctx, "failed to remove pending snapshot manifest directory", mlog.Err(err))
 				// Keep catalog record for retry in next GC cycle.
 				continue
 			}
 
 			// Delete metadata file
-			if err := gc.Option.Cli.Remove(ctx, metadataPath); err != nil {
+			if err := gc.removeObject(ctx, metadataPath); err != nil {
 				snapshotLog.Warn(ctx, "failed to remove pending snapshot metadata file", mlog.Err(err))
 				// Keep catalog record for retry in next GC cycle.
 				continue
@@ -3040,13 +3043,13 @@ func (gc *GarbageCollector) recycleSnapshots(ctx context.Context, signal <-chan 
 				mlog.String("metadataPath", metadataPath))
 
 			// Delete manifest directory
-			if err := gc.Option.Cli.RemoveWithPrefix(ctx, manifestDir); err != nil {
+			if err := gc.removeObjectsWithPrefix(ctx, manifestDir); err != nil {
 				snapshotLog.Warn(ctx, "failed to remove deleting snapshot manifest directory", mlog.Err(err))
 				// Continue with metadata and etcd cleanup even if S3 cleanup fails
 			}
 
 			// Delete metadata file
-			if err := gc.Option.Cli.Remove(ctx, metadataPath); err != nil {
+			if err := gc.removeObject(ctx, metadataPath); err != nil {
 				snapshotLog.Warn(ctx, "failed to remove deleting snapshot metadata file", mlog.Err(err))
 				// Continue with etcd cleanup even if S3 cleanup fails
 			}
