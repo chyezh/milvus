@@ -8,6 +8,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
@@ -108,4 +109,31 @@ func ReadSnapshot(ctx context.Context, receive func() (*streamingpb.WALReplicaSn
 func snapshotRecords(snapshot *streamingpb.WALReplicaSnapshot) int {
 	return len(snapshot.Vchannels) + len(snapshot.Segments) + len(snapshot.QueryViews) + len(snapshot.QueryBarriers) +
 		len(snapshot.GetStorage().GetVchannels()) + len(snapshot.GetStorage().GetSegments())
+}
+
+// ValidateSnapshot verifies the source term and paired physical/logical replay
+// interval before a baseline is sent or used to allocate recovery resources.
+func ValidateSnapshot(term int64, snapshot *streamingpb.WALReplicaSnapshot) error {
+	if snapshot.GetCursor().GetTerm() != term || term <= 0 {
+		return merr.WrapErrServiceUnavailable("WAL replica snapshot belongs to another primary term")
+	}
+	cp, observed := snapshot.GetCheckpoint(), snapshot.GetObserved()
+	if cp.GetLogGeneration() != observed.GetLogGeneration() {
+		return merr.WrapErrDataIntegrityMsg("WAL replica snapshot crosses log generations")
+	}
+	if cp.GetMessageId() == nil || observed.GetMessageId() == nil || cp.GetTimeTick() > observed.GetTimeTick() {
+		return merr.WrapErrDataIntegrityMsg("WAL replica snapshot has an invalid replay interval")
+	}
+	start, err := message.UnmarshalMessageID(cp.MessageId)
+	if err != nil {
+		return merr.Wrap(err, "decode replica checkpoint")
+	}
+	end, err := message.UnmarshalMessageID(observed.MessageId)
+	if err != nil {
+		return merr.Wrap(err, "decode replica replay frontier")
+	}
+	if start.WALName() != end.WALName() || end.LT(start) || (cp.TimeTick == observed.TimeTick && !start.EQ(end)) {
+		return merr.WrapErrDataIntegrityMsg("WAL replica snapshot replay frontiers disagree")
+	}
+	return nil
 }

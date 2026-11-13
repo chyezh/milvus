@@ -1376,6 +1376,23 @@ message WALReplicaSnapshotChunk {
     bytes data = 5;
 }
 
+// A fresh baseline may use the follower's paired physical/logical restart
+// position. The response always declares the selected interval explicitly.
+message WALReplicaBootstrapRequest {
+    PChannelInfo pchannel = 1;
+    WALCheckpoint checkpoint = 2;
+}
+
+// Metadata, retained WAL replay and completion are distinct transfer phases.
+// Replay entries keep their WAL positions; they are never assigned event Seq.
+message WALReplicaBootstrapFrame {
+    oneof payload {
+        WALReplicaSnapshotChunk snapshot = 1;
+        WALReplicaEntry replay = 2;
+        WALReplicaCursor complete = 3;
+    }
+}
+
 // Transactions preserve their assembled logical boundary. The ordinary outer
 // message alone does not serialize the in-memory transaction body.
 message WALReplicaEntry {
@@ -1424,4 +1441,8 @@ service StreamingNodeReplicaService {
     rpc ReconcileWALReplicas(ReconcileWALReplicasRequest) returns (ReconcileWALReplicasResponse) {};
     // Resume strictly after the locally applied cursor; never skip missing history.
     rpc SubscribeWALEvents(WALReplicaSubscribeRequest) returns (stream WALReplicaEvent) {};
+    // Bounded protected baseline transfer, followed by SubscribeWALEvents at
+    // the returned cut. Missing suffix history rejects resume and requires a
+    // new baseline, rather than silently omitting events.
+    rpc BootstrapWALReplica(WALReplicaBootstrapRequest) returns (stream WALReplicaBootstrapFrame) {};
 }

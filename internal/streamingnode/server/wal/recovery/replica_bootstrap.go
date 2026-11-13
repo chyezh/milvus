@@ -22,7 +22,7 @@ type ReplicaReplay func(context.Context) (message.ImmutableMessage, error)
 // It returns no partially initialized runtime on failure. Its owner registers
 // QueryView intent only after this returns, then consumes the cut's S+1 suffix.
 func BootstrapReadOnlyRecoveryStorage(ctx context.Context, cfg ReadOnlyConfig, snapshot *streamingpb.WALReplicaSnapshot, replay ReplicaReplay, opts ...RecoveryStorageOption) (_ *ReadOnlyRecoveryStorage, err error) {
-	if err := validateReplicaSnapshot(cfg.Channel.Term, snapshot); err != nil {
+	if err := walevent.ValidateSnapshot(cfg.Channel.Term, snapshot); err != nil {
 		return nil, err
 	}
 	cfg.Applied = walevent.CursorFromProto(snapshot.Cursor)
@@ -61,31 +61,6 @@ func BootstrapReadOnlyRecoveryStorage(ctx context.Context, cfg ReadOnlyConfig, s
 		}
 	}
 	return r, nil
-}
-
-func validateReplicaSnapshot(term int64, snapshot *streamingpb.WALReplicaSnapshot) error {
-	if snapshot.GetCursor().GetTerm() != term || term <= 0 {
-		return merr.WrapErrServiceUnavailable("WAL replica snapshot belongs to another primary term")
-	}
-	cp, observed := snapshot.GetCheckpoint(), snapshot.GetObserved()
-	if cp.GetLogGeneration() != observed.GetLogGeneration() {
-		return merr.WrapErrDataIntegrityMsg("WAL replica snapshot crosses log generations")
-	}
-	if cp.GetMessageId() == nil || observed.GetMessageId() == nil || cp.GetTimeTick() > observed.GetTimeTick() {
-		return merr.WrapErrDataIntegrityMsg("WAL replica snapshot has an invalid replay interval")
-	}
-	start, err := message.UnmarshalMessageID(cp.MessageId)
-	if err != nil {
-		return merr.Wrap(err, "decode replica checkpoint")
-	}
-	end, err := message.UnmarshalMessageID(observed.MessageId)
-	if err != nil {
-		return merr.Wrap(err, "decode replica replay frontier")
-	}
-	if start.WALName() != end.WALName() || end.LT(start) || (cp.TimeTick == observed.TimeTick && !start.EQ(end)) {
-		return merr.WrapErrDataIntegrityMsg("WAL replica snapshot replay frontiers disagree")
-	}
-	return nil
 }
 
 func (r *ReadOnlyRecoveryStorage) replayReplicaSnapshot(ctx context.Context, snapshot *streamingpb.WALReplicaSnapshot, replay ReplicaReplay) error {

@@ -17,11 +17,12 @@ import (
 
 type replicaServiceImpl struct {
 	streamingpb.UnimplementedStreamingNodeReplicaServiceServer
-	walManager walmanager.Manager
+	walManager     walmanager.Manager
+	bootstrapSlots chan struct{}
 }
 
 func NewReplicaService(manager walmanager.Manager) streamingpb.StreamingNodeReplicaServiceServer {
-	return &replicaServiceImpl{walManager: manager}
+	return &replicaServiceImpl{walManager: manager, bootstrapSlots: make(chan struct{}, 32)}
 }
 
 func (hs *replicaServiceImpl) ReconcileWALReplicas(ctx context.Context, req *streamingpb.ReconcileWALReplicasRequest) (*streamingpb.ReconcileWALReplicasResponse, error) {

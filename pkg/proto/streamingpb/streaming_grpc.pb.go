@@ -1248,6 +1248,7 @@ var StreamingNodeManagerService_ServiceDesc = grpc.ServiceDesc{
 const (
 	StreamingNodeReplicaService_ReconcileWALReplicas_FullMethodName = "/milvus.proto.streaming.StreamingNodeReplicaService/ReconcileWALReplicas"
 	StreamingNodeReplicaService_SubscribeWALEvents_FullMethodName   = "/milvus.proto.streaming.StreamingNodeReplicaService/SubscribeWALEvents"
+	StreamingNodeReplicaService_BootstrapWALReplica_FullMethodName  = "/milvus.proto.streaming.StreamingNodeReplicaService/BootstrapWALReplica"
 )
 
 // StreamingNodeReplicaServiceClient is the client API for StreamingNodeReplicaService service.
@@ -1258,6 +1259,10 @@ type StreamingNodeReplicaServiceClient interface {
 	ReconcileWALReplicas(ctx context.Context, in *ReconcileWALReplicasRequest, opts ...grpc.CallOption) (*ReconcileWALReplicasResponse, error)
 	// Resume strictly after the locally applied cursor; never skip missing history.
 	SubscribeWALEvents(ctx context.Context, in *WALReplicaSubscribeRequest, opts ...grpc.CallOption) (StreamingNodeReplicaService_SubscribeWALEventsClient, error)
+	// Bounded protected baseline transfer, followed by SubscribeWALEvents at
+	// the returned cut. Missing suffix history rejects resume and requires a
+	// new baseline, rather than silently omitting events.
+	BootstrapWALReplica(ctx context.Context, in *WALReplicaBootstrapRequest, opts ...grpc.CallOption) (StreamingNodeReplicaService_BootstrapWALReplicaClient, error)
 }
 
 type streamingNodeReplicaServiceClient struct {
@@ -1309,6 +1314,38 @@ func (x *streamingNodeReplicaServiceSubscribeWALEventsClient) Recv() (*WALReplic
 	return m, nil
 }
 
+func (c *streamingNodeReplicaServiceClient) BootstrapWALReplica(ctx context.Context, in *WALReplicaBootstrapRequest, opts ...grpc.CallOption) (StreamingNodeReplicaService_BootstrapWALReplicaClient, error) {
+	stream, err := c.cc.NewStream(ctx, &StreamingNodeReplicaService_ServiceDesc.Streams[1], StreamingNodeReplicaService_BootstrapWALReplica_FullMethodName, opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &streamingNodeReplicaServiceBootstrapWALReplicaClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type StreamingNodeReplicaService_BootstrapWALReplicaClient interface {
+	Recv() (*WALReplicaBootstrapFrame, error)
+	grpc.ClientStream
+}
+
+type streamingNodeReplicaServiceBootstrapWALReplicaClient struct {
+	grpc.ClientStream
+}
+
+func (x *streamingNodeReplicaServiceBootstrapWALReplicaClient) Recv() (*WALReplicaBootstrapFrame, error) {
+	m := new(WALReplicaBootstrapFrame)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // StreamingNodeReplicaServiceServer is the server API for StreamingNodeReplicaService service.
 // All implementations should embed UnimplementedStreamingNodeReplicaServiceServer
 // for forward compatibility
@@ -1317,6 +1354,10 @@ type StreamingNodeReplicaServiceServer interface {
 	ReconcileWALReplicas(context.Context, *ReconcileWALReplicasRequest) (*ReconcileWALReplicasResponse, error)
 	// Resume strictly after the locally applied cursor; never skip missing history.
 	SubscribeWALEvents(*WALReplicaSubscribeRequest, StreamingNodeReplicaService_SubscribeWALEventsServer) error
+	// Bounded protected baseline transfer, followed by SubscribeWALEvents at
+	// the returned cut. Missing suffix history rejects resume and requires a
+	// new baseline, rather than silently omitting events.
+	BootstrapWALReplica(*WALReplicaBootstrapRequest, StreamingNodeReplicaService_BootstrapWALReplicaServer) error
 }
 
 // UnimplementedStreamingNodeReplicaServiceServer should be embedded to have forward compatible implementations.
@@ -1328,6 +1369,9 @@ func (UnimplementedStreamingNodeReplicaServiceServer) ReconcileWALReplicas(conte
 }
 func (UnimplementedStreamingNodeReplicaServiceServer) SubscribeWALEvents(*WALReplicaSubscribeRequest, StreamingNodeReplicaService_SubscribeWALEventsServer) error {
 	return status.Errorf(codes.Unimplemented, "method SubscribeWALEvents not implemented")
+}
+func (UnimplementedStreamingNodeReplicaServiceServer) BootstrapWALReplica(*WALReplicaBootstrapRequest, StreamingNodeReplicaService_BootstrapWALReplicaServer) error {
+	return status.Errorf(codes.Unimplemented, "method BootstrapWALReplica not implemented")
 }
 
 // UnsafeStreamingNodeReplicaServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -1380,6 +1424,27 @@ func (x *streamingNodeReplicaServiceSubscribeWALEventsServer) Send(m *WALReplica
 	return x.ServerStream.SendMsg(m)
 }
 
+func _StreamingNodeReplicaService_BootstrapWALReplica_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WALReplicaBootstrapRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(StreamingNodeReplicaServiceServer).BootstrapWALReplica(m, &streamingNodeReplicaServiceBootstrapWALReplicaServer{stream})
+}
+
+type StreamingNodeReplicaService_BootstrapWALReplicaServer interface {
+	Send(*WALReplicaBootstrapFrame) error
+	grpc.ServerStream
+}
+
+type streamingNodeReplicaServiceBootstrapWALReplicaServer struct {
+	grpc.ServerStream
+}
+
+func (x *streamingNodeReplicaServiceBootstrapWALReplicaServer) Send(m *WALReplicaBootstrapFrame) error {
+	return x.ServerStream.SendMsg(m)
+}
+
 // StreamingNodeReplicaService_ServiceDesc is the grpc.ServiceDesc for StreamingNodeReplicaService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1396,6 +1461,11 @@ var StreamingNodeReplicaService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "SubscribeWALEvents",
 			Handler:       _StreamingNodeReplicaService_SubscribeWALEvents_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "BootstrapWALReplica",
+			Handler:       _StreamingNodeReplicaService_BootstrapWALReplica_Handler,
 			ServerStreams: true,
 		},
 	},

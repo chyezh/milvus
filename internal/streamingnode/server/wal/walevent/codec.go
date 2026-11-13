@@ -24,16 +24,7 @@ func (e Event) IntoProto() *streamingpb.WALReplicaEvent {
 	payload, _ := e.Payload.freeze()
 	switch p := payload.(type) {
 	case WALEntry:
-		entry := &streamingpb.WALReplicaEntry{Message: proto.CloneOf(p.Message.IntoImmutableMessageProto())}
-		if txn := message.AsImmutableTxnMessage(p.Message); txn != nil {
-			entry.Begin = proto.CloneOf(txn.Begin().IntoImmutableMessageProto())
-			entry.Commit = proto.CloneOf(txn.Commit().IntoImmutableMessageProto())
-			_ = txn.RangeOver(func(msg message.ImmutableMessage) error {
-				entry.Body = append(entry.Body, proto.CloneOf(msg.IntoImmutableMessageProto()))
-				return nil
-			})
-		}
-		result.Payload = &streamingpb.WALReplicaEvent_WalEntry{WalEntry: entry}
+		result.Payload = &streamingpb.WALReplicaEvent_WalEntry{WalEntry: EncodeEntry(p.Message)}
 	case QueryViewIntentBatch:
 		result.Payload = &streamingpb.WALReplicaEvent_QueryViewIntents{QueryViewIntents: &streamingpb.WALReplicaQueryViewIntents{Views: p.Views}}
 	case StoragePublished:
@@ -51,7 +42,7 @@ func EventFromProto(pb *streamingpb.WALReplicaEvent) (Event, error) {
 	}
 	switch p := pb.GetPayload().(type) {
 	case *streamingpb.WALReplicaEvent_WalEntry:
-		msg, err := decodeEntry(p.WalEntry)
+		msg, err := DecodeEntry(p.WalEntry)
 		if err != nil {
 			return Event{}, err
 		}
@@ -82,7 +73,23 @@ func decodeMessage(pb *commonpb.ImmutableMessage) (message.ImmutableMessage, err
 	return message.NewImmutableMesasge(id, owned.Payload, owned.Properties), nil
 }
 
-func decodeEntry(entry *streamingpb.WALReplicaEntry) (message.ImmutableMessage, error) {
+// EncodeEntry preserves logical transactions for both retained replay and live
+// events. Replay has no event cursor of its own.
+func EncodeEntry(msg message.ImmutableMessage) *streamingpb.WALReplicaEntry {
+	entry := &streamingpb.WALReplicaEntry{Message: proto.CloneOf(msg.IntoImmutableMessageProto())}
+	if txn := message.AsImmutableTxnMessage(msg); txn != nil {
+		entry.Begin = proto.CloneOf(txn.Begin().IntoImmutableMessageProto())
+		entry.Commit = proto.CloneOf(txn.Commit().IntoImmutableMessageProto())
+		_ = txn.RangeOver(func(body message.ImmutableMessage) error {
+			entry.Body = append(entry.Body, proto.CloneOf(body.IntoImmutableMessageProto()))
+			return nil
+		})
+	}
+	return entry
+}
+
+// DecodeEntry validates and owns a complete logical WAL message.
+func DecodeEntry(entry *streamingpb.WALReplicaEntry) (message.ImmutableMessage, error) {
 	outer, err := decodeMessage(entry.GetMessage())
 	if err != nil {
 		return nil, err

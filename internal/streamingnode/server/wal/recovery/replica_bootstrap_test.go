@@ -134,5 +134,5 @@ func TestReplicaBootstrapValidatesMetadataBeforeAllocatingRuntime(t *testing.T) 
 		require.Error(t, err)
 		require.Nil(t, ro)
 	}
-	require.Error(t, validateReplicaSnapshot(0, nil))
+	require.Error(t, walevent.ValidateSnapshot(0, nil))
 }
