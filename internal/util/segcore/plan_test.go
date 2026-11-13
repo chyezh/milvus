@@ -28,6 +28,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/planpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
@@ -79,6 +80,14 @@ func (suite *PlanSuite) TestQueryPlanCollectionReleased() {
 	suite.collection.Release()
 	_, err := segcore.NewRetrievePlan(suite.collection, nil, 0, 0, 0, 0, 0)
 	suite.Error(err)
+}
+
+func (suite *PlanSuite) TestQueryPlanEmptyExpression() {
+	for _, expr := range [][]byte{nil, {}} {
+		plan, err := segcore.NewRetrievePlan(suite.collection, expr, 0, 0, 0, 0, 0)
+		suite.Nil(plan)
+		suite.ErrorIs(err, merr.ErrServiceInternal)
+	}
 }
 
 func TestPlan(t *testing.T) {

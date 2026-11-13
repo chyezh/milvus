@@ -232,6 +232,9 @@ func NewRetrievePlan(col *CCollection,
 	if col.rawPointer() == nil {
 		return nil, merr.WrapErrServiceInternalMsg("collection is released")
 	}
+	if len(expr) == 0 {
+		return nil, merr.WrapErrServiceInternalMsg("empty retrieve expression plan")
+	}
 	var cPlan C.CRetrievePlan
 	status := C.CreateRetrievePlanByExpr(col.rawPointer(), unsafe.Pointer(&expr[0]), (C.int64_t)(len(expr)), &cPlan)
 	if err := ConsumeCStatusIntoError(&status); err != nil {
