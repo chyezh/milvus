@@ -39,6 +39,12 @@ func convertServiceError(method string, err error) error {
 	}
 	switch {
 	case strings.HasPrefix(method, streamingpb.ServiceMethodPrefix):
+		// Replica handshakes carry a structured resume cursor alongside their
+		// streaming status. Re-encoding an already projected status would lose
+		// both the original cause and the cursor needed to recapture a baseline.
+		if _, ok := grpcstatus.FromError(err); ok {
+			return err
+		}
 		err = convertMilvusErrorIntoStreamingError(err)
 		return status.NewGRPCStatusFromStreamingError(status.AsStreamingError(err)).Err()
 	case strings.HasPrefix(method, viewpb.ServiceMethodPrefix):

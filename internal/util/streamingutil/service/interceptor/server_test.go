@@ -33,6 +33,27 @@ func TestConvertMilvusErrorIntoStreamingError(t *testing.T) {
 	assert.True(t, s.IsSkippedOperation())
 }
 
+func TestStreamingServerPreservesReplicaHandshake(t *testing.T) {
+	cursor := &streamingpb.WALReplicaCursor{Term: 8, Seq: 42}
+	wire, err := status.NewGRPCStatusFromStreamingError(status.NewInvalidRequestSeq("baseline required")).WithDetails(cursor)
+	require.NoError(t, err)
+	for _, streaming := range []bool{false, true} {
+		var got error
+		method := streamingpb.StreamingNodeReplicaService_SubscribeWALEvents_FullMethodName
+		if streaming {
+			got = NewServiceStreamServerInterceptor()(nil, nil, &grpc.StreamServerInfo{FullMethod: method}, func(any, grpc.ServerStream) error { return wire.Err() })
+		} else {
+			_, got = NewServiceUnaryServerInterceptor()(t.Context(), nil, &grpc.UnaryServerInfo{FullMethod: method}, func(context.Context, any) (any, error) { return nil, wire.Err() })
+		}
+		require.Equal(t, wire.Proto(), grpcstatus.Convert(got).Proto())
+		restored := status.AsStreamingError(status.ConvertStreamingError(method, got))
+		require.Equal(t, streamingpb.StreamingCode_STREAMING_CODE_INVALID_REQUEST_SEQ, restored.Code)
+		require.Equal(t, "baseline required", restored.Cause)
+	}
+	transport := grpcstatus.Error(codes.Unavailable, "connection lost")
+	require.Equal(t, transport, convertServiceError(streamingpb.StreamingNodeReplicaService_BootstrapWALReplica_FullMethodName, transport))
+}
+
 // The same domain error must be projected according to the invoked service,
 // for both unary and streaming RPCs, before the corresponding client wraps it.
 func TestPairedServiceInterceptors(t *testing.T) {
