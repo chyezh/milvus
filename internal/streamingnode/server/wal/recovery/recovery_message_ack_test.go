@@ -238,10 +238,7 @@ func TestPersistBatchMarksModuleSnapshotsAfterCompoundCommit(t *testing.T) {
 		moduleName: moduleapi.ModuleNameSegment,
 		key:        moduleapi.SnapshotKey{SegmentID: 1},
 		op:         moduleapi.SnapshotOpUpsert,
-		payload:    &streamingpb.SegmentAssignmentMeta{SegmentId: 1},
-		markPersisted: func() {
-			events = append(events, "mark-module-persisted")
-		},
+		payload:    &streamingpb.SegmentAssignmentMeta{SegmentId: 1, Vchannel: "v1"},
 	}
 	storage.pendingPersistSnapshot = &dirtyPersistSnapshot{
 		Checkpoint:       checkpoint.Clone(),
@@ -258,9 +255,16 @@ func TestPersistBatchMarksModuleSnapshotsAfterCompoundCommit(t *testing.T) {
 		return nil
 	}).Build()
 	defer compoundMock.UnPatch()
+	apply := mockey.Mock((*vchannel.PChannelRecoveryManager).ApplyCatalogPublication).To(func(_ *vchannel.PChannelRecoveryManager, publication *streamingpb.WALReplicaCatalogPublication) error {
+		require.Len(t, publication.Segments, 1)
+		require.EqualValues(t, 1, publication.Segments[0].SegmentId)
+		events = append(events, "apply-catalog-publication")
+		return nil
+	}).Build()
+	defer apply.UnPatch()
 
 	require.NoError(t, storage.persistDirtySnapshot(context.Background(), mlog.DebugLevel))
-	assert.Equal(t, []string{"persist-compound", "mark-module-persisted"}, events)
+	assert.Equal(t, []string{"persist-compound", "apply-catalog-publication"}, events)
 }
 
 func TestBuildRecoverySnapshotBatchesModuleMutations(t *testing.T) {
@@ -426,6 +430,13 @@ func TestPersistReportsCapturedFullAndBaseMaterializationFrontiers(t *testing.T)
 	t.Cleanup(storage.metrics.Close)
 	storage.SetLogger(mlog.With())
 	storage.summaryManager = walsummary.NewManager(walsummary.ManagerConfig{})
+	manager, err := vchannel.NewPChannelRecoveryManager(vchannel.PChannelManagerConfig{
+		PChannel: storage.channel.Name, SummaryManager: storage.summaryManager,
+		VChannelMetas: map[string]*streamingpb.VChannelMeta{"full": {Vchannel: "full"}, "base": {Vchannel: "base"}},
+	})
+	require.NoError(t, err)
+	defer manager.Close()
+	storage.vchannelManager = manager
 	storage.pendingPersistSnapshot = &dirtyPersistSnapshot{Checkpoint: checkpoint, ModuleDirtySnaps: []moduleapi.DirtySnapshot{
 		newOrderedDirtySnapshot(moduleapi.ModuleNameVChannel, moduleapi.SnapshotKey{VChannel: "full"}, moduleapi.SnapshotOpUpsert, &streamingpb.VChannelMeta{Vchannel: "full", TransformMaterializedTimeTick: 100}),
 		newOrderedDirtySnapshot(moduleapi.ModuleNameVChannel, moduleapi.SnapshotKey{VChannel: "base"}, moduleapi.SnapshotOpUpsertBase, &streamingpb.VChannelMeta{Vchannel: "base", TransformMaterializedTimeTick: 200}),

@@ -1244,3 +1244,120 @@ var StreamingNodeManagerService_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "streaming.proto",
 }
+
+const (
+	StreamingNodeReplicaService_SubscribeWALEvents_FullMethodName = "/milvus.proto.streaming.StreamingNodeReplicaService/SubscribeWALEvents"
+)
+
+// StreamingNodeReplicaServiceClient is the client API for StreamingNodeReplicaService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type StreamingNodeReplicaServiceClient interface {
+	// Resume strictly after the locally applied cursor; never skip missing history.
+	SubscribeWALEvents(ctx context.Context, in *WALReplicaSubscribeRequest, opts ...grpc.CallOption) (StreamingNodeReplicaService_SubscribeWALEventsClient, error)
+}
+
+type streamingNodeReplicaServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewStreamingNodeReplicaServiceClient(cc grpc.ClientConnInterface) StreamingNodeReplicaServiceClient {
+	return &streamingNodeReplicaServiceClient{cc}
+}
+
+func (c *streamingNodeReplicaServiceClient) SubscribeWALEvents(ctx context.Context, in *WALReplicaSubscribeRequest, opts ...grpc.CallOption) (StreamingNodeReplicaService_SubscribeWALEventsClient, error) {
+	stream, err := c.cc.NewStream(ctx, &StreamingNodeReplicaService_ServiceDesc.Streams[0], StreamingNodeReplicaService_SubscribeWALEvents_FullMethodName, opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &streamingNodeReplicaServiceSubscribeWALEventsClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type StreamingNodeReplicaService_SubscribeWALEventsClient interface {
+	Recv() (*WALReplicaEvent, error)
+	grpc.ClientStream
+}
+
+type streamingNodeReplicaServiceSubscribeWALEventsClient struct {
+	grpc.ClientStream
+}
+
+func (x *streamingNodeReplicaServiceSubscribeWALEventsClient) Recv() (*WALReplicaEvent, error) {
+	m := new(WALReplicaEvent)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+// StreamingNodeReplicaServiceServer is the server API for StreamingNodeReplicaService service.
+// All implementations should embed UnimplementedStreamingNodeReplicaServiceServer
+// for forward compatibility
+type StreamingNodeReplicaServiceServer interface {
+	// Resume strictly after the locally applied cursor; never skip missing history.
+	SubscribeWALEvents(*WALReplicaSubscribeRequest, StreamingNodeReplicaService_SubscribeWALEventsServer) error
+}
+
+// UnimplementedStreamingNodeReplicaServiceServer should be embedded to have forward compatible implementations.
+type UnimplementedStreamingNodeReplicaServiceServer struct {
+}
+
+func (UnimplementedStreamingNodeReplicaServiceServer) SubscribeWALEvents(*WALReplicaSubscribeRequest, StreamingNodeReplicaService_SubscribeWALEventsServer) error {
+	return status.Errorf(codes.Unimplemented, "method SubscribeWALEvents not implemented")
+}
+
+// UnsafeStreamingNodeReplicaServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to StreamingNodeReplicaServiceServer will
+// result in compilation errors.
+type UnsafeStreamingNodeReplicaServiceServer interface {
+	mustEmbedUnimplementedStreamingNodeReplicaServiceServer()
+}
+
+func RegisterStreamingNodeReplicaServiceServer(s grpc.ServiceRegistrar, srv StreamingNodeReplicaServiceServer) {
+	s.RegisterService(&StreamingNodeReplicaService_ServiceDesc, srv)
+}
+
+func _StreamingNodeReplicaService_SubscribeWALEvents_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WALReplicaSubscribeRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(StreamingNodeReplicaServiceServer).SubscribeWALEvents(m, &streamingNodeReplicaServiceSubscribeWALEventsServer{stream})
+}
+
+type StreamingNodeReplicaService_SubscribeWALEventsServer interface {
+	Send(*WALReplicaEvent) error
+	grpc.ServerStream
+}
+
+type streamingNodeReplicaServiceSubscribeWALEventsServer struct {
+	grpc.ServerStream
+}
+
+func (x *streamingNodeReplicaServiceSubscribeWALEventsServer) Send(m *WALReplicaEvent) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+// StreamingNodeReplicaService_ServiceDesc is the grpc.ServiceDesc for StreamingNodeReplicaService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var StreamingNodeReplicaService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "milvus.proto.streaming.StreamingNodeReplicaService",
+	HandlerType: (*StreamingNodeReplicaServiceServer)(nil),
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "SubscribeWALEvents",
+			Handler:       _StreamingNodeReplicaService_SubscribeWALEvents_Handler,
+			ServerStreams: true,
+		},
+	},
+	Metadata: "streaming.proto",
+}

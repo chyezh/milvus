@@ -75,6 +75,12 @@ func (e *ResetError) Error() string { return e.cause.Error() }
 
 func (e *ResetError) Unwrap() error { return e.cause }
 
+// NewResumeRequired reconstructs a transport resume rejection. Applied is the
+// local cursor; Requested identifies the primary's current baseline candidate.
+func NewResumeRequired(applied, current Cursor) *ResetError {
+	return newResetError(applied, current, "primary no longer retains the requested event prefix")
+}
+
 func newResetError(applied, requested Cursor, reason string) *ResetError {
 	return &ResetError{
 		Applied: applied, Requested: requested,

@@ -100,6 +100,7 @@ func (s *Server) initService() {
 // registerGRPCService register all grpc service to grpc server.
 func (s *Server) registerGRPCService(grpcServer *grpc.Server) {
 	streamingpb.RegisterStreamingNodeHandlerServiceServer(grpcServer, s.handlerService)
+	streamingpb.RegisterStreamingNodeReplicaServiceServer(grpcServer, service.NewReplicaService(s.walManager))
 	streamingpb.RegisterStreamingNodeManagerServiceServer(grpcServer, s.managerService)
 	viewpb.RegisterViewSyncServiceServer(grpcServer, snview.NewPChannelViewSyncServer(s.walManager))
 	viewpb.RegisterViewQueryServiceServer(grpcServer, snview.NewPChannelViewQueryServer(

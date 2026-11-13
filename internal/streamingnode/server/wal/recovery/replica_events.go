@@ -33,6 +33,11 @@ func (r *recoveryStorageImpl) applyEvent(ctx context.Context, event walevent.Eve
 		r.mu.Unlock()
 		r.metrics.ObServePersistedMetrics(checkpoint.TimeTick)
 	case walevent.StoragePublished:
+		if payload.Catalog != nil {
+			if err := r.vchannelManager.ApplyCatalogPublication(payload.Catalog); err != nil {
+				return err
+			}
+		}
 		if payload.Summary != nil {
 			if r.summaryManager == nil {
 				return merr.WrapErrServiceInternalMsg("WAL summary event applier is not installed")

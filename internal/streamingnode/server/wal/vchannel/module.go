@@ -89,6 +89,7 @@ type VChannelRecoveryModule struct {
 	segmentPackWriter segment.PackWriter
 
 	removed          bool
+	catalogRemovedAt uint64 // RO waits for its own query references before retirement.
 	onCleanup        func(*VChannelRecoveryModule)
 	onL0Materialized func(uint64)
 }

@@ -88,24 +88,13 @@ func (rs *recoveryStorageImpl) persistDirtySnapshot(ctx context.Context, lvl mlo
 	if err := rs.saveRecoverySnapshot(ctx, recoverySnapshot); err != nil {
 		return err
 	}
-	// The vchannel metas are durable now: advance the summary GC positions to
-	// their materialization frontiers. Only persisted frontiers may release
-	// summary records — a crash-recovery must observe them (see
-	// VChannelRecoveryModule.markL0Materialized).
-	if rs.summaryManager != nil {
-		for vchannel, meta := range recoverySnapshot.VChannels {
-			if frontier := meta.GetTransformMaterializedTimeTick(); frontier > 0 {
-				rs.summaryManager.AdvanceGCTimeTick(vchannel, frontier)
-			}
+	// Completion must cross the same Apply boundary as WAL and QueryView input.
+	// Updating local modules directly here would make a metadata cut overtake
+	// its replicated completion, and RO would never finish catalog lifecycles.
+	if len(snapshot.ModuleDirtySnaps) > 0 {
+		if err := rs.publishStorage(ctx, walevent.StoragePublished{Catalog: catalogPublication(snapshot.ModuleDirtySnaps)}); err != nil {
+			return err
 		}
-		for vchannel, meta := range recoverySnapshot.VChannelBaseMetas {
-			if frontier := meta.GetTransformMaterializedTimeTick(); frontier > 0 {
-				rs.summaryManager.AdvanceGCTimeTick(vchannel, frontier)
-			}
-		}
-	}
-	for _, dirtySnapshot := range snapshot.ModuleDirtySnaps {
-		dirtySnapshot.MarkPersisted()
 	}
 	if snapshot.CheckpointDirty {
 		if _, err := rs.events.Publish(ctx, walevent.CheckpointPublished{Checkpoint: snapshot.Checkpoint.IntoProto()}); err != nil {
@@ -202,19 +191,15 @@ func (rs *recoveryStorageImpl) buildRecoverySnapshot(snapshot *dirtyPersistSnaps
 				return nil, merr.WrapErrServiceInternalMsg("unknown vchannel snapshot op: %d", dirtySnapshot.Op())
 			}
 		case moduleapi.ModuleNameSegment:
+			meta, ok := dirtySnapshot.Payload().(*streamingpb.SegmentAssignmentMeta)
+			if !ok || meta == nil {
+				return nil, merr.WrapErrServiceInternalMsg("segment dirty snapshot payload is not SegmentAssignmentMeta")
+			}
+			if meta.GetSegmentId() != key.SegmentID {
+				return nil, merr.WrapErrServiceInternalMsg("segment dirty snapshot key mismatch: expected %d, got %d", key.SegmentID, meta.GetSegmentId())
+			}
 			switch dirtySnapshot.Op() {
 			case moduleapi.SnapshotOpUpsert:
-				meta, ok := dirtySnapshot.Payload().(*streamingpb.SegmentAssignmentMeta)
-				if !ok || meta == nil {
-					return nil, merr.WrapErrServiceInternalMsg("segment dirty snapshot payload is not SegmentAssignmentMeta")
-				}
-				if meta.GetSegmentId() != key.SegmentID {
-					return nil, merr.WrapErrServiceInternalMsg(
-						"segment dirty snapshot key mismatch: expected %d, got %d",
-						key.SegmentID,
-						meta.GetSegmentId(),
-					)
-				}
 				if recoverySnapshot.SegmentAssignments == nil {
 					recoverySnapshot.SegmentAssignments = make(map[int64]*streamingpb.SegmentAssignmentMeta)
 				}

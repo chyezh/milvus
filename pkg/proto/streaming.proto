@@ -1289,3 +1289,62 @@ message HighlightRowResult {
 message HighlightResult {
     repeated HighlightRowResult results = 1;
 }
+
+// WALReplicaCursor identifies a composite event prefix, not a WAL position.
+message WALReplicaCursor {
+    int64 term = 1;
+    uint64 seq = 2;
+}
+
+message WALReplicaSubscribeRequest {
+    PChannelInfo pchannel = 1;
+    WALReplicaCursor after = 2;
+}
+
+// Transactions preserve their assembled logical boundary. The ordinary outer
+// message alone does not serialize the in-memory transaction body.
+message WALReplicaEntry {
+    common.ImmutableMessage message = 1;
+    common.ImmutableMessage begin = 2;
+    repeated common.ImmutableMessage body = 3;
+    common.ImmutableMessage commit = 4;
+}
+
+message WALReplicaQueryViewIntents {
+    repeated view.QueryViewOfShard views = 1;
+}
+
+message WALReplicaStoragePublication {
+    repeated VChannelMeta vchannels = 1;
+    repeated SegmentAssignmentMeta segments = 2;
+    PChannelSummaryManifest summary = 3;
+    WALReplicaCatalogPublication catalog = 4;
+}
+
+// Metadata transaction completions. These are facts, not instructions to write
+// the catalog. Deletes carry their captured identity, including the vchannel.
+message WALReplicaCatalogPublication {
+    repeated VChannelMeta vchannels = 1;
+    repeated VChannelMeta vchannel_bases = 2;
+    repeated SegmentAssignmentMeta segments = 3;
+    repeated VChannelMeta removed_vchannels = 4;
+    repeated SegmentAssignmentMeta removed_segments = 5;
+    repeated VChannelMeta removed_schemas = 6;
+}
+
+message WALReplicaEvent {
+    WALReplicaCursor cursor = 1;
+    oneof payload {
+        WALReplicaEntry wal_entry = 2;
+        WALReplicaQueryViewIntents query_view_intents = 3;
+        WALReplicaStoragePublication storage_published = 4;
+        WALCheckpoint checkpoint_published = 5;
+    }
+}
+
+
+// Primary-to-replica transport, independent of producer/consumer connections.
+service StreamingNodeReplicaService {
+    // Resume strictly after the locally applied cursor; never skip missing history.
+    rpc SubscribeWALEvents(WALReplicaSubscribeRequest) returns (stream WALReplicaEvent) {};
+}

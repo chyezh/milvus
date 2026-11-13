@@ -48,6 +48,10 @@ func (info *VChannelView) stableMetaLocked() *streamingpb.VChannelMeta {
 func (info *VChannelView) CompleteDrop(timeTick uint64) {
 	info.mu.Lock()
 	defer info.mu.Unlock()
+	info.completeDropLocked(timeTick)
+}
+
+func (info *VChannelView) completeDropLocked(timeTick uint64) {
 	drop := info.pendingDrops[0]
 	if drop.timeTick != timeTick {
 		panic("out-of-order drop completion")

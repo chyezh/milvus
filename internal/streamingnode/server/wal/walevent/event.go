@@ -69,6 +69,7 @@ type StoragePublished struct {
 	VChannels []*streamingpb.VChannelMeta
 	Segments  []*streamingpb.SegmentAssignmentMeta
 	Summary   *streamingpb.PChannelSummaryManifest
+	Catalog   *streamingpb.WALReplicaCatalogPublication
 }
 
 func (e StoragePublished) freeze() (Payload, int) {
@@ -76,8 +77,9 @@ func (e StoragePublished) freeze() (Payload, int) {
 		VChannels: make([]*streamingpb.VChannelMeta, len(e.VChannels)),
 		Segments:  make([]*streamingpb.SegmentAssignmentMeta, len(e.Segments)),
 		Summary:   proto.Clone(e.Summary).(*streamingpb.PChannelSummaryManifest),
+		Catalog:   proto.CloneOf(e.Catalog),
 	}
-	size := proto.Size(result.Summary)
+	size := proto.Size(result.Summary) + proto.Size(result.Catalog)
 	for i, vchannel := range e.VChannels {
 		result.VChannels[i] = proto.Clone(vchannel).(*streamingpb.VChannelMeta)
 		size += proto.Size(result.VChannels[i])

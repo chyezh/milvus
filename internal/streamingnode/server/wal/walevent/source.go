@@ -199,6 +199,10 @@ type Reader struct {
 	once   sync.Once
 }
 
+// SourceDone allows transports to terminate a flow-controlled Send when the
+// source closes. Returning from a gRPC handler cancels the blocked Send.
+func (r *Reader) SourceDone() <-chan struct{} { return r.source.ctx.Done() }
+
 func (r *Reader) Next(ctx context.Context) (Event, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

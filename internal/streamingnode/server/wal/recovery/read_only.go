@@ -33,11 +33,14 @@ type ReadOnlyConfig struct {
 // consumer and its QueryView resources, including its applied cursor.
 type ReadOnlyRecoveryStorage struct {
 	*recoveryStorageImpl
-	consumer *walevent.Consumer
-	ctx      context.Context
-	cancel   context.CancelFunc
-	applyMu  sync.RWMutex
-	closed   bool
+	consumer      *walevent.Consumer
+	ctx           context.Context
+	cancel        context.CancelFunc
+	applyMu       sync.RWMutex
+	closed        bool
+	sourceMu      sync.Mutex
+	sourceAttempt uint64
+	sourceCancel  context.CancelFunc
 }
 
 func NewReadOnlyRecoveryStorage(cfg ReadOnlyConfig, opts ...RecoveryStorageOption) (*ReadOnlyRecoveryStorage, error) {

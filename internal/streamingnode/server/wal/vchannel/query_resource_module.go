@@ -31,6 +31,15 @@ func (m *VChannelRecoveryModule) ReleaseQueryResource(req snview.ReleaseResource
 	if m == nil || m.queryResources == nil {
 		return
 	}
+	if m.readOnly {
+		onDropped := req.OnDropped
+		req.OnDropped = func() {
+			m.reclaimReadOnlyCatalog()
+			if onDropped != nil {
+				onDropped()
+			}
+		}
+	}
 	m.queryResources.Release(req)
 	if m.runtime.Notifier != nil {
 		m.runtime.Notifier.NotifyModuleUpdated(moduleapi.ModuleNameSegment)
