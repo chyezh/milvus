@@ -158,6 +158,18 @@ func RecoverPChannelSNQueryViewHandler(
 	return recoverSNQueryViewHandler(ctx, pchannel, catalog, resMgr, views)
 }
 
+// NewReadOnlyPChannelSNQueryViewHandler installs query runtime without a catalog
+// writer. Up targets from the reconciled baseline prepare locally before being
+// advertised; subsequent intents use the same state machine as the primary.
+func NewReadOnlyPChannelSNQueryViewHandler(
+	ctx context.Context,
+	pchannel string,
+	resMgr StreamingNodeResourceManager,
+	upViews []*viewpb.QueryViewOfShard,
+) *SNQueryViewHandler {
+	return recoverSNQueryViewHandler(ctx, pchannel, nil, resMgr, upViews)
+}
+
 func OldestUpDataVersions(views []*viewpb.QueryViewOfShard) map[string]qviews.DataVersion {
 	result := make(map[string]qviews.DataVersion)
 	for _, view := range views {

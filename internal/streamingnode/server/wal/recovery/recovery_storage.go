@@ -9,6 +9,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walevent"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/ratelimit"
@@ -110,6 +111,10 @@ type RecoveryStream interface {
 
 // RecoveryStorage owns WAL recovery state for one pchannel.
 type RecoveryStorage interface {
+	// Events is the primary's ordered input and locally applied event journal.
+	// A ReadOnlyRecoveryStorage consumes remote events and returns nil here.
+	Events() *walevent.Source
+
 	// Metrics gets the metrics of the recovery storage.
 	Metrics() RecoveryMetrics
 

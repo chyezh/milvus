@@ -6,12 +6,12 @@ import (
 	"github.com/cockroachdb/errors"
 	"go.uber.org/atomic"
 	"golang.org/x/time/rate"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
-	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 	"github.com/milvus-io/milvus/pkg/v3/util/retry"
 	"github.com/milvus-io/milvus/pkg/v3/util/tsoutil"
@@ -127,11 +127,10 @@ func (t *ensureGrowingSegmentTask) Execute(ctx context.Context) error {
 		}
 
 		segment.mu.Lock()
-		handles := segment.markPendingDataDurableLocked(t.timetick)
+		published := proto.CloneOf(segment.durableMeta)
+		published.CheckpointTimeTick = max(published.CheckpointTimeTick, t.timetick)
 		segment.mu.Unlock()
-		segment.NotifyDataUpdated()
-		releaseMessages(handles)
-		return nil
+		return segment.publishStorage(ctx, published)
 	})
 }
 
@@ -186,45 +185,13 @@ func (t *commitL1SegmentTask) Execute(ctx context.Context) error {
 			return err
 		}
 
-		segment.mu.Lock()
-		handles := segment.markPendingDataDurableLocked(t.timetick)
-		segment.finalCommitDone.Store(true)
-		segment.meta.SealedAtDataVersion = version
-		// Publication and retirement are one stable transition; a snapshot can
-		// never capture an intermediate FLUSHED state before the owner callback.
-		segment.meta.State = streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_TOMBSTONED
-		segment.meta.CheckpointTimeTick = max(segment.meta.GetCheckpointTimeTick(), t.timetick)
-		segment.durableMeta.State = segment.meta.State
-		segment.durableMeta.SealedAtDataVersion = version
-		if stat := segment.meta.GetStat(); stat != nil && segment.durableMeta.GetStat() != nil {
-			stat.LastModifiedTimestamp = tsoutil.PhysicalTime(t.timetick).Unix()
-			segment.durableMeta.Stat.LastModifiedTimestamp = stat.GetLastModifiedTimestamp()
+		meta.State = streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_TOMBSTONED
+		meta.SealedAtDataVersion = version
+		meta.CheckpointTimeTick = max(meta.CheckpointTimeTick, t.timetick)
+		if meta.Stat != nil {
+			meta.Stat.LastModifiedTimestamp = tsoutil.PhysicalTime(t.timetick).Unix()
 		}
-		segment.dirty = true
-		// After the final commit no flush task can ever cover the buffer again.
-		// A non-empty buffer here means out-of-timetick-order inserts slipped
-		// past the replay guards: their rows can never be persisted anymore. Do
-		// not plain-release them (that would make the loss invisible and
-		// overturn the "release = durable" contract); poison them instead, so a
-		// consumer can enumerate and handle them separately, then warn loudly.
-		var abandoned []message.RetainedImmutableMessage
-		if len(segment.pending.entries) > 0 {
-			mlog.Warn(ctx, "final commit leaves pending insert data unpersisted",
-				mlog.Int64("segmentID", segment.segmentID),
-				mlog.String("vchannel", segment.vchannel),
-				mlog.Int("pendingEntries", len(segment.pending.entries)),
-				mlog.Uint64("pendingFromTimeTick", segment.pending.fromTimeTick),
-				mlog.Uint64("commitTimeTick", t.timetick))
-			abandoned = segment.pending.entries
-			segment.pending.reset()
-		}
-		segment.mu.Unlock()
-		segment.NotifyDataUpdated()
-		releaseMessages(handles)
-		for _, handle := range abandoned {
-			handle.PoisonedRelease()
-		}
-		return nil
+		return segment.publishStorage(ctx, meta)
 	})
 }
 

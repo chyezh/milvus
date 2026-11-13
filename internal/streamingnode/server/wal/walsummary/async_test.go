@@ -435,9 +435,9 @@ func TestSummaryPressurePromotesQueuedWritesAndPublication(t *testing.T) {
 	require.NoError(t, later.Execute(ctx))
 	require.Empty(t, promoted)
 	publication := m.manifestTask
-	m.flushBacklog(true) // Later publication does not gate this already confirmed frontier.
+	m.flushBacklog(true) // Every published prefix must be exportable to replicas.
 	require.Same(t, publication, m.manifestTask)
-	require.False(t, promoted[&publication.priority])
+	require.True(t, promoted[&publication.priority])
 	require.NoError(t, publication.Execute(ctx))
 	require.Equal(t, uint64(200), m.LastAcked())
 	m.terminalErr = context.Canceled

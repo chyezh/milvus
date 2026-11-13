@@ -47,7 +47,7 @@ func newTestRecoveryStorage(t *testing.T, checkpoint *utility.WALCheckpoint) *re
 	nodeScheduler := nodescheduler.New(4)
 	t.Cleanup(nodeScheduler.Close)
 	storage := newRecoveryStorage(
-		types.PChannelInfo{Name: "test-pchannel"},
+		types.PChannelInfo{Name: "test-pchannel", Term: 1},
 		checkpoint,
 		WithNodeScheduler(nodeScheduler),
 	)
@@ -200,7 +200,7 @@ func (b *recordingRecoveryStreamBuilder) WALName() message.WALName {
 }
 
 func (b *recordingRecoveryStreamBuilder) Channel() types.PChannelInfo {
-	return types.PChannelInfo{Name: "test-pchannel"}
+	return types.PChannelInfo{Name: "test-pchannel", Term: 1}
 }
 
 func (b *recordingRecoveryStreamBuilder) Build(param BuildRecoveryStreamParam) RecoveryStream {
@@ -1256,7 +1256,7 @@ func TestRecoverRecoveryStorageFailureReleasesResources(t *testing.T) {
 	nodeScheduler := nodescheduler.New(4)
 	t.Cleanup(nodeScheduler.Close)
 	rs := newRecoveryStorage(
-		types.PChannelInfo{Name: "test-pchannel"},
+		types.PChannelInfo{Name: "test-pchannel", Term: 1},
 		&utility.WALCheckpoint{
 			MessageID: walimplstest.NewTestMessageID(10),
 			TimeTick:  10,

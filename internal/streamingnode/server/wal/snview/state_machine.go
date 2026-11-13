@@ -32,6 +32,9 @@ import (
 //
 // Thread-safety: NOT thread-safe. The caller must serialize access.
 type snQueryViewStateMachine struct {
+	// An Up intent can arrive before this replica finishes preparing. It is
+	// independent of the primary's readiness and survives Preparing retries.
+	pendingUp  bool
 	state      qviews.QueryViewState
 	meta       *viewpb.QueryViewMeta
 	snView     *viewpb.QueryViewOfStreamingNode
@@ -141,6 +144,9 @@ func (sm *snQueryViewStateMachine) OnReady() {
 	}
 	sm.state = qviews.QueryViewStateReady
 	sm.pendingReport = sm.buildReport()
+	if sm.pendingUp {
+		sm.handleCoordUp()
+	}
 }
 
 // OnUnrecoverable reports a fatal error (e.g., WAL recovery OOM).
@@ -239,9 +245,13 @@ func (sm *snQueryViewStateMachine) handleCoordPreparing() {
 
 func (sm *snQueryViewStateMachine) handleCoordUp() {
 	switch sm.state {
+	case qviews.QueryViewStatePreparing:
+		sm.pendingUp = true
+		sm.pendingReport = sm.buildReport()
 	case qviews.QueryViewStateReady:
 		// Normal transition: Ready → Up.
 		sm.state = qviews.QueryViewStateUp
+		sm.pendingUp = false
 		sm.pendingReport = sm.buildReport()
 		sm.pendingPersist = sm.buildReport()
 	case qviews.QueryViewStateDropping:
@@ -254,7 +264,13 @@ func (sm *snQueryViewStateMachine) handleCoordUp() {
 }
 
 func (sm *snQueryViewStateMachine) handleCoordDown() {
+	sm.pendingUp = false
 	switch sm.state {
+	case qviews.QueryViewStatePreparing, qviews.QueryViewStateReady:
+		// This replica may still be catching up after another replica made
+		// the view Up. Never transiently advertise it after receiving Down.
+		sm.state = qviews.QueryViewStateDown
+		sm.pendingReport = sm.buildReport()
 	case qviews.QueryViewStateUp:
 		sm.state = qviews.QueryViewStateDown
 		sm.pendingReport = sm.buildReport()

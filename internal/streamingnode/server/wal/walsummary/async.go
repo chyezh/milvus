@@ -9,6 +9,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walevent"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
@@ -20,6 +21,9 @@ import (
 // staged records seal on size or WAL tail pressure, never age. Chunk and manifest
 // I/O and retries use the scheduler.
 func (m *Manager) Run(ctx context.Context, materializationMaxAge time.Duration, underPressure func() bool) {
+	if m.cfg.ReadOnly {
+		return
+	}
 	interval := time.Second
 	if materializationMaxAge > 0 && materializationMaxAge < interval {
 		interval = materializationMaxAge
@@ -82,12 +86,12 @@ func (m *Manager) advanceLastAckedLocked(timetick uint64) {
 func (m *Manager) refreshLastAckedLocked() {
 	// Current-term data is discoverable only after its first manifest PUT.
 	if m.manifestPublished {
-		m.advanceLastAckedLocked(m.manifest.GetCoverage().GetEndTimeTick())
+		m.advanceLastAckedLocked(m.publishedManifest.GetCoverage().GetEndTimeTick())
 	}
 	// Non-record messages need no new object. But a first-term unpublished
 	// chunk must still pin confirmation even after leaving pendingSealed.
 	if len(m.pending) == 0 && len(m.pendingSealed) == 0 &&
-		(m.manifestPublished || m.manifest.GetCoverage() == nil || m.manifest.GetCoverage().GetTerm() != m.cfg.Term) {
+		(proto.Equal(m.manifest.GetCoverage(), m.publishedManifest.GetCoverage()) || m.manifest.GetCoverage() == nil || m.manifest.GetCoverage().GetTerm() != m.cfg.Term) {
 		m.advanceLastAckedLocked(m.lastObserved)
 	}
 }
@@ -112,7 +116,7 @@ func (m *Manager) requestSeal() {
 
 func (m *Manager) scheduleWrite() {
 	m.mu.Lock()
-	if m.terminalErr != nil || m.cfg.Runtime.Scheduler == nil {
+	if m.cfg.ReadOnly || m.terminalErr != nil || m.cfg.Runtime.Scheduler == nil {
 		m.mu.Unlock()
 		return
 	}
@@ -134,7 +138,7 @@ func (m *Manager) scheduleWrite() {
 
 func (m *Manager) scheduleManifest() {
 	m.mu.Lock()
-	if m.terminalErr != nil || m.cfg.Runtime.Scheduler == nil || m.manifestVersion == m.publishedVersion {
+	if m.cfg.ReadOnly || m.terminalErr != nil || m.cfg.Runtime.Scheduler == nil || m.manifestVersion == m.publishedVersion {
 		m.mu.Unlock()
 		return
 	}
@@ -154,6 +158,9 @@ func (m *Manager) scheduleManifest() {
 
 // HasPendingWork includes publication-only work, even without another chunk.
 func (m *Manager) HasPendingWork() bool {
+	if m.cfg.ReadOnly {
+		return false
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.pending) > 0 || len(m.pendingSealed) > 0 || m.manifestVersion != m.publishedVersion ||
@@ -262,10 +269,15 @@ func (t *manifestWriteTask) Execute(ctx context.Context) (err error) {
 			}
 			return err
 		}
+		if publish := m.cfg.Runtime.PublishStorage; publish != nil {
+			if err := publish(ctx, walevent.StoragePublished{Summary: snapshot}); err != nil {
+				return err
+			}
+		} else if err := m.ApplyStoragePublished(snapshot); err != nil {
+			return err
+		}
 		m.mu.Lock()
 		m.publishedVersion = version
-		m.manifestPublished = true
-		m.refreshLastAckedLocked()
 		m.mu.Unlock()
 	}
 	// A complete current-term manifest releases older manifests independently

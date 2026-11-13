@@ -25,6 +25,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	msgadaptor "github.com/milvus-io/milvus/pkg/v3/streaming/util/message/adaptor"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
@@ -221,6 +222,10 @@ func (o *openerAdaptorImpl) openRWWAL(ctx context.Context, l walimpls.WALImpls, 
 		newRecoveryStreamBuilder(roWAL, param.WriteAheadBuffer, liveReady),
 		cp,
 		param.LastTimeTickMessage,
+		recovery.WithQueryViewEventApplier(func(ctx context.Context, views []*viewpb.QueryViewOfShard) error {
+			snview.ApplyQueryViewIntents(ctx, resources.queryViewHandler, views)
+			return nil
+		}),
 		recovery.WithRecoveryTailRateLimiter(roWAL.RecoveryStorage),
 		recovery.WithConsumedThrough(param.WriteAheadBuffer.ReleaseThrough),
 		recovery.WithRecoveryFatalHandler(roWAL.markUnavailable),
@@ -274,6 +279,7 @@ func (o *openerAdaptorImpl) openRWWAL(ctx context.Context, l walimpls.WALImpls, 
 	}
 	wal := adaptImplsToRWWAL(roWAL, o.interceptorBuilders, param)
 	wal.queryViewHandler = resources.queryViewHandler
+	wal.queryViewEvents = snview.NewEventQueryViewHandler(roWAL.availableCtx, rs.Events(), resources.queryViewHandler, roWAL.markUnavailable)
 	wal.viewResourceManager = rs.VChannelManager()
 	close(liveReady)
 	o.walInstances.Insert(id, wal)

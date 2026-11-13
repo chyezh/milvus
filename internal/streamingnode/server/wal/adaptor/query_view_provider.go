@@ -19,7 +19,7 @@ var (
 )
 
 func (w *walAdaptorImpl) QueryViewHandler() worknodehandler.QueryViewHandler {
-	return w.queryViewHandler
+	return w.queryViewEvents
 }
 
 func (w *walAdaptorImpl) Statistics(ctx context.Context, req *viewpb.StatisticsOnViewRequest) (int64, error) {

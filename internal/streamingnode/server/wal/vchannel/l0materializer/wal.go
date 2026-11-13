@@ -27,6 +27,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walevent"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
@@ -37,6 +38,7 @@ import (
 
 // WALConfig wires the temporary retained-message consumer.
 type WALConfig struct {
+	ReadOnly             bool
 	VChannel             string
 	MaterializedTimeTick uint64
 	MaterializeMaxBytes  uint64
@@ -54,6 +56,7 @@ type WALConfig struct {
 // TODO: Remove after enabling queryview and reconnect the Summary materializer.
 // Materialization waits for earlier L1 final commits across all partitions.
 type WALMaterializer struct {
+	readOnly               bool
 	earlierSegmentsFlushed func(uint64) bool
 	mu                     sync.Mutex
 	vchannel               string
@@ -75,6 +78,7 @@ type WALMaterializer struct {
 
 func NewWALMaterializer(config WALConfig) *WALMaterializer {
 	return &WALMaterializer{
+		readOnly:               config.ReadOnly,
 		vchannel:               config.VChannel,
 		materialized:           config.MaterializedTimeTick,
 		observed:               config.MaterializedTimeTick,
@@ -94,6 +98,9 @@ func (m *WALMaterializer) MaterializedTimeTick() uint64 {
 }
 
 func (m *WALMaterializer) ObserveMessage(retained message.RetainedImmutableMessage) {
+	if m.readOnly {
+		return
+	}
 	msg := retained.Message()
 	flush := isL0FlushMessage(msg.MessageType())
 	deleted := messageutil.ClassifyTransformLogMessage(msg) == messageutil.TransformLogKindDelete
@@ -235,13 +242,14 @@ func (m *WALMaterializer) submit(task *walMaterializeTask) {
 }
 
 type walMaterializeTask struct {
-	priority moduleapi.DataTaskPriority
-	mu       sync.Mutex
-	owner    *WALMaterializer
-	handles  []message.RetainedImmutableMessage
-	through  uint64
-	done     bool
-	err      error
+	registered bool // Reuse successful object/coordinator output if event publication retries.
+	priority   moduleapi.DataTaskPriority
+	mu         sync.Mutex
+	owner      *WALMaterializer
+	handles    []message.RetainedImmutableMessage
+	through    uint64
+	done       bool
+	err        error
 }
 
 func (t *walMaterializeTask) Execute(ctx context.Context) error {
@@ -266,7 +274,7 @@ func (t *walMaterializeTask) Execute(ctx context.Context) error {
 			positions[entry.GetTimeTick()] = utility.NewMessagePosition(handle.Message(), m.vchannel)
 		}
 	}
-	if len(entries) > 0 {
+	if len(entries) > 0 && !t.registered {
 		if m.writer == nil {
 			return errors.Mark(merr.WrapErrServiceInternalMsg("L0 materializer output writer is nil"), nodescheduler.ErrDelay)
 		}
@@ -281,10 +289,17 @@ func (t *walMaterializeTask) Execute(ctx context.Context) error {
 			}
 			return errors.Mark(err, nodescheduler.ErrDelay)
 		}
+		t.registered = true
 	}
 	// Install dirty metadata outside the buffer lock, before any handle can
 	// complete. The publisher saves that snapshot before the global checkpoint.
-	if m.onMaterialized != nil {
+	if m.runtime.PublishStorage != nil {
+		if err := m.runtime.PublishStorage(ctx, walevent.StoragePublished{VChannels: []*streamingpb.VChannelMeta{{
+			Vchannel: m.vchannel, TransformMaterializedTimeTick: t.through,
+		}}}); err != nil {
+			return errors.Mark(err, nodescheduler.ErrDelay)
+		}
+	} else if m.onMaterialized != nil {
 		m.onMaterialized(t.through)
 	}
 	m.mu.Lock()

@@ -64,6 +64,8 @@ func (e QueryViewIntentBatch) freeze() (Payload, int) {
 // be inferred from a WAL message. Descriptors reference immutable objects; they
 // must not contain an unpersisted message tail or local worker callbacks.
 type StoragePublished struct {
+	// VChannels carries only (vchannel, transform_materialized_time_tick)
+	// completion facts. Schema and DDL state come from ordered WALEntry input.
 	VChannels []*streamingpb.VChannelMeta
 	Segments  []*streamingpb.SegmentAssignmentMeta
 	Summary   *streamingpb.PChannelSummaryManifest

@@ -69,6 +69,7 @@ type Manager struct {
 	generationExhausted   bool
 	reopenedTerm          bool
 	manifest              *streamingpb.PChannelSummaryManifest
+	publishedManifest     *streamingpb.PChannelSummaryManifest
 	manifestVersion       uint64
 	publishedVersion      uint64
 	manifestPublished     bool
@@ -94,6 +95,8 @@ type Manager struct {
 
 // ManagerConfig carries the wiring of one pchannel's summary manager.
 type ManagerConfig struct {
+	// ReadOnly keeps a queryable tail but never schedules persistence or GC.
+	ReadOnly bool
 	// CacheMaxBytes bounds cached encoded chunk buffers per PChannel; zero disables residency.
 	CacheMaxBytes uint64
 	Runtime       moduleapi.Runtime
@@ -187,8 +190,9 @@ func (m *Manager) stageRecordLocked(
 	if entry != nil {
 		addTransformSize(m.pendingTransforms, msg.VChannel(), entry)
 	}
+	record.size = stagedRecordSize(msg, &record)
 	m.pending = append(m.pending, record)
-	m.pendingBytes += stagedRecordSize(msg, &record)
+	m.pendingBytes += record.size
 }
 
 // stagedRecordSize estimates what the record will cost in a chunk. It is what
@@ -365,7 +369,7 @@ func (m *Manager) seal() *SealedChunk {
 }
 
 func (m *Manager) sealLocked() (*SealedChunk, error) {
-	if len(m.pending) == 0 || m.terminalErr != nil {
+	if m.cfg.ReadOnly || len(m.pending) == 0 || m.terminalErr != nil {
 		return nil, nil
 	}
 	if m.reopenedTerm {
@@ -711,6 +715,7 @@ func vchannelChunkIndex(chunk *streamingpb.PChannelSummaryChunkIndexEntry, vchan
 // stagedRecord is one staged record: the built section halves plus the WAL
 // position they came from. The message itself is not retained.
 type stagedRecord struct {
+	size     uint64
 	entry    *streamingpb.TransformLogEntry
 	vchannel string
 	timeTick uint64

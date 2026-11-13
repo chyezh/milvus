@@ -55,6 +55,7 @@ func newSegmentView(
 	}
 	durableMeta := proto.CloneOf(meta)
 	return &SegmentView{
+		readOnly:                    config.readOnly,
 		closingTimeTick:             closingTimeTick,
 		meta:                        cloneSegmentMetaState(durableMeta),
 		durableMeta:                 durableMeta,
@@ -172,6 +173,10 @@ func newSegmentAssignmentMetaFromCreateSegmentMessage(msg message.ImmutableCreat
 // SegmentView tracks the metadata and durability state of a growing segment.
 type SegmentView struct {
 	mu sync.Mutex
+	// RO keeps immutable query input only; it never allocates persistence
+	// handles, flush chunks or lifecycle tasks for this tail.
+	readOnly        bool
+	readOnlyInserts []message.ImmutableMessage
 
 	// meta is the in-memory segment recovery state. It is updated synchronously
 	// by WAL observe and is used to recover the live write path. Its checkpoint
@@ -275,6 +280,9 @@ func (s *SegmentView) ObserveCreateSegmentMessageV2(
 		return false
 	}
 	s.meta.CheckpointTimeTick = timetick
+	if s.readOnly {
+		return true
+	}
 	s.retainDataHandleLocked(timetick, owned.CloneHandle())
 	s.newEnsureGrowingSegmentTaskLocked(timetick)
 	s.maybeSubmitNextLocked()
@@ -342,6 +350,10 @@ func (s *SegmentView) ObserveInsert(
 	for _, assignment := range batch.assignments {
 		s.observeInsertMetaLocked(batch.timeTick, assignment)
 	}
+	if s.readOnly {
+		s.readOnlyInserts = append(s.readOnlyInserts, owned.Message())
+		return true
+	}
 	s.pending.appendMessage(owned.Clone(), batch.rows, batch.binarySize)
 	if s.flushPolicy != nil && s.flushPolicy.ShouldFlush(s.pending, batch.timeTick) {
 		s.newFlushL1BufferTaskLocked()
@@ -377,6 +389,9 @@ func (s *SegmentView) Flush(
 	timetick := msg.TimeTick()
 	closed, flushTimeTick, metaChanged := s.observeFlushMeta(timetick)
 	if !closed {
+		return metaChanged
+	}
+	if s.readOnly {
 		return metaChanged
 	}
 	s.retainDataHandleLocked(flushTimeTick, owned.Clone())
@@ -441,19 +456,7 @@ func (s *SegmentView) FlushInsertChunk(ctx context.Context, targetTimeTick uint6
 		return err
 	}
 
-	s.mu.Lock()
-	if err := s.unrecoverableErr(); err != nil {
-		s.mu.Unlock()
-		return err
-	}
-	chunk := s.pendingFlushChunkLocked(targetTimeTick)
-	appendPersistedStorage(result.PersistedStorage, s.meta, s.durableMeta)
-	applyInsertStat(s.durableMeta, *chunk)
-	handles := s.markPendingDataDurableLocked(targetTimeTick)
-	s.mu.Unlock()
-	s.NotifyDataUpdated()
-	releaseMessages(handles)
-	return nil
+	return s.publishStorage(ctx, pack.Meta)
 }
 
 // RequestPersistThrough schedules persistence for buffered inserts whose
@@ -469,6 +472,9 @@ func (s *SegmentView) RequestPersistThroughUnderPressure(targetTimeTick uint64) 
 }
 
 func (s *SegmentView) requestPersistThrough(targetTimeTick uint64, underPressure bool) bool {
+	if s.readOnly {
+		return false
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.unrecoverableErr() != nil {
@@ -659,6 +665,10 @@ func (info *SegmentView) EnsureFinalCommit() bool {
 		info.mu.Unlock()
 		return true
 	}
+	if info.readOnly {
+		info.mu.Unlock()
+		return false
+	}
 	task := info.newCommitL1SegmentTaskLocked(info.closingTimeTick)
 	if task != nil {
 		info.maybeSubmitNextLocked()
@@ -670,6 +680,9 @@ func (info *SegmentView) EnsureFinalCommit() bool {
 // ResumePendingRecovery retries legacy recovered final-commit work that was
 // durable before restart but had not reached the coordinator.
 func (info *SegmentView) ResumePendingRecovery() {
+	if info.readOnly {
+		return
+	}
 	info.mu.Lock()
 	if info.unrecoverableErr() != nil {
 		// Terminal segment: its commit can never reach the coordinator, so
@@ -819,6 +832,7 @@ func releaseMessages(messages []message.RetainedImmutableMessage) {
 // memory-reclaim signal in the real scanner wiring, which must not execute
 // under s.mu). Must be called with s.mu held.
 func (s *SegmentView) collectAllPendingLocked() []message.RetainedImmutableMessage {
+	s.readOnlyInserts = nil
 	var handles []message.RetainedImmutableMessage
 	handles = append(handles, s.pending.entries...)
 	for _, item := range s.pendingDataHandles {

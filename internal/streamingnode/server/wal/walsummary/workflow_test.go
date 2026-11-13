@@ -75,13 +75,13 @@ func TestConcurrentCompletionAndFirstPublication(t *testing.T) {
 	require.Len(t, disk.Chunks, 3, "completions coalesce into one snapshot")
 }
 
-func TestPublishedTermConfirmsAndRecoversUnpublishedTail(t *testing.T) {
+func TestPublishedTermRecoversButDoesNotConfirmUnpublishedTail(t *testing.T) {
 	ctx := context.Background()
 	m, store := newTestManagerWithStore(t)
 	require.NoError(t, m.Restore(ctx))
 	require.NoError(t, drainSummary(ctx, m)) // discoverable empty term
 	require.NoError(t, stageChunk(t, m, 100).Execute(ctx))
-	require.Equal(t, uint64(100), m.LastAcked())
+	require.Zero(t, m.LastAcked(), "live confirmation waits for the published manifest")
 	disk, _, err := store.ReadManifest(ctx)
 	require.NoError(t, err)
 	require.Empty(t, disk.Chunks)

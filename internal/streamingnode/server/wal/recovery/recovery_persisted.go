@@ -83,9 +83,13 @@ func (r *recoveryStorageImpl) recoverRecoveryInfoFromMeta(ctx context.Context, c
 		return err
 	}
 	summaryManager := r.newSummaryManager(moduleapi.Runtime{
-		Scheduler: r.taskScheduler,
-		Notifier:  r,
+		Scheduler:      r.taskScheduler,
+		Notifier:       r,
+		PublishStorage: r.publishStorage,
 	})
+	// Restore may submit the first manifest publication before other recovery
+	// modules are initialized. Install its Apply target before starting tasks.
+	r.summaryManager = summaryManager
 	if err := summaryManager.Restore(ctx); err != nil {
 		return merr.Wrap(err, "restore pchannel summary")
 	}

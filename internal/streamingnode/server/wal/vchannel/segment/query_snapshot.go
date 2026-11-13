@@ -22,6 +22,7 @@ func (info *SegmentView) VisibleSnapshot(vchannel string, dataVersion qviews.Dat
 		insertMessages = append(insertMessages, chunk.Messages()...)
 	}
 	insertMessages = append(insertMessages, info.pending.Messages()...)
+	insertMessages = append(insertMessages, info.readOnlyInserts...)
 	// Messages returns ordinary immutable references, independent of the
 	// persistence handles. Keep them alive without copying their payloads.
 	var schema *schemapb.CollectionSchema

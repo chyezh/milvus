@@ -79,6 +79,7 @@ func (m *Manager) Restore(ctx context.Context) error {
 	}
 	m.mu.Lock()
 	m.manifest = manifest
+	m.publishedManifest = proto.Clone(original).(*streamingpb.PChannelSummaryManifest)
 	for _, chunk := range manifest.GetChunks() {
 		m.chunkIndex.chunks = append(m.chunkIndex.chunks, m.chunkIndex.newChunk(chunk, nil))
 	}

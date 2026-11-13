@@ -16,7 +16,6 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/mocks/mock_metastore"
 	"github.com/milvus-io/milvus/internal/mocks/streamingnode/server/wal/interceptors/shard/mock_utils"
-	"github.com/milvus-io/milvus/internal/mocks/streamingnode/server/wal/mock_recovery"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/replicate/replicates"
@@ -86,8 +85,12 @@ func TestOpenRWWALCleansRecoveredShardManagerOnReplicateRecoveryFailure(t *testi
 			return rmq.NewRmqID(1), nil
 		},
 	}
-	rs := mock_recovery.NewMockRecoveryStorage(t)
-	rs.EXPECT().Close().Return().Once()
+	rs := &recoveryStorageStub{}
+	closeStorage := mockey.Mock((*recoveryStorageStub).Close).Return().Build()
+	defer func() {
+		require.Equal(t, 1, closeStorage.Times())
+		closeStorage.UnPatch()
+	}()
 	snapshot := &recovery.RecoverySnapshot{
 		WritePathRecovery: &moduleapi.WritePathRecoveryModuleSnapshot{
 			VChannels:       map[string]moduleapi.VChannelWritePathRecoveryState{},
@@ -243,3 +246,8 @@ func TestHandleAlterWALAdvanceCheckpointsStageKeepsReplicateCheckpoint(t *testin
 	assert.Equal(t, sourceMessageID.IntoProto().GetWALName(), replicateCheckpoint.GetMessageId().GetWALName())
 	assert.Equal(t, sourceMessageID.Marshal(), replicateCheckpoint.GetMessageId().GetId())
 }
+
+// Other methods are deliberately absent from these cleanup-only tests.
+type recoveryStorageStub struct{ recovery.RecoveryStorage }
+
+func (s *recoveryStorageStub) Close() { s.RecoveryStorage.Close() }

@@ -35,6 +35,9 @@ const orphanSweepBudget = 1000
 // physical deletion are asynchronous. Cross-owner exclusion remains the design
 // TODO; readMu protects consumers of this manager only.
 func (m *Manager) GCOnce(ctx context.Context) error {
+	if m.cfg.ReadOnly {
+		return nil
+	}
 	m.mu.Lock()
 	terminal := m.terminalErr
 	m.mu.Unlock()

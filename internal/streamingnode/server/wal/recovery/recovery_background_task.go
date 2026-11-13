@@ -10,6 +10,7 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walevent"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
@@ -107,13 +108,12 @@ func (rs *recoveryStorageImpl) persistDirtySnapshot(ctx context.Context, lvl mlo
 		dirtySnapshot.MarkPersisted()
 	}
 	if snapshot.CheckpointDirty {
-		rs.mu.Lock()
-		rs.checkpoint = snapshot.Checkpoint.Clone()
-		rs.mu.Unlock()
+		if _, err := rs.events.Publish(ctx, walevent.CheckpointPublished{Checkpoint: snapshot.Checkpoint.IntoProto()}); err != nil {
+			return err
+		}
 		if rs.tailController != nil {
 			rs.tailController.Publish(snapshot.LogicalEndOffset, snapshot.LogicalEndMessageCount)
 		}
-		rs.metrics.ObServePersistedMetrics(snapshot.Checkpoint.TimeTick)
 		rs.simpleTruncateCheckpoint(ctx, snapshot.Checkpoint)
 	}
 	return

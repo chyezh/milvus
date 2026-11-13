@@ -1,9 +1,12 @@
 package moduleapi
 
 import (
+	"context"
+
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walevent"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
@@ -76,6 +79,9 @@ type DirtySnapshot interface {
 type Runtime struct {
 	Scheduler AsyncTaskScheduler
 	Notifier  ModuleNotifier
+	// PublishStorage returns durable completion facts to the WAL event owner.
+	// Call only outside module/segment locks; Apply may re-enter the module.
+	PublishStorage func(context.Context, walevent.StoragePublished) error
 }
 
 type AsyncTaskScheduler interface {

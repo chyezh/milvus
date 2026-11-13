@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/milvus-io/milvus/pkg/v3/util/contextutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
@@ -71,7 +72,11 @@ func (s *Source) Publish(ctx context.Context, payload Payload) (Cursor, error) {
 	frozen, size := payload.freeze()
 	cursor.Seq++
 	event := Event{Cursor: cursor, Payload: frozen}
-	if err := s.consumer.Apply(s.ctx, event); err != nil {
+	// Preserve process-local input metadata (for example QueryView report
+	// callbacks), without letting a producer cancellation interrupt Apply.
+	applyCtx, cancel := contextutil.MergeContext(context.WithoutCancel(ctx), s.ctx)
+	defer cancel()
+	if err := s.consumer.Apply(applyCtx, event); err != nil {
 		s.closeWithError(err)
 		return Cursor{}, err
 	}
@@ -161,6 +166,14 @@ func (s *Source) appendLocked(event Event, size int) {
 
 func (s *Source) Close() {
 	s.closeWithError(merr.WrapErrServiceUnavailable("WAL event source closed"))
+}
+
+// CloseAndWait joins the current Apply or metadata cut before its owner releases
+// runtime resources. Do not call it from an applier or capture callback.
+func (s *Source) CloseAndWait() {
+	s.Close()
+	s.gate <- struct{}{}
+	<-s.gate
 }
 
 func (s *Source) closeWithError(err error) {

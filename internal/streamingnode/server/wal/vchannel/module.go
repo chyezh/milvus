@@ -25,6 +25,7 @@ import (
 // ModuleConfig contains the initial state and dependencies for one vchannel
 // recovery module.
 type ModuleConfig struct {
+	ReadOnly                   bool
 	QueryStatsChunkManager     storage.ChunkManager
 	QueryRuntimeModuleBuilders []queryresource.QueryRuntimeModuleBuilder
 	QueryViewLoadInfoProvider  queryresource.LoadInfoProvider
@@ -51,6 +52,7 @@ type ModuleConfig struct {
 
 // VChannelRecoveryModule owns all recovery_storage state for one vchannel.
 type VChannelRecoveryModule struct {
+	readOnly                bool
 	queryResources          *queryresource.Manager
 	queryTransformLogStream wal.TransformLogStream
 	queryObservedTimeTick   uint64
@@ -108,6 +110,7 @@ func newModule(config ModuleConfig, adoptVChannelMeta bool) (*VChannelRecoveryMo
 		return nil, merr.WrapErrServiceInternalMsg("vchannel recovery module vchannel is empty")
 	}
 	module := &VChannelRecoveryModule{
+		readOnly:                config.ReadOnly,
 		pchannel:                config.PChannel,
 		querySealed:             make(map[int64]bool),
 		queryTransformLogStream: config.TransformLogStream,
@@ -165,6 +168,7 @@ func newModule(config ModuleConfig, adoptVChannelMeta bool) (*VChannelRecoveryMo
 		}
 	}
 	module.l0Materializer = l0materializer.NewWALMaterializer(l0materializer.WALConfig{
+		ReadOnly:               config.ReadOnly,
 		VChannel:               config.VChannel,
 		MaterializedTimeTick:   config.VChannelMeta.GetTransformMaterializedTimeTick(),
 		MaterializeMaxRows:     config.L0MaterializeRows,
@@ -180,6 +184,7 @@ func newModule(config ModuleConfig, adoptVChannelMeta bool) (*VChannelRecoveryMo
 
 func (m *VChannelRecoveryModule) segmentViewConfig() segment.ViewConfig {
 	return segment.ViewConfig{
+		ReadOnly:   m.readOnly,
 		Runtime:    m.runtime,
 		Lifecycle:  m.segmentLifecycle,
 		PackWriter: m.segmentPackWriter,
@@ -412,7 +417,7 @@ func (m *VChannelRecoveryModule) handleDropCollectionMessage(
 ) {
 	msg := message.MustAsImmutableDropCollectionMessageV1(owned.Message())
 	if m.vchannelView != nil {
-		if m.vchannelView.ObserveDropCollectionMessageV1(msg) {
+		if m.vchannelView.ObserveDropCollectionMessageV1(msg) && !m.readOnly {
 			m.pendingDrops = append(m.pendingDrops, owned.Clone())
 		}
 	}
@@ -425,7 +430,7 @@ func (m *VChannelRecoveryModule) handleDropPartitionMessage(
 ) {
 	msg := message.MustAsImmutableDropPartitionMessageV1(owned.Message())
 	if m.vchannelView != nil {
-		if m.vchannelView.ObserveDropPartitionMessageV1(msg) {
+		if m.vchannelView.ObserveDropPartitionMessageV1(msg) && !m.readOnly {
 			m.pendingDrops = append(m.pendingDrops, owned.Clone())
 		}
 	}

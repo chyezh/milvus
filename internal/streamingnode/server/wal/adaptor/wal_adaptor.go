@@ -96,6 +96,7 @@ func adaptImplsToRWWAL(
 
 // walAdaptorImpl is a wrapper of WALImpls to extend it into a WAL interface.
 type walAdaptorImpl struct {
+	queryViewEvents     *snview.EventQueryViewHandler
 	queryViewHandler    *snview.SNQueryViewHandler
 	viewResourceManager *vchannel.PChannelRecoveryManager
 	*roWALAdaptorImpl

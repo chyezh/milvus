@@ -76,7 +76,7 @@ func TestDataScannerReleasesOwnerAfterAllModulesObserve(t *testing.T) {
 	scheduler := nodescheduler.New(1)
 	t.Cleanup(scheduler.Close)
 	storage := newRecoveryStorage(
-		types.PChannelInfo{Name: "test-pchannel"},
+		types.PChannelInfo{Name: "test-pchannel", Term: 1},
 		checkpoint,
 		WithNodeScheduler(scheduler),
 	)
@@ -164,7 +164,7 @@ func TestPersistRetryKeepsFrozenCheckpointAndSchedulesAckFollowUp(t *testing.T) 
 	scheduler := nodescheduler.New(1)
 	t.Cleanup(scheduler.Close)
 	storage := newRecoveryStorage(
-		types.PChannelInfo{Name: "test-pchannel"},
+		types.PChannelInfo{Name: "test-pchannel", Term: 1},
 		checkpoint,
 		WithNodeScheduler(scheduler),
 	)

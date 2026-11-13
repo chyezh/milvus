@@ -8,7 +8,6 @@ import (
 	"github.com/bytedance/mockey"
 	"github.com/stretchr/testify/require"
 
-	"github.com/milvus-io/milvus/internal/mocks/streamingnode/server/wal/mock_recovery"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel"
@@ -28,7 +27,7 @@ func TestWALOpenResourcesDrainsRecoveredViewsBeforeStorageClose(t *testing.T) {
 		}()
 	}).Build()
 	defer release.UnPatch()
-	storageClose := mockey.Mock((*mock_recovery.MockRecoveryStorage).Close).To(func(*mock_recovery.MockRecoveryStorage) {
+	storageClose := mockey.Mock((*recoveryStorageStub).Close).To(func(*recoveryStorageStub) {
 		require.EqualValues(t, 1, released.Load())
 		storageClosed.Store(true)
 	}).Build()
@@ -42,7 +41,7 @@ func TestWALOpenResourcesDrainsRecoveredViewsBeforeStorageClose(t *testing.T) {
 		Version: &viewpb.QueryViewVersion{DataVersion: &viewpb.DataVersion{StreamingVersion: 1}, QueryVersion: 1},
 	}, StreamingNode: &viewpb.QueryViewOfStreamingNode{}}
 	h := snview.RecoverPChannelSNQueryViewHandler(context.Background(), "p", nil, &vchannel.PChannelRecoveryManager{}, []*viewpb.QueryViewOfShard{view})
-	resources := &walOpenResources{queryViewHandler: h, param: &interceptors.InterceptorBuildParam{RecoveryStorage: &mock_recovery.MockRecoveryStorage{}}, roWAL: &roWALAdaptorImpl{}}
+	resources := &walOpenResources{queryViewHandler: h, param: &interceptors.InterceptorBuildParam{RecoveryStorage: &recoveryStorageStub{}}, roWAL: &roWALAdaptorImpl{}}
 	resources.Close() // The explicit FLUSHING-stage close.
 	resources.Close() // openRWWAL's deferred cleanup.
 	require.EqualValues(t, 1, released.Load())

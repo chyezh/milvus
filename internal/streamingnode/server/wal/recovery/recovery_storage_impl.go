@@ -20,10 +20,12 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/l0materializer"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/queryresource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/segment"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walevent"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walsummary"
 	"github.com/milvus-io/milvus/internal/util/idalloc"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message/messageutil"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
@@ -146,32 +148,39 @@ func newRecoveryStorage(channel types.PChannelInfo, cp *utility.WALCheckpoint, o
 		persistNotifier:        make(chan struct{}, 1),
 		metrics:                metrics,
 	}
+	for _, opt := range opts {
+		opt(rs)
+	}
 	if cp != nil {
 		rs.installCheckpoint(cp)
 	}
 	// Restore the latest control state and its own replay boundary, which may
 	// be ahead of the global WAL checkpoint (see utility.WALCheckpoint).
 	rs.installPChannelControl(utility.PChannelControlFromCheckpoint(cp))
-	for _, opt := range opts {
-		opt(rs)
-	}
 	rs.tailController = newRecoveryTailController(cfg, rs.recoveryTailRateLimiter, metrics)
 	rs.refreshRecoveryTail()
 	if rs.nodeScheduler == nil {
 		rs.nodeScheduler = nodescheduler.Get()
 	}
 	rs.taskScheduler = newScopedTaskScheduler(rs.nodeScheduler)
-	rs.broadcastAck = newBroadcastAckModule(moduleapi.Runtime{
-		Scheduler: rs.taskScheduler,
-		Notifier:  rs,
-	})
+	if !rs.readOnly {
+		rs.broadcastAck = newBroadcastAckModule(moduleapi.Runtime{
+			Scheduler: rs.taskScheduler,
+			Notifier:  rs,
+		})
+		rs.events = walevent.NewSource(channel.Term, cfg.eventJournalMaxEvents, cfg.eventJournalMaxBytes, rs.applyEvent)
+	}
 	return rs
 }
 
 // recoveryStorageImpl is a component that manages the recovery info for the streaming service.
 // It will consume the message from the wal, consume the message in wal, and update the checkpoint for it.
 type recoveryStorageImpl struct {
-	consumedThrough func(uint64)
+	readOnly         bool
+	observedTimeTick uint64
+	events           *walevent.Source
+	applyQueryViews  func(context.Context, []*viewpb.QueryViewOfShard) error
+	consumedThrough  func(uint64)
 	mlog.Binder
 	backgroundTaskNotifier  *syncutil.AsyncTaskNotifier[struct{}]
 	cfg                     *config
@@ -210,10 +219,14 @@ func (r *recoveryStorageImpl) installCheckpoint(checkpoint *WALCheckpoint) {
 		checkpoint = &WALCheckpoint{}
 	}
 	r.checkpoint = checkpoint.Clone()
+	r.observedTimeTick = checkpoint.TimeTick
 	if r.metrics != nil {
 		r.metrics.ObserveObservedTimeTick(checkpoint.TimeTick)
 		r.metrics.ObServeInMemMetrics(checkpoint.TimeTick)
 		r.metrics.ObServePersistedMetrics(checkpoint.TimeTick)
+	}
+	if r.readOnly {
+		return
 	}
 	point := utility.WALCheckpoint{
 		MessageID: checkpoint.MessageID,
@@ -253,8 +266,9 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 		return err
 	}
 	moduleRuntime := moduleapi.Runtime{
-		Scheduler: r.taskScheduler,
-		Notifier:  r,
+		Scheduler:      r.taskScheduler,
+		Notifier:       r,
+		PublishStorage: r.publishStorage,
 	}
 	l0Writer := l0materializer.NewSyncMaterializer(
 		resource.Resource().ChunkManager(),
@@ -291,7 +305,9 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 	}
 	manager.Start()
 	r.vchannelManager = manager
-	r.summaryManager = summaryManager
+	if r.summaryManager == nil {
+		r.summaryManager = summaryManager
+	}
 	r.installCheckpoint(r.checkpoint)
 	// Seed the summary's confirmation frontier from the restored checkpoint so
 	// the frontier never starts behind a checkpoint that was already
@@ -335,6 +351,9 @@ func (r *recoveryStorageImpl) Metrics() RecoveryMetrics {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	checkpoint := r.checkpoint
+	if r.readOnly {
+		return RecoveryMetrics{RecoveryTimeTick: r.observedTimeTick}
+	}
 	if r.ackTracker != nil {
 		completed := r.ackTracker.CompletedPoint()
 		checkpoint = &completed
@@ -357,6 +376,7 @@ func (r *recoveryStorageImpl) VChannelManager() *vchannel.PChannelRecoveryManage
 
 // Close closes the recovery storage and wait the background task stop.
 func (r *recoveryStorageImpl) Close() {
+	r.events.Close()
 	r.backgroundTaskNotifier.Cancel()
 	r.backgroundTaskNotifier.BlockUntilFinish()
 	r.scannerWG.Wait()
@@ -370,6 +390,9 @@ func (r *recoveryStorageImpl) Close() {
 // the failed-recovery path (where the background task never started, so
 // BlockUntilFinish must not be called).
 func (r *recoveryStorageImpl) closeRecoveryResources() {
+	if !r.readOnly {
+		r.events.CloseAndWait()
+	}
 	if r.recoveryStream != nil {
 		r.recoveryStream.Close()
 	}
@@ -419,6 +442,9 @@ func (r *recoveryStorageImpl) startSummaryBacklog() {
 
 // notifyPersist notifies a persist operation.
 func (r *recoveryStorageImpl) notifyPersist() {
+	if r.readOnly {
+		return
+	}
 	select {
 	case r.persistNotifier <- struct{}{}:
 	default:
@@ -546,6 +572,19 @@ func (r *recoveryStorageImpl) observeMessage(ctx context.Context, msg message.Im
 	if !msg.IsPersisted() {
 		return
 	}
+	if r.readOnly {
+		// Retain ordinary query data only. No message enters a persistence ACK
+		// tracker, broadcast ACK dispatcher, or writer-pressure feedback loop.
+		owner := message.NewOwnedImmutableMessage(msg, nil)
+		dispatch := owner.Clone()
+		r.observeModulesMessage(ctx, dispatch)
+		dispatch.Release()
+		owner.Release()
+		r.updatePChannelControl(msg)
+		r.observedTimeTick = msg.TimeTick()
+		r.metrics.ObserveObservedTimeTick(msg.TimeTick())
+		return
+	}
 	owner := r.ackTracker.Track(msg)
 	r.refreshRecoveryTail()
 	r.metrics.ObserveObservedTimeTick(msg.TimeTick())
@@ -621,12 +660,25 @@ func (r *recoveryStorageImpl) runLiveScanner(rs RecoveryStream) {
 			return
 		case msg, ok := <-rs.Chan():
 			if !ok {
-				if err := rs.Error(); err != nil {
-					r.Logger().Warn(context.TODO(), "wal recovery live scanner stopped with error", mlog.Err(err))
+				err := rs.Error()
+				r.events.Close()
+				if ctx.Err() == nil {
+					if err == nil {
+						err = merr.WrapErrServiceUnavailable("WAL recovery stream ended")
+					}
+					r.Logger().Warn(ctx, "wal recovery live scanner stopped", mlog.Err(err))
+					if r.onFatal != nil {
+						r.onFatal(merr.Wrap(err, "WAL event source stopped"))
+					}
 				}
 				return
 			}
-			r.observeMessage(ctx, msg)
+			if _, err := r.events.Publish(ctx, walevent.WALEntry{Message: msg}); err != nil {
+				if ctx.Err() == nil && r.onFatal != nil {
+					r.onFatal(merr.Wrap(err, "apply live WAL event"))
+				}
+				return
+			}
 		}
 	}
 }

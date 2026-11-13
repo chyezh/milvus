@@ -13,6 +13,7 @@ type ViewOwner interface {
 // ViewConfig contains dependencies shared by segment views owned by one
 // vchannel module.
 type ViewConfig struct {
+	ReadOnly   bool
 	Lifecycle  Lifecycle
 	PackWriter PackWriter
 	Runtime    moduleapi.Runtime
@@ -20,6 +21,7 @@ type ViewConfig struct {
 }
 
 type runtimeConfig struct {
+	readOnly    bool
 	lifecycle   Lifecycle
 	packWriter  PackWriter
 	runtime     moduleapi.Runtime
@@ -29,6 +31,7 @@ type runtimeConfig struct {
 
 func runtimeConfigFromViewConfig(config ViewConfig) runtimeConfig {
 	return runtimeConfig{
+		readOnly:   config.ReadOnly,
 		lifecycle:  config.Lifecycle,
 		packWriter: config.PackWriter,
 		runtime:    config.Runtime,

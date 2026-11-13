@@ -839,21 +839,21 @@ func TestCoordDown_Dropping_NoReport(t *testing.T) {
 	assertNoReport(t, sm)
 }
 
-func TestCoordDown_Preparing_ReReportsPreparing(t *testing.T) {
+func TestCoordDown_Preparing_ReportsDown(t *testing.T) {
 	sm := newTestSM()
 	sm.ConsumeReport()
 
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDown)
-	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
-	assertReportState(t, sm, qviews.QueryViewStatePreparing)
+	assert.Equal(t, qviews.QueryViewStateDown, sm.State())
+	assertReportState(t, sm, qviews.QueryViewStateDown)
 }
 
-func TestCoordDown_Ready_ReReportsReady(t *testing.T) {
+func TestCoordDown_Ready_ReportsDown(t *testing.T) {
 	sm := newReadySM()
 
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDown)
-	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
-	assertReportState(t, sm, qviews.QueryViewStateReady)
+	assert.Equal(t, qviews.QueryViewStateDown, sm.State())
+	assertReportState(t, sm, qviews.QueryViewStateDown)
 }
 
 func TestCoordDown_Unrecoverable_ReReportsUnrecoverable(t *testing.T) {

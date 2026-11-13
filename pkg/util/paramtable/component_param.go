@@ -9652,6 +9652,8 @@ type streamingConfig struct {
 	SummaryCacheBytesPerPChannel ParamItem `refreshable:"false"`
 
 	// recovery configuration.
+	WALReplicaEventJournalMaxEvents      ParamItem `refreshable:"false"`
+	WALReplicaEventJournalMaxBytes       ParamItem `refreshable:"false"`
 	WALRecoveryPersistInterval           ParamItem `refreshable:"true"`
 	WALRecoveryMaxDirtyMessage           ParamItem `refreshable:"true"`
 	WALRecoveryGracefulCloseTimeout      ParamItem `refreshable:"true"`
@@ -10141,6 +10143,23 @@ materialization frontiers.`,
 		Export:       true,
 	}
 	p.SummaryCacheBytesPerPChannel.Init(base.mgr)
+
+	p.WALReplicaEventJournalMaxEvents = ParamItem{
+		Key:          "streaming.walReplica.eventJournalMaxEvents",
+		Version:      "3.1.0",
+		DefaultValue: "8192",
+		Export:       true,
+		Doc:          "Maximum locally applied events retained for WAL replica resubscription per PChannel. Applied when the WAL opens.",
+	}
+	p.WALReplicaEventJournalMaxEvents.Init(base.mgr)
+	p.WALReplicaEventJournalMaxBytes = ParamItem{
+		Key:          "streaming.walReplica.eventJournalMaxBytes",
+		Version:      "3.1.0",
+		DefaultValue: "64MB",
+		Export:       true,
+		Doc:          "WAL replica event journal payload budget per PChannel. Readers behind retained history recover from a metadata baseline and WAL replay.",
+	}
+	p.WALReplicaEventJournalMaxBytes.Init(base.mgr)
 
 	p.WALRecoveryPersistInterval = ParamItem{
 		Key:     "streaming.walRecovery.persistInterval",

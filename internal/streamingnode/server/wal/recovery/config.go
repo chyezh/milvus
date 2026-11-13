@@ -17,6 +17,8 @@ func newConfig() *config {
 	tailSoftWatermark := params.StreamingCfg.WALRecoveryTailSoftWatermark.GetAsSize()
 	tailHighWatermark := params.StreamingCfg.WALRecoveryTailHighWatermark.GetAsSize()
 	cfg := &config{
+		eventJournalMaxEvents:  params.StreamingCfg.WALReplicaEventJournalMaxEvents.GetAsInt(),
+		eventJournalMaxBytes:   int(params.StreamingCfg.WALReplicaEventJournalMaxBytes.GetAsSize()),
 		persistInterval:        persistInterval,
 		ackStallTimeout:        ackStallTimeout,
 		maxDirtyMessages:       maxDirtyMessages,
@@ -43,6 +45,8 @@ func nonNegativeSize(size int64) uint64 {
 
 // config is the configuration for the recovery module.
 type config struct {
+	eventJournalMaxEvents  int
+	eventJournalMaxBytes   int
 	persistInterval        time.Duration // persistInterval is the interval to persist the dirty recovery snapshot.
 	ackStallTimeout        time.Duration // ackStallTimeout is the maximum wait before requesting VChannel data persistence.
 	maxDirtyMessages       int           // maxDirtyMessages is the maximum number of dirty messages to be persisted.

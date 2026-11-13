@@ -27,6 +27,7 @@ import (
 )
 
 type PChannelManagerConfig struct {
+	ReadOnly                   bool
 	QueryStatsChunkManager     storage.ChunkManager
 	QueryRuntimeModuleBuilders []queryresource.QueryRuntimeModuleBuilder
 	QueryViewLoadInfoProvider  queryresource.LoadInfoProvider
@@ -247,6 +248,9 @@ func (m *PChannelRecoveryManager) requestPersistThrough(vchannel string, targetT
 
 // Start runs one shared L0 age check.
 func (m *PChannelRecoveryManager) Start() {
+	if m.config.ReadOnly {
+		return
+	}
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
@@ -326,6 +330,7 @@ func (m *PChannelRecoveryManager) newModule(vchannel string) (*VChannelRecoveryM
 		},
 	}
 	module, err := newModuleFromOwnedRecoveryState(ModuleConfig{
+		ReadOnly:                   m.config.ReadOnly,
 		QueryRuntimeModuleBuilders: m.config.QueryRuntimeModuleBuilders,
 		QueryViewLoadInfoProvider:  m.config.QueryViewLoadInfoProvider,
 		QueryStatsChunkManager:     m.config.QueryStatsChunkManager,

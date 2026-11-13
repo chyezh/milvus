@@ -401,7 +401,9 @@ func (s *snShardView) detachIfEmptyLocked() {
 // Caller must hold s.mu.
 func (s *snShardView) consumeAndPersist(entry *snViewEntry) bool {
 	persist := entry.sm.ConsumePersist()
-	if persist == nil {
+	// A read-only handler has no catalog writer. Its target state is supplied
+	// by the primary; local readiness is still published independently below.
+	if persist == nil || s.catalog == nil {
 		return true
 	}
 	qvobserve.Observe(s.ctx, qvobserve.StreamingNodePersistViewEvent{View: entry.View.QueryViewKey(), State: qviews.QueryViewState(persist.Meta.State)})
