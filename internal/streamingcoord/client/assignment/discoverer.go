@@ -192,6 +192,7 @@ func (c *assignmentDiscoverClient) recvLoop() (err error) {
 				Version:          newIncomingVersion,
 				Assignments:      newIncomingAssignments,
 				CChannel:         resp.FullAssignment.Cchannel,
+				WALReplicaPlans:  resp.FullAssignment.WalReplicaPlans,
 				ReplicateConfigHelper: replicateutil.MustNewConfigHelper(
 					c.clusterID,
 					resp.FullAssignment.ReplicateConfiguration),

@@ -310,6 +310,10 @@ message FullStreamingNodeAssignmentWithVersion {
     common.ReplicateConfiguration replicate_configuration = 4;
     StreamingVersion streaming_version = 5;
     VersionPair version_by_revision = 6;
+    // Desired WAL placements, including independently preparing read replicas.
+    // This is a topology hint; each endpoint's local View watch determines
+    // query availability. Writer Channels above remain the write-ready subset.
+    map<string, WALReplicaPlan> wal_replica_plans = 7;
 }
 
 // CChannelAssignment is the assignment info of a control channel.
@@ -1435,8 +1439,17 @@ message WALReplicaEvent {
 }
 
 
+// Resolve the currently installed query runtime of a desired member. Source
+// term is deliberately absent: an RO can keep serving while changing sources.
+message WALReplicaEndpointRequest {
+    string pchannel = 1;
+    uint64 replica_id = 2;
+    int64 node_id = 3;
+}
+
 // Primary-to-replica transport, independent of producer/consumer connections.
 service StreamingNodeReplicaService {
+    rpc GetWALReplicaEndpoint(WALReplicaEndpointRequest) returns (view.StreamingWorkNode) {};
     // Admit the full plan without waiting for another node to become ready.
     rpc ReconcileWALReplicas(ReconcileWALReplicasRequest) returns (ReconcileWALReplicasResponse) {};
     // Resume strictly after the locally applied cursor; never skip missing history.

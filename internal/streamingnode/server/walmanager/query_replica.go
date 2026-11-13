@@ -5,12 +5,33 @@ import (
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
+	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
 var _ wal.QueryReplicaManager = (*managerImpl)(nil)
+
+func (m *managerImpl) QueryReplicaEndpoint(req *streamingpb.WALReplicaEndpointRequest) (*viewpb.StreamingWorkNode, error) {
+	if !m.lifetime.AddIf(isGetable) {
+		return nil, errWALManagerClosed
+	}
+	defer m.lifetime.Done()
+	if req.GetNodeId() != paramtable.GetNodeID() || req.GetReplicaId() == 0 || req.GetPchannel() == "" {
+		return nil, status.NewChannelFenced(req.GetPchannel())
+	}
+	controller, ok := m.replicas.Get(req.Pchannel)
+	if !ok {
+		return nil, status.NewChannelNotExist(req.Pchannel)
+	}
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	if controller.current == nil || !controller.current.IsAvailable() || controller.assignment.GetReplicaId() != req.ReplicaId {
+		return nil, status.NewChannelFenced(req.Pchannel)
+	}
+	return controller.queryIdentityLocked(), nil
+}
 
 func (m *managerImpl) QueryReplicaIdentity(instance wal.WAL) (*viewpb.StreamingWorkNode, error) {
 	if !m.lifetime.AddIf(isGetable) {

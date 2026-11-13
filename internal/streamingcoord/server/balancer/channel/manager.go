@@ -45,6 +45,7 @@ type (
 		PChannelView           *PChannelView // channel metas only, Stats is nil
 		Relations              []types.PChannelInfoAssigned
 		ReplicateConfiguration *commonpb.ReplicateConfiguration
+		WALReplicaPlans        map[string]*streamingpb.WALReplicaPlan
 	}
 	WatchChannelAssignmentsCallback func(param WatchChannelAssignmentsCallbackParam) error
 )
@@ -708,7 +709,11 @@ func (cm *ChannelManager) getNewIncomingTask(newConfig *replicateutil.ConfigHelp
 func (cm *ChannelManager) applyAssignments(cb WatchChannelAssignmentsCallback) (typeutil.VersionInt64Pair, error) {
 	cm.cond.L.Lock()
 	assignments := make([]types.PChannelInfoAssigned, 0, len(cm.channels))
+	replicaPlans := make(map[string]*streamingpb.WALReplicaPlan, len(cm.channels))
 	for _, c := range cm.channels {
+		if plan := c.ReplicaPlan(); plan != nil {
+			replicaPlans[c.Name()] = plan
+		}
 		if c.IsAssigned() {
 			assignments = append(assignments, c.CurrentAssignment())
 		}
@@ -731,6 +736,7 @@ func (cm *ChannelManager) applyAssignments(cb WatchChannelAssignmentsCallback) (
 		PChannelView:           pchannelViews,
 		Relations:              assignments,
 		ReplicateConfiguration: replicateConfig,
+		WALReplicaPlans:        replicaPlans,
 	})
 }
 

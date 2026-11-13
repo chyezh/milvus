@@ -47,3 +47,9 @@ type QueryReplicaManager interface {
 	QueryReplicaIdentity(WAL) (*viewpb.StreamingWorkNode, error)
 	GetAvailableQueryReplica(*viewpb.StreamingWorkNode) (WAL, error)
 }
+
+// QueryReplicaEndpointProvider resolves a stable member placement to its local
+// query runtime, without waiting for the primary's current source term.
+type QueryReplicaEndpointProvider interface {
+	QueryReplicaEndpoint(*streamingpb.WALReplicaEndpointRequest) (*viewpb.StreamingWorkNode, error)
+}

@@ -263,3 +263,20 @@ func TestReplicaObservationsRequireExactWriterIncarnation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, newPlan.WalTerm+1, m.channels[id].CurrentTerm())
 }
+
+func TestReplicaTopologyPublishedBeforePrimaryReady(t *testing.T) {
+	mutable := NewPChannelMeta("p", types.AccessModeRW).CopyForWrite()
+	_, err := mutable.assignReplicaPlan(ReplicaPlanTarget{PrimaryResourceGroup: "a", Nodes: map[string]*types.StreamingNodeInfo{"a": {ServerID: 1, Address: "a"}, "b": {ServerID: 2, Address: "b"}, "c": nil}})
+	require.NoError(t, err)
+	meta := newPChannelMetaFromProto(mutable.IntoRawMeta(), nil)
+	require.False(t, meta.IsAssigned())
+	cm := &ChannelManager{cond: syncutil.NewContextCond(&sync.Mutex{}), cchannelMeta: &streamingpb.CChannelMeta{}, channels: map[ChannelID]*PChannelMeta{{Name: "p"}: meta, {Name: "unplanned"}: NewPChannelMeta("unplanned", types.AccessModeRW)}}
+	assignment, err := cm.GetLatestChannelAssignment()
+	require.NoError(t, err)
+	require.Empty(t, assignment.Relations, "the primary is still preparing")
+	require.Len(t, assignment.WALReplicaPlans, 1)
+	require.True(t, proto.Equal(meta.ReplicaPlan(), assignment.WALReplicaPlans["p"]))
+	require.Len(t, assignment.WALReplicaPlans["p"].Replicas, 3)
+	assignment.WALReplicaPlans["p"].Replicas[0].Node.ServerId = 99
+	require.EqualValues(t, 1, meta.ReplicaPlan().Replicas[0].Node.ServerId, "discovery does not own the catalog projection")
+}

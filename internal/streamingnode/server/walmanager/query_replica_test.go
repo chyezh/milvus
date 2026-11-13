@@ -52,6 +52,24 @@ func TestQueryReplicaIdentityRejectsOldAndForeignRuntimes(t *testing.T) {
 				require.EqualValues(t, 7, target.WalTerm)
 				require.True(t, target.ReadOnly)
 				require.NotZero(t, target.RuntimeId)
+				request := &streamingpb.WALReplicaEndpointRequest{Pchannel: "p", NodeId: 2, ReplicaId: target.WalReplicaId}
+				endpoint, endpointErr := m.QueryReplicaEndpoint(request)
+				if planned {
+					require.NoError(t, endpointErr)
+					require.True(t, proto.Equal(target, endpoint))
+				} else {
+					require.Error(t, endpointErr)
+				}
+				for _, invalid := range []*streamingpb.WALReplicaEndpointRequest{
+					nil,
+					{Pchannel: "p", NodeId: 3, ReplicaId: 2},
+					{Pchannel: "missing", NodeId: 2, ReplicaId: 2},
+					{NodeId: 2, ReplicaId: 2},
+					{Pchannel: "p", NodeId: 2, ReplicaId: 99},
+				} {
+					_, err := m.QueryReplicaEndpoint(invalid)
+					require.Error(t, err)
+				}
 				found, err := m.GetAvailableQueryReplica(target)
 				require.NoError(t, err)
 				require.Same(t, instance, wal.Unwrap(found))
@@ -72,6 +90,8 @@ func TestQueryReplicaIdentityRejectsOldAndForeignRuntimes(t *testing.T) {
 				_, err = m.QueryReplicaIdentity(&controllerTestWAL{})
 				require.Error(t, err)
 				available.Store(false)
+				_, err = m.QueryReplicaEndpoint(request)
+				require.Error(t, err)
 				_, err = m.QueryReplicaIdentity(instance)
 				require.Error(t, err)
 				_, err = m.GetAvailableQueryReplica(target)
@@ -84,8 +104,13 @@ func TestQueryReplicaIdentityRejectsOldAndForeignRuntimes(t *testing.T) {
 					controller.mu.Unlock()
 					_, err = m.GetAvailableQueryReplica(target)
 					require.Error(t, err, "same-term replacement invalidates plans from the previous runtime")
+					endpoint, err = m.QueryReplicaEndpoint(request)
+					require.NoError(t, err)
+					require.NotEqual(t, target.RuntimeId, endpoint.RuntimeId)
 				}
 				m.lifetime.SetState(managerStopped)
+				_, err = m.QueryReplicaEndpoint(request)
+				require.ErrorIs(t, err, errWALManagerClosed)
 				_, err = m.QueryReplicaIdentity(instance)
 				require.ErrorIs(t, err, errWALManagerClosed)
 				_, err = m.GetAvailableQueryReplica(target)

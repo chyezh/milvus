@@ -11,6 +11,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/walmanager"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
@@ -23,6 +24,21 @@ type replicaServiceImpl struct {
 
 func NewReplicaService(manager walmanager.Manager) streamingpb.StreamingNodeReplicaServiceServer {
 	return &replicaServiceImpl{walManager: manager, bootstrapSlots: make(chan struct{}, 32)}
+}
+
+func (hs *replicaServiceImpl) GetWALReplicaEndpoint(ctx context.Context, req *streamingpb.WALReplicaEndpointRequest) (*viewpb.StreamingWorkNode, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	provider, ok := hs.walManager.(wal.QueryReplicaEndpointProvider)
+	if !ok {
+		return nil, status.NewGRPCStatusFromStreamingError(status.NewOnShutdownError("WAL replica directory is unavailable")).Err()
+	}
+	endpoint, err := provider.QueryReplicaEndpoint(req)
+	if err != nil {
+		return nil, status.NewGRPCStatusFromStreamingError(status.AsStreamingError(err)).Err()
+	}
+	return endpoint, nil
 }
 
 func (hs *replicaServiceImpl) ReconcileWALReplicas(ctx context.Context, req *streamingpb.ReconcileWALReplicasRequest) (*streamingpb.ReconcileWALReplicasResponse, error) {

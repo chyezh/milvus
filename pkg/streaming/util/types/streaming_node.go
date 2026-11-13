@@ -42,6 +42,8 @@ type VersionedStreamingNodeAssignments struct {
 	Assignments           map[int64]StreamingNodeAssignment
 	CChannel              *streamingpb.CChannelAssignment
 	ReplicateConfigHelper *replicateutil.ConfigHelper
+	// WALReplicaPlans is immutable desired topology, not serving readiness.
+	WALReplicaPlans map[string]*streamingpb.WALReplicaPlan
 }
 
 // PChannelOfCChannel returns the pchannel of the cchannel.

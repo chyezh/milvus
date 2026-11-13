@@ -57,6 +57,7 @@ func (h *discoverGrpcServerHelper) SendFullAssignment(param balancer.WatchChanne
 				Assignments:            assignments,
 				Cchannel:               param.CChannelAssignment,
 				ReplicateConfiguration: param.ReplicateConfiguration,
+				WalReplicaPlans:        param.WALReplicaPlans,
 			},
 		},
 	})
