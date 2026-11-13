@@ -10,6 +10,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/walmanager"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/contextutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
+	worknodehandler "github.com/milvus-io/milvus/internal/views/worknode/handler"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 )
@@ -27,7 +28,24 @@ func acquireAndServeReplicaWatch(manager walmanager.Manager, rpc streamingpb.Str
 	if err != nil {
 		return status.NewInvalidArgument("create replica watch stream request is required")
 	}
-	raw, err := manager.GetAvailableWAL(types.NewPChannelInfoFromProto(req.GetPchannel()))
+	channel := types.NewPChannelInfoFromProto(req.GetPchannel())
+	target, err := worknodehandler.DecodeQueryReplicaFromIncomingContext(rpc.Context())
+	if err != nil {
+		return err
+	}
+	var raw wal.WAL
+	if target == nil {
+		raw, err = manager.GetAvailableWAL(channel)
+	} else {
+		if target.Pchannel != channel.Name || target.WalTerm != channel.Term || target.ReadOnly != (channel.AccessMode == types.AccessModeRO) {
+			return status.NewChannelFenced(channel.Name)
+		}
+		replicas, ok := manager.(wal.QueryReplicaManager)
+		if !ok {
+			return status.NewOnShutdownError("query replica directory is unavailable")
+		}
+		raw, err = replicas.GetAvailableQueryReplica(target)
+	}
 	if err != nil {
 		return err
 	}

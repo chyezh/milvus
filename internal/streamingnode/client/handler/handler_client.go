@@ -141,7 +141,7 @@ type HandlerClientOption func(*handlerClientImpl)
 // including nodes that have no writer assignments.
 func WithReplicaSessionDiscovery(etcd *clientv3.Client) HandlerClientOption {
 	return func(client *handlerClientImpl) {
-		client.replicaConn, client.replicaResolver = connection.NewSession(etcd, "milvus.proto.view.QueryPlanService", "milvus.proto.view.ViewQueryService")
+		client.replicaConn, client.replicaResolver = connection.NewSession(etcd, "milvus.proto.view.QueryPlanService", "milvus.proto.view.ViewQueryService", "milvus.proto.streaming.StreamingNodeHandlerService")
 	}
 }
 

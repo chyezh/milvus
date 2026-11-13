@@ -3,6 +3,7 @@ package adaptor
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -86,9 +87,19 @@ func TestReadOnlyReplicaHasNoWriterCapabilities(t *testing.T) {
 	require.ErrorIs(t, r.storage.SubscribeAndApply(ctx, nil, cfg.Channel), context.Canceled)
 	require.Same(t, runtime, r.storage.VChannelManager())
 	require.True(t, r.IsAvailable())
+	watch, err := r.AcquireReplicaWatchStream(t.Context())
+	require.NoError(t, err)
+	defer watch.Close()
 	r.Close()
 	r.Close()
 	require.False(t, r.IsAvailable())
+	select {
+	case <-watch.Done():
+	case <-time.After(time.Second):
+		t.Fatal("closed RO runtime retained its directory stream")
+	}
+	_, err = r.AcquireReplicaWatchStream(t.Context())
+	require.True(t, status.AsStreamingError(err).IsOnShutdown())
 	select {
 	case <-r.Unavailable():
 	default:

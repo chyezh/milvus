@@ -96,6 +96,14 @@ func (r *readOnlyReplica) Metrics() types.WALMetrics {
 func (r *readOnlyReplica) IsAvailable() bool            { return r.availableCtx.Err() == nil }
 func (r *readOnlyReplica) Unavailable() <-chan struct{} { return r.availableCtx.Done() }
 
+func (r *readOnlyReplica) AcquireReplicaWatchStream(ctx context.Context) (wal.ReplicaWatchStream, error) {
+	if !r.lifetime.Add(typeutil.LifetimeStateWorking) {
+		return nil, status.NewOnShutdownError("replica directory WAL is unavailable")
+	}
+	defer r.lifetime.Done()
+	return r.SNQueryViewHandler.AcquireReplicaWatchStream(ctx, r.channel.Name, r.Unavailable()), nil
+}
+
 func (r *readOnlyReplica) Append(context.Context, message.MutableMessage) (*wal.AppendResult, error) {
 	return nil, status.NewChannelFenced(r.channel.String())
 }
