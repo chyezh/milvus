@@ -75,9 +75,8 @@ var (
 	marshalOptions = proto.MarshalOptions{Deterministic: true}
 )
 
-// Store is the object storage layer of one pchannel's WALSummary. All objects
-// are written under the owner's term, so a new owner never overwrites the
-// objects it recovered from.
+// Store is the object storage layer of one pchannel's WALSummary. Runtime
+// manifests and chunks are immutable; the catalog selects the recovery image.
 type Store struct {
 	chunkManager storage.ChunkManager
 	pchannel     string
@@ -308,6 +307,13 @@ func (s *Store) ReadManifest(ctx context.Context) (*streamingpb.PChannelSummaryM
 // wrote, and a downward probe costs a read plus a full chunk-prefix list per
 // empty term in between.
 func (s *Store) ListManifestTerms(ctx context.Context, upTo int64) ([]int64, error) {
+	if s.retention != nil {
+		publication, err := s.retention.LoadWALSummaryPublication(ctx, s.pchannel)
+		if err != nil || publication == nil || publication.Term > upTo {
+			return nil, err
+		}
+		return []int64{publication.Term}, nil
+	}
 	prefix := buildManifestPrefix(s.chunkManager, s.pchannel)
 	keys, _, err := storage.ListAllChunkWithPrefix(ctx, s.chunkManager, prefix, false)
 	if err != nil {
@@ -335,6 +341,13 @@ func (s *Store) ListManifestTerms(ctx context.Context, upTo int64) ([]int64, err
 
 func (s *Store) ReadManifestOfTerm(ctx context.Context, term int64) (*streamingpb.PChannelSummaryManifest, bool, error) {
 	key := s.ManifestKeyOfTerm(term)
+	if s.retention != nil {
+		publication, err := s.retention.LoadWALSummaryPublication(ctx, s.pchannel)
+		if err != nil || publication == nil || publication.Term != term {
+			return nil, false, err
+		}
+		key = publication.ObjectKey
+	}
 	exists, err := s.chunkManager.Exist(ctx, key)
 	if err != nil {
 		return nil, false, merr.Wrapf(err, "failed to probe summary manifest %s", key)
@@ -353,24 +366,37 @@ func (s *Store) ReadManifestOfTerm(ctx context.Context, term int64) (*streamingp
 	return manifest, true, nil
 }
 
-// WriteManifest publishes the manifest. The manifest is always written as the
-// previous manifest plus amendments: recovery reads the
-// prior term's manifest on a term handoff and seals the inherited index into
-// the new term's manifest, so the chain never grows beyond one hop.
+// WriteManifest writes a complete immutable image after retaining its objects,
+// then publishes the catalog pointer. Callers serialize logical publications;
+// the predecessor CAS rejects delayed completion after a concurrent successor.
 func (s *Store) WriteManifest(ctx context.Context, manifest *streamingpb.PChannelSummaryManifest) error {
 	payload, err := marshalManifest(manifest)
 	if err != nil {
 		return err
 	}
+	var previous *streamingpb.WALSummaryPublication
+	if s.retention != nil {
+		previous, err = s.retention.LoadWALSummaryPublication(ctx, s.pchannel)
+		if err != nil {
+			return err
+		}
+	}
 	roots, err := s.retainManifest(ctx, manifest, payload)
 	if err != nil {
 		return err
 	}
-	key := s.ManifestKey()
+	key := s.manifestImageKey(payload)
 	if err := s.chunkManager.Write(ctx, key, payload); err != nil {
 		return merr.Wrapf(err, "failed to write summary manifest %s", key)
 	}
-	return s.commitManifestRoots(ctx, roots)
+	if s.retention == nil {
+		return nil
+	}
+	publication := &streamingpb.WALSummaryPublication{Term: s.term, ObjectKey: key}
+	for _, root := range roots {
+		publication.RootIds = append(publication.RootIds, root.RootId)
+	}
+	return s.retention.PublishWALSummary(ctx, s.pchannel, previous.GetObjectKey(), publication)
 }
 
 // ProbeChunkForward lists the chunk objects of this term at or after
@@ -1143,7 +1169,11 @@ func (s *Store) sweepGarbage(ctx context.Context, term int64, coverage *streamin
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return deleted, false, merr.Wrap(err, "failed to sweep summary garbage")
 	}
-	return deleted, finished && deleteErr == nil, deleteErr
+	if deleteErr != nil || !finished || s.retention == nil {
+		return deleted, finished && deleteErr == nil, deleteErr
+	}
+	images, complete, err := s.sweepManifestImages(ctx, budget-deleted)
+	return deleted + images, complete, err
 }
 
 // readChunkPayload validates a retained object against the captured manifest

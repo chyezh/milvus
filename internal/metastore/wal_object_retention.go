@@ -20,15 +20,14 @@ const (
 // This protocol must cover every publisher and deleter of the protected object
 // namespace. It is not safe to enable GC by counting only online subscribers.
 type WALObjectRetentionCatalog interface {
+	// Load the sole authoritative immutable recovery image, or nil before first publication.
+	LoadWALSummaryPublication(context.Context, string) (*streamingpb.WALSummaryPublication, error)
+	// Publish a retained image with an exact predecessor key and writer term CAS.
+	PublishWALSummary(context.Context, string, string, *streamingpb.WALSummaryPublication) error
 	RetainWALObjects(context.Context, string, *streamingpb.WALObjectRetentionRoot) error
 	RetainWALRecoveryObjects(context.Context, string, int64, *streamingpb.WALObjectRetentionRoot) error
 	ReleaseWALObjects(context.Context, string, string) error
 	ListWALObjectRetentionRoots(context.Context, string) ([]*streamingpb.WALObjectRetentionRoot, error)
-	// CommitWALRecoveryRoot replaces one authoritative recovery slot after its
-	// metadata is durable. The new root must already be retained; the previous
-	// root is released atomically with the slot update and writer term check.
-	// A root belongs to exactly one slot and cannot be released independently.
-	CommitWALRecoveryRoot(context.Context, string, int64, string, string) error
 	// Begin returns nil when a live root still references the object. New
 	// authorization requires the current checkpoint term; an existing exact
 	// operation can be resumed by any owner, including after a crash.

@@ -175,7 +175,7 @@ func TestSummaryRecoveryRootFailureIsFailClosed(t *testing.T) {
 		require.ErrorIs(t, s.WriteManifest(t.Context(), manifest), merr.ErrServiceUnavailable)
 		require.ErrorIs(t, newTestManager(t, s, 1<<30).Restore(t.Context()), merr.ErrServiceUnavailable)
 		patch.UnPatch()
-		patch = mockey.Mock(mockey.GetMethod(retention, "CommitWALRecoveryRoot")).Return(merr.ErrServiceUnavailable).Build()
+		patch = mockey.Mock(mockey.GetMethod(retention, "PublishWALSummary")).Return(merr.ErrServiceUnavailable).Build()
 		require.ErrorIs(t, s.WriteManifest(t.Context(), manifest), merr.ErrServiceUnavailable)
 		patch.UnPatch()
 		patch = mockey.Mock(mockey.GetMethod(retention, "ListWALObjectRetentionRoots")).Return(nil, merr.ErrServiceUnavailable).Build()
@@ -183,9 +183,6 @@ func TestSummaryRecoveryRootFailureIsFailClosed(t *testing.T) {
 		patch.UnPatch()
 		orphan := &streamingpb.WALObjectRetentionRoot{RootId: "summary-recovery/1/orphan", ObjectKeys: []string{s.ManifestKey()}}
 		require.NoError(t, retention.RetainWALObjects(t.Context(), s.pchannel, orphan))
-		patch = mockey.Mock(mockey.GetMethod(retention, "ReleaseWALObjects")).Return(merr.ErrServiceUnavailable).Build()
-		require.ErrorIs(t, s.WriteManifest(t.Context(), manifest), merr.ErrServiceUnavailable)
-		patch.UnPatch()
 		for _, rootID := range []string{"summary-recovery/invalid", "summary-recovery/9/future"} {
 			require.NoError(t, retention.RetainWALObjects(t.Context(), s.pchannel, &streamingpb.WALObjectRetentionRoot{RootId: rootID, ObjectKeys: []string{s.ManifestKey()}}))
 		}

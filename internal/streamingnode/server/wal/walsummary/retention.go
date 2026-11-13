@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/fs"
 	"strconv"
-	"strings"
 
 	"github.com/cockroachdb/errors"
 	"google.golang.org/protobuf/encoding/protowire"
@@ -43,7 +42,7 @@ func (s *Store) retainManifest(ctx context.Context, manifest *streamingpb.PChann
 // parts never creates a gap in its protection.
 func (s *Store) manifestRoots(manifest *streamingpb.PChannelSummaryManifest, encoded []byte) ([]*streamingpb.WALObjectRetentionRoot, error) {
 	baseID := fmt.Sprintf("%s%d/%x/", summaryRecoveryRootPrefix, s.term, sha256.Sum256(encoded))
-	keys := append(s.ObjectKeys(manifest), s.ManifestKey())
+	keys := append(s.ObjectKeys(manifest), s.manifestImageKey(encoded))
 	var roots []*streamingpb.WALObjectRetentionRoot
 	root := &streamingpb.WALObjectRetentionRoot{RootId: baseID + "0"}
 	size := proto.Size(root)
@@ -72,44 +71,19 @@ func (s *Store) protectRecoveredManifest(ctx context.Context, manifest *streamin
 	return err
 }
 
-// The slot replacement happens only after the manifest write succeeds. Failed
-// preparations retain both images; a successful successor can retire their
-// abandoned recovery roots after durably publishing its own complete image.
-// Replica/runtime roots use a different namespace and are never released here.
-func (s *Store) commitManifestRoots(ctx context.Context, current []*streamingpb.WALObjectRetentionRoot) error {
+// Each publication has a content-addressed immutable image. Unit stores without
+// a catalog retain their standalone manifest path; runtime stores always use
+// the authoritative catalog pointer and never recover by listing these images.
+func (s *Store) manifestImageKey(encoded []byte) string {
 	if s.retention == nil {
-		return nil
+		return s.ManifestKey()
 	}
-	keep := make(map[string]struct{}, len(current))
-	for i, root := range current {
-		if err := s.retention.CommitWALRecoveryRoot(ctx, s.pchannel, s.term, "summary/"+strconv.Itoa(i), root.RootId); err != nil {
-			return err
-		}
-		keep[root.RootId] = struct{}{}
-	}
-	roots, err := s.retention.ListWALObjectRetentionRoots(ctx, s.pchannel)
-	if err != nil {
-		return err
-	}
-	for _, root := range roots {
-		if _, ok := keep[root.RootId]; ok || !strings.HasPrefix(root.RootId, summaryRecoveryRootPrefix) {
-			continue
-		}
-		owner, _, ok := strings.Cut(strings.TrimPrefix(root.RootId, summaryRecoveryRootPrefix), "/")
-		term, err := strconv.ParseInt(owner, 10, 64)
-		if !ok || err != nil || term > s.term {
-			continue
-		}
-		if err := s.retention.ReleaseWALObjects(ctx, s.pchannel, root.RootId); err != nil {
-			return err
-		}
-	}
-	return nil
+	return fmt.Sprintf("%s_%x", s.ManifestKey(), sha256.Sum256(encoded))
 }
 
 // ObjectKeys lists the immutable transitive dependencies of an in-memory
 // manifest. Its encoded metadata travels in the replica snapshot, so the
-// mutable per-term manifest object itself is not a dependency of that cut.
+// immutable manifest image itself is not a dependency of that cut.
 func (s *Store) ObjectKeys(manifest *streamingpb.PChannelSummaryManifest) []string {
 	keys := make([]string, 0, len(manifest.GetChunks()))
 	for _, chunk := range manifest.GetChunks() {
@@ -128,9 +102,6 @@ func (s *Store) deleteObject(ctx context.Context, key string) (bool, error) {
 		}
 		if intent == nil {
 			return false, nil
-		}
-		if intent.Done {
-			return true, nil
 		}
 	}
 	if err := s.chunkManager.Remove(ctx, key); err != nil && !errors.Is(err, fs.ErrNotExist) {

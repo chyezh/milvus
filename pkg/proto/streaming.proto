@@ -1521,3 +1521,11 @@ message WALReplayRetentionState {
     WALCheckpoint truncated = 1;
     map<string, WALReplayPin> pins = 2;
 }
+
+// Authoritative immutable Summary image. Roots are retained before the PUT;
+// this pointer is published with the writer term and predecessor CAS.
+message WALSummaryPublication {
+    int64 term = 1;
+    string object_key = 2;
+    repeated string root_ids = 3;
+}
