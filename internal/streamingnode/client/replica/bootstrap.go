@@ -12,6 +12,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walevent"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
@@ -27,10 +28,10 @@ type Bootstrap struct {
 	cancel   context.CancelFunc
 }
 
-func (s *Source) Bootstrap(ctx context.Context, checkpoint *streamingpb.WALCheckpoint, opts ...grpc.CallOption) (*Bootstrap, error) {
+func (s *Source) Bootstrap(ctx context.Context, checkpoint *streamingpb.WALCheckpoint, runtime *viewpb.StreamingWorkNode, opts ...grpc.CallOption) (*Bootstrap, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	opts = append([]grpc.CallOption{grpc.MaxCallRecvMsgSize(paramtable.DefaultClientMaxRecvSize)}, opts...)
-	stream, err := s.events.BootstrapWALReplica(ctx, &streamingpb.WALReplicaBootstrapRequest{Pchannel: types.NewProtoFromPChannelInfo(s.primary.Channel), Checkpoint: checkpoint}, opts...)
+	stream, err := s.events.BootstrapWALReplica(ctx, &streamingpb.WALReplicaBootstrapRequest{Pchannel: types.NewProtoFromPChannelInfo(s.primary.Channel), Checkpoint: checkpoint, Runtime: proto.CloneOf(runtime)}, opts...)
 	if err != nil {
 		cancel()
 		return nil, status.ConvertStreamingError("BootstrapWALReplica", err)

@@ -1385,6 +1385,7 @@ message WALReplicaSnapshotChunk {
 message WALReplicaBootstrapRequest {
     PChannelInfo pchannel = 1;
     WALCheckpoint checkpoint = 2;
+    view.StreamingWorkNode runtime = 3;
 }
 
 // Metadata, retained WAL replay and completion are distinct transfer phases.

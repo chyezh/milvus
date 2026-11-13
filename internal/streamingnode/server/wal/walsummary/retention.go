@@ -149,6 +149,11 @@ func (s *Store) ResumeDeletions(ctx context.Context, limit int) error {
 	if s.retention == nil {
 		return nil
 	}
+	if runtimes, ok := s.retention.(metastore.WALReplicaRuntimeCatalog); ok {
+		if err := runtimes.SweepReleasedWALReplicaRoots(ctx, s.pchannel, limit); err != nil {
+			return err
+		}
+	}
 	intents, err := s.retention.ListPendingWALObjectDeletions(ctx, s.pchannel, limit)
 	if err != nil {
 		return err

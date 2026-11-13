@@ -198,3 +198,40 @@ func (c *catalog) checkRuntimeRetention(ctx context.Context, channel string, run
 	}
 	return nil
 }
+
+// SweepReleasedWALReplicaRoots resumes cleanup if the receiver exited after
+// fencing its runtime but before removing all roots. It never infers release
+// from a missing connection, an old source term, or elapsed wall-clock time.
+func (c *catalog) SweepReleasedWALReplicaRoots(ctx context.Context, channel string, limit int) error {
+	if limit <= 0 || limit > maxRetentionRoots {
+		return merr.WrapErrServiceInternalMsg("invalid released WAL replica root sweep budget")
+	}
+	roots, err := c.ListWALObjectRetentionRoots(ctx, channel)
+	if err != nil {
+		return err
+	}
+	removed := 0
+	for _, root := range roots {
+		if root.Runtime == nil {
+			continue
+		}
+		runtime, err := c.loadReplicaRuntime(ctx, root.Runtime)
+		if err != nil {
+			return err
+		}
+		if runtime == nil {
+			return merr.WrapErrDataIntegrityMsg("retained WAL object has no runtime obligation")
+		}
+		if runtime.State != streamingpb.WALReplicaRuntimeRetentionState_WAL_REPLICA_RUNTIME_RELEASED {
+			continue
+		}
+		if err := c.ReleaseWALObjects(ctx, channel, root.RootId); err != nil {
+			return err
+		}
+		removed++
+		if removed == limit {
+			break
+		}
+	}
+	return nil
+}

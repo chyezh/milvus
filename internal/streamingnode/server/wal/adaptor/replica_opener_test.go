@@ -19,6 +19,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walevent"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 )
 
@@ -26,11 +27,14 @@ func replicaOpenOption() *wal.OpenOption {
 	channel := types.PChannelInfo{Name: "ro-replica", Term: 7, AccessMode: types.AccessModeRO}
 	primary := channel
 	primary.AccessMode = types.AccessModeRW
-	return &wal.OpenOption{Channel: channel, Primary: &types.PChannelInfoAssigned{Channel: primary, Node: types.StreamingNodeInfo{ServerID: 11}}}
+	return &wal.OpenOption{
+		Channel: channel, Primary: &types.PChannelInfoAssigned{Channel: primary, Node: types.StreamingNodeInfo{ServerID: 11}},
+		RuntimeID: 99, Replica: &streamingpb.WALReplicaAssignment{ReplicaId: 2, ReplicaRevision: 3, AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY, Node: &streamingpb.StreamingNodeInfo{ServerId: 12}},
+	}
 }
 
 func TestReplicaOpenerOwnsRuntimeAfterComplete(t *testing.T) {
-	for _, failure := range []string{"bootstrap", "recovery", "complete", "success"} {
+	for _, failure := range []string{"bootstrap", "recovery", "complete", "install", "success"} {
 		t.Run(failure, func(t *testing.T) {
 			mockey.PatchConvey("bootstrap must complete before an independently owned runtime is installed", t, func() {
 				resource.InitForTest(t)
@@ -40,6 +44,17 @@ func TestReplicaOpenerOwnsRuntimeAfterComplete(t *testing.T) {
 				created := mockey.Mock(replicaclient.NewClient).To(func(*clientv3.Client) *replicaclient.Client { return client }).Build()
 				closed := mockey.Mock((*replicaclient.Client).Close).Return().Build()
 				option := replicaOpenOption()
+				retention := &replicaRuntimeRetention{runtime: &viewpb.StreamingWorkNode{NodeId: 12, RuntimeId: option.RuntimeID}}
+				mockey.Mock(createReplicaRuntimeRetention).Return(retention, nil).Build()
+				released := mockey.Mock((*replicaRuntimeRetention).Close).Return().Build()
+				mockey.Mock((*replicaRuntimeRetention).install).To(func(_ *replicaRuntimeRetention, _ context.Context, cursor *streamingpb.WALReplicaCursor) error {
+					require.Zero(t, o.walInstances.Len())
+					require.EqualValues(t, 7, cursor.Term)
+					if failure == "install" {
+						return io.ErrUnexpectedEOF
+					}
+					return nil
+				}).Build()
 				mockey.Mock((*replicaclient.Client).ForPrimary).To(func(actual *replicaclient.Client, primary types.PChannelInfoAssigned) *replicaclient.Source {
 					require.Same(t, client, actual)
 					require.Equal(t, *option.Primary, primary)
@@ -47,8 +62,9 @@ func TestReplicaOpenerOwnsRuntimeAfterComplete(t *testing.T) {
 				}).Build()
 				_, snapshot := readOnlyReplicaBaseline()
 				transfer := &replicaclient.Bootstrap{Snapshot: snapshot}
-				mockey.Mock((*replicaclient.Source).Bootstrap).To(func(_ *replicaclient.Source, _ context.Context, cp *streamingpb.WALCheckpoint, _ ...grpc.CallOption) (*replicaclient.Bootstrap, error) {
+				mockey.Mock((*replicaclient.Source).Bootstrap).To(func(_ *replicaclient.Source, _ context.Context, cp *streamingpb.WALCheckpoint, runtime *viewpb.StreamingWorkNode, _ ...grpc.CallOption) (*replicaclient.Bootstrap, error) {
 					require.Nil(t, cp)
+					require.Same(t, retention.runtime, runtime)
 					if failure == "bootstrap" {
 						return nil, io.ErrUnexpectedEOF
 					}
@@ -87,11 +103,13 @@ func TestReplicaOpenerOwnsRuntimeAfterComplete(t *testing.T) {
 					require.Eventually(t, following.Load, time.Second, time.Millisecond)
 					cancel()
 					require.True(t, actual.IsAvailable(), "assignment open context does not own local queries")
+					require.Zero(t, released.Times(), "transport cancellation cannot release the installed runtime's objects")
 					require.Same(t, client, o.getReplicaClient())
 					actual.Close()
 					require.Zero(t, o.walInstances.Len())
 					require.False(t, actual.IsAvailable())
 				}
+				require.Equal(t, 1, released.Times())
 				require.Equal(t, 1, created.Times())
 				require.Empty(t, o.openerCache, "RO must never acquire a backend writer")
 				if failure == "bootstrap" {
@@ -99,7 +117,7 @@ func TestReplicaOpenerOwnsRuntimeAfterComplete(t *testing.T) {
 				} else {
 					require.Equal(t, 1, transferClosed.Times())
 				}
-				if failure == "complete" || failure == "success" {
+				if failure == "complete" || failure == "install" || failure == "success" {
 					require.Equal(t, 1, completed.Times())
 				} else {
 					require.Zero(t, completed.Times())

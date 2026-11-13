@@ -37,8 +37,18 @@ func (o *openerAdaptorImpl) OpenReadOnlyReplica(ctx context.Context, opt *wal.Op
 		opt.Channel.Name != opt.Primary.Channel.Name || opt.Channel.Term <= 0 || opt.Primary.Node.ServerID <= 0 {
 		return nil, merr.WrapErrServiceInternalMsg("read-only WAL bootstrap requires its assigned primary")
 	}
+	retention, err := createReplicaRuntimeRetention(ctx, opt)
+	if err != nil {
+		return nil, err
+	}
+	installed := false
+	defer func() {
+		if !installed {
+			retention.Close()
+		}
+	}()
 	source := o.getReplicaClient().ForPrimary(*opt.Primary)
-	transfer, err := source.Bootstrap(ctx, nil)
+	transfer, err := source.Bootstrap(ctx, nil, retention.runtime)
 	if err != nil {
 		return nil, err
 	}
@@ -51,8 +61,16 @@ func (o *openerAdaptorImpl) OpenReadOnlyReplica(ctx context.Context, opt *wal.Op
 		r.Close()
 		return nil, err
 	}
+	if err := retention.install(ctx, transfer.Snapshot.Cursor); err != nil {
+		r.Close()
+		return nil, err
+	}
 	id := o.idAllocator.Allocate()
-	r.onClose = func() { o.walInstances.Remove(id) }
+	r.onClose = func() {
+		o.walInstances.Remove(id)
+		retention.Close()
+	}
+	installed = true
 	r.startFollowing(source.Events(), opt.Primary.Channel)
 	o.walInstances.Insert(id, r)
 	return r, nil

@@ -46,6 +46,11 @@ func (hs *replicaServiceImpl) serveReplicaBootstrap(ctx context.Context, req *st
 	if channel.GetName() == "" || channel.GetTerm() <= 0 || channel.GetAccessMode() != streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE {
 		return status.NewInvalidArgument("WAL replica bootstrap requires a primary channel")
 	}
+	runtime := req.GetRuntime()
+	if runtime.GetPchannel() != channel.Name || runtime.GetWalTerm() != channel.Term || !runtime.GetReadOnly() ||
+		runtime.GetNodeId() <= 0 || runtime.GetRuntimeId() == 0 || runtime.GetWalReplicaId() == 0 || runtime.GetWalReplicaRevision() == 0 {
+		return status.NewInvalidArgument("WAL replica bootstrap requires an exact receiver runtime")
+	}
 	raw, err := hs.walManager.GetAvailableWAL(types.NewPChannelInfoFromProto(channel))
 	if err != nil {
 		return err
@@ -54,7 +59,7 @@ func (hs *replicaServiceImpl) serveReplicaBootstrap(ctx context.Context, req *st
 	if !ok {
 		return status.NewOnShutdownError("protected WAL replica bootstrap is unavailable")
 	}
-	bootstrap, err := provider.OpenReplicaBootstrap(ctx, req.GetCheckpoint())
+	bootstrap, err := provider.OpenReplicaBootstrap(ctx, req.GetCheckpoint(), runtime)
 	if err != nil {
 		return err
 	}
@@ -87,6 +92,9 @@ func (hs *replicaServiceImpl) serveReplicaBootstrap(ctx context.Context, req *st
 			return err
 		}
 		through = msg.TimeTick()
+	}
+	if err := bootstrap.Complete(ctx); err != nil {
+		return err
 	}
 	return send(&streamingpb.WALReplicaBootstrapFrame{Payload: &streamingpb.WALReplicaBootstrapFrame_Complete{Complete: snapshot.Cursor}})
 }

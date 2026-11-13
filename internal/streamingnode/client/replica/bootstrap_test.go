@@ -14,6 +14,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walevent"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/walimplstest"
@@ -79,6 +80,8 @@ func TestBootstrapClientRequiresCompleteTransfer(t *testing.T) {
 					require.LessOrEqual(t, time.Until(deadline), 2*time.Minute)
 					require.EqualValues(t, 7, req.Pchannel.Term)
 					require.EqualValues(t, 5, req.Checkpoint.TimeTick)
+					require.EqualValues(t, 12, req.Runtime.NodeId)
+					require.EqualValues(t, 13, req.Runtime.RuntimeId)
 					if failure == "open" {
 						return nil, io.ErrClosedPipe
 					}
@@ -93,7 +96,7 @@ func TestBootstrapClientRequiresCompleteTransfer(t *testing.T) {
 					return frame, nil
 				}).Build()
 				source := &Source{primary: types.PChannelInfoAssigned{Channel: types.PChannelInfo{Name: "p", Term: 7}}, events: &bootstrapTestClient{}}
-				transfer, err := source.Bootstrap(t.Context(), &streamingpb.WALCheckpoint{TimeTick: 5})
+				transfer, err := source.Bootstrap(t.Context(), &streamingpb.WALCheckpoint{TimeTick: 5}, &viewpb.StreamingWorkNode{NodeId: 12, RuntimeId: 13})
 				if failure == "open" || failure == "metadata-eof" || failure == "metadata-kind" || failure == "metadata-term" {
 					require.Error(t, err)
 					require.Nil(t, transfer)

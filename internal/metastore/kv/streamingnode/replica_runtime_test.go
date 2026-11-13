@@ -210,3 +210,41 @@ func TestWALReplicaRuntimeReadFailuresPreserveState(t *testing.T) {
 		require.ErrorIs(t, c.CreateWALReplicaRuntime(t.Context(), runtime), merr.ErrServiceUnavailable)
 	})
 }
+
+func TestReleasedWALReplicaRootsAreReconciledAfterReceiverExit(t *testing.T) {
+	mockey.PatchConvey("only durably released runtime roots are reclaimed", t, func() {
+		c, _, store := retentionCatalogs(t)
+		ctx := t.Context()
+		runtime := retentionRuntime()
+		require.NoError(t, c.CreateWALReplicaRuntime(ctx, runtime))
+		for _, id := range []string{"r1", "r2"} {
+			require.NoError(t, c.RetainWALObjects(ctx, "p", &streamingpb.WALObjectRetentionRoot{RootId: id, ObjectKeys: []string{id}, Runtime: runtime}))
+		}
+		other := proto.CloneOf(runtime)
+		other.RuntimeId++
+		require.NoError(t, c.CreateWALReplicaRuntime(ctx, other))
+		require.NoError(t, c.RetainWALObjects(ctx, "p", &streamingpb.WALObjectRetentionRoot{RootId: "active", ObjectKeys: []string{"active"}, Runtime: other}))
+		require.NoError(t, c.RetainWALObjects(ctx, "p", &streamingpb.WALObjectRetentionRoot{RootId: "recovery", ObjectKeys: []string{"recovery"}}))
+		patch := mockey.Mock((*catalog).ReleaseWALObjects).Return(merr.ErrServiceUnavailable).Build()
+		require.ErrorIs(t, c.ReleaseWALReplicaRuntime(ctx, runtime), merr.ErrServiceUnavailable)
+		require.ErrorIs(t, c.SweepReleasedWALReplicaRoots(ctx, "p", 1), merr.ErrServiceUnavailable)
+		patch.UnPatch()
+		require.NoError(t, c.SweepReleasedWALReplicaRoots(ctx, "p", 1))
+		roots, err := c.ListWALObjectRetentionRoots(ctx, "p")
+		require.NoError(t, err)
+		require.Len(t, roots, 3)
+		require.NoError(t, c.SweepReleasedWALReplicaRoots(ctx, "p", 1))
+		require.NoError(t, c.SweepReleasedWALReplicaRoots(ctx, "p", 1))
+		roots, err = c.ListWALObjectRetentionRoots(ctx, "p")
+		require.NoError(t, err)
+		require.Len(t, roots, 2)
+		require.Error(t, c.SweepReleasedWALReplicaRoots(ctx, "p", 0))
+		patch = mockey.Mock((*catalog).ListWALObjectRetentionRoots).Return(nil, merr.ErrServiceUnavailable).Build()
+		require.ErrorIs(t, c.SweepReleasedWALReplicaRoots(ctx, "p", 1), merr.ErrServiceUnavailable)
+		patch.UnPatch()
+		require.NoError(t, store.Save(ctx, replicaRuntimeKey(other), "malformed"))
+		require.ErrorIs(t, c.SweepReleasedWALReplicaRoots(ctx, "p", 1), merr.ErrDataIntegrity)
+		require.NoError(t, store.Remove(ctx, replicaRuntimeKey(other)))
+		require.ErrorIs(t, c.SweepReleasedWALReplicaRoots(ctx, "p", 1), merr.ErrDataIntegrity)
+	})
+}

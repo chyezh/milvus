@@ -17,16 +17,18 @@ type ReplicaEventProvider interface {
 
 // ReplicaBootstrap owns protection for one immutable metadata cut, its objects,
 // physical replay range and S+1 reader. Next returns assembled, ordered WAL
-// messages strictly after Snapshot().Checkpoint. Close releases all protection.
-// Implementations must honor cancellation and never expose an unprotected cut.
+// messages strictly after Snapshot().Checkpoint. Complete fences the source
+// and prepares the receiver's durable runtime obligation after replay. Close
+// releases transport/replay protection; objects belong to the receiver runtime.
 type ReplicaBootstrap interface {
 	Snapshot() *streamingpb.WALReplicaSnapshot
 	Next(context.Context) (message.ImmutableMessage, error)
+	Complete(context.Context) error
 	Close()
 }
 
 type ReplicaBootstrapProvider interface {
-	OpenReplicaBootstrap(context.Context, *streamingpb.WALCheckpoint) (ReplicaBootstrap, error)
+	OpenReplicaBootstrap(context.Context, *streamingpb.WALCheckpoint, *viewpb.StreamingWorkNode) (ReplicaBootstrap, error)
 }
 
 // ReplicaSourceUpdater changes a read-only runtime's upstream without closing

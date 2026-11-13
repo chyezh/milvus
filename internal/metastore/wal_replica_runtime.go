@@ -16,4 +16,5 @@ type WALReplicaRuntimeCatalog interface {
 	InstallWALReplicaRuntime(context.Context, *viewpb.StreamingWorkNode, *streamingpb.WALReplicaCursor) error
 	ReleaseWALReplicaRuntime(context.Context, *viewpb.StreamingWorkNode) error
 	ListWALReplicaRuntimes(context.Context, string) ([]*streamingpb.WALReplicaRuntimeRetention, error)
+	SweepReleasedWALReplicaRoots(context.Context, string, int) error
 }

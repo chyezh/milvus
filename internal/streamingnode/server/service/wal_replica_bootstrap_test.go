@@ -27,6 +27,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/resolver"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/walimplstest"
@@ -36,11 +37,17 @@ import (
 
 type bootstrapWAL struct{ wal.WAL }
 
-func (*bootstrapWAL) OpenReplicaBootstrap(context.Context, *streamingpb.WALCheckpoint) (wal.ReplicaBootstrap, error) {
+func (*bootstrapWAL) OpenReplicaBootstrap(context.Context, *streamingpb.WALCheckpoint, *viewpb.StreamingWorkNode) (wal.ReplicaBootstrap, error) {
 	panic("mockey")
 }
 
 type bootstrapTransfer struct{ wal.ReplicaBootstrap }
+
+func (*bootstrapTransfer) Complete(context.Context) error { panic("mockey") }
+
+func bootstrapRuntime() *viewpb.StreamingWorkNode {
+	return &viewpb.StreamingWorkNode{Pchannel: "p", NodeId: 12, RuntimeId: 13, WalReplicaId: 2, WalReplicaRevision: 3, WalTerm: 7, ReadOnly: true}
+}
 
 func (*bootstrapTransfer) Snapshot() *streamingpb.WALReplicaSnapshot              { panic("mockey") }
 func (*bootstrapTransfer) Next(context.Context) (message.ImmutableMessage, error) { panic("mockey") }
@@ -67,6 +74,7 @@ func TestReplicaBootstrapGRPCRecovery(t *testing.T) {
 		mockey.Mock((*replicaManager).GetAvailableWAL).Return(&bootstrapWAL{}, nil).Build()
 		mockey.Mock((*bootstrapWAL).OpenReplicaBootstrap).Return(&bootstrapTransfer{}, nil).Build()
 		mockey.Mock((*bootstrapTransfer).Snapshot).Return(snapshot).Build()
+		mockey.Mock((*bootstrapTransfer).Complete).Return(nil).Build()
 		var next atomic.Int64
 		mockey.Mock((*bootstrapTransfer).Next).To(func(context.Context) (message.ImmutableMessage, error) {
 			n := next.Add(1)
@@ -88,7 +96,7 @@ func TestReplicaBootstrapGRPCRecovery(t *testing.T) {
 		client := replicaclient.NewClient((*clientv3.Client)(nil))
 		channel := types.PChannelInfo{Name: "p", Term: 7, AccessMode: types.AccessModeRW}
 		source := client.ForPrimary(types.PChannelInfoAssigned{Channel: channel, Node: types.StreamingNodeInfo{ServerID: 42}})
-		transfer, err := source.Bootstrap(ctx, nil)
+		transfer, err := source.Bootstrap(ctx, nil, bootstrapRuntime())
 		require.NoError(t, err)
 		defer transfer.Close()
 		require.True(t, proto.Equal(snapshot, transfer.Snapshot))
@@ -105,19 +113,21 @@ func TestReplicaBootstrapGRPCRecovery(t *testing.T) {
 }
 
 func TestReplicaBootstrapRejectsInvalidSource(t *testing.T) {
-	for _, failure := range []string{"request", "missing", "unsupported", "open", "term", "snapshot", "interval", "replay", "nil", "order", "upper", "physical", "send", "cancel", "success"} {
+	for _, failure := range []string{"request", "runtime", "missing", "unsupported", "open", "term", "snapshot", "interval", "replay", "nil", "order", "upper", "physical", "send", "cancel", "completion", "success"} {
 		t.Run(failure, func(t *testing.T) {
 			mockey.PatchConvey("uncommitted transfer never reports completion", t, func() {
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				snapshot := bootstrapSnapshot()
-				req := &streamingpb.WALReplicaBootstrapRequest{Pchannel: &streamingpb.PChannelInfo{Name: "p", Term: 7}}
+				req := &streamingpb.WALReplicaBootstrapRequest{Pchannel: &streamingpb.PChannelInfo{Name: "p", Term: 7}, Runtime: bootstrapRuntime()}
 				var lookupErr, openErr, nextErr error
 				var raw wal.WAL = &bootstrapWAL{}
 				msg := bootstrapTick(3, 2)
 				switch failure {
 				case "request":
 					req.Pchannel = nil
+				case "runtime":
+					req.Runtime = nil
 				case "missing":
 					lookupErr = merr.WrapErrServiceUnavailable("missing")
 				case "unsupported":
@@ -148,6 +158,12 @@ func TestReplicaBootstrapRejectsInvalidSource(t *testing.T) {
 				mockey.Mock((*bootstrapWAL).OpenReplicaBootstrap).Return(&bootstrapTransfer{}, openErr).Build()
 				mockey.Mock((*bootstrapTransfer).Snapshot).Return(snapshot).Build()
 				mockey.Mock((*bootstrapTransfer).Next).Return(msg, nextErr).Build()
+				mockey.Mock((*bootstrapTransfer).Complete).To(func(context.Context) error {
+					if failure == "completion" {
+						return merr.ErrServiceUnavailable
+					}
+					return nil
+				}).Build()
 				closeMock := mockey.Mock((*bootstrapTransfer).Close).Return().Build()
 				complete := false
 				service := NewReplicaService(&replicaManager{}).(*replicaServiceImpl)
@@ -165,7 +181,7 @@ func TestReplicaBootstrapRejectsInvalidSource(t *testing.T) {
 					require.Error(t, err)
 					require.False(t, complete)
 				}
-				if failure != "request" && failure != "missing" && failure != "unsupported" && failure != "open" {
+				if failure != "request" && failure != "runtime" && failure != "missing" && failure != "unsupported" && failure != "open" {
 					require.Equal(t, 1, closeMock.Times())
 				}
 			})
@@ -209,7 +225,7 @@ func TestReplicaBootstrapAdmissionAndCancellation(t *testing.T) {
 		}).Build()
 		result := make(chan error, 1)
 		go func() {
-			result <- service.BootstrapWALReplica(&streamingpb.WALReplicaBootstrapRequest{Pchannel: &streamingpb.PChannelInfo{Name: "p", Term: 7}}, &bootstrapServerStream{})
+			result <- service.BootstrapWALReplica(&streamingpb.WALReplicaBootstrapRequest{Pchannel: &streamingpb.PChannelInfo{Name: "p", Term: 7}, Runtime: bootstrapRuntime()}, &bootstrapServerStream{})
 		}()
 		select {
 		case <-sending:
