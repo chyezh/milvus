@@ -22,8 +22,8 @@ var _ metastore.WALObjectRetentionCatalog = (*catalog)(nil)
 var errRetentionPageFull = errors.New("WAL object retention page is full")
 
 const (
-	maxRetentionRootBytes = 512 * 1024
-	maxRetentionObjects   = 4096
+	maxRetentionRootBytes = metastore.WALObjectRetentionRootMaxBytes
+	maxRetentionObjects   = metastore.WALObjectRetentionRootMaxObjects
 	maxRetentionRoots     = 1024
 	maxRetentionBytes     = 64 * 1024 * 1024
 )
@@ -75,6 +75,17 @@ func (c *catalog) commitRetention(ctx context.Context, channel, epoch string, sa
 }
 
 func (c *catalog) RetainWALObjects(ctx context.Context, channel string, root *streamingpb.WALObjectRetentionRoot) error {
+	return c.retainWALObjects(ctx, channel, 0, root)
+}
+
+func (c *catalog) RetainWALRecoveryObjects(ctx context.Context, channel string, term int64, root *streamingpb.WALObjectRetentionRoot) error {
+	if term <= 0 {
+		return merr.WrapErrServiceInternalMsg("WAL recovery root requires a writer term")
+	}
+	return c.retainWALObjects(ctx, channel, term, root)
+}
+
+func (c *catalog) retainWALObjects(ctx context.Context, channel string, term int64, root *streamingpb.WALObjectRetentionRoot) error {
 	if root.GetRootId() == "" || root.GetReleased() || len(root.GetObjectKeys()) == 0 ||
 		len(root.GetObjectKeys()) > maxRetentionObjects || proto.Size(root) > maxRetentionRootBytes {
 		return merr.WrapErrServiceInternalMsg("invalid or oversized WAL object retention root")
@@ -88,6 +99,21 @@ func (c *catalog) RetainWALObjects(ctx context.Context, channel string, root *st
 	epoch, err := c.loadRetentionValue(ctx, retentionPrefix(channel)+"epoch")
 	if err != nil {
 		return err
+	}
+	var guards []predicates.Predicate
+	if term > 0 {
+		owner, err := c.metaKV.Load(ctx, buildConsumeCheckpointKey(channel))
+		if err != nil {
+			return err
+		}
+		checkpoint := &streamingpb.WALCheckpoint{}
+		if err := proto.Unmarshal([]byte(owner), checkpoint); err != nil {
+			return merr.WrapErrDataIntegrity(err, "decode WAL recovery object owner")
+		}
+		if checkpoint.Term != term {
+			return merr.WrapErrServiceUnavailable("WAL recovery object publisher was fenced")
+		}
+		guards = append(guards, predicates.ValueEqual(buildConsumeCheckpointKey(channel), owner))
 	}
 	released, err := c.loadRetentionValue(ctx, retentionKey(channel, "released", root.RootId))
 	if err != nil {
@@ -130,7 +156,7 @@ func (c *catalog) RetainWALObjects(ctx context.Context, channel string, root *st
 	if err != nil {
 		return merr.WrapErrDataIntegrity(err, "encode WAL object retention root")
 	}
-	return c.commitRetention(ctx, channel, epoch, map[string]string{key: string(encoded)}, nil)
+	return c.commitRetention(ctx, channel, epoch, map[string]string{key: string(encoded)}, nil, guards...)
 }
 
 func (c *catalog) checkObjectsRetainable(ctx context.Context, channel string, objects []string) error {
@@ -267,7 +293,7 @@ func (c *catalog) ListPendingWALObjectDeletions(ctx context.Context, channel str
 		return nil, merr.WrapErrServiceInternalMsg("invalid WAL object deletion page limit")
 	}
 	operations := make([]*streamingpb.WALObjectDeletion, 0, limit)
-	err := c.metaKV.WalkWithPrefix(ctx, retentionPrefix(channel)+"pending/", min(128, limit), func(_ []byte, value []byte) error {
+	err := c.metaKV.WalkWithPrefix(ctx, retentionPrefix(channel)+"pending/", min(128, limit), func(_, value []byte) error {
 		if len(operations) == limit {
 			return errRetentionPageFull
 		}

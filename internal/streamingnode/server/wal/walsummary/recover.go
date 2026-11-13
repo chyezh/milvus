@@ -77,6 +77,9 @@ func (m *Manager) Restore(ctx context.Context) error {
 	if err := validateManifest(manifest); err != nil {
 		return err
 	}
+	if err := m.cfg.Store.protectRecoveredManifest(ctx, manifest); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	m.manifest = manifest
 	m.publishedManifest = proto.Clone(original).(*streamingpb.PChannelSummaryManifest)

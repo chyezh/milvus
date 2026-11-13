@@ -32,8 +32,8 @@ import (
 const orphanSweepBudget = 1000
 
 // GCOnce requests retention and garbage collection. Manifest publication and
-// physical deletion are asynchronous. Cross-owner exclusion remains the design
-// TODO; readMu protects consumers of this manager only.
+// physical deletion are asynchronous. The catalog protects remote/recovery
+// roots; readMu protects consumers of this manager.
 func (m *Manager) GCOnce(ctx context.Context) error {
 	if m.cfg.ReadOnly {
 		return nil
@@ -136,7 +136,11 @@ func (t *summaryGCTask) Execute(ctx context.Context) error {
 	// beyond this frozen coverage and the sweep excludes them, even if they are
 	// published during deletion. References from older terms are only inherited
 	// at Restore, never added by this live manager. Keep the frozen refs/coverage
-	// throughout I/O; cross-owner deletion fencing remains a separate TODO.
+	// throughout I/O. Each physical deletion also crosses the durable catalog
+	// ledger, which serializes it with remote object roots and owner changes.
+	if err := m.cfg.Store.ResumeDeletions(ctx, orphanSweepBudget); err != nil {
+		return errors.Mark(err, nodescheduler.ErrDelay)
+	}
 	_, finished, err := m.cfg.Store.sweepGarbage(ctx, m.cfg.Term, coverage, refs, orphanSweepBudget)
 	if err != nil {
 		return errors.Mark(err, nodescheduler.ErrDelay)

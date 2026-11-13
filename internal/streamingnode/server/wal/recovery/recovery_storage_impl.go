@@ -10,6 +10,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus/internal/flushcommon/broker"
 	"github.com/milvus-io/milvus/internal/flushcommon/syncmgr"
+	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/storagev2/packed"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/messageack"
@@ -325,14 +326,12 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 // newSummaryManager creates the pchannel-scoped WALSummary manager and wires
 // it to the recovery runtime.
 func (r *recoveryStorageImpl) newSummaryManager(runtime moduleapi.Runtime) *walsummary.Manager {
+	retention, _ := resource.Resource().StreamingNodeCatalog().(metastore.WALObjectRetentionCatalog)
 	return walsummary.NewManager(walsummary.ManagerConfig{
 		PChannel: r.channel.Name,
 		Term:     r.channel.Term,
-		Store: walsummary.NewStore(
-			resource.Resource().ChunkManager(),
-			r.channel.Name,
-			r.channel.Term,
-		),
+		Store: walsummary.NewStore(resource.Resource().ChunkManager(), r.channel.Name, r.channel.Term,
+			walsummary.WithRetentionCatalog(retention)),
 		Runtime:           runtime,
 		FlushMaxBytes:     uint64(paramtable.Get().StreamingCfg.FlushL0MaxSize.GetAsSize()),
 		CacheMaxBytes:     uint64(max(0, paramtable.Get().StreamingCfg.SummaryCacheBytesPerPChannel.GetAsSize())),

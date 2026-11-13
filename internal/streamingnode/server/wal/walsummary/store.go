@@ -41,6 +41,7 @@ import (
 	"github.com/cockroachdb/errors"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v3/common"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
@@ -56,8 +57,8 @@ const (
 	manifestObjectDir = "manifest"
 
 	// walsummaryObjectDir is the object storage directory of the summary store.
-	// The store keeps nothing in etcd, so this is its only root. It aliases the
-	// registered segment so this top-level directory stays in
+	// Payloads live here; shared retention obligations live in the catalog.
+	// It aliases the registered segment so this top-level directory stays in
 	// common.InternalStorageRootSegments, which import path validation denies.
 	walsummaryObjectDir = common.WalSummaryRootPath
 )
@@ -81,15 +82,28 @@ type Store struct {
 	chunkManager storage.ChunkManager
 	pchannel     string
 	term         int64
+	retention    metastore.WALObjectRetentionCatalog
+}
+
+type StoreOption func(*Store)
+
+// WithRetentionCatalog coordinates exact-object deletion with remote runtimes
+// and recovery roots. Runtime stores must provide the shared durable catalog.
+func WithRetentionCatalog(catalog metastore.WALObjectRetentionCatalog) StoreOption {
+	return func(s *Store) { s.retention = catalog }
 }
 
 // NewStore creates the object storage layer of a pchannel summary store.
-func NewStore(chunkManager storage.ChunkManager, pchannel string, term int64) *Store {
-	return &Store{
+func NewStore(chunkManager storage.ChunkManager, pchannel string, term int64, opts ...StoreOption) *Store {
+	s := &Store{
 		chunkManager: chunkManager,
 		pchannel:     pchannel,
 		term:         term,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // PChannel returns the pchannel of the store.
@@ -271,10 +285,8 @@ func (s *Store) ReadIdempotencySectionsOfChunk(
 // object.
 func (s *Store) DeleteChunk(ctx context.Context, generation uint64, term int64) error {
 	key := buildChunkKey(s.chunkManager, s.pchannel, generation, term)
-	if err := s.chunkManager.Remove(ctx, key); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return merr.Wrapf(err, "failed to delete summary chunk %s", key)
-	}
-	return nil
+	_, err := s.deleteObject(ctx, key)
+	return err
 }
 
 // ReadManifest reads this term's manifest. A missing object is reported as
@@ -350,11 +362,15 @@ func (s *Store) WriteManifest(ctx context.Context, manifest *streamingpb.PChanne
 	if err != nil {
 		return err
 	}
+	roots, err := s.retainManifest(ctx, manifest, payload)
+	if err != nil {
+		return err
+	}
 	key := s.ManifestKey()
 	if err := s.chunkManager.Write(ctx, key, payload); err != nil {
 		return merr.Wrapf(err, "failed to write summary manifest %s", key)
 	}
-	return nil
+	return s.commitManifestRoots(ctx, roots)
 }
 
 // ProbeChunkForward lists the chunk objects of this term at or after
@@ -435,8 +451,8 @@ func (s *Store) DeleteManifestsBelowTerm(ctx context.Context, belowTerm int64) e
 	}
 	for _, term := range terms {
 		key := buildManifestKey(s.chunkManager, s.pchannel, term)
-		if err := s.chunkManager.Remove(ctx, key); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return merr.Wrapf(err, "failed to delete superseded summary manifest %s", key)
+		if _, err := s.deleteObject(ctx, key); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -464,15 +480,19 @@ func parseChunkKey(base string) (generation uint64, term int64, ok bool) {
 
 // RemoveAllObjects deletes every object of the pchannel's summary store. It is
 // only correct where no catalog meta references a chunk any more, such as
-// dropping the store. A prefix removal over the whole store root reaps the
-// per-term manifests, the chunks directory, and whatever an earlier partial
-// removal left behind.
+// dropping the store. Each exact key still crosses the retention ledger; a
+// broad prefix deletion could destroy a concurrently retained object.
 func (s *Store) RemoveAllObjects(ctx context.Context) error {
 	prefix := buildStorePrefix(s.chunkManager, s.pchannel)
-	if err := s.chunkManager.RemoveWithPrefix(ctx, prefix); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return merr.Wrapf(err, "failed to remove summary store with prefix %s", prefix)
+	var deleteErr error
+	err := s.chunkManager.WalkWithPrefix(ctx, prefix, true, func(info *storage.ChunkObjectInfo) bool {
+		_, deleteErr = s.deleteObject(ctx, info.FilePath)
+		return deleteErr == nil
+	})
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return merr.Wrapf(err, "failed to list summary store with prefix %s", prefix)
 	}
-	return nil
+	return deleteErr
 }
 
 // ---- key builders ----
@@ -1105,9 +1125,13 @@ func (s *Store) sweepGarbage(ctx context.Context, term int64, coverage *streamin
 		if _, keep := referenced[ChunkRef{Generation: generation, Term: keyTerm}]; keep {
 			return true
 		}
-		if err := s.DeleteChunk(ctx, generation, keyTerm); err != nil {
+		removed, err := s.deleteObject(ctx, info.FilePath)
+		if err != nil {
 			deleteErr = err
 			return false
+		}
+		if !removed {
+			return true
 		}
 		deleted++
 		if deleted >= budget {

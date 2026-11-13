@@ -312,13 +312,13 @@ func TestSlowGCDoesNotBlockReadersOrPublication(t *testing.T) {
 
 	entered, release := make(chan struct{}), make(chan struct{})
 	unblock := sync.OnceFunc(func() { close(release) })
-	var original func(*Store, context.Context, uint64, int64) error
-	patch := mockey.Mock((*Store).DeleteChunk).Origin(&original).To(func(s *Store, ctx context.Context, gen uint64, term int64) error {
-		if gen == 0 {
+	var original func(*Store, context.Context, string) (bool, error)
+	patch := mockey.Mock((*Store).deleteObject).Origin(&original).To(func(s *Store, ctx context.Context, key string) (bool, error) {
+		if key == store.ChunkKey(0) {
 			close(entered)
 			<-release
 		}
-		return original(s, ctx, gen, term)
+		return original(s, ctx, key)
 	}).Build()
 	defer patch.UnPatch()
 	done := make(chan struct{})
@@ -389,7 +389,7 @@ func TestGCDeletionFailureIsRediscoveredAfterRestart(t *testing.T) {
 	requireSummaryError(t, m.gcTask.Execute(ctx), nodescheduler.ErrDelay, "unpublished removal cannot authorize deletion")
 	require.NoError(t, m.manifestTask.Execute(ctx))
 	failure := errors.New("delete unavailable")
-	patch := mockey.Mock((*Store).DeleteChunk).Return(failure).Build()
+	patch := mockey.Mock((*Store).deleteObject).Return(false, failure).Build()
 	defer patch.UnPatch()
 	requireSummaryError(t, m.gcTask.Execute(ctx), failure)
 	patch.UnPatch()
