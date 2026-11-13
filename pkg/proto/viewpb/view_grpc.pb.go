@@ -139,8 +139,9 @@ var ViewSyncService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	QueryPlanService_GetQueryPlan_FullMethodName     = "/milvus.proto.view.QueryPlanService/GetQueryPlan"
-	QueryPlanService_GetMVCCTimestamp_FullMethodName = "/milvus.proto.view.QueryPlanService/GetMVCCTimestamp"
+	QueryPlanService_GetQueryPlan_FullMethodName         = "/milvus.proto.view.QueryPlanService/GetQueryPlan"
+	QueryPlanService_GetMVCCTimestamp_FullMethodName     = "/milvus.proto.view.QueryPlanService/GetMVCCTimestamp"
+	QueryPlanService_ResolveQueryPlanMVCC_FullMethodName = "/milvus.proto.view.QueryPlanService/ResolveQueryPlanMVCC"
 )
 
 // QueryPlanServiceClient is the client API for QueryPlanService service.
@@ -153,6 +154,9 @@ type QueryPlanServiceClient interface {
 	// Proxy gets MVCC from primary, then calls GetQueryPlan on the target replica with the pre-obtained frontiers.
 	// Returns VIEW_CODE_NOT_PRIMARY if the node is not the primary replica.
 	GetMVCCTimestamp(ctx context.Context, in *GetMVCCTimestampRequest, opts ...grpc.CallOption) (*GetMVCCTimestampResponse, error)
+	// Resolve the requested consistency/barrier on the primary, without waiting
+	// for its local QueryViews. A read-only WAL prepares and queries its own Views.
+	ResolveQueryPlanMVCC(ctx context.Context, in *GetQueryPlanRequest, opts ...grpc.CallOption) (*QueryPlanMVCC, error)
 }
 
 type queryPlanServiceClient struct {
@@ -181,6 +185,15 @@ func (c *queryPlanServiceClient) GetMVCCTimestamp(ctx context.Context, in *GetMV
 	return out, nil
 }
 
+func (c *queryPlanServiceClient) ResolveQueryPlanMVCC(ctx context.Context, in *GetQueryPlanRequest, opts ...grpc.CallOption) (*QueryPlanMVCC, error) {
+	out := new(QueryPlanMVCC)
+	err := c.cc.Invoke(ctx, QueryPlanService_ResolveQueryPlanMVCC_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // QueryPlanServiceServer is the server API for QueryPlanService service.
 // All implementations should embed UnimplementedQueryPlanServiceServer
 // for forward compatibility
@@ -191,6 +204,9 @@ type QueryPlanServiceServer interface {
 	// Proxy gets MVCC from primary, then calls GetQueryPlan on the target replica with the pre-obtained frontiers.
 	// Returns VIEW_CODE_NOT_PRIMARY if the node is not the primary replica.
 	GetMVCCTimestamp(context.Context, *GetMVCCTimestampRequest) (*GetMVCCTimestampResponse, error)
+	// Resolve the requested consistency/barrier on the primary, without waiting
+	// for its local QueryViews. A read-only WAL prepares and queries its own Views.
+	ResolveQueryPlanMVCC(context.Context, *GetQueryPlanRequest) (*QueryPlanMVCC, error)
 }
 
 // UnimplementedQueryPlanServiceServer should be embedded to have forward compatible implementations.
@@ -202,6 +218,9 @@ func (UnimplementedQueryPlanServiceServer) GetQueryPlan(context.Context, *GetQue
 }
 func (UnimplementedQueryPlanServiceServer) GetMVCCTimestamp(context.Context, *GetMVCCTimestampRequest) (*GetMVCCTimestampResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetMVCCTimestamp not implemented")
+}
+func (UnimplementedQueryPlanServiceServer) ResolveQueryPlanMVCC(context.Context, *GetQueryPlanRequest) (*QueryPlanMVCC, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ResolveQueryPlanMVCC not implemented")
 }
 
 // UnsafeQueryPlanServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -251,6 +270,24 @@ func _QueryPlanService_GetMVCCTimestamp_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _QueryPlanService_ResolveQueryPlanMVCC_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetQueryPlanRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(QueryPlanServiceServer).ResolveQueryPlanMVCC(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: QueryPlanService_ResolveQueryPlanMVCC_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(QueryPlanServiceServer).ResolveQueryPlanMVCC(ctx, req.(*GetQueryPlanRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // QueryPlanService_ServiceDesc is the grpc.ServiceDesc for QueryPlanService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -265,6 +302,10 @@ var QueryPlanService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetMVCCTimestamp",
 			Handler:    _QueryPlanService_GetMVCCTimestamp_Handler,
+		},
+		{
+			MethodName: "ResolveQueryPlanMVCC",
+			Handler:    _QueryPlanService_ResolveQueryPlanMVCC_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

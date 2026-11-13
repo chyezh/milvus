@@ -313,6 +313,9 @@ service QueryPlanService {
     // Proxy gets MVCC from primary, then calls GetQueryPlan on the target replica with the pre-obtained frontiers.
     // Returns VIEW_CODE_NOT_PRIMARY if the node is not the primary replica.
     rpc GetMVCCTimestamp(GetMVCCTimestampRequest) returns (GetMVCCTimestampResponse) {}
+    // Resolve the requested consistency/barrier on the primary, without waiting
+    // for its local QueryViews. A read-only WAL prepares and queries its own Views.
+    rpc ResolveQueryPlanMVCC(GetQueryPlanRequest) returns (QueryPlanMVCC) {}
 }
 
 message GetQueryPlanRequest {

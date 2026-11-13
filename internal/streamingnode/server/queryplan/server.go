@@ -52,6 +52,19 @@ func (s *Server) GetMVCCTimestamp(ctx context.Context, req *viewpb.GetMVCCTimest
 	return resp, nil
 }
 
+func (s *Server) ResolveQueryPlanMVCC(ctx context.Context, req *viewpb.GetQueryPlanRequest) (*viewpb.QueryPlanMVCC, error) {
+	p, err := s.providerForVChannel(ctx, req.GetShardId().GetVchannel())
+	if err != nil {
+		return nil, normalizeQueryPlanError(err)
+	}
+	resolver, ok := p.(provider.QueryMVCCResolver)
+	if !ok {
+		return nil, viewerror.NewNotPrimaryError("MVCC resolution requires the primary WAL")
+	}
+	mvcc, err := resolver.ResolveQueryPlanMVCC(ctx, req)
+	return mvcc, normalizeQueryPlanError(err)
+}
+
 func (s *Server) providerForVChannel(ctx context.Context, vchannel string) (provider.QueryPlanProvider, error) {
 	if s == nil || s.walManager == nil {
 		return nil, viewerror.NewOnShutdownError("query plan service is unavailable")

@@ -316,6 +316,24 @@ func (w *walAdaptorImpl) GetMVCCTimestamp(ctx context.Context, req *viewpb.GetMV
 	return &viewpb.GetMVCCTimestampResponse{Mvcc: mvcc}, nil
 }
 
+// ResolveQueryPlanMVCC is the writer-only consistency endpoint used by RO
+// replicas. Local QueryView readiness must not gate a different replica's reads.
+func (w *walAdaptorImpl) ResolveQueryPlanMVCC(ctx context.Context, req *viewpb.GetQueryPlanRequest) (*viewpb.QueryPlanMVCC, error) {
+	if !w.lifetime.Add(typeutil.LifetimeStateWorking) {
+		return nil, viewerror.NewOnShutdownError("wal is on shutdown")
+	}
+	defer w.lifetime.Done()
+	ctx, cancel := contextutil.MergeContext(ctx, w.availableCtx)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if w.Channel().AccessMode != types.AccessModeRW {
+		return nil, viewerror.NewNotPrimaryError("MVCC resolution requires the primary WAL")
+	}
+	return w.resolveQueryPlanMVCC(ctx, req, req.GetShardId().GetVchannel())
+}
+
 func (w *walAdaptorImpl) resolveQueryPlanMVCC(ctx context.Context, req *viewpb.GetQueryPlanRequest, vchannel string) (*viewpb.QueryPlanMVCC, error) {
 	switch mvcc := req.GetMvcc().(type) {
 	case *viewpb.GetQueryPlanRequest_BarrierMvcc:
