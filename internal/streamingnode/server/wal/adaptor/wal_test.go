@@ -166,17 +166,9 @@ func (f *testOneWALFramework) Run() {
 		// TODO: add test here after remove the flusher component.
 		// metrics := rwWAL.Metrics()
 
-		pChannel.AccessMode = types.AccessModeRO
-		roWAL, err := f.opener.Open(ctx, &wal.OpenOption{
-			Channel:        pChannel,
-			DisableFlusher: true,
-		})
-		require.NoError(f.t, err)
-		metrics := roWAL.Metrics()
-		_ = metrics.(types.ROWALMetrics)
-		f.testReadAndWrite(ctx, rwWAL, roWAL)
-		// close the wal
-		roWAL.Close()
+		// Raw consumer scans belong to the writer. ReadOnly service mode is a
+		// query runtime and is exercised by the replica bootstrap tests.
+		f.testReadAndWrite(ctx, rwWAL)
 		walimplstest.EnableFenced(pChannel.Name)
 
 		// create collection before start test
@@ -199,7 +191,7 @@ func (f *testOneWALFramework) Run() {
 	}
 }
 
-func (f *testOneWALFramework) testReadAndWrite(ctx context.Context, rwWAL wal.WAL, roWAL wal.ROWAL) {
+func (f *testOneWALFramework) testReadAndWrite(ctx context.Context, rwWAL wal.WAL) {
 	cp, err := rwWAL.GetReplicateCheckpoint()
 	require.True(f.t, status.AsStreamingError(err).IsReplicateViolation())
 	require.Nil(f.t, cp)
@@ -213,10 +205,10 @@ func (f *testOneWALFramework) testReadAndWrite(ctx context.Context, rwWAL wal.WA
 
 	// Test read and write.
 	wg := sync.WaitGroup{}
-	wg.Add(5)
+	wg.Add(4)
 
 	var newWritten []message.ImmutableMessage
-	var read1, read2, read3 []message.ImmutableMessage
+	var read1, read2 []message.ImmutableMessage
 	appendDone := make(chan struct{})
 	go func() { //nolint:gosec // context.Background is intentional in test goroutine
 		defer wg.Done()
@@ -252,12 +244,6 @@ func (f *testOneWALFramework) testReadAndWrite(ctx context.Context, rwWAL wal.WA
 	go func() {
 		defer wg.Done()
 		var err error
-		read3, err = f.testRead(ctx, roWAL)
-		require.NoError(f.t, err)
-	}()
-	go func() {
-		defer wg.Done()
-		var err error
 		read2, err = f.testRead(ctx, rwWAL)
 		require.NoError(f.t, err)
 	}()
@@ -266,29 +252,17 @@ func (f *testOneWALFramework) testReadAndWrite(ctx context.Context, rwWAL wal.WA
 	// read result should be sorted by timetick.
 	f.assertSortByTimeTickMessageList(read1)
 	f.assertSortByTimeTickMessageList(read2)
-	f.assertSortByTimeTickMessageList(read3)
 
 	// all written messages should be read.
 	sort.Sort(sortByMessageID(newWritten))
 	f.written = append(f.written, newWritten...)
 	sort.Sort(sortByMessageID(read1))
 	sort.Sort(sortByMessageID(read2))
-	sort.Sort(sortByMessageID(read3))
 	f.assertEqualMessageList(f.written, read1)
 	f.assertEqualMessageList(f.written, read2)
-	f.assertEqualMessageList(f.written, read3)
 
 	// test read with option
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		f.testReadWithOption(ctx, rwWAL)
-	}()
-	go func() {
-		defer wg.Done()
-		f.testReadWithOption(ctx, roWAL)
-	}()
-	wg.Wait()
+	f.testReadWithOption(ctx, rwWAL)
 }
 
 func (f *testOneWALFramework) testSendCreateCollection(ctx context.Context, w wal.WAL) {
@@ -538,7 +512,7 @@ func (f *testOneWALFramework) assertSortByTimeTickMessageList(msgs []message.Imm
 	}
 }
 
-func (f *testOneWALFramework) assertEqualMessageList(msgs1 []message.ImmutableMessage, msgs2 []message.ImmutableMessage) {
+func (f *testOneWALFramework) assertEqualMessageList(msgs1, msgs2 []message.ImmutableMessage) {
 	require.Equal(f.t, len(msgs2), len(msgs1))
 	for i := 0; i < len(msgs1); i++ {
 		require.Equal(f.t, msgs1[i].MessageType(), msgs2[i].MessageType())

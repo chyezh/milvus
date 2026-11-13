@@ -87,10 +87,16 @@ type openerAdaptorImpl struct {
 
 // Open opens a wal instance for the channel.
 func (o *openerAdaptorImpl) Open(ctx context.Context, opt *wal.OpenOption) (wal.WAL, error) {
+	if opt.Channel.AccessMode == types.AccessModeRO {
+		return o.OpenReadOnlyReplica(ctx, opt)
+	}
 	if !o.lifetime.Add(typeutil.LifetimeStateWorking) {
 		return nil, status.NewOnShutdownError("wal opener is on shutdown")
 	}
 	defer o.lifetime.Done()
+	if opt.Channel.AccessMode != types.AccessModeRW {
+		return nil, merr.WrapErrServiceInternalMsg("unknown WAL access mode")
+	}
 
 	// Determine which walName to use
 	walName, checkpoint, err := o.determineWALName(ctx, opt)
@@ -116,15 +122,7 @@ func (o *openerAdaptorImpl) Open(ctx context.Context, opt *wal.OpenOption) (wal.
 		return nil, err
 	}
 
-	var wal wal.WAL
-	switch opt.Channel.AccessMode {
-	case types.AccessModeRW:
-		wal, err = o.openRWWAL(ctx, l, opt)
-	case types.AccessModeRO:
-		wal, err = o.openROWAL(l)
-	default:
-		panic("unknown access mode")
-	}
+	wal, err := o.openRWWAL(ctx, l, opt)
 	if err != nil {
 		logger.Warn(ctx, "open wal failed", mlog.Err(err))
 		return nil, err
@@ -539,16 +537,6 @@ func (o *openerAdaptorImpl) handleAlterWALAdvanceCheckpointsStage(ctx context.Co
 		mlog.Uint64("newCheckpointTS", finalCheckpoint.TimeTick))
 
 	return nil
-}
-
-// openROWAL opens a read only wal instance for the channel.
-func (o *openerAdaptorImpl) openROWAL(l walimpls.WALImpls) (wal.WAL, error) {
-	id := o.idAllocator.Allocate()
-	wal := adaptImplsToROWAL(l, func() {
-		o.walInstances.Remove(id)
-	})
-	o.walInstances.Insert(id, wal)
-	return wal, nil
 }
 
 // Close the wal opener, release the underlying resources.
