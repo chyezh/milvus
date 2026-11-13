@@ -274,7 +274,7 @@ func (c *replicaController) apply(ctx context.Context, plan *streamingpb.WALRepl
 	c.mu.Unlock()
 	option := &wal.OpenOption{
 		Channel: types.PChannelInfo{Name: c.pchannel, Term: plan.WalTerm, AccessMode: types.AccessMode(local.AccessMode)},
-		Replica: proto.CloneOf(local), Primary: &source,
+		Replica: proto.CloneOf(local), Primary: &source, RuntimeID: replicaRuntimeIDs.Add(1),
 	}
 	var opened wal.WAL
 	var err error
@@ -309,7 +309,7 @@ func (c *replicaController) apply(ctx context.Context, plan *streamingpb.WALRepl
 		return context.Canceled
 	}
 	c.current, c.assignment, c.sourceTerm = opened, proto.CloneOf(local), plan.WalTerm
-	c.runtimeID = replicaRuntimeIDs.Add(1)
+	c.runtimeID = option.RuntimeID
 	c.opening = nil
 	c.sourceNode = source.Node
 	if retaining {

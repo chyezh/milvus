@@ -1466,6 +1466,24 @@ message WALObjectRetentionRoot {
     string root_id = 1;
     repeated string object_keys = 2;
     bool released = 3;
+    // Optional local runtime owner. Retaining an object is serialized with
+    // closing this runtime, including canceled/ambiguous bootstrap attempts.
+    view.StreamingWorkNode runtime = 4;
+}
+
+enum WALReplicaRuntimeRetentionState {
+    WAL_REPLICA_RUNTIME_CANDIDATE = 0;
+    WAL_REPLICA_RUNTIME_PREPARED = 1;
+    WAL_REPLICA_RUNTIME_INSTALLED = 2;
+    WAL_REPLICA_RUNTIME_RELEASED = 3;
+}
+
+// Object ownership outlives its bootstrap transport and event subscription.
+// This is a retention obligation, not permission to serve a QueryView.
+message WALReplicaRuntimeRetention {
+    view.StreamingWorkNode runtime = 1;
+    WALReplicaCursor cursor = 2;
+    WALReplicaRuntimeRetentionState state = 3;
 }
 
 // Authorization survives the issuing writer. Once present, the object can

@@ -51,10 +51,13 @@ func awaitReplicaState(t *testing.T, c *replicaController, plan *streamingpb.WAL
 func TestReplicaControllerKeepsRuntimeAcrossSourceTerms(t *testing.T) {
 	mockey.PatchConvey("primary replacement updates the source of the retained RO runtime", t, func() {
 		instance := &controllerTestWAL{}
+		reserved := make(chan uint64, 1)
 		opened := mockey.Mock((*controllerTestOpener).Open).To(func(_ *controllerTestOpener, _ context.Context, option *wal.OpenOption) (wal.WAL, error) {
 			require.Equal(t, types.AccessModeRO, option.Channel.AccessMode)
 			require.EqualValues(t, 2, option.Replica.ReplicaId)
 			require.EqualValues(t, 1, option.Primary.Node.ServerID)
+			require.NotZero(t, option.RuntimeID)
+			reserved <- option.RuntimeID
 			return instance, nil
 		}).Build()
 		mockey.Mock((*controllerTestWAL).IsAvailable).Return(true).Build()
@@ -67,6 +70,9 @@ func TestReplicaControllerKeepsRuntimeAcrossSourceTerms(t *testing.T) {
 		defer c.close()
 		plan := controllerTestPlan()
 		awaitReplicaState(t, c, plan, streamingpb.WALReplicaState_WAL_REPLICA_STATE_READY)
+		c.mu.Lock()
+		require.Equal(t, <-reserved, c.runtimeID, "the installed runtime keeps its pre-bootstrap ownership identity")
+		c.mu.Unlock()
 		plan.Revision, plan.WalTerm = 2, 8
 		awaitReplicaState(t, c, plan, streamingpb.WALReplicaState_WAL_REPLICA_STATE_READY)
 		require.Same(t, instance, c.getWAL())

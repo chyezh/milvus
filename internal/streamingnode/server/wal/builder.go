@@ -21,6 +21,7 @@ type OpenOption struct {
 	Channel        types.PChannelInfo
 	DisableFlusher bool // disable flusher for test, only use in test.
 	Replica        *streamingpb.WALReplicaAssignment
+	RuntimeID      uint64 // reserved before opening, including failed candidates
 	Primary        *types.PChannelInfoAssigned
 }
 

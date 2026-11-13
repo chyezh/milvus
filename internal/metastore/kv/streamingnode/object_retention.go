@@ -101,6 +101,9 @@ func (c *catalog) retainWALObjects(ctx context.Context, channel string, term int
 		return err
 	}
 	var guards []predicates.Predicate
+	if err := c.checkRuntimeRetention(ctx, channel, root.Runtime); err != nil {
+		return err
+	}
 	if term > 0 {
 		owner, err := c.metaKV.Load(ctx, buildConsumeCheckpointKey(channel))
 		if err != nil {
