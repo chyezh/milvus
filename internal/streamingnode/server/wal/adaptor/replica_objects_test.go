@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bytedance/mockey"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -184,4 +185,75 @@ func TestReplicaObjectRetentionProtectsLazyIDFResources(t *testing.T) {
 	operation, err = r.catalog.BeginSharedWALObjectDeletion(t.Context(), "sealed-bm25")
 	require.NoError(t, err)
 	require.Nil(t, operation, "replacement must preserve the old query dependencies")
+}
+
+func TestReplicaObjectRetentionCompactsWithoutReleasingObjects(t *testing.T) {
+	r := newReplicaObjectRetentionForTest(t)
+	ctx := t.Context()
+	for i := range maxReplicaObjectRoots * 2 {
+		namespace, retained := "summary", r.summary
+		if i%2 == 0 {
+			namespace, retained = "shared", r.shared
+		}
+		require.NoError(t, r.retain(ctx, namespace, retained, []string{fmt.Sprint(i)}))
+		require.LessOrEqual(t, r.roots, maxReplicaObjectRoots)
+	}
+	require.Positive(t, r.compaction)
+	require.False(t, r.refresh.Load())
+	for _, namespace := range []string{"summary", "shared"} {
+		var roots []*streamingpb.WALObjectRetentionRoot
+		var err error
+		if namespace == "summary" {
+			roots, err = r.catalog.ListWALObjectRetentionRoots(ctx, "p")
+		} else {
+			roots, err = r.catalog.ListSharedWALObjectRoots(ctx)
+		}
+		require.NoError(t, err)
+		all := make(map[string]bool)
+		for _, root := range roots {
+			require.True(t, proto.Equal(r.runtime, root.Runtime))
+			for _, key := range root.ObjectKeys {
+				all[key] = true
+			}
+		}
+		for i := range maxReplicaObjectRoots * 2 {
+			require.Equal(t, (i%2 == 0) == (namespace == "shared"), all[fmt.Sprint(i)])
+		}
+	}
+}
+
+func TestReplicaObjectCompactionFailurePreservesOwnership(t *testing.T) {
+	for _, namespace := range []string{"summary", "shared"} {
+		for _, failAcquire := range []bool{false, true} {
+			mockey.PatchConvey("replacement roots precede retirement and retry preserves every key", t, func() {
+				r := newReplicaObjectRetentionForTest(t)
+				ctx := t.Context()
+				retained := r.summary
+				acquire, release := "RetainWALObjects", "ReleaseWALObjects"
+				if namespace == "shared" {
+					retained = r.shared
+					acquire, release = "RetainSharedWALObjects", "ReleaseSharedWALObjects"
+				}
+				require.NoError(t, r.retain(ctx, namespace, retained, []string{"a"}))
+				require.NoError(t, r.retain(ctx, namespace, retained, []string{"b"}))
+				method := release
+				if failAcquire {
+					method = acquire
+				}
+				patch := mockey.Mock(mockey.GetMethod(r.catalog, method)).Return(merr.ErrServiceUnavailable).Build()
+				require.ErrorIs(t, r.compactRoots(ctx), merr.ErrServiceUnavailable)
+				patch.UnPatch()
+				require.NoError(t, r.compactRoots(ctx))
+				require.Equal(t, 1, r.roots)
+				require.Len(t, retained, 2)
+				if namespace == "shared" {
+					for _, key := range []string{"a", "b"} {
+						intent, err := r.catalog.BeginSharedWALObjectDeletion(ctx, key)
+						require.NoError(t, err)
+						require.Nil(t, intent)
+					}
+				}
+			})
+		}
+	}
 }

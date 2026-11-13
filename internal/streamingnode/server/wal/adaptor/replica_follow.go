@@ -47,6 +47,7 @@ func (r *readOnlyReplica) startFollowing(client streamingpb.StreamingNodeReplica
 			}
 			var reset *walevent.ResetError
 			if errors.As(err, &reset) {
+				mlog.Info(r.availableCtx, "refreshing WAL replica baseline", mlog.String("channel", r.channel.Name), mlog.Err(err))
 				r.refresh.Store(true)
 				return
 			}

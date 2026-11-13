@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"maps"
 	"path"
 	"slices"
 	"strconv"
@@ -40,24 +41,26 @@ type replicaObjectCatalog interface {
 }
 
 // replicaObjectRetention protects all lazily loaded versions admitted by one
-// local runtime. The owner periodically replaces that runtime before reaching
-// these bounds; old roots are released only after its queries/loaders drain.
+// local runtime. Incremental roots are compacted without releasing their objects.
+// The owner replaces the runtime when its key/byte budget is reached; old roots are released only after its queries/loaders drain.
 // Close releases the native executor, never the durable object obligations.
 type replicaObjectRetention struct {
-	refresh   atomic.Bool
-	mu        sync.Mutex
-	closed    bool
-	catalog   replicaObjectCatalog
-	runtime   *viewpb.StreamingWorkNode
-	store     *walsummary.Store
-	rootPath  string
-	config    *indexpb.StorageConfig
-	io        *packed.ManifestIOContext
-	summary   map[string]struct{}
-	shared    map[string]struct{}
-	manifests map[string]struct{}
-	roots     int
-	bytes     int
+	refresh    atomic.Bool
+	mu         sync.Mutex
+	closed     bool
+	catalog    replicaObjectCatalog
+	runtime    *viewpb.StreamingWorkNode
+	store      *walsummary.Store
+	rootPath   string
+	config     *indexpb.StorageConfig
+	io         *packed.ManifestIOContext
+	summary    map[string]struct{}
+	shared     map[string]struct{}
+	manifests  map[string]struct{}
+	roots      int
+	rootIDs    map[string]map[string]struct{}
+	compaction uint64
+	bytes      int
 }
 
 func (r *replicaObjectRetention) RetainQueryResources(ctx context.Context, response *datapb.GetStreamingNodeQueryViewResourcesResponse) error {
@@ -84,6 +87,7 @@ func newReplicaObjectRetention(catalog replicaObjectCatalog, runtime *viewpb.Str
 		catalog: catalog, runtime: proto.CloneOf(runtime), rootPath: cm.RootPath(), config: config,
 		store: walsummary.NewStore(cm, runtime.Pchannel, runtime.WalTerm), io: packed.NewManifestIOContext(2),
 		summary: make(map[string]struct{}), shared: make(map[string]struct{}), manifests: make(map[string]struct{}),
+		rootIDs: map[string]map[string]struct{}{"summary": {}, "shared": {}},
 	}
 }
 
@@ -194,8 +198,24 @@ func (r *replicaObjectRetention) retain(ctx context.Context, namespace string, r
 		return err
 	}
 	if r.roots+len(roots) > maxReplicaObjectRoots {
-		return merr.WrapErrServiceUnavailable("WAL replica requires a fresh object baseline")
+		if err := r.compactRoots(ctx); err != nil {
+			return err
+		}
+		if r.roots+len(roots) > maxReplicaObjectRoots {
+			return merr.WrapErrServiceUnavailable("WAL replica requires a fresh object baseline")
+		}
 	}
+	if err := r.retainRoots(ctx, namespace, roots); err != nil {
+		return err
+	}
+	for _, key := range keys {
+		retained[key] = struct{}{}
+	}
+	r.bytes += bytes
+	return nil
+}
+
+func (r *replicaObjectRetention) retainRoots(ctx context.Context, namespace string, roots []*streamingpb.WALObjectRetentionRoot) error {
 	for _, root := range roots {
 		if err := retry.Do(ctx, func() error {
 			if namespace == "summary" {
@@ -205,12 +225,51 @@ func (r *replicaObjectRetention) retain(ctx context.Context, namespace string, r
 		}, retry.Attempts(3), retry.Sleep(10*time.Millisecond)); err != nil {
 			return err
 		}
+		if _, known := r.rootIDs[namespace][root.RootId]; !known {
+			r.rootIDs[namespace][root.RootId] = struct{}{}
+			r.roots++
+		}
 	}
-	for _, key := range keys {
-		retained[key] = struct{}{}
+	return nil
+}
+
+// Merge incremental obligations without changing the set of retained objects.
+// Acquire every replacement before releasing any predecessor, so queries and
+// concurrent GC never see an ownership gap. Runtime Close remains the only
+// operation that releases the objects themselves.
+func (r *replicaObjectRetention) compactRoots(ctx context.Context) error {
+	r.compaction++
+	for _, namespace := range []string{"summary", "shared"} {
+		keys := r.summary
+		if namespace == "shared" {
+			keys = r.shared
+		}
+		if len(r.rootIDs[namespace]) < 2 {
+			continue
+		}
+		// Use a new identity even if sorted chunk boundaries revisit an old
+		// set: released root identities are permanent retry fences.
+		roots, err := replicaObjectRoots(r.runtime, namespace+"/compact/"+strconv.FormatUint(r.compaction, 10), slices.Sorted(maps.Keys(keys)))
+		if err != nil {
+			return err
+		}
+		old := maps.Clone(r.rootIDs[namespace])
+		if err := r.retainRoots(ctx, namespace, roots); err != nil {
+			return err
+		}
+		for id := range old {
+			if err := retry.Do(ctx, func() error {
+				if namespace == "summary" {
+					return r.catalog.ReleaseWALObjects(ctx, r.runtime.Pchannel, id)
+				}
+				return r.catalog.ReleaseSharedWALObjects(ctx, r.runtime, id)
+			}, retry.Attempts(3), retry.Sleep(10*time.Millisecond)); err != nil {
+				return err
+			}
+			delete(r.rootIDs[namespace], id)
+			r.roots--
+		}
 	}
-	r.roots += len(roots)
-	r.bytes += bytes
 	return nil
 }
 
