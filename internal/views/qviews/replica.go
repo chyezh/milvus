@@ -15,6 +15,9 @@ type ReplicaSnapshot struct {
 type Replica struct {
 	ReplicaID        int64
 	MaxUpViewVersion QueryViewVersion
+	// StreamingNode is the physical WAL runtime whose local directory published
+	// this candidate. Different WAL copies can serve the same QueryReplicaID.
+	StreamingNode StreamingNode
 }
 
 func ReplicasFromProto(entries []*viewpb.VChannelReplicas_Replica) []Replica {

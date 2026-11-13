@@ -36,7 +36,7 @@ func newWALAccesser(c *clientv3.Client) *walAccesserImpl {
 		streamingCoordClient: streamingCoordClient,
 		handlerClient:        handlerClient,
 		schemaClient:         newSchemaClient(handlerClient, paramtable.Get().StreamingCfg.SchemaCacheTTL.GetAsDuration(time.Second)),
-		replicaClient:        resumablereplicas.NewResumingClient(handlerClient.AcquireReplicaWatchStream),
+		replicaClient:        resumablereplicas.NewTopologyClient(streamingCoordClient.Assignment(), replicaWatchFactory(handlerClient)),
 		producerMutex:        sync.Mutex{},
 		producers:            make(map[string]*producer.ResumableProducer),
 

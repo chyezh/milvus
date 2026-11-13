@@ -16,6 +16,7 @@ import (
 	"github.com/milvus-io/milvus/internal/views/queryclient/reducer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/internal/views/viewerror"
+	worknodehandler "github.com/milvus-io/milvus/internal/views/worknode/handler"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
@@ -232,7 +233,14 @@ func (s *shardViewQueryClient) executeShard(
 
 		// Phase 1: GetQueryPlan with consistency routing.
 		planReq := params.buildPlanReq(targetShardID)
-		response, err := s.executeGetQueryPlan(ctx, targetShardID, planReq, params)
+		planCtx := ctx
+		if candidate.StreamingNode.NodeID != 0 {
+			planCtx, err = worknodehandler.EncodeQueryReplicaToOutgoingContext(ctx, candidate.StreamingNode.IntoProto())
+			if err != nil {
+				return nil, err
+			}
+		}
+		response, err := s.executeGetQueryPlan(planCtx, targetShardID, planReq, params)
 		if err != nil {
 			if retryableQueryError(err) {
 				lastErr = err
