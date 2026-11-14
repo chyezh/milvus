@@ -1,7 +1,8 @@
 package balancer
 
 import (
-	"sort"
+	"maps"
+	"slices"
 
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/balancer/channel"
 	"github.com/milvus-io/milvus/pkg/v3/common"
@@ -23,11 +24,7 @@ func planWALReplicas(view *channel.PChannelView, nodes map[int64]*types.Streamin
 		}
 		groups[group][id] = node
 	}
-	groupNames := make([]string, 0, len(groups))
-	for group := range groups {
-		groupNames = append(groupNames, group)
-	}
-	sort.Strings(groupNames)
+	groupNames := slices.Sorted(maps.Keys(groups))
 	plans := make(map[types.ChannelID]channel.ReplicaPlanTarget, len(view.Channels))
 	for id := range view.Channels {
 		plans[id] = channel.ReplicaPlanTarget{Nodes: make(map[string]*types.StreamingNodeInfo, len(groups))}

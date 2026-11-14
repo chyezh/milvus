@@ -84,7 +84,7 @@ func TestReplicaObjectRetentionTransfersSnapshotOwnership(t *testing.T) {
 	again, err := r.catalog.ListSharedWALObjectRoots(ctx)
 	require.NoError(t, err)
 	require.Len(t, again, len(roots))
-	require.Equal(t, 2, receiver.roots)
+	require.Equal(t, 2, receiver.rootCount())
 	require.NoError(t, r.catalog.(metastore.WALReplicaRuntimeCatalog).ReleaseWALReplicaRuntime(ctx, r.runtime))
 	require.NoError(t, r.catalog.SweepReleasedSharedWALRoots(ctx, 10))
 	operation, err := r.catalog.BeginSharedWALObjectDeletion(ctx, insert)
@@ -154,7 +154,8 @@ func TestReplicaObjectRetentionBoundedRecordsAndLifetime(t *testing.T) {
 	r.bytes = 64 << 20
 	require.ErrorIs(t, r.retain(t.Context(), "shared", r.shared, []string{"new"}), merr.ErrServiceUnavailable)
 	r.bytes = 0
-	r.roots = maxReplicaObjectRoots
+	full := mockey.Mock((*replicaObjectRetention).rootCount).Return(maxReplicaObjectRoots).Build()
+	defer full.UnPatch()
 	require.ErrorIs(t, r.retain(t.Context(), "shared", r.shared, []string{"new"}), merr.ErrServiceUnavailable)
 	require.Empty(t, r.shared)
 }
@@ -174,7 +175,8 @@ func TestReplicaObjectRetentionProtectsLazyIDFResources(t *testing.T) {
 	require.Nil(t, operation)
 	replica := &readOnlyReplica{dependencyRefresh: r.refresh.Load}
 	require.False(t, replica.ReplicaRefreshRequired())
-	r.roots = maxReplicaObjectRoots
+	full := mockey.Mock((*replicaObjectRetention).rootCount).Return(maxReplicaObjectRoots).Build()
+	defer full.UnPatch()
 	response.Bm25Resources[0].Bm25Binlogs[0].Binlogs[0].LogPath = "new-sealed-bm25"
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -196,7 +198,7 @@ func TestReplicaObjectRetentionCompactsWithoutReleasingObjects(t *testing.T) {
 			namespace, retained = "shared", r.shared
 		}
 		require.NoError(t, r.retain(ctx, namespace, retained, []string{fmt.Sprint(i)}))
-		require.LessOrEqual(t, r.roots, maxReplicaObjectRoots)
+		require.LessOrEqual(t, r.rootCount(), maxReplicaObjectRoots)
 	}
 	require.Positive(t, r.compaction)
 	require.False(t, r.refresh.Load())
@@ -244,7 +246,7 @@ func TestReplicaObjectCompactionFailurePreservesOwnership(t *testing.T) {
 				require.ErrorIs(t, r.compactRoots(ctx), merr.ErrServiceUnavailable)
 				patch.UnPatch()
 				require.NoError(t, r.compactRoots(ctx))
-				require.Equal(t, 1, r.roots)
+				require.Equal(t, 1, r.rootCount())
 				require.Len(t, retained, 2)
 				if namespace == "shared" {
 					for _, key := range []string{"a", "b"} {

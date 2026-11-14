@@ -57,7 +57,6 @@ type replicaObjectRetention struct {
 	summary    map[string]struct{}
 	shared     map[string]struct{}
 	manifests  map[string]struct{}
-	roots      int
 	rootIDs    map[string]map[string]struct{}
 	compaction uint64
 	bytes      int
@@ -197,11 +196,11 @@ func (r *replicaObjectRetention) retain(ctx context.Context, namespace string, r
 	if err != nil {
 		return err
 	}
-	if r.roots+len(roots) > maxReplicaObjectRoots {
+	if r.rootCount()+len(roots) > maxReplicaObjectRoots {
 		if err := r.compactRoots(ctx); err != nil {
 			return err
 		}
-		if r.roots+len(roots) > maxReplicaObjectRoots {
+		if r.rootCount()+len(roots) > maxReplicaObjectRoots {
 			return merr.WrapErrServiceUnavailable("WAL replica requires a fresh object baseline")
 		}
 	}
@@ -225,12 +224,13 @@ func (r *replicaObjectRetention) retainRoots(ctx context.Context, namespace stri
 		}, retry.Attempts(3), retry.Sleep(10*time.Millisecond)); err != nil {
 			return err
 		}
-		if _, known := r.rootIDs[namespace][root.RootId]; !known {
-			r.rootIDs[namespace][root.RootId] = struct{}{}
-			r.roots++
-		}
+		r.rootIDs[namespace][root.RootId] = struct{}{}
 	}
 	return nil
+}
+
+func (r *replicaObjectRetention) rootCount() int {
+	return len(r.rootIDs["summary"]) + len(r.rootIDs["shared"])
 }
 
 // Merge incremental obligations without changing the set of retained objects.
@@ -267,7 +267,6 @@ func (r *replicaObjectRetention) compactRoots(ctx context.Context) error {
 				return err
 			}
 			delete(r.rootIDs[namespace], id)
-			r.roots--
 		}
 	}
 	return nil
