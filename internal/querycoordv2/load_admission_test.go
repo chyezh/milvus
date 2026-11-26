@@ -25,17 +25,18 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/rgpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/coordinator/snmanager"
 	"github.com/milvus-io/milvus/internal/metacache"
+	"github.com/milvus-io/milvus/internal/metacache/metacachetest"
 	"github.com/milvus-io/milvus/internal/metastore/mocks"
 	"github.com/milvus-io/milvus/internal/querycoordv2/job"
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/querycoordv2/params"
 	"github.com/milvus-io/milvus/internal/querycoordv2/session"
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
-	"github.com/milvus-io/milvus/internal/util/streamingutil"
+	"github.com/milvus-io/milvus/internal/views/coord/loadmgr"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
@@ -62,17 +63,30 @@ func newAdmissionFixture(t *testing.T) *admissionFixture {
 
 	nodeMgr := session.NewNodeManager()
 	m := &meta.Meta{
-		CollectionManager: meta.NewCollectionManager(catalog, metacache.NewMetaStore(nil)),
+		CollectionManager: meta.NewCollectionManager(catalog, anyCollectionStore()),
 		ReplicaManager:    meta.NewReplicaManager(params.RandomIncrementIDAllocator(), catalog),
 		ResourceManager:   meta.NewResourceManager(catalog, nodeMgr),
 	}
-	broker := meta.NewMockBroker(t)
-	broker.EXPECT().DescribeCollection(mock.Anything, mock.Anything).
-		RunAndReturn(func(_ context.Context, collectionID int64) (*milvuspb.DescribeCollectionResponse, error) {
-			return &milvuspb.DescribeCollectionResponse{CollectionID: collectionID}, nil
-		}).Maybe()
-	broker.EXPECT().GetPartitions(mock.Anything, mock.Anything).Return([]int64{1}, nil).Maybe()
-	return &admissionFixture{meta: m, nodeMgr: nodeMgr, broker: broker}
+	return &admissionFixture{meta: m, nodeMgr: nodeMgr, broker: meta.NewMockBroker(t)}
+}
+
+// anyCollectionSource serves every collection ID as a Created collection
+// with partition 1.
+type anyCollectionSource struct{ metacache.CollectionSource }
+
+func (anyCollectionSource) GetCollection(collectionID int64) (*metacache.CollectionInfo, bool) {
+	return &metacache.CollectionInfo{ID: collectionID, Partitions: []int64{1}, Schema: &schemapb.CollectionSchema{}}, true
+}
+
+func anyCollectionStore() metacache.MetaStore {
+	store := metacache.NewMetaStore(nil)
+	store.SetCollectionSource(anyCollectionSource{metacache.NewCollections()})
+	return store
+}
+
+// newViewMeta returns a Meta whose collection view holds colls.
+func newViewMeta(colls ...*metacache.CollectionInfo) *meta.Meta {
+	return &meta.Meta{CollectionManager: meta.NewCollectionManager(nil, metacachetest.NewMetaStore(colls...))}
 }
 
 // putResourceGroup registers rgName holding exactly the given regular query
@@ -124,7 +138,7 @@ func (f *admissionFixture) loadedIn(t *testing.T, collectionID int64, rgNames ..
 	}
 }
 
-// withStreamingQueryNodes turns the streaming service on and makes the
+// withStreamingQueryNodes makes the
 // streaming node manager answer from byRG, so a test can state which resource
 // group holds which streaming query nodes without one running. The
 // cluster-wide set is derived from byRG: the two are the same nodes.
@@ -133,7 +147,6 @@ func withStreamingQueryNodes(byRG map[string]typeutil.UniqueSet) func() {
 	for _, nodes := range byRG {
 		all.Insert(nodes.Collect()...)
 	}
-	enabled := mockey.Mock(streamingutil.IsStreamingServiceEnabled).Return(true).Build()
 	byGroup := mockey.Mock((*snmanager.StreamingNodeManager).GetStreamingQueryNodeIDsByResourceGroup).
 		Return(byRG).Build()
 	cluster := mockey.Mock((*snmanager.StreamingNodeManager).GetStreamingQueryNodeIDs).
@@ -141,7 +154,6 @@ func withStreamingQueryNodes(byRG map[string]typeutil.UniqueSet) func() {
 	return func() {
 		cluster.UnPatch()
 		byGroup.UnPatch()
-		enabled.UnPatch()
 	}
 }
 
@@ -152,6 +164,10 @@ func withStreamingQueryNodes(byRG map[string]typeutil.UniqueSet) func() {
 func (f *admissionFixture) loadCollection(t *testing.T, req *querypb.LoadCollectionRequest) (checkedNodeNum bool, err error) {
 	t.Helper()
 	s := &Server{meta: f.meta, broker: f.broker}
+	current := s.getCurrentLoadConfig(context.Background(), req.GetCollectionID())
+	s.qviewsRuntime = &qviewsRuntime{loadConfigStore: &loadmgr.LoadConfigStore{}}
+	currentConfig := mockey.Mock((*Server).getCurrentLoadConfig).Return(current).Build()
+	defer currentConfig.UnPatch()
 	var origin func(context.Context, *meta.Meta, []string, int32, bool) (map[string]int, error)
 	broadcast := mockey.Mock((*Server).startBroadcastWithCollectionIDLock).Return(stubBroadcaster{}, nil).Build()
 	defer broadcast.UnPatch()
@@ -161,9 +177,9 @@ func (f *admissionFixture) loadCollection(t *testing.T, req *querypb.LoadCollect
 			return origin(ctx, m, resourceGroups, replicaNumber, checkNodeNum)
 		}).Origin(&origin).Build()
 	defer admission.UnPatch()
-	generate := mockey.Mock(job.GenerateAlterLoadConfigMessage).Return(nil, nil).Build()
+	generate := mockey.Mock((*Server).generateAlterLoadConfigMessageForLoadCollection).Return(nil, nil).Build()
 	defer generate.UnPatch()
-	err = s.broadcastAlterLoadConfigCollectionV2ForLoadCollection(context.Background(), req)
+	err = s.broadcastAlterLoadConfigCollectionV2ForLoadCollection(context.Background(), false, req)
 	return checkedNodeNum, err
 }
 
@@ -188,8 +204,8 @@ func (f *admissionFixture) loadPartitions(t *testing.T, req *querypb.LoadPartiti
 }
 
 // theFormsOnlyStreamingNode is the streaming side of a form's instance: one
-// streaming node, for DDL and the write ahead log, in a group of its own that
-// holds no replica. Every query cluster is a group of regular query nodes.
+// streaming node in a separate group. Load admission checks the QueryNodes
+// in the requested resource groups independently of delegator placement.
 func theFormsOnlyStreamingNode() map[string]typeutil.UniqueSet {
 	return map[string]typeutil.UniqueSet{"internal": typeutil.NewUniqueSet(7)}
 }
@@ -345,8 +361,8 @@ func TestAScopedExpansionAskingMoreReplicasThanTheGroupHasQueryNodesIsRefused(t 
 
 // A group with enough query nodes admits the expansion, exactly as a first
 // load into it would be admitted - and with a form installed it is admitted
-// although the whole instance runs one streaming node: a form's delegators
-// go onto the replicas' own query nodes (UseStreamingQueryNodeAsDelegator).
+// although the whole instance runs one streaming node. This is an admission
+// policy independent of delegator placement.
 func TestAScopedExpansionIntoAGroupWithEnoughNodesIsAdmitted(t *testing.T) {
 	setForm(t, true)
 	f := newAdmissionFixture(t)

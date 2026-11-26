@@ -198,6 +198,7 @@ class RawExprCacheExtendedTest : public ::testing::TestWithParam<Backend> {
             0,
             query::PlanOptions{},
             std::make_shared<QueryConfig>(config_map));
+        query_->set_read_snapshot(segment_->CaptureReadSnapshot());
         exec_ = std::make_unique<ExecContext>(query_.get());
         pool_ = std::make_shared<folly::CPUThreadPoolExecutor>(1);
     }
@@ -396,16 +397,18 @@ class RawExprCacheExtendedTest : public ::testing::TestWithParam<Backend> {
     Observe(const std::shared_ptr<const Logical>& logical,
             const std::shared_ptr<RawCalls>& calls,
             int64_t rows) {
-        return std::make_shared<ObservedRawExpr<Physical>>(
-            calls,
-            std::vector<ExprPtr>{},
-            logical,
-            "observed_raw",
-            nullptr,
-            segment_.get(),
-            rows,
-            kBatch,
-            0);
+        auto input =
+            std::make_shared<ObservedRawExpr<Physical>>(calls,
+                                                        std::vector<ExprPtr>{},
+                                                        logical,
+                                                        "observed_raw",
+                                                        nullptr,
+                                                        segment_.get(),
+                                                        rows,
+                                                        kBatch,
+                                                        0);
+        input->SetSnapshot(query_->get_read_snapshot().get());
+        return input;
     }
 
     std::shared_ptr<SegmentExpr>
@@ -495,7 +498,7 @@ TEST_P(RawExprCacheExtendedTest, MissHitAndOffsetsPreserveRawResults) {
         auto miss_calls = std::make_shared<RawCalls>();
         auto input = MakeInput(c.logical, miss_calls);
         FeatureRecorder miss_recorder;
-        input->SetFeatureRecorder(&miss_recorder);
+        input->SetFeatureRecorder(&miss_recorder, *schema_);
         auto miss = std::make_shared<RawExprCacheAdapter>(input, nullptr, true);
         miss->PrefetchAsync(pool_);
         EvalCtx context(exec_.get());
@@ -510,7 +513,7 @@ TEST_P(RawExprCacheExtendedTest, MissHitAndOffsetsPreserveRawResults) {
         ExprResCacheManager::Value stored;
         stored.active_count = kRows;
         ASSERT_TRUE(manager.Get(
-            {segment_->get_segment_id(), input->GetSignatureForRawExprCache()},
+            input->MakeExprCacheKey(input->GetSignatureForRawExprCache()),
             stored));
         Check({stored.result->clone(), stored.valid_result->clone()}, c);
 
@@ -520,7 +523,7 @@ TEST_P(RawExprCacheExtendedTest, MissHitAndOffsetsPreserveRawResults) {
         // hook therefore never runs; the adapter records through the
         // expression's recorder instead.
         FeatureRecorder hit_recorder;
-        hit_input->SetFeatureRecorder(&hit_recorder);
+        hit_input->SetFeatureRecorder(&hit_recorder, *schema_);
         auto hit =
             std::make_shared<RawExprCacheAdapter>(hit_input, nullptr, false);
         hit->PrefetchAsync(pool_);

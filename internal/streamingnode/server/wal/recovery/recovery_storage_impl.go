@@ -25,7 +25,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
-	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message/messageutil"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
@@ -71,6 +70,9 @@ func RecoverRecoveryStorage(
 		rs.closeRecoveryResources()
 		return nil, nil, err
 	}
+	if rs.recoveryComplete != nil {
+		rs.recoveryComplete(snapshot)
+	}
 	// Register recovered QueryView references before background cleanup can
 	// advance the segment-version floor or reclaim their bootstrap resources.
 	if rs.recoverQueryViews != nil {
@@ -92,6 +94,12 @@ func RecoverRecoveryStorage(
 }
 
 type RecoveryStorageOption func(*recoveryStorageImpl)
+
+// WithRecoveryComplete installs the live WAL only after bounded replay succeeds,
+// before starting persistence, truncation or live consumption.
+func WithRecoveryComplete(complete func(*RecoverySnapshot)) RecoveryStorageOption {
+	return func(r *recoveryStorageImpl) { r.recoveryComplete = complete }
+}
 
 // WithQueryViewRecovery installs query references at the startup barrier, before
 // background persistence and cleanup begin. The callback must not block on I/O.
@@ -128,7 +136,7 @@ func initialCheckpointFromLastTimeTickMessage(lastTimeTickMessage message.Immuta
 	return &utility.WALCheckpoint{
 		MessageID: lastTimeTickMessage.LastConfirmedMessageID(),
 		TimeTick:  lastTimeTickMessage.TimeTick(),
-		Magic:     utility.RecoveryMagicRecoveryStorageV2,
+		Magic:     utility.RecoveryMagicSchemaMetadataAligned,
 	}
 }
 
@@ -179,6 +187,8 @@ type recoveryStorageImpl struct {
 	currentClusterID        string
 	channel                 types.PChannelInfo
 	checkpoint              *WALCheckpoint
+	minimumRecoveryMagic    int64
+	walSwitchReady          chan struct{}
 	pchannelControl         *streamingpb.PChannelRecoveryControlMeta
 	ackTracker              *messageack.Tracker
 	tailController          *recoveryTailController
@@ -198,6 +208,7 @@ type recoveryStorageImpl struct {
 	pendingPersistSnapshot *dirtyPersistSnapshot
 	scannerWG              sync.WaitGroup
 	recoveryStream         RecoveryStream
+	recoveryComplete       func(*RecoverySnapshot)
 	ackTrackerWG           sync.WaitGroup
 	summaryWG              sync.WaitGroup
 	// pendingSalvageCheckpoint holds the salvage checkpoint captured during force promote.
@@ -222,9 +233,9 @@ func (r *recoveryStorageImpl) installCheckpoint(checkpoint *WALCheckpoint) {
 	}
 	var tracker *messageack.Tracker
 	tracker = messageack.NewTracker(point, func(utility.WALCheckpoint) {
-		observed, completed := tracker.LogicalOffsets()
+		observed, completed, count, lastMessageAt := tracker.LogicalState()
 		if r.tailController != nil {
-			r.tailController.UpdateTrackerFrontiers(observed, completed)
+			r.tailController.UpdateTrackerFrontiers(observed, completed, count, lastMessageAt)
 		}
 		r.notifyPersist()
 	}, r.vchannelManager)
@@ -262,18 +273,13 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 		syncmgr.BrokerMetaWriter(broker.NewCoordBroker(coord, paramtable.GetNodeID()), paramtable.GetNodeID(), retry.Attempts(1)),
 	)
 	// The temporary L0 consumer rebuilds retained Delete handles from WAL replay.
-	// Deprecated: the manager periodically reports the pchannel recovery
-	// checkpoint to DataCoord (DataCoord.UpdateChannelCheckpoint) so that
-	// GetFlushState can observe flush progress. The recovery storage write
-	// path itself never calls UpdateChannelCheckpoint; remove this wiring
-	// together with PChannelCheckpointUpdater once the new
-	// checkpoint-propagation path lands.
-	coordinatorBroker := broker.NewCoordBroker(coord, paramtable.GetNodeID())
 	manager, err := vchannel.NewPChannelRecoveryManager(vchannel.PChannelManagerConfig{
 		QueryRuntimeModuleBuilders: []queryresource.QueryRuntimeModuleBuilder{
 			queryresource.NewGrowingRuntimeModuleBuilder(nil),
+			queryresource.NewReadSchemaModuleBuilder(),
 			idf.NewFutureProvider(resource.Resource().MixCoordClient(), idf.WithChunkManager(resource.Resource().ChunkManager())),
 		},
+		QueryStatsChunkManager:    resource.Resource().ChunkManager(),
 		QueryViewLoadInfoProvider: queryresource.NewFutureLoadInfoProvider(resource.Resource().MixCoordClient()),
 		PChannel:                  r.channel.Name,
 		VChannelMetas:             vchannels,
@@ -286,12 +292,10 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 			idalloc.NewMAllocator(resource.Resource().IDAllocator()),
 			packed.CreateStorageConfig(),
 		),
-		SummaryManager:        summaryManager,
-		L0Materializer:        l0Writer,
-		L0MaterializeRows:     uint64(paramtable.Get().StreamingCfg.FlushL0MaxRowNum.GetAsInt()),
-		L0MaterializeBytes:    uint64(paramtable.Get().DataNodeCfg.FlushDeleteBufferBytes.GetAsInt64()),
-		GetRecoveryCheckpoint: func() *utility.WALCheckpoint { return r.GetCheckpoint(context.TODO()) },
-		CoordinatorBroker:     coordinatorBroker,
+		SummaryManager:     summaryManager,
+		L0Materializer:     l0Writer,
+		L0MaterializeRows:  uint64(paramtable.Get().StreamingCfg.FlushL0MaxRowNum.GetAsInt()),
+		L0MaterializeBytes: uint64(paramtable.Get().DataNodeCfg.FlushDeleteBufferBytes.GetAsInt64()),
 	})
 	if err != nil {
 		return err
@@ -399,11 +403,11 @@ func (r *recoveryStorageImpl) startAckTracker() {
 	r.ackTrackerWG.Add(1)
 	go func() {
 		defer r.ackTrackerWG.Done()
-		var underPressure func() bool
+		var shouldFlush func() bool
 		if r.tailController != nil {
-			underPressure = r.tailController.UnderSoftPressure
+			shouldFlush = r.tailController.ShouldFlush
 		}
-		r.ackTracker.Run(r.backgroundTaskNotifier.Context(), r.cfg.ackStallTimeout, underPressure)
+		r.ackTracker.Run(r.backgroundTaskNotifier.Context(), r.cfg.ackStallTimeout, shouldFlush)
 	}()
 }
 
@@ -414,13 +418,13 @@ func (r *recoveryStorageImpl) startSummaryBacklog() {
 	r.summaryWG.Add(1)
 	go func() {
 		defer r.summaryWG.Done()
-		var underPressure func() bool
+		var shouldFlush func() bool
 		if r.tailController != nil {
-			underPressure = r.tailController.UnderSoftPressure
+			shouldFlush = r.tailController.ShouldFlush
 		}
-		// Summary checks tail pressure independently of AckTracker stalls. The
+		// Summary checks flush thresholds independently of AckTracker stalls. The
 		// current WAL L0 materializer owns its own consumption age policy.
-		r.summaryManager.Run(r.backgroundTaskNotifier.Context(), 0, underPressure)
+		r.summaryManager.Run(r.backgroundTaskNotifier.Context(), 0, shouldFlush)
 	}()
 }
 
@@ -450,18 +454,20 @@ func (r *recoveryStorageImpl) consumeDirtySnapshot() *dirtyPersistSnapshot {
 	if r.summaryManager != nil {
 		summaryThrough = r.summaryManager.LastAcked()
 	}
-	completedPoint, completedLogicalOffset := r.ackTracker.CheckpointThrough(summaryThrough)
+	completedPoint, completedLogicalOffset, completedMessageCount := r.ackTracker.CheckpointThroughWithCount(summaryThrough)
 
 	if checkpoint != nil && !shouldAdvanceConsumePoint(*checkpoint, completedPoint) {
 		completedPoint = *checkpoint.Clone()
 		if r.tailController != nil {
-			completedLogicalOffset = r.tailController.Snapshot().PublishedOffset
+			published := r.tailController.Snapshot()
+			completedLogicalOffset = published.PublishedOffset
+			completedMessageCount = published.PublishedMessages
 		}
 	}
 	frozenCheckpoint := &WALCheckpoint{
 		MessageID: completedPoint.MessageID,
 		TimeTick:  completedPoint.TimeTick,
-		Magic:     utility.RecoveryMagicRecoveryStorageV2,
+		Magic:     max(r.checkpoint.Magic, r.minimumRecoveryMagic),
 		Term:      r.channel.Term,
 	}
 	// Freeze the latest control state with its own applied frontier. Its
@@ -490,11 +496,12 @@ func (r *recoveryStorageImpl) consumeDirtySnapshot() *dirtyPersistSnapshot {
 		return nil
 	}
 	return &dirtyPersistSnapshot{
-		Checkpoint:        frozenCheckpoint,
-		LogicalEndOffset:  completedLogicalOffset,
-		CheckpointDirty:   checkpointDirty,
-		SalvageCheckpoint: salvageCP,
-		ModuleDirtySnaps:  moduleSnapshots,
+		Checkpoint:             frozenCheckpoint,
+		LogicalEndOffset:       completedLogicalOffset,
+		LogicalEndMessageCount: completedMessageCount,
+		CheckpointDirty:        checkpointDirty,
+		SalvageCheckpoint:      salvageCP,
+		ModuleDirtySnaps:       moduleSnapshots,
 	}
 }
 
@@ -515,8 +522,7 @@ func consumeCheckpointEqual(left, right *utility.WALCheckpoint) bool {
 		return false
 	}
 	if !proto.Equal(left.ReplicateConfig, right.ReplicateConfig) ||
-		!proto.Equal(left.ReplicateCheckpoint, right.ReplicateCheckpoint) ||
-		!proto.Equal(left.AlterWalState, right.AlterWalState) {
+		!proto.Equal(left.ReplicateCheckpoint, right.ReplicateCheckpoint) {
 		return false
 	}
 	if left.MessageID == nil || right.MessageID == nil {
@@ -543,7 +549,7 @@ func (r *recoveryStorageImpl) observeMessage(ctx context.Context, msg message.Im
 	// confirmations enter the recovery tracker and dirty a snapshot.
 	defer func() {
 		r.observeQueryBarriers(ctx, msg)
-		if r.consumedThrough != nil && messageutil.IsTimeTickConfirmBarrier(msg.MessageType()) {
+		if r.consumedThrough != nil && (message.IsTimeTickConfirmBarrier(msg)) {
 			r.consumedThrough(msg.TimeTick())
 		}
 	}()
@@ -571,8 +577,8 @@ func (r *recoveryStorageImpl) refreshRecoveryTail() {
 	if r.ackTracker == nil || r.tailController == nil {
 		return
 	}
-	observed, completed := r.ackTracker.LogicalOffsets()
-	r.tailController.UpdateTrackerFrontiers(observed, completed)
+	observed, completed, count, lastMessageAt := r.ackTracker.LogicalState()
+	r.tailController.UpdateTrackerFrontiers(observed, completed, count, lastMessageAt)
 }
 
 func (r *recoveryStorageImpl) observeModulesMessage(
@@ -587,6 +593,19 @@ func (r *recoveryStorageImpl) observeModulesMessage(
 	if r.summaryManager != nil {
 		r.summaryManager.ObserveMessage(ctx, retained.Message())
 	}
+	// Ordinary confirmations are PChannel recovery progress, not VChannel
+	// resource events. Keep Tracker/Summary coverage without a shard-wide fanout.
+	msg := retained.Message()
+	if msg.MessageType() == message.MessageTypeTimeTick {
+		return
+	}
+	// Old WALs may contain empty transactions. They have no resource or query
+	// effects, but their Summary/AckTracker progress must still be consumed.
+	if msg.MessageType() == message.MessageTypeTxn && message.AsImmutableTxnMessage(msg).Size() == 0 {
+		return
+	}
+	// RecoveryBarrier and persisted MVCCBarrier still retain their complete-prefix
+	// effects. The extra scoped query-plan progress is dispatched separately.
 	r.vchannelManager.ObserveMessage(ctx, retained)
 }
 
@@ -669,19 +688,6 @@ func (r *recoveryStorageImpl) updatePChannelControl(msg message.ImmutableMessage
 			}
 		}
 	}
-	if msg.MessageType() == message.MessageTypeAlterWAL {
-		alterWAL := message.MustAsImmutableAlterWALMessageV2(msg)
-		header := alterWAL.Header()
-		if r.pchannelControl.AlterWalState == nil || r.pchannelControl.AlterWalState.Stage == streamingpb.AlterWALStage_NONE {
-			r.pchannelControl.AlterWalState = &streamingpb.AlterWALState{
-				TargetWalName: header.TargetWalName,
-				TimeTick:      msg.TimeTick(),
-				Configs:       header.Config,
-				Stage:         streamingpb.AlterWALStage_FLUSHING,
-			}
-			changed = true
-		}
-	}
 	// update the replicate checkpoint.
 	replicateHeader := msg.ReplicateHeader()
 	if replicateHeader != nil && r.pchannelControl.ReplicateCheckpoint == nil {
@@ -722,7 +728,7 @@ func (r *recoveryStorageImpl) getCompletedCheckpoint() *WALCheckpoint {
 	return &WALCheckpoint{
 		MessageID: point.MessageID,
 		TimeTick:  point.TimeTick,
-		Magic:     utility.RecoveryMagicRecoveryStorageV2,
+		Magic:     r.checkpoint.Magic,
 		Term:      r.channel.Term,
 	}
 }

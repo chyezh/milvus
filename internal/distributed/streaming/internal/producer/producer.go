@@ -26,7 +26,8 @@ var errGracefulShutdown = errors.New("graceful shutdown")
 
 // ProducerOptions is the options for creating a producer.
 type ProducerOptions struct {
-	PChannel string
+	OnSchemaVersionMismatch func(vchannel string)
+	PChannel                string
 }
 
 type ProduceOption struct {
@@ -131,6 +132,8 @@ func (p *ResumableProducer) produceInternal(ctx context.Context, msg message.Mut
 	}
 	defer p.lifetime.Done()
 
+	// Transport failures retry this same message. Only the server's business
+	// error decides whether the caller may replay a transaction with a new ID.
 	for {
 		// get producer.
 		producerHandler, err := p.producer.GetProducerAfterAvailable(ctx)
@@ -139,6 +142,9 @@ func (p *ResumableProducer) produceInternal(ctx context.Context, msg message.Mut
 		}
 		appendCtx, span := p.startDistAppendSpanIfRemote(ctx, producerHandler, msg)
 		produceResult, err := producerHandler.Append(appendCtx, msg)
+		if sErr := status.AsStreamingError(err); sErr != nil && sErr.IsSchemaVersionMismatch() && p.opts.OnSchemaVersionMismatch != nil {
+			p.opts.OnSchemaVersionMismatch(msg.VChannel())
+		}
 		if span != nil {
 			if err != nil {
 				span.RecordError(err)
@@ -173,6 +179,7 @@ func (p *ResumableProducer) produceInternal(ctx context.Context, msg message.Mut
 				if err := p.rateLimiter.WaitUntilAvailable(ctx); err != nil {
 					return nil, errors.Mark(err, errs.ErrCanceledOrDeadlineExceed)
 				}
+				continue // Admission rejection did not reach WAL.
 			}
 		}
 	}

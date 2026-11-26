@@ -23,9 +23,14 @@
 
 // Ngram candidate generation, exposed as a pure query mixin. Results are a
 // superset (caps.ngram_candidates = true, caps.exact = false); the consumer
-// fetches original values and verifies the predicate. The index neither calls
+// fetches original values and verifies the predicate unless CandidatesAreExact
+// identifies an exact literal/operator combination. The index neither calls
 // the executor nor performs that refinement. PatternOp names the operation;
 // implementing INgramReader does not imply exact IPatternMatchReader support.
+
+namespace milvus {
+struct RegexLiteralCondition;
+}
 
 namespace milvus::index {
 
@@ -33,11 +38,30 @@ class INgramReader {
  public:
     virtual ~INgramReader() = default;
 
+    // Input is a validated necessary-condition tree, borrowed for this call.
+    // The caller decodes/validates transport data before entering the reader.
+    // Unselective plans return false, including planner budget exhaustion.
+    virtual bool
+    CanHandleConditionTree(const RegexLiteralCondition& condition) const = 0;
+
+    // AND-merges a candidate superset into the Count-sized bitmap.
+    // Requires CanHandleConditionTree(condition) == true. Always requires exact
+    // predicate refinement against raw values, even for a single literal.
+    virtual void
+    ConditionTreeCandidates(const RegexLiteralCondition& condition,
+                            TargetBitmap& candidates) const = 0;
+
     // Whether this literal/operator can use the index, for example whether the
     // literal meets min_gram. This is a per-call check after pinning, not a cached
     // capability bit or an exception-based capability probe.
     virtual bool
     CanHandle(std::string_view literal, PatternOp op) const = 0;
+
+    // Whether Candidates returns exact predicate hits for this literal and op,
+    // so the consumer can skip raw-value refinement. False for an ineligible
+    // literal. This does not change caps.exact for the reader's general API.
+    virtual bool
+    CandidatesAreExact(std::string_view literal, PatternOp op) const = 0;
 
     // Phase 1: candidate generation. The result is AND-merged into `candidates`
     // (the caller initializes it non-empty). Semantically a superset.

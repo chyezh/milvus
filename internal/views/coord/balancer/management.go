@@ -14,6 +14,8 @@ import (
 // Management exposes the same replica ownership and lifecycle used by automatic
 // scheduling. Manual migration is a one-time placement change, not a node pin.
 type Management interface {
+	ManualPlace(context.Context, PlacementScope, func(map[qviews.ShardID]*qviews.QueryViewAtCoordBuilder) error) (map[qviews.ShardID]ManualPlaceResult, error)
+	MoveSegmentsAndWait(context.Context, int64, int64, []int64, []int64) (map[qviews.ShardID]ManualPlaceResult, error)
 	Placement(context.Context, int64) (*CollectionPlacement, error)
 	MoveSegments(context.Context, *loadmgr.LoadConfig, int64, []int64, []int64) (map[qviews.ShardID]*SegmentMove, error)
 }
@@ -188,6 +190,7 @@ func (b *DefaultBalancer) MoveSegments(ctx context.Context, cfg *loadmgr.LoadCon
 		}
 		rows[destination] += info.LogicalSize
 	}
+	priorities := b.preparationPriorities()
 	builders := make(map[qviews.ShardID]*qviews.QueryViewAtCoordBuilder, len(moves))
 	for id, move := range moves {
 		stat := pl.Shards[id]
@@ -206,7 +209,8 @@ func (b *DefaultBalancer) MoveSegments(ctx context.Context, cfg *loadmgr.LoadCon
 			assignments[node][info.PartitionID] = append(assignments[node][info.PartitionID], segment)
 		}
 		builders[id] = qviews.NewQueryViewAtCoordBuilder(id.ReplicaID, syntheticDataView(cfg, data.DataVersion, data.Shard(id.VChannel)), id.VChannel).
-			SetAssignments(assignments).SetLoadInfoVersion(pl.ConfigVersion).SetSchemaVersion(stat.UpSchemaVersion)
+			SetAssignments(assignments).SetLoadInfoVersion(pl.ConfigVersion).SetSchemaVersion(stat.UpSchemaVersion).
+			SetPreparationPriority(priorities.preparationPriority(id))
 	}
 	for id, builder := range builders {
 		// A concurrent data/schema change is handled by normal reconciliation;

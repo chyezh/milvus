@@ -40,6 +40,7 @@
 #include "storage/PayloadStream.h"
 #include "storage/RemoteChunkManagerSingleton.h"
 #include "storage/Types.h"
+#include "storage/Util.h"
 
 using milvus::DataType;
 using milvus::FieldDataPtr;
@@ -49,16 +50,15 @@ using milvus::storage::ChunkManagerPtr;
 using milvus::storage::FieldDataMeta;
 using milvus::storage::InsertData;
 using milvus::storage::MmapConfig;
-using milvus::storage::StorageConfig;
 
 namespace {
 
 // test remote chunk manager with local disk
-inline StorageConfig
+inline std::shared_ptr<milvus_storage::api::Properties>
 get_default_local_storage_config() {
-    StorageConfig storage_config;
-    storage_config.storage_type = "local";
-    storage_config.root_path = TestRemotePath;
+    auto storage_config = std::make_shared<milvus_storage::api::Properties>();
+    (*storage_config)[PROPERTY_FS_STORAGE_TYPE] = std::string("local");
+    (*storage_config)[PROPERTY_FS_ROOT_PATH] = std::string(TestRemotePath);
     return storage_config;
 }
 
@@ -83,11 +83,12 @@ PrepareInsertBinlog(int64_t collection_id,
                     const GeneratedData& dataset,
                     const ChunkManagerPtr cm,
                     std::string mmap_dir_path = "",
-                    std::vector<int64_t> excluded_field_ids = {}) {
+                    std::vector<int64_t> excluded_field_ids = {},
+                    const std::string& binlog_prefix = TestRemotePath) {
     bool enable_mmap = !mmap_dir_path.empty();
     LoadFieldDataInfo load_info;
     auto row_count = dataset.row_ids_.size();
-    const std::string prefix = TestRemotePath;
+    const std::string& prefix = binlog_prefix;
 
     auto SaveFieldData = [&](const FieldDataPtr field_data,
                              const std::string& file,
@@ -347,10 +348,10 @@ gen_index_meta(int64_t segment_id = 3,
 
 [[maybe_unused]] auto
 gen_local_storage_config(const std::string& root_path)
-    -> milvus::storage::StorageConfig {
-    auto ret = milvus::storage::StorageConfig{};
-    ret.storage_type = "local";
-    ret.root_path = root_path;
+    -> std::shared_ptr<milvus_storage::api::Properties> {
+    auto ret = std::make_shared<milvus_storage::api::Properties>();
+    (*ret)[PROPERTY_FS_STORAGE_TYPE] = std::string("local");
+    (*ret)[PROPERTY_FS_ROOT_PATH] = std::string(root_path);
     return ret;
 }
 

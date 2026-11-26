@@ -35,16 +35,16 @@ on the wire. What remains is small enough to state on one page.
 ```go
 package extension
 
-func SetHook(h hook.Hook)                     // hookutil prefers it over proxy.soPath
+func SetHook(h hook.Hook)                     // hookutil uses it; proxy.soPath is ignored
 func InstalledHook() hook.Hook
 func SetForm()                                // declares a form installed, in every role
 func FormInstalled() bool                     // reads SetForm's mark; independent of SetHook
 
 type QueryHook interface { ... }              // the queryNode.soPath plug-in's method set
-func SetQueryHook(h QueryHook)                // the QueryNode prefers it over queryNode.soPath
+func SetQueryHook(h QueryHook)                // the QueryNode uses it; queryNode.soPath is ignored
 func InstalledQueryHook() QueryHook
 
-func SetCipher(c hook.Cipher)                 // hookutil prefers it over cipherPlugin.soPathGo
+func SetCipher(c hook.Cipher)                 // hookutil uses it; cipherPlugin.soPathGo is ignored
 func InstalledCipher() hook.Cipher
 
 type Coordinator interface {                  // the coordinator as its own clients see it
@@ -85,33 +85,28 @@ which sees the same metadata the authentication interceptor does; a refusal
 from `Before` always reaches the client as the interceptor's own
 `InvalidArgument`, which is in pymilvus's non-retried set.
 
-One addition to hookutil: a compiled-in hook (`SetHook`) is used in preference
-to `proxy.soPath`, and a deployment that configures both is refused at
-start-up. A compiled-in hook is otherwise treated exactly as a plug-in is: it
-gets the same `Init` call with the `hook.*` configuration before it is
-installed, a failure to initialize keeps the proxy from starting, and it is
-registered with the same watcher, so editing a `hook.*` key re-initializes it
-with the new configuration without a restart. It differs in one respect:
-`common.panicWhenPluginFail`, which lets an operator run on without a plug-in
-that failed to load, does not reach it. A compiled-in hook that cannot
-initialize, or is configured beside a plug-in, stops the proxy whatever the
-setting says, because the distribution that compiled it in has switched the
-coordinators' behaviors on too, and a proxy serving through the default hook
-beside them would run half of that distribution.
+One addition to hookutil: a compiled-in hook (`SetHook`) is used and
+`proxy.soPath` is ignored, with a warning. A compiled-in hook is otherwise
+treated exactly as a plug-in is: it gets the same `Init` call with the
+`hook.*` configuration before it is installed, and it is registered with the
+same watcher, so editing a `hook.*` key re-initializes it with the new
+configuration without a restart. A failure to initialize follows
+`common.panicWhenPluginFail`, as a plug-in's load failure does: with the
+default `true` it stops the proxy, and with `false` the proxy starts on the
+default hook. When a form is installed (`SetForm`), a failure to initialize
+stops the proxy whatever the setting says.
 
 ### The query hook
 
 The QueryNode's search-parameter tuning hook - the `QueryNodePlugin` symbol a
 `queryNode.soPath` plug-in exports - can be compiled in the same way
-(`SetQueryHook`). A compiled-in query hook is used in preference to
-`queryNode.soPath`, and a deployment that configures both is refused at
-start-up: both would tune every search, and only one can. The refusal is
-reported the way a plug-in's load failure is: the QueryNode treats it as
-fatal when `autoIndex.enable` is on, and with tuning off it starts without
-either hook, as it always has. It is otherwise treated exactly as the plug-in
-is: it gets the same two `Init` calls with the
-`autoIndex.params.search` and `autoIndex.params.tuning` configuration before it
-is installed, and the same watchers re-initialize it when those keys change.
+(`SetQueryHook`). A compiled-in query hook is used and `queryNode.soPath` is
+ignored, with a warning. A compiled-in hook that fails to initialize is
+reported the way a plug-in's load failure is: the QueryNode treats it as fatal
+when `autoIndex.enable` is on, and with tuning off it starts without either
+hook, as it always has. It is otherwise treated exactly as the plug-in is: it
+gets the same two `Init` calls with the `autoIndex.params.search` and
+`autoIndex.params.tuning` configuration before it is installed, and the same watchers re-initialize it when those keys change.
 `autoIndex.enable` still decides whether tuning happens at all, whichever way
 the hook got there. `optimizers.QueryHook` is now an alias of
 `extension.QueryHook`, so nothing in the tree changes.
@@ -120,10 +115,10 @@ the hook got there. `optimizers.QueryHook` is now an alias of
 
 The Go half of the cipher plug-in pair - the `CipherPlugin` symbol a
 `cipherPlugin.soPathGo` plug-in exports - can be compiled in the same way
-(`SetCipher`). A compiled-in cipher is used in preference to
-`cipherPlugin.soPathGo`, and a deployment that configures both is refused at
-start-up: both would answer for the encryption keys, and only one can. Only
-that half changes hands: the C++ half is still loaded by the core from
+(`SetCipher`). A compiled-in cipher is used and `cipherPlugin.soPathGo` is
+ignored, with a warning that names the key but not its value: cipher paths
+stay out of the logs, as they do when a plug-in fails to load. Only that half
+changes hands: the C++ half is still loaded by the core from
 `cipherPlugin.soPathCpp`, and that path stays the deployment's declaration
 that encryption is on. A compiled-in cipher in a deployment without
 `soPathCpp` is left idle and `IsClusterEncryptionEnabled` stays false,
@@ -153,48 +148,37 @@ routes it to the leaders whose replica lives in that group
 (`ShardLeadersList.resource_groups`) and the proxy attributes its latency to
 that group. Nothing in a stock binary sets it.
 
+The existing `milvus_proxy_req_count`, `milvus_proxy_search_vectors_count`
+and `milvus_proxy_sq_latency` families carry an `rg` label. Unscoped requests,
+including ordinary Milvus traffic, use `rg=""` and are still counted. These
+replace the three `milvus_proxy_resource_group_*` families; each observation
+is recorded only in the original family. Consumers that aggregate over RG
+continue to obtain the overall count or histogram; consumers needing a query
+cluster filter on `rg`. Existing queries of the removed families must migrate
+(or retain a fallback to the original names while old images are running).
+
+The gRPC and REST request counters remain outside the hook so that they see
+the final response, including Mock answers and Before/After refusals. A
+request-local attribution holder carries the admitted hook context's RG back
+to those counters without mutating the context value used for routing. Total
+and outcome are both recorded at completion with the same RG (gRPC previously
+recorded total at entry). A refusal before admission stays unscoped. Successful
+Search/HybridSearch vector counts and Search/HybridSearch/Query latency use
+the routing context directly at their existing observation sites.
+
+
 ### Form-gated behaviors
 
 A distribution declares the deployment shape its coordinator behaviors are
 written for with `extension.SetForm()`; `extension.FormInstalled()` reads that
-declaration, independent of `SetHook`. Three behaviors in the coordinators are
+declaration, independent of `SetHook`. Two behaviors in the coordinators are
 switched on by `FormInstalled()` alone. They exist for the
-deployment shape a distribution runs - one streaming node kept for DDL and the
-write ahead log while queries are served from resource groups of regular query
-nodes, one collection loaded into several of those groups independently,
+deployment shape a distribution runs - one collection loaded into several
+resource groups independently,
 every role rolled from one image - and a stock binary, which
 answers false, keeps master's behavior exactly. Because the query coordinator
 and the data coordinator read the mark too, a distribution must make the
 declaration in every role it runs, not only in the proxy.
-
-- **Delegator placement** (`streamingutil.UseStreamingQueryNodeAsDelegator`).
-  With the streaming service on, the query coordinator places shard delegators
-  on streaming query nodes only, gives every replica a streaming query node of
-  its own, and refuses a collection more replicas than there are streaming
-  nodes. With a form installed, delegators go onto the replica's regular RW
-  query nodes instead, which watch the channel and read the WAL remotely, and
-  the streaming node takes no part in serving: a form runs one, and loads the
-  same collection into several resource groups. The replica bound in
-  `utils.AssignReplica`, the channel and leader checkers, the assign policies'
-  node filter, the channel balance helpers and the manual channel transfer ask
-  this one question; each already carried both placements. Stock: exactly the
-  streaming gate's answer, as before.
-
-  A delegator that does not share a process with the WAL trades two QueryNode
-  shortcuts for that separation. On a stock replica, where they do share one:
-  `delegator.GetLatestMVCCTimestampIfLocal` reads the WAL directly and lets a
-  Strong-consistency search be answered without waiting for tsafe to catch up;
-  `PrepareReleaseManualFlushIfLocal` runs the manual-flush prepare step in
-  place. A form's delegator, reading the WAL remotely, gets an error from the
-  first (`it does not run beside the WAL`), so every Strong search waits for
-  the channel's tsafe instead; and the second hits
-  `isReleaseManualFlushPrepareUnavailable`, which logs a warning and
-  unsubscribes without the prepare step. Neither is a bug - the WAL is being
-  read remotely by design - but both are the difference between a delegator on
-  a streaming node and one on a regular query node, and both paths run on the
-  2.5-compat branches (`utils.GetChannelRWAndRONodesFor260`,
-  `utils.filterNodeLessThan260` and the checkers' non-streaming-query-node
-  branches) that `cmd/milvus/main_entry.go` already marks for removal.
 
 - **Resource-group-scoped load placement** (`completePlacementForOutOfScopeResourceGroups`).
   With a form installed, a load request naming resource groups only ever
@@ -286,34 +270,36 @@ them through `user.yaml` or the environment.
 ## Test plan
 
 - `pkg/extension`: the setters and getters, and the context mark.
-- hookutil: a compiled-in hook is used, refused beside a plug-in, absent by
+- hookutil: a compiled-in hook is used, `proxy.soPath` ignored beside it, absent by
   default, initialized with the `hook.*` configuration, re-initialized when
-  that configuration changes, and fatal when it cannot initialize even with
-  `common.panicWhenPluginFail` off.
+  that configuration changes; when it cannot initialize, fatal with a form
+  installed even with `common.panicWhenPluginFail` off, and following that
+  setting without a form.
 - hookutil: a compiled-in cipher is used when `cipherPlugin.soPathCpp` is
-  set, refused beside `cipherPlugin.soPathGo`, idle without `soPathCpp`,
-  absent by default, not installed when it cannot initialize, and
+  set, `cipherPlugin.soPathGo` ignored beside it without its value reaching
+  the logs (whether the cipher initializes, fails to, or stays idle), idle
+  without `soPathCpp`, absent by default, not installed when it cannot initialize, and
   re-initialized on a `cipherPlugin.*` edit.
-- querynode: a compiled-in query hook is used, refused beside a plug-in,
+- querynode: a compiled-in query hook is used, `queryNode.soPath` ignored beside it,
   absent by default, initialized with the `autoIndex.params.*` configuration,
   and not installed when it cannot initialize.
-- proxy: a hook-pinned resource group reaches the search task; per-resource-
-  group latency series exist only for pinned requests; both streams consult
+- proxy: a hook-pinned resource group reaches the search task; latency, vector counts and request counts use the pinned RG, or an empty
+  label for unscoped requests; both streams consult
   the hook, and every stream the service declares is one of them.
 - mixcoord: the engine starts on activation only, receives the coordinator
   client, and is stopped once.
 - querycoord / datacoord: each form-gated behavior with and without a form
   installed - the stock cases assert master's answers (a second replica
-  refused for want of a streaming node, a delegator placed on the streaming
-  query node, a scoped load that moves the replica, version 0
+  refused for want of a streaming node, a scoped load that moves the replica,
+  version 0
   with no session) - plus a request naming no resource group; the resource
   group scope of `completePlacementForOutOfScopeResourceGroups` (a named group
   is an addition, an unnamed one is carried through); the expansion predicate
   in `job_load.go`, its legs, a request that only adds a replica to an
   already-loaded group, and a replayed expansion; a scoped
   `ShowLoadCollections` answered from the group's own figures (100 / -1 /
-  unknown group refused); a delegator placed on a regular query node under a
-  form; and an index engine version override clamped with no QueryNode
+  unknown group refused); and an index engine version override clamped with no
+  QueryNode
   registered.
 
 ## Rejected alternatives

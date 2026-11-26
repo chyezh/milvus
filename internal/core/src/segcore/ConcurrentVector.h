@@ -505,6 +505,21 @@ class ConcurrentVectorImpl : public VectorBase {
     set_data_raw(ssize_t element_offset,
                  const void* source,
                  ssize_t element_count) override {
+        write_data_raw<false>(
+            element_offset, static_cast<const Type*>(source), element_count);
+    }
+
+    // Same as set_data_raw, but the rows in source may be moved from.
+    void
+    move_data_raw(ssize_t element_offset, Type* source, ssize_t element_count) {
+        write_data_raw<true>(element_offset, source, element_count);
+    }
+
+    template <bool Move>
+    void
+    write_data_raw(ssize_t element_offset,
+                   std::conditional_t<Move, Type*, const Type*> source,
+                   ssize_t element_count) {
         ssize_t valid_count = 0;
         ssize_t storage_offset = 0;
         if (use_mapping_storage_) {
@@ -544,8 +559,7 @@ class ConcurrentVectorImpl : public VectorBase {
             chunks_ptr_->emplace_to_at_least(
                 upper_div(storage_offset + valid_count, size),
                 elements_per_row_ * size);
-            set_data(
-                storage_offset, static_cast<const Type*>(source), valid_count);
+            set_data<Move>(storage_offset, source, valid_count);
         }
     }
 
@@ -593,9 +607,15 @@ class ConcurrentVectorImpl : public VectorBase {
         return chunks_ptr_->get_element_offset(chunk_index);
     }
 
+    // The row accessors below return Type objects, which the batch-stored
+    // types (IsBatchStoredType) do not have: their chunks hold views. Read
+    // those through view_element() or view_physical_element().
+
     // just for fun, don't use it directly
     const Type*
-    get_element(ssize_t element_index) const {
+    get_element(ssize_t element_index) const
+        requires(!IsBatchStoredType<Type>)
+    {
         auto physical_index = offset_mapping_.GetPhysicalOffset(element_index);
         if (physical_index == -1) {
             return nullptr;
@@ -608,7 +628,9 @@ class ConcurrentVectorImpl : public VectorBase {
     }
 
     const Type*
-    get_physical_element(ssize_t physical_index) const {
+    get_physical_element(ssize_t physical_index) const
+        requires(!IsBatchStoredType<Type>)
+    {
         if (physical_index == -1) {
             return nullptr;
         }
@@ -623,7 +645,9 @@ class ConcurrentVectorImpl : public VectorBase {
     // concurrent try_remove_chunks cannot free the buffer mid-read.
     const Type*
     get_physical_element(const ChunkSnapshot& snap,
-                         ssize_t physical_index) const {
+                         ssize_t physical_index) const
+        requires(!IsBatchStoredType<Type>)
+    {
         if (physical_index == -1) {
             return nullptr;
         }
@@ -635,17 +659,14 @@ class ConcurrentVectorImpl : public VectorBase {
     }
 
     const Type&
-    operator[](ssize_t element_index) const {
+    operator[](ssize_t element_index) const
+        requires(!IsBatchStoredType<Type>)
+    {
         AssertInfo(
             elements_per_row_ == 1,
             fmt::format(
                 "The value of elements_per_row_ is not 1, elements_per_row_={}",
                 elements_per_row_));
-        if constexpr (std::is_same_v<Type, ArrayValue>) {
-            AssertInfo(!chunks_ptr_->is_mmap(),
-                       "mmap nested ARRAY rows must be accessed through "
-                       "view_element()");
-        }
         auto chunk_id = element_index / size_per_chunk_;
         auto chunk_offset = element_index % size_per_chunk_;
         auto data =
@@ -756,9 +777,10 @@ class ConcurrentVectorImpl : public VectorBase {
     }
 
  private:
+    template <bool Move>
     void
     set_data(ssize_t element_offset,
-             const Type* source,
+             std::conditional_t<Move, Type*, const Type*> source,
              ssize_t element_count) {
         auto chunk_id = element_offset / size_per_chunk_;
         auto chunk_offset = element_offset % size_per_chunk_;
@@ -766,13 +788,14 @@ class ConcurrentVectorImpl : public VectorBase {
         // first partition:
         if (chunk_offset + element_count <= size_per_chunk_) {
             // only first
-            fill_chunk(
+            fill_chunk<Move>(
                 chunk_id, chunk_offset, element_count, source, source_offset);
             return;
         }
 
         auto first_size = size_per_chunk_ - chunk_offset;
-        fill_chunk(chunk_id, chunk_offset, first_size, source, source_offset);
+        fill_chunk<Move>(
+            chunk_id, chunk_offset, first_size, source, source_offset);
 
         source_offset += size_per_chunk_ - chunk_offset;
         element_count -= first_size;
@@ -780,7 +803,8 @@ class ConcurrentVectorImpl : public VectorBase {
 
         // the middle
         while (element_count >= size_per_chunk_) {
-            fill_chunk(chunk_id, 0, size_per_chunk_, source, source_offset);
+            fill_chunk<Move>(
+                chunk_id, 0, size_per_chunk_, source, source_offset);
             source_offset += size_per_chunk_;
             element_count -= size_per_chunk_;
             ++chunk_id;
@@ -788,14 +812,15 @@ class ConcurrentVectorImpl : public VectorBase {
 
         // the final
         if (element_count > 0) {
-            fill_chunk(chunk_id, 0, element_count, source, source_offset);
+            fill_chunk<Move>(chunk_id, 0, element_count, source, source_offset);
         }
     }
+    template <bool Move>
     void
     fill_chunk(ssize_t chunk_id,
                ssize_t chunk_offset,
                ssize_t element_count,
-               const Type* source,
+               std::conditional_t<Move, Type*, const Type*> source,
                ssize_t source_offset) {
         if (element_count <= 0) {
             return;
@@ -815,11 +840,21 @@ class ConcurrentVectorImpl : public VectorBase {
                 return valid_data_ptr->is_valid(beg_id + offset);
             };
         }
-        chunks_ptr_->copy_to_chunk(chunk_id,
-                                   chunk_offset * elements_per_row_,
-                                   source + source_offset * elements_per_row_,
-                                   element_count * elements_per_row_,
-                                   check_data_valid);
+        if constexpr (Move) {
+            chunks_ptr_->move_to_chunk(
+                chunk_id,
+                chunk_offset * elements_per_row_,
+                source + source_offset * elements_per_row_,
+                element_count * elements_per_row_,
+                check_data_valid);
+        } else {
+            chunks_ptr_->copy_to_chunk(
+                chunk_id,
+                chunk_offset * elements_per_row_,
+                source + source_offset * elements_per_row_,
+                element_count * elements_per_row_,
+                check_data_valid);
+        }
     }
 
  protected:
@@ -940,8 +975,8 @@ class ConcurrentVector<ArrayValue>
 
  private:
     void
-    set_mmap_proto_rows(ssize_t element_offset,
-                        std::span<const ScalarFieldProto* const> rows);
+    set_proto_rows(ssize_t element_offset,
+                   std::span<const ScalarFieldProto* const> rows);
 
     std::once_flag array_type_once_;
     std::shared_ptr<const proto::schema::TypeSchema> array_type_;
@@ -963,6 +998,13 @@ class ConcurrentVector<VectorArray>
               std::move(mmap_descriptor),
               valid_data_ptr,
               use_mapping_storage) {
+    }
+
+    VectorArrayView
+    view_physical_element(ssize_t physical_index) const {
+        auto chunk_id = physical_index / size_per_chunk_;
+        auto chunk_offset = physical_index % size_per_chunk_;
+        return chunks_ptr_->view_element(chunk_id, chunk_offset);
     }
 };
 

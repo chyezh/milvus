@@ -55,6 +55,39 @@ ifeq ($(USE_ASAN), ON)
 	MILVUS_GO_BUILD_TAGS := $(MILVUS_GO_BUILD_TAGS),use_asan
 endif
 
+USE_TSAN ?= OFF
+export USE_TSAN
+ifneq ($(USE_TSAN),ON)
+ifneq ($(USE_TSAN),OFF)
+$(error USE_TSAN must be ON or OFF)
+endif
+endif
+use_tsan = $(USE_TSAN)
+TSAN_GO_LDFLAGS :=
+ifeq ($(USE_TSAN), ON)
+ifneq ($(OS),Linux)
+$(error USE_TSAN currently requires Linux)
+endif
+ifeq ($(USE_ASAN), ON)
+$(error USE_ASAN and USE_TSAN are mutually exclusive)
+endif
+ifneq ($(filter -race -race=true,$(GOFLAGS) $(shell $(GO) env GOFLAGS)),)
+$(error USE_TSAN cannot be combined with Go -race)
+endif
+# Preserve Go's default C++ flags before appending TSan flags so ordinary
+# builds do not stamp CGO_CXXFLAGS="-O2 -g" into Go buildinfo.
+	CGO_CXXFLAGS ?= $(shell $(GO) env CGO_CXXFLAGS)
+	override CGO_CFLAGS += -fsanitize=thread -g -fno-omit-frame-pointer
+	override CGO_CXXFLAGS += -fsanitize=thread -g -fno-omit-frame-pointer
+	override CGO_LDFLAGS += -fsanitize=thread -shared-libsan
+	MILVUS_LLVM_ROOT ?= /usr/lib/llvm-20
+	override CC := $(MILVUS_LLVM_ROOT)/bin/clang
+	override CXX := $(MILVUS_LLVM_ROOT)/bin/clang++
+	export CC CXX MILVUS_LLVM_ROOT
+	MILVUS_GO_BUILD_TAGS := dynamic,sonic,$(SONIC_PLUGIN_SYNC_TAG)
+	TSAN_GO_LDFLAGS := -linkmode=external
+endif
+
 use_dynamic_simd = ON
 ifdef USE_DYNAMIC_SIMD
 	use_dynamic_simd = ${USE_DYNAMIC_SIMD}
@@ -65,8 +98,15 @@ ifdef TANTIVY_FEATURES
 	tantivy_features = ${TANTIVY_FEATURES}
 endif
 
+# FIPS: set TANTIVY_ANALYZER_REMOTE_TLS=OFF to compile rustls/ring
+# out of tantivy-binding (Lindera HTTPS fetch + gRPC tokenizer TLS).
+tantivy_analyzer_remote_tls = ON
+ifdef TANTIVY_ANALYZER_REMOTE_TLS
+	tantivy_analyzer_remote_tls = ${TANTIVY_ANALYZER_REMOTE_TLS}
+endif
 
-use_svs = OFF
+
+use_svs = AUTO
 ifdef USE_SVS
 	use_svs = ${USE_SVS}
 endif
@@ -111,11 +151,28 @@ PROTOC_GEN_GO_GRPC_OUTPUT := $(shell echo | $(INSTALL_PATH)/protoc-gen-go-grpc  
 INSTALL_PROTOC_GEN_GO_GRPC := $(findstring $(PROTOC_GEN_GO_GRPC_VERSION),$(PROTOC_GEN_GO_GRPC_OUTPUT))
 
 index_engine = knowhere
+WITH_GPU ?= OFF
+unexport WITH_GPU
+
+ifneq ($(filter ON on TRUE True true 1,$(WITH_GPU)),)
+    ifeq ($(USE_TSAN),ON)
+        $(error USE_TSAN does not support GPU builds)
+    endif
+    ifneq ($(index_engine),cardinal)
+        MILVUS_GO_BUILD_TAGS := $(MILVUS_GO_BUILD_TAGS),cuda
+    endif
+endif
 
 # Ensure git works inside containers where .git is owned by a different user.
-# Must use git config --global because git's ownership check runs before
-# both -c options and GIT_CONFIG_COUNT env vars are processed.
-$(shell git config --global --add safe.directory '*' 2>/dev/null)
+# Must use git config --global: git without 2.38's protected config reads
+# safe.directory only from system/global config, ignoring -c and
+# GIT_CONFIG_COUNT. That includes Ubuntu focal's git and jammy's before
+# 2.34.1-1ubuntu1.16; #47916 hit it in the CI build container.
+# Every make run parses this line, so write only when `git rev-parse` fails and
+# '*' is not in the global config yet. An unconditional --add appended a
+# duplicate entry to ~/.gitconfig on each run and disabled git's ownership
+# check for all repos on developer machines that never needed it.
+$(shell git rev-parse --git-dir >/dev/null 2>&1 || git config --global --get-all safe.directory 2>/dev/null | grep -qxF '*' || git config --global --add safe.directory '*' 2>/dev/null)
 
 export GIT_BRANCH=$(shell git rev-parse --abbrev-ref HEAD 2>/dev/null | grep -v '^HEAD$$' || echo "$${GITHUB_REF_NAME:-$${BRANCH_NAME:-unknown}}")
 GIT_BRANCH_SAFE=$(shell echo "$(GIT_BRANCH)" | tr '/' '-')
@@ -130,15 +187,8 @@ build-go:
 	@echo "Building Milvus ..."
 	@source $(PWD)/scripts/setenv.sh && \
 		mkdir -p $(INSTALL_PATH) && go env -w CGO_ENABLED="1" && \
-		$(GOEXPERIMENT_FLAG) CGO_LDFLAGS="$(CGO_LDFLAGS)" CGO_CFLAGS="$(CGO_CFLAGS)" GO111MODULE=on $(GO) build -pgo=$(PGO_PATH)/default.pgo -ldflags="$(SONIC_PLUGIN_SYNC_LDFLAG) -r $${RPATH} -X '$(OBJPREFIX).BuildTags=$(BUILD_TAGS)' -X '$(OBJPREFIX).BuildTime=$(BUILD_TIME)' -X '$(OBJPREFIX).GitCommit=$(GIT_COMMIT)' -X '$(OBJPREFIX).GoVersion=$(GO_VERSION)' -X '$(OBJPREFIX).MilvusVersion=$(MILVUS_VERSION)'" \
+		$(GOEXPERIMENT_FLAG) CGO_LDFLAGS="$(CGO_LDFLAGS)" CGO_CFLAGS="$(CGO_CFLAGS)" CGO_CXXFLAGS="$(CGO_CXXFLAGS)" GO111MODULE=on $(GO) build -pgo=$(PGO_PATH)/default.pgo -ldflags="$(TSAN_GO_LDFLAGS) $(SONIC_PLUGIN_SYNC_LDFLAG) -r $${RPATH} -X '$(OBJPREFIX).BuildTags=$(BUILD_TAGS)' -X '$(OBJPREFIX).BuildTime=$(BUILD_TIME)' -X '$(OBJPREFIX).GitCommit=$(GIT_COMMIT)' -X '$(OBJPREFIX).GoVersion=$(GO_VERSION)' -X '$(OBJPREFIX).MilvusVersion=$(MILVUS_VERSION)'" \
 		-tags "$(MILVUS_GO_BUILD_TAGS)" -o $(INSTALL_PATH)/milvus $(PWD)/cmd/main.go 1>/dev/null
-
-milvus-gpu: build-cpp-gpu print-gpu-build-info build-pyudf-runtime-wheel
-	@echo "Building Milvus-gpu ..."
-	@source $(PWD)/scripts/setenv.sh && \
-		mkdir -p $(INSTALL_PATH) && go env -w CGO_ENABLED="1" && \
-		CGO_LDFLAGS="$(CGO_LDFLAGS)" CGO_CFLAGS="$(CGO_CFLAGS)" GO111MODULE=on $(GO) build -pgo=$(PGO_PATH)/default.pgo -ldflags="$(SONIC_PLUGIN_SYNC_LDFLAG) -r $${RPATH} -X '$(OBJPREFIX).BuildTags=$(BUILD_TAGS_GPU)' -X '$(OBJPREFIX).BuildTime=$(BUILD_TIME)' -X '$(OBJPREFIX).GitCommit=$(GIT_COMMIT)' -X '$(OBJPREFIX).GoVersion=$(GO_VERSION)' -X '$(OBJPREFIX).MilvusVersion=$(MILVUS_VERSION)'" \
-		-tags "$(MILVUS_GO_BUILD_TAGS),cuda" -o $(INSTALL_PATH)/milvus $(PWD)/cmd/main.go 1>/dev/null
 
 get-build-deps:
 	@(env bash $(PWD)/scripts/install_deps.sh)
@@ -182,6 +232,7 @@ tools/bin/revive: tools/check/go.mod
 cppcheck:
 	@#(env bash ${PWD}/scripts/core_build.sh -l)
 	@(env bash ${PWD}/scripts/check_cpp_fmt.sh)
+	@cmake -DWORK_DIR=$(PWD)/cmake_build/compile-checks -P $(PWD)/internal/core/unittest/check_compile_options.cmake
 
 rustfmt:
 	@echo  "Running cargo format"
@@ -268,26 +319,36 @@ meta-migration:
 INTERATION_PATH = $(PWD)/tests/integration
 CMEK_FIXTURE_PATH = $(INSTALL_PATH)/cmek-fixtures
 
-.PHONY: build-cmek-fixtures integration-test integration-test-base integration-test-cmek
+.PHONY: build-cmek-fixtures build-failpoint-fixture integration-test integration-test-base integration-test-cmek integration-test-failpoint
 .NOTPARALLEL: integration-test
+
+FAILPOINT_FIXTURE_PATH ?= $(PWD)/cmake_build/failpoint-fixture
+
+build-failpoint-fixture:
+	@bash $(PWD)/scripts/build_failpoint_fixture.sh "$(FAILPOINT_FIXTURE_PATH)"
+
+integration-test-failpoint: getdeps build-failpoint-fixture
+	@env MILVUS_FAILPOINT_WORK_DIR="$(FAILPOINT_FIXTURE_PATH)" MILVUS_INTEGRATION_COVERAGE_APPEND="$(MILVUS_INTEGRATION_COVERAGE_APPEND)" bash $(PWD)/scripts/run_intergration_test.sh --package ./idempotency "$(INSTALL_PATH)/gotestsum --"
 
 build-cmek-fixtures:
 	@echo "Building CMEK fixture plugins ..."
 	@(env GO="$(GO)" bash $(PWD)/scripts/build_cmek_fixtures.sh "$(CMEK_FIXTURE_PATH)")
 
 integration-test: MILVUS_INTEGRATION_COVERAGE_APPEND = true
-integration-test: integration-test-base integration-test-cmek
+integration-test: integration-test-base integration-test-cmek integration-test-failpoint
 
 integration-test-base: getdeps
-	@echo "Running integration tests excluding CMEK ..."
-	@(bash $(PWD)/scripts/run_intergration_test.sh --exclude-package ./cmek "$(INSTALL_PATH)/gotestsum --")
+	@echo "Running integration tests excluding CMEK and failpoint fixtures ..."
+	@(bash $(PWD)/scripts/run_intergration_test.sh --exclude-package ./cmek --exclude-package ./idempotency "$(INSTALL_PATH)/gotestsum --")
 
 integration-test-cmek: getdeps build-cmek-fixtures
-	@echo "Running CMEK scalar-index integration tests ..."
+	@echo "Running CMEK integration tests ..."
 	@(env MILVUS_CMEK_FIXTURE_DIR="$(CMEK_FIXTURE_PATH)" MILVUS_INTEGRATION_COVERAGE_APPEND="$(MILVUS_INTEGRATION_COVERAGE_APPEND)" bash $(PWD)/scripts/run_intergration_test.sh --package ./cmek "$(INSTALL_PATH)/gotestsum --")
 
 BUILD_TAGS = $(shell git describe --tags --always --dirty="-dev")
-BUILD_TAGS_GPU = ${BUILD_TAGS}-gpu
+ifneq ($(filter ON on TRUE True true 1,$(WITH_GPU)),)
+    BUILD_TAGS := $(BUILD_TAGS)-gpu
+endif
 BUILD_TIME = $(shell date -u)
 GIT_COMMIT = $(shell git rev-parse --short HEAD)
 GO_VERSION = $(shell go version)
@@ -295,13 +356,9 @@ BUILD_DATE = $(shell date -u +%Y%m%d)
 MILVUS_VERSION := $(shell tag=$$(git describe --exact-match --tags --match 'v*' 2>/dev/null) && echo "$$tag" | sed 's/^v//' || echo "$(GIT_BRANCH_SAFE)-$(BUILD_DATE)-$(GIT_COMMIT)")
 
 print-build-info:
+	@echo "Index Engine: $(index_engine)"
+	@echo "WITH_GPU: $(WITH_GPU)"
 	@echo "Build Tag: $(BUILD_TAGS)"
-	@echo "Build Time: $(BUILD_TIME)"
-	@echo "Git Commit: $(GIT_COMMIT)"
-	@echo "Go Version: $(GO_VERSION)"
-
-print-gpu-build-info:
-	@echo "Build Tag: $(BUILD_TAGS_GPU)"
 	@echo "Build Time: $(BUILD_TIME)"
 	@echo "Git Commit: $(GIT_COMMIT)"
 	@echo "Go Version: $(GO_VERSION)"
@@ -340,19 +397,15 @@ check-segcore-codes-product: generate-segcore-codes
 
 build-cpp: generated-proto plan-parser-lib
 	@echo "Building Milvus cpp library ..."
-	@(env bash $(PWD)/scripts/core_build.sh -t ${mode} -a ${use_asan} -n ${use_disk_index} -y ${use_dynamic_simd} ${AZURE_OPTION} -x ${index_engine} -f $(tantivy_features) -S ${use_svs} -R ${with_crt})
-
-build-cpp-gpu: generated-proto plan-parser-lib
-	@echo "Building Milvus cpp gpu library ... "
-	@(env bash $(PWD)/scripts/core_build.sh -t ${mode} -g -n ${use_disk_index} -y ${use_dynamic_simd} ${AZURE_OPTION} -x ${index_engine} -f $(tantivy_features) -S ${use_svs} -R ${with_crt})
+	@(env TANTIVY_ANALYZER_REMOTE_TLS=$(tantivy_analyzer_remote_tls) bash $(PWD)/scripts/core_build.sh -t ${mode} -a ${use_asan} -T ${use_tsan} -n ${use_disk_index} -y ${use_dynamic_simd} ${AZURE_OPTION} -x ${index_engine} -G ${WITH_GPU} -f $(tantivy_features) -S ${use_svs} -R ${with_crt})
 
 build-cpp-with-unittest: generated-proto plan-parser-lib
 	@echo "Building Milvus cpp library with unittest ... "
-	@(env bash $(PWD)/scripts/core_build.sh -t ${mode} -a ${use_asan} -u -n ${use_disk_index} -y ${use_dynamic_simd} ${AZURE_OPTION} -x ${index_engine} -f $(tantivy_features) -S ${use_svs} -R ${with_crt})
+	@(env TANTIVY_ANALYZER_REMOTE_TLS=$(tantivy_analyzer_remote_tls) bash $(PWD)/scripts/core_build.sh -t ${mode} -a ${use_asan} -T ${use_tsan} -u -n ${use_disk_index} -y ${use_dynamic_simd} ${AZURE_OPTION} -x ${index_engine} -G ${WITH_GPU} -f $(tantivy_features) -S ${use_svs} -R ${with_crt})
 
 build-cpp-with-coverage: generated-proto plan-parser-lib
 	@echo "Building Milvus cpp library with coverage and unittest ..."
-	@(env bash $(PWD)/scripts/core_build.sh -t ${mode} -a ${use_asan} -u -c -n ${use_disk_index} -y ${use_dynamic_simd} ${AZURE_OPTION} -x ${index_engine} -f $(tantivy_features) -S ${use_svs} -R ${with_crt})
+	@(env TANTIVY_ANALYZER_REMOTE_TLS=$(tantivy_analyzer_remote_tls) bash $(PWD)/scripts/core_build.sh -t ${mode} -a ${use_asan} -T ${use_tsan} -u -c -n ${use_disk_index} -y ${use_dynamic_simd} ${AZURE_OPTION} -x ${index_engine} -G ${WITH_GPU} -f $(tantivy_features) -S ${use_svs} -R ${with_crt})
 
 check-proto-product: generated-proto
 	 @(env bash $(PWD)/scripts/check_proto_product.sh)
@@ -547,14 +600,9 @@ codecov-cpp: build-cpp-with-coverage
 # Build each component and install binary to $GOPATH/bin.
 # Package builds audit the AWS runtime even without native unit tests.
 # An explicit environment or command-line value can override this default.
-install gpu-install: export MILVUS_AUDIT_AWS_RUNTIME ?= ON
+install: export MILVUS_AUDIT_AWS_RUNTIME ?= ON
 
 install: milvus build-pyudf-runtime-wheel
-	@echo "Installing binary to './bin'"
-	@(env GOPATH=$(GOPATH) LIBRARY_PATH=$(LIBRARY_PATH) bash $(PWD)/scripts/install_milvus.sh)
-	@echo "Installation successful."
-
-gpu-install: milvus-gpu build-pyudf-runtime-wheel
 	@echo "Installing binary to './bin'"
 	@(env GOPATH=$(GOPATH) LIBRARY_PATH=$(LIBRARY_PATH) bash $(PWD)/scripts/install_milvus.sh)
 	@echo "Installation successful."
@@ -590,7 +638,7 @@ rpm: install
 	@cp -r lib ~/rpmbuild/BUILD/
 	@cp -r configs ~/rpmbuild/BUILD/
 	@cp -r build/rpm/services ~/rpmbuild/BUILD/
-	@QA_RPATHS="$$[ 0x001|0x0002|0x0020 ]" rpmbuild -ba ./build/rpm/milvus.spec
+	@QA_RPATHS="$$[ 0x001|0x0002|0x0020 ]" rpmbuild $(if $(wildcard $(LIBRARY_PATH)/libsvs_runtime.so),--with,--without) svs -ba ./build/rpm/milvus.spec
 
 generate-mockery-types: getdeps
 	# MixCoord
@@ -651,7 +699,6 @@ generate-mockery-flushcommon: getdeps
 	$(INSTALL_PATH)/mockery --name=BufferManager --dir=$(PWD)/internal/flushcommon/writebuffer --output=$(PWD)/internal/flushcommon/writebuffer --filename=mock_manager.go --with-expecter --structname=MockBufferManager --outpkg=writebuffer --inpackage
 	$(INSTALL_PATH)/mockery --name=BinlogIO --dir=$(PWD)/internal/flushcommon/io --output=$(PWD)/internal/mocks/flushcommon/mock_util --filename=mock_binlogio.go --with-expecter --structname=MockBinlogIO --outpkg=mock_util --inpackage=false
 	$(INSTALL_PATH)/mockery --name=MsgHandler --dir=$(PWD)/internal/flushcommon/util --output=$(PWD)/internal/mocks/flushcommon/mock_util --filename=mock_MsgHandler.go --with-expecter --structname=MockMsgHandler --outpkg=mock_util --inpackage=false
-	$(INSTALL_PATH)/mockery --name=FlowgraphManager --dir=$(PWD)/internal/flushcommon/pipeline --output=$(PWD)/internal/flushcommon/pipeline --filename=mock_fgmanager.go --with-expecter --structname=MockFlowgraphManager --outpkg=pipeline --inpackage
 
 generate-mockery-metastore: getdeps
 	$(INSTALL_PATH)/mockery --name=RootCoordCatalog --dir=$(PWD)/internal/metastore --output=$(PWD)/internal/metastore/mocks --filename=mock_rootcoord_catalog.go --with-expecter --structname=RootCoordCatalog --outpkg=mocks

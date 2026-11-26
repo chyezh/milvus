@@ -26,8 +26,10 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/pkg/v3/metrics"
+	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
@@ -256,8 +258,10 @@ func ParseMetricLabel(resp any, err error) (status string, cause string) {
 	if st != nil && !merr.Ok(st) {
 		// Client cancellation is neither party's failure, but it stays a "fail"
 		// like it was before the cause dimension existed; cause is what lets a
-		// consumer exclude it.
-		if st.GetCode() == merr.CanceledCode {
+		// consumer exclude it. An operator cancel (CancelRequests) is the same
+		// kind of outcome under its own code, ErrRequestCanceled, so that the
+		// client can tell it from its own cancellation.
+		if st.GetCode() == merr.CanceledCode || st.GetCode() == merr.RequestCanceledCode {
 			return metrics.FailLabel, metrics.CauseCancel
 		}
 		// Retryability takes priority over classification.
@@ -284,7 +288,7 @@ func ParseMetricLabel(resp any, err error) (status string, cause string) {
 	// caller's fault, so bucket them as a user-side rejection. Everything else
 	// is a system-side rejection.
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
+		if errors.Is(err, context.Canceled) || errors.Is(err, merr.ErrRequestCanceled) {
 			return metrics.RejectedLabel, metrics.CauseCancel
 		}
 		if merr.GetErrorType(err) == merr.InputError {
@@ -298,4 +302,28 @@ func ParseMetricLabel(resp any, err error) (status string, cause string) {
 		}
 	}
 	return metrics.SuccessLabel, metrics.CauseNA
+}
+
+// SearchRequestNq returns the number of query rows of a search request as it
+// arrives. Nq is optional on the wire: the RESTful handlers and older clients
+// leave it 0 and the search task derives it later, so a request that does not
+// declare it is counted by what it carries: the rows of its placeholder group,
+// or its primary keys when it searches by primary key. Anything that reads the
+// count before the search task has run (the rate limiter, the running-request
+// registry, the access log of a request refused early) has to use this rather
+// than the field.
+//
+// A malformed placeholder group counts as 0 here; the search task rejects it.
+func SearchRequestNq(req *milvuspb.SearchRequest) int64 {
+	if nq := req.GetNq(); nq != 0 {
+		return nq
+	}
+	if ids := req.GetIds(); ids != nil {
+		return int64(typeutil.GetSizeOfIDs(ids))
+	}
+	rows, err := funcutil.CountPlaceholderGroupValues(req.GetPlaceholderGroup())
+	if err != nil {
+		return 0
+	}
+	return rows
 }

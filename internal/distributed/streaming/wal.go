@@ -3,15 +3,18 @@ package streaming
 import (
 	"context"
 	"sync"
+	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/milvus-io/milvus/internal/distributed/streaming/internal/consumer"
 	"github.com/milvus-io/milvus/internal/distributed/streaming/internal/producer"
+	resumablereplicas "github.com/milvus-io/milvus/internal/distributed/streaming/internal/replicadiscovery"
 	"github.com/milvus-io/milvus/internal/streamingcoord/client"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
+	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/util/conc"
@@ -33,6 +36,8 @@ func newWALAccesser(c *clientv3.Client) *walAccesserImpl {
 		clusterID:            paramtable.Get().CommonCfg.ClusterPrefix.GetValue(),
 		streamingCoordClient: streamingCoordClient,
 		handlerClient:        handlerClient,
+		schemaClient:         newSchemaClient(handlerClient, paramtable.Get().StreamingCfg.SchemaCacheTTL.GetAsDuration(time.Second)),
+		replicaClient:        resumablereplicas.NewResumingClient(handlerClient.AcquireReplicaWatchStream),
 		producerMutex:        sync.Mutex{},
 		producers:            make(map[string]*producer.ResumableProducer),
 
@@ -55,6 +60,8 @@ type walAccesserImpl struct {
 	// All services
 	streamingCoordClient client.Client
 	handlerClient        handler.HandlerClient
+	schemaClient         *schemaClient
+	replicaClient        *resumablereplicas.Client
 
 	producerMutex         sync.Mutex
 	producers             map[string]*producer.ResumableProducer
@@ -102,6 +109,9 @@ func (w *walAccesserImpl) RawAppend(ctx context.Context, msg message.MutableMess
 
 // Read returns a scanner for reading records from the wal.
 func (w *walAccesserImpl) Read(ctx context.Context, opts ReadOption) Scanner {
+	if _, latest := opts.DeliverPolicy.GetPolicy().(*streamingpb.DeliverPolicy_Latest); latest {
+		return newErrScanner(status.NewInvalidArgument("latest delivery policy is deprecated; use All, StartFrom or StartAfter"))
+	}
 	if !w.lifetime.Add(typeutil.LifetimeStateWorking) {
 		return newErrScanner(ErrWALAccesserClosed)
 	}
@@ -157,7 +167,13 @@ func (w *walAccesserImpl) Broadcast() Broadcast {
 
 // Close closes all the wal accesser.
 func (w *walAccesserImpl) Close() {
+	if w.schemaClient != nil {
+		w.schemaClient.close()
+	}
 	w.lifetime.SetState(typeutil.LifetimeStateStopped)
+	if w.replicaClient != nil {
+		w.replicaClient.Close()
+	}
 	w.lifetime.Wait()
 
 	w.producerMutex.Lock()
@@ -209,5 +225,5 @@ func (w *walAccesserImpl) AnalyzerClient() AnalyzerClient {
 }
 
 func (w *walAccesserImpl) SchemaClient() SchemaClient {
-	return schemaClient{handlerClient: w.handlerClient}
+	return w.schemaClient
 }

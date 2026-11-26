@@ -9,14 +9,15 @@ import (
 
 	"github.com/milvus-io/milvus/internal/dataview"
 	datacatalog "github.com/milvus-io/milvus/internal/metastore/kv/datacoord"
-	"github.com/milvus-io/milvus/internal/metastore/kv/querycoord"
 	"github.com/milvus-io/milvus/internal/metastore/kv/queryview"
 	"github.com/milvus-io/milvus/internal/views/coord/balancer/api"
 	balancercache "github.com/milvus-io/milvus/internal/views/coord/balancer/cache"
 	"github.com/milvus-io/milvus/internal/views/coord/coordview"
 	"github.com/milvus-io/milvus/internal/views/coord/loadmgr"
+	"github.com/milvus-io/milvus/internal/views/coord/loadmgr/loadmgrtest"
 	"github.com/milvus-io/milvus/internal/views/qviews"
-	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
@@ -29,11 +30,6 @@ func TestBalancerConsumesRealDataViewManager(t *testing.T) {
 	for _, patch := range []*mockey.Mocker{
 		mockey.Mock((*datacatalog.Catalog).ListAllDataViews).Return(nil, nil).Build(),
 		mockey.Mock((*datacatalog.Catalog).SaveDataView).Return(nil).Build(),
-		mockey.Mock((*querycoord.Catalog).GetCollections).Return([]*querypb.CollectionLoadInfo{{CollectionID: 1}}, nil).Build(),
-		mockey.Mock((*querycoord.Catalog).GetPartitions).Return(map[int64][]*querypb.PartitionLoadInfo{
-			1: {{CollectionID: 1, PartitionID: 100}},
-		}, nil).Build(),
-		mockey.Mock((*querycoord.Catalog).GetReplicas).Return([]*querypb.Replica{{ID: 10, CollectionID: 1}}, nil).Build(),
 
 		mockey.Mock((*stubSyncer).SyncViews).Return(nil).Build(),
 	} {
@@ -58,8 +54,12 @@ func TestBalancerConsumesRealDataViewManager(t *testing.T) {
 	registry, err := coordview.RecoverShardViewRegistryWithDataViews(ctx, catalog, &stubSyncer{}, m)
 	require.NoError(t, err)
 	t.Cleanup(registry.Close)
-	store, err := loadmgr.RecoverLoadConfigStore(ctx, querycoord.NewCatalog(nil))
+	store, err := loadmgr.RecoverLoadConfigStore(ctx, loadmgrtest.Dependencies(t))
 	require.NoError(t, err)
+	require.NoError(t, store.Put(ctx, &loadmgr.LoadConfig{
+		CollectionID: 1, PartitionIDs: []int64{100},
+		Replicas: []*loadmgr.ReplicaAssignment{{ReplicaID: 10}},
+	}))
 	// Use real replaying source hooks; mock only the node source boundary.
 	nodes := &testNodePublisher{}
 	nodePatch := mockey.Mock((*testNodePublisher).RegisterNodeListener).To(func(_ *testNodePublisher, listener balancercache.NodeListener) func() {
@@ -73,6 +73,7 @@ func TestBalancerConsumesRealDataViewManager(t *testing.T) {
 	controller := NewDefaultBalancer(cache, registry, nil, nil)
 	controller.Trigger(TriggerScope{DirtyCollections: []int64{1}})
 	require.NoError(t, controller.Reconcile(ctx))
+	require.NotNil(t, registry.Get(shardID))
 	stats := registry.Get(shardID).Stats()
 	require.Equal(t, qviews.FromProtoDataVersion(version), stats.PreparingVersion.DataVersion)
 	require.False(t, stats.Segments[101].LostStats)
@@ -90,23 +91,20 @@ func (*testNodePublisher) RegisterNodeListener(balancercache.NodeListener) func(
 }
 
 func TestRecoveredLoadIdentityAvoidsRebuildButDetectsRealChanges(t *testing.T) {
-	for _, patch := range []*mockey.Mocker{
-		mockey.Mock((*querycoord.Catalog).GetCollections).Return([]*querypb.CollectionLoadInfo{{CollectionID: 1, LoadFields: []int64{200}, FieldIndexID: map[int64]int64{200: 300}}}, nil).Build(),
-		mockey.Mock((*querycoord.Catalog).GetPartitions).Return(map[int64][]*querypb.PartitionLoadInfo{1: {{CollectionID: 1, PartitionID: 1}}}, nil).Build(),
-		mockey.Mock((*querycoord.Catalog).GetReplicas).Return([]*querypb.Replica{{ID: 10, CollectionID: 1, ResourceGroup: "rg1"}}, nil).Build(),
-		mockey.Mock((*querycoord.Catalog).SaveCollection).Return(nil).Build(),
-		mockey.Mock((*querycoord.Catalog).SaveReplica).Return(nil).Build(),
-	} {
-		t.Cleanup(func() { patch.UnPatch() })
-	}
-	catalog := querycoord.NewCatalog(nil)
-	before, err := loadmgr.RecoverLoadConfigStore(t.Context(), catalog)
+	deps := loadmgrtest.Dependencies(t)
+	indexes := []*indexpb.IndexInfo{{CollectionID: 1, FieldID: 200, IndexID: 300}}
+	deps.Indexes = func(int64, ...int64) []*indexpb.IndexInfo { return indexes }
+	before, err := loadmgr.RecoverLoadConfigStore(t.Context(), deps)
 	require.NoError(t, err)
-	cfg := before.Snapshot().ConfigsMap()[1]
-	// Simulate the first load before restart: its identity must survive recovery.
+	cfg := &loadmgr.LoadConfig{
+		CollectionID: 1, PartitionIDs: []int64{1},
+		LoadFields:     []*viewpb.LoadFieldConfig{{FieldId: 200}},
+		RequiredFields: []*viewpb.LoadFieldConfig{{FieldId: 200}},
+		Replicas:       []*loadmgr.ReplicaAssignment{{ReplicaID: 10, ResourceGroup: "rg1"}},
+	}
 	require.NoError(t, before.Put(t.Context(), cfg))
-	oldVersion := before.Snapshot().ConfigVersion(1)
-	after, err := loadmgr.RecoverLoadConfigStore(t.Context(), catalog)
+	oldVersion := before.GetConfigVersion(1)
+	after, err := loadmgr.RecoverLoadConfigStore(t.Context(), deps)
 	require.NoError(t, err)
 	cache := balancercache.New(policyTestConfig())
 	stop := after.RegisterLoadConfigListener(cache.PublishLoadConfig)
@@ -122,18 +120,69 @@ func TestRecoveredLoadIdentityAvoidsRebuildButDetectsRealChanges(t *testing.T) {
 	cache.PublishShard(id, withSegmentRows(testShardStats(ver(1, 1, 1), oldVersion, placement(1000, 1, 1, coordview.SegmentStateUp)), map[int64]int64{1000: 100}))
 	policy := NewDefaultBalancePolicy()
 	require.Empty(t, policy.Plan(cache, []qviews.ShardID{id}).Prepares, "unchanged recovery must not rebuild Up views")
-	require.Contains(t, reusableResources(newPlanningContext(cache), id, segment, []int64{1}), int64(1))
-	changed := cfg.Clone()
-	changed.LoadFields[0].IndexId++
-	require.NoError(t, after.Put(t.Context(), changed))
-	require.Equal(t, oldVersion, after.Snapshot().ConfigVersion(1), "QueryView does not bind an index version")
-	require.Empty(t, policy.Plan(cache, []qviews.ShardID{id}).Prepares)
-	require.Contains(t, reusableResources(newPlanningContext(cache), id, segment, []int64{1}), int64(1))
-	changed = cfg.Clone()
-	changed.LoadFields[0].FieldId++
-	require.NoError(t, after.Put(t.Context(), changed))
+	key := coordview.ResourceKey{SegmentID: segment.SegmentID, PartitionID: segment.PartitionID, DataVersion: dv, LoadInfoVersion: oldVersion}
+	placements := []*balancercache.PlacementNode{cache.GetCollection(1).PlacementNode(1)}
+	require.Contains(t, reusableResources(placements, key), int64(1))
+	// A newly selected index changes only LoadInfoVersion, not Schema/DataVersion.
+	indexes = append(indexes, &indexpb.IndexInfo{FieldID: 200, IndexID: 301})
+	require.NoError(t, after.Put(t.Context(), cfg))
 	plan := policy.Plan(cache, []qviews.ShardID{id})
 	require.Contains(t, plan.Prepares, id, "config change must be mandatory even with autoBalance disabled")
 	require.NotEqual(t, oldVersion, plan.Prepares[id].Build().Meta.LoadInfoVersion)
-	require.Empty(t, reusableResources(newPlanningContext(cache), id, segment, []int64{1}), "old resources must not alias the new load identity")
+	key.LoadInfoVersion = cache.GetCollection(1).ConfigVersion()
+	require.Empty(t, reusableResources(placements, key), "old resources must not alias the new load identity")
+}
+
+func TestAutoLoadSourceUpdateDoesNotRebuildViews(t *testing.T) {
+	for _, preparing := range []bool{false, true} {
+		t.Run(map[bool]string{false: "up", true: "preparing"}[preparing], func(t *testing.T) {
+			deps := loadmgrtest.Dependencies(t)
+			store, err := loadmgr.RecoverLoadConfigStore(t.Context(), deps)
+			require.NoError(t, err)
+			cfg := cfgFor(1, 10, []int64{1}, nil)
+			cfg.AutoLoad = true
+			require.NoError(t, store.Put(t.Context(), cfg))
+			version := store.GetConfigVersion(1)
+			cache := balancercache.New(policyTestConfig())
+			stop := store.RegisterLoadConfigListener(cache.PublishLoadConfig)
+			defer stop()
+			config := *cache.GetBalanceConfig()
+			config.OptimizationEnabled = false
+			cache.UpdateBalanceConfig(&config)
+			id := cacheShard(1, 10)
+			publishTestNodes(cache, &NodeInfo{NodeID: 1, Alive: true, ResourceGroup: "rg1"})
+			publishTestData(cache, 1, qviews.DataVersion{StreamingVersion: 1}, nil, shardDataView(id.VChannel, 1))
+			policy := NewDefaultBalancePolicy()
+			initial := policy.Plan(cache, []qviews.ShardID{id}).Prepares[id].Build()
+			require.EqualValues(t, 12, initial.Meta.Control.PreparationPriority)
+			stats := testShardStats(ver(1, 0, 1), version)
+			if preparing {
+				stats.PreparingVersion, stats.UpVersion = stats.UpVersion, nil
+			}
+			cache.PublishShard(id, stats)
+			oldContext := newPlanningContext(cache)
+			require.True(t, oldContext.ConfigForShard(id).AutoLoad)
+			cfg.AutoLoad = false
+			require.NoError(t, store.Put(t.Context(), cfg))
+			require.Equal(t, version, store.GetConfigVersion(1))
+			require.True(t, oldContext.ConfigForShard(id).AutoLoad)
+			require.False(t, newPlanningContext(cache).ConfigForShard(id).AutoLoad, "same-version metadata reaches the balancer")
+			require.Empty(t, policy.Plan(cache, []qviews.ShardID{id}).Prepares)
+			require.EqualValues(t, 12, initial.Meta.Control.PreparationPriority, "already admitted priority is immutable")
+			if preparing {
+				cache.PublishShard(id, testShardStats(ver(1, 0, 1), version))
+				require.Empty(t, policy.Plan(cache, []qviews.ShardID{id}).Prepares, "completion must not create a cold successor")
+			}
+			// Once a new View is needed, its score must use the current source,
+			// even though the resource requirements still have the same identity.
+			cache.PublishShard(id, nil)
+			next := policy.Plan(cache, []qviews.ShardID{id}).Prepares[id].Build()
+			require.Equal(t, version, next.Meta.LoadInfoVersion)
+			require.EqualValues(t, 2, next.Meta.Control.PreparationPriority, "new View uses manual source, not the old AutoLoad boost")
+			cache.PublishShard(id, testShardStats(ver(1, 0, 1), version))
+			cfg.PartitionIDs = append(cfg.PartitionIDs, 2)
+			require.NoError(t, store.Put(t.Context(), cfg))
+			require.Contains(t, policy.Plan(cache, []qviews.ShardID{id}).Prepares, id, "real requirements still rebuild")
+		})
+	}
 }

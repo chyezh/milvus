@@ -61,13 +61,17 @@ change, and external index paths are never added to a manifest.
 
 Upgrade DataCoord, index workers and QueryNodes before enabling this behavior.
 An older native worker treats unknown path versions as collection-rooted and
-can echo the requested version despite writing the old layout. The existing
-switch remains an operator gate. DataCoord additionally checks the selected
-worker's `QuerySlot.segment_rooted_indexes` capability before dispatching a v2
-build or copy destination. A missing capability fails the task with an explicit
-upgrade-required reason, without dispatching or downgrading its layout. RPC
-failures remain retryable. Downgrading readers while version-2 artifacts exist
-is unsupported.
+can echo the requested version despite writing the old layout. The rollout must
+keep workers without v2 support out of the scheduling pool while v2 builds or
+copy tasks can be dispatched. Before rolling back workers, disable manifest
+publication and drain existing v2 tasks, which retain their layout on retry.
+Downgrading readers while version-2 artifacts exist is unsupported.
+
+When upgrading from a DataCoord that checks the former `QuerySlot` capability,
+upgrade all DataCoord replicas before workers that omit the field. The older
+DataCoord treats the missing field as unsupported. To upgrade workers first,
+disable manifest publication and drain existing v2 tasks before replacing the
+workers, then re-enable publication after DataCoord is upgraded.
 
 ## Snapshot restore
 
@@ -85,7 +89,10 @@ segment-directory listing and collects indexes from that explicit list, so
 GC of unreferenced builds does not change the export file set.
 Cleanup prefixes and result admission use the same
 persisted destination version. A result claiming a different layout is rejected
-before making the target segment visible.
+before making the target segment visible. Result installation retains import
+protection until all index records are installed, then publishes the manifest
+and finalized segment state under the segment manifest lock. Replayed results
+skip finalized targets even if the task completion write was lost.
 
 ## Garbage collection
 

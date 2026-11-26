@@ -48,8 +48,8 @@ type (
 	cipherBox    struct{ cipher hook.Cipher }
 )
 
-// SetHook installs a compiled-in request hook. hookutil prefers it over
-// proxy.soPath and refuses a deployment that configures both. Call it before
+// SetHook installs a compiled-in request hook. hookutil uses it and ignores
+// proxy.soPath, with a warning, when both are configured. Call it before
 // milvus starts; a nil hook leaves the stock behavior in place.
 //
 // Init is called again whenever the hook's configuration is refreshed. A
@@ -69,17 +69,11 @@ func InstalledHook() hook.Hook {
 	return nil
 }
 
-// SetForm marks this binary as running the deployment form the coordinators'
-// form-gated behaviors are written for: one streaming node, several resource
-// groups loading the same collection, every role from one image. It switches
-// on, in the query coordinator and the data coordinator: shard delegators on
-// the regular query nodes of the resource groups, with the streaming node kept
-// for DDL and the write ahead log, a load that names the resource groups it
-// speaks for, an index engine version answered before any QueryNode registers.
-// Call it in EVERY role, before milvus starts - a role whose main forgets the
-// call runs as stock with no signal at all. It is independent of SetHook: a
-// distribution may install a request hook without switching any coordinator
-// behavior on.
+// SetForm enables the coordinator behaviors used by a distribution: load
+// requests scoped to their named resource groups and an index engine version
+// available before any QueryNode registers. The latter assumes every role
+// runs the same image. It does not select delegator placement.
+// Call it in every role before Milvus starts. It is independent of SetHook.
 func SetForm() {
 	formInstalled.Store(true)
 }

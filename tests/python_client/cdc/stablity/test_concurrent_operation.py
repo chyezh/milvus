@@ -26,10 +26,9 @@ from chaos.checker import (
 )
 from common import common_func as cf
 from common.common_type import CaseLabel
-from common.milvus_sys import MilvusSys
 from delayed_assert import assert_expectations
-from pymilvus import DataType, FunctionType, connections
-from utils.util_k8s import get_milvus_instance_name, wait_pods_ready
+from pymilvus import DataType, FunctionType
+from utils.util_k8s import wait_pods_ready
 from utils.util_log import test_log as log
 
 _VECTOR_DTYPES = {
@@ -92,11 +91,13 @@ class TestOperations(TestBase):
     @pytest.fixture(scope="function", autouse=True)
     def connection(
         self,
+        upstream_client,
         upstream_uri,
         upstream_token,
         downstream_uri,
         downstream_token,
         milvus_ns,
+        upstream_milvus_name,
         import_2pc_workload,
         import_2pc_minio_endpoint,
         import_2pc_minio_bucket,
@@ -104,13 +105,10 @@ class TestOperations(TestBase):
         import_2pc_downstream_minio_bucket,
         import_2pc_rows,
     ):
-        connections.connect("default", uri=upstream_uri, token=upstream_token)
-        if connections.has_connection("default") is False:
-            raise Exception("no connections")
+        upstream_client.list_databases(timeout=10)
         log.info("connect to milvus successfully")
-        self.milvus_sys = MilvusSys(alias="default")
         self.milvus_ns = milvus_ns
-        self.release_name = get_milvus_instance_name(self.milvus_ns, milvus_sys=self.milvus_sys)
+        self.release_name = upstream_milvus_name
         cf.param_info.param_uri = upstream_uri
         cf.param_info.param_token = upstream_token
         cf.param_info.param_bucket_name = import_2pc_minio_bucket
@@ -172,25 +170,25 @@ class TestOperations(TestBase):
     def test_operations(self, request_duration, is_check, collection_name):
         # start the monitor threads to check the milvus ops
         log.info("*********************Test Start**********************")
-        log.info(connections.get_connection_addr("default"))
+        log.info(f"upstream URI: {self.upstream_uri}")
         # event_records = EventRecords()
         c_name = collection_name if collection_name else cf.gen_unique_str("Checker_")
         # event_records.insert("init_health_checkers", "start")
         self.init_health_checkers(collection_name=c_name)
         # event_records.insert("init_health_checkers", "finished")
-        cc.start_monitor_threads(self.health_checkers)
-        log.info("*********************Load Start**********************")
-        request_duration = request_duration.replace("h", "*3600+").replace("m", "*60+").replace("s", "")
-        if request_duration[-1] == "+":
-            request_duration = request_duration[:-1]
-        request_duration = eval(request_duration)
-        for i in range(10):
-            sleep(request_duration // 10)
-            for k, v in self.health_checkers.items():
-                v.check_result()
-                # log.info(v.check_result())
-        wait_pods_ready(self.milvus_ns, f"app.kubernetes.io/instance={self.release_name}")
-        time.sleep(60)
+        with cc.monitor_threads(self.health_checkers):
+            log.info("*********************Load Start**********************")
+            request_duration = request_duration.replace("h", "*3600+").replace("m", "*60+").replace("s", "")
+            if request_duration[-1] == "+":
+                request_duration = request_duration[:-1]
+            request_duration = eval(request_duration)
+            for i in range(10):
+                sleep(request_duration // 10)
+                for k, v in self.health_checkers.items():
+                    v.check_result()
+                    # log.info(v.check_result())
+            wait_pods_ready(self.milvus_ns, f"app.kubernetes.io/instance={self.release_name}")
+            time.sleep(60)
         ra = ResultAnalyzer()
         ra.get_stage_success_rate()
         if is_check:

@@ -90,6 +90,11 @@ func (suite *IDFOracleSuite) TearDownTest() {
 func (s *IDFOracleSuite) waitTargetVersion(targetVersion int64) {
 	for {
 		if s.idfOracle.TargetVersion() >= targetVersion {
+			// Publication no longer waits for physical cleanup. Join the sync
+			// before tests inspect files or disk-resource accounting.
+			s.idfOracle.syncMu.Lock()
+			s.GreaterOrEqual(s.idfOracle.diskSize(), int64(0))
+			s.idfOracle.syncMu.Unlock()
 			return
 		}
 		time.Sleep(time.Millisecond * 100)
@@ -272,7 +277,7 @@ func (suite *IDFOracleSuite) TestRegisterGrowingClonesStats() {
 
 	registered, ok := suite.idfOracle.growing[1]
 	suite.True(ok)
-	suite.Equal(int64(1), registered.bm25Stats[102].NumRow())
+	suite.Equal(int64(1), registered[102].NumRow())
 	suite.Equal(int64(1), suite.idfOracle.current.NumRow())
 }
 
@@ -281,10 +286,10 @@ func (suite *IDFOracleSuite) TestUpdateGrowingAfterEmptyRegistration() {
 
 	registered, ok := suite.idfOracle.growing[1]
 	suite.True(ok)
-	suite.NotNil(registered.bm25Stats)
+	suite.NotNil(registered)
 
 	suite.idfOracle.UpdateGrowing(1, suite.genStats(1, 2))
-	suite.Equal(int64(1), registered.bm25Stats[102].NumRow())
+	suite.Equal(int64(1), registered[102].NumRow())
 	suite.Equal(int64(1), suite.idfOracle.current.NumRow())
 }
 
@@ -461,7 +466,9 @@ func (suite *IDFOracleSuite) TestLoadSealedNoParse() {
 	suite.Equal(int64(0), suite.idfOracle.current.NumRow())
 
 	// disk file should exist
-	segDir := path.Join(suite.idfOracle.dirPath, "1", "102")
+	sealedEntry, loaded := suite.idfOracle.sealed.Get(1)
+	suite.Require().True(loaded)
+	segDir := path.Join(sealedEntry.localDir, "102")
 	entries, err := os.ReadDir(segDir)
 	suite.NoError(err)
 	suite.NotEmpty(entries)
@@ -491,9 +498,9 @@ func (suite *IDFOracleSuite) TestLoadSealedFailureCleanup() {
 	suite.Equal(int64(0), suite.idfOracle.sealedDiskSize.Load())
 
 	// disk directory should be cleaned up
-	segDir := path.Join(suite.idfOracle.dirPath, "1")
-	_, statErr := os.Stat(segDir)
-	suite.True(os.IsNotExist(statErr))
+	dirs, statErr := os.ReadDir(suite.idfOracle.dirPath)
+	suite.Require().NoError(statErr)
+	suite.Empty(dirs, "failed download must remove its actual unique directory")
 }
 
 // setFieldForTest replaces the stats of one field.
@@ -702,6 +709,7 @@ func TestLoadSealedForReopenIdempotentAfterSuccess(t *testing.T) {
 		fieldList: []int64{102},
 		diskSize:  7,
 	}
+	require.NoError(t, os.MkdirAll(sealedStats.localDir, 0o700))
 	idfOracle.sealed.Insert(1, sealedStats)
 	idfOracle.sealedDiskSize.Store(7)
 
@@ -833,8 +841,13 @@ func TestLoadSealedForReopenFailureCleanupPreservesExistingFields(t *testing.T) 
 	assert.Equal(t, int64(4), idfOracle.sealedDiskSize.Load())
 	_, err = os.Stat(oldFieldDir)
 	assert.NoError(t, err)
-	_, err = os.Stat(path.Join(idfOracle.dirPath, "1", "104"))
-	assert.True(t, os.IsNotExist(err))
+	dirs, err := os.ReadDir(idfOracle.dirPath)
+	require.NoError(t, err)
+	require.Len(t, dirs, 1, "failed reopen must remove its staging directory")
+	fields, err := os.ReadDir(sealedStats.localDir)
+	require.NoError(t, err)
+	require.Len(t, fields, 1)
+	assert.Equal(t, "102", fields[0].Name())
 }
 
 func TestActiveReopenBM25MergesNewFieldStats(t *testing.T) {
@@ -859,6 +872,7 @@ func TestActiveReopenBM25MergesNewFieldStats(t *testing.T) {
 		fieldList: []int64{102},
 		diskSize:  7,
 	}
+	require.NoError(t, os.MkdirAll(sealedStats.localDir, 0o700))
 	idfOracle.sealed.Insert(1, sealedStats)
 	idfOracle.sealedDiskSize.Store(7)
 
@@ -1159,12 +1173,9 @@ func TestIDFSyncFunctionsPrunesDroppedBM25Field(t *testing.T) {
 	idfOracle.current.setFieldForTest(104, keptStats)
 	keptField, err := idfOracle.current.GetStats(104)
 	require.NoError(t, err)
-	idfOracle.growing[1] = &growingBm25Stats{
-		bm25Stats: bm25Stats{
-			102: droppedStats.Clone(),
-			104: keptStats.Clone(),
-		},
-		activate: true,
+	idfOracle.growing[1] = bm25Stats{
+		102: droppedStats.Clone(),
+		104: keptStats.Clone(),
 	}
 
 	segDir := path.Join(idfOracle.dirPath, "10")
@@ -1195,9 +1206,9 @@ func TestIDFSyncFunctionsPrunesDroppedBM25Field(t *testing.T) {
 	existing, err := idfOracle.current.GetStats(104)
 	require.NoError(t, err)
 	assert.Same(t, keptField, existing)
-	_, ok := idfOracle.growing[1].bm25Stats[102]
+	_, ok := idfOracle.growing[1][102]
 	assert.False(t, ok)
-	_, ok = idfOracle.growing[1].bm25Stats[104]
+	_, ok = idfOracle.growing[1][104]
 	assert.True(t, ok)
 
 	sealedStats, ok := idfOracle.sealed.Get(10)
@@ -1223,12 +1234,12 @@ func TestIDFSyncFunctionsPrunesAllDroppedBM25Fields(t *testing.T) {
 
 	stats := genBM25StatsForField(102, 1, 2)[102]
 	idfOracle.current.setFieldForTest(102, stats)
-	idfOracle.growing[1] = &growingBm25Stats{bm25Stats: bm25Stats{102: stats.Clone()}, activate: true}
+	idfOracle.growing[1] = bm25Stats{102: stats.Clone()}
 
 	err := idfOracle.SyncFunctions(nil)
 	require.NoError(t, err)
 
 	_, err = idfOracle.current.GetStats(102)
 	require.Error(t, err)
-	assert.Empty(t, idfOracle.growing[1].bm25Stats)
+	assert.Empty(t, idfOracle.growing[1])
 }

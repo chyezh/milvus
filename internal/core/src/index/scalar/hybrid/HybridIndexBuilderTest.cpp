@@ -34,7 +34,6 @@
 #include "index/IndexTypeAdapter.h"
 #include "index/Meta.h"
 #include "index/contracts/Registry.h"
-#include "index/contracts/build/IReaderConvertible.h"
 #include "index/contracts/build/ScalarBuildInput.h"
 #include "index/contracts/query/IPatternMatchReader.h"
 #include "index/contracts/query/IJsonIndexReader.h"
@@ -467,20 +466,6 @@ HybridLifecycleCases() {
                          static_cast<ScalarIndexType>(255)));
                  });
              }},
-        {.name = "ArtifactIsNotReaderConvertible",
-         .run =
-             [] {
-                 const auto& backend =
-                     ScalarReaderBackends().Get<int64_t>("HybridInt64NonNull");
-                 auto data = IntegerCardinalityData(3, false);
-                 const ScalarTestInput<int64_t> input(data);
-                 auto artifact = backend.Build(
-                     input.View(), {.row_count = data.values.size()});
-                 ExpectSegcoreError(ErrorCode::Unsupported, [&] {
-                     static_cast<void>(
-                         IReaderConvertible::FromArtifact(std::move(artifact)));
-                 });
-             }},
     };
     return cases;
 }
@@ -797,5 +782,26 @@ TEST(HybridIndexBuilderTest, UnrecognizableSelectorlessArtifactIsRejected) {
     });
 }
 
+TEST(HybridIndexBuilderTest, LeadingPlusCardinalityLimitBuildsAndQueries) {
+    const auto& backend = ScalarReaderBackends().Get<int64_t>("HybridInt64");
+    auto data = IntegerCardinalityData(3, false);
+    const ScalarTestInput<int64_t> input(data);
+    auto params = backend.BuildParams();
+    params[BITMAP_INDEX_CARDINALITY_LIMIT] = "+4";
+    auto builder =
+        BuilderRegistry<ScalarBuildInput<int64_t>>::Instance().Create(
+            families::kHybrid, params);
+    ASSERT_NE(builder, nullptr);
+    auto artifact = std::move(*builder).Build(input.View());
+    const auto persisted = SerializeV3(*artifact);
+    EXPECT_EQ(persisted.metadata.at(INDEX_TYPE).get<uint8_t>(),
+              static_cast<uint8_t>(ScalarIndexType::BITMAP));
+    auto reader = OpenV3(backend, persisted, {.row_count = 3});
+    const auto* predicate =
+        dynamic_cast<const IScalarPredicateReader<int64_t>*>(reader.get());
+    ASSERT_NE(predicate, nullptr);
+    const int64_t key = 1;
+    ExpectHits(predicate->In(1, &key), 3, {1});
+}
 }  // namespace
 }  // namespace milvus::index::test

@@ -329,7 +329,7 @@ func (t *LevelZeroCompactionTask) splitAndWrite(
 					// L0 output: only delta side has data; no stats blobs
 					// are written so statsBlobSize is 0. Insert aggregates
 					// are zero by construction since insertLogs is nil.
-					Stats: buildCompactionOutputStats(nil, deltalogs, 0),
+					Stats: buildCompactionOutputStats(nil, deltalogs, nil, 0),
 				}, nil
 			}
 			// V1: Return deltalog in FieldBinlog format
@@ -354,7 +354,7 @@ func (t *LevelZeroCompactionTask) splitAndWrite(
 				Deltalogs: deltalogs,
 				NumOfRows: int64(len(deletes.pks)),
 				// L0 output: only delta side has data; no stats blobs.
-				Stats: buildCompactionOutputStats(nil, deltalogs, 0),
+				Stats: buildCompactionOutputStats(nil, deltalogs, nil, 0),
 			}, nil
 		}()
 		if err != nil {
@@ -463,6 +463,17 @@ func (t *LevelZeroCompactionTask) process(ctx context.Context, l0MemSize int64, 
 		if err != nil {
 			mlog.Warn(context.TODO(), "L0 compaction splitAndWrite fail", mlog.Err(err))
 			return nil, err
+		}
+		// A successful BF pass also certifies targets with no matching Delete.
+		// Report those exact plan targets so Coord can advance their replay
+		// cursors without resampling a possibly changed segment collection.
+		for _, result := range batchResults {
+			delete(segmentBFs, result.GetSegmentID())
+		}
+		for _, segment := range batchSegments {
+			if _, noMatch := segmentBFs[segment.GetSegmentID()]; noMatch {
+				batchResults = append(batchResults, &datapb.CompactionSegment{SegmentID: segment.GetSegmentID()})
+			}
 		}
 
 		mlog.Info(context.TODO(), "L0 compaction finished one batch",

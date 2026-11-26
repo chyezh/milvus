@@ -17,6 +17,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -74,7 +75,8 @@ class GrowingIndexSet {
                const IndexMetaPtr& index_meta,
                const SegcoreConfig& segcore_config,
                int64_t segment_id,
-               const InsertRecordGrowing& insert_record);
+               const InsertRecordGrowing& insert_record,
+               const std::function<bool(FieldId)>& include_field);
 
     // Construct without registering. Reopen backfills and flushes this owner
     // through the segment's stable raw prefix before registering the complete
@@ -140,15 +142,18 @@ class GrowingIndexSet {
     Flush(Appender& appender, FieldId field_id);
 
     // One generation, one coverage boundary; no family-specific read getters.
+    // Invokes the owner's maintenance hook, which may trigger commit or
+    // publication for deferred publishers. Synchronous vector owners only
+    // check published failure state before pinning the available record.
     index::GrowingIndexSnapshotPin
-    PinSnapshot(FieldId field_id) const {
+    PinSnapshot(milvus::OpContext* op_ctx, FieldId field_id) const {
         std::shared_lock lock(mutex_);
         auto it = appenders_.find(field_id);
         if (it == appenders_.end() || !it->second.owner) {
             return {};
         }
         it->second.owner->CommitIfNeeded();
-        return it->second.owner->PinSnapshot();
+        return it->second.owner->PinSnapshot(op_ctx);
     }
 
     FieldIndexCapability

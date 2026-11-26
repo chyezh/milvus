@@ -26,6 +26,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus/internal/datacoord/allocator"
+	"github.com/milvus-io/milvus/internal/datacoord/meta"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 )
@@ -43,8 +44,7 @@ import (
 //     contention, monotonicity conflict, catalog retry exhaustion) leaves the
 //     group READY for the next round.
 //
-// Member reclamation for FAILED/ABORTED groups is the reconciler's job (PR-C),
-// not this inspector's.
+// FAILED/ABORTED members are reclaimed here and during startup recovery.
 //
 // The inspector is nil-safe by construction: with no persisted groups the loop
 // is a no-op, and every meta access guards nil (a dataview-less DataCoord runs
@@ -54,11 +54,12 @@ type segmentChangeInspector struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
-	mt    *meta
-	alloc allocator.Allocator
+	mt      *meta.Meta
+	alloc   allocator.Allocator
+	cleaner *segmentChangeCleaner
 }
 
-func newSegmentChangeInspector(ctx context.Context, mt *meta, alloc allocator.Allocator) *segmentChangeInspector {
+func newSegmentChangeInspector(ctx context.Context, mt *meta.Meta, alloc allocator.Allocator) *segmentChangeInspector {
 	ctx, cancel := context.WithCancel(ctx)
 	return &segmentChangeInspector{
 		ctx:    ctx,
@@ -105,14 +106,18 @@ func (i *segmentChangeInspector) loop() {
 // by GetSegmentChangeGroupsByCollection, so the state transitions applied here
 // never mutate the table under a reader.
 func (i *segmentChangeInspector) checkAllGroups(ctx context.Context) {
-	for _, g := range i.mt.GetSegmentChangeGroupsByCollection(ctx, 0) {
+	groups := i.mt.GetSegmentChangeGroupsByCollection(ctx, 0)
+	for _, g := range groups {
 		switch g.State {
 		case model.SegmentChangeStateStaged:
 			i.evaluateStaged(ctx, g)
 		case model.SegmentChangeStateReady:
 			i.tryPublish(ctx, g)
+		case model.SegmentChangeStateFailed, model.SegmentChangeStateAborted:
+			i.reclaimGroup(ctx, g)
 		}
 	}
+	i.cleaner.clean(ctx, groups)
 }
 
 // evaluateStaged re-evaluates a STAGED group's members with the shared
@@ -131,7 +136,7 @@ func (i *segmentChangeInspector) evaluateStaged(ctx context.Context, g *model.Se
 		i.failGroup(ctx, g, "collection dropped or schema-less while staged")
 		return
 	}
-	readiness := i.mt.prepareReadiness(coll)
+	readiness := i.mt.PrepareReadiness(coll)
 	if readiness == nil {
 		i.failGroup(ctx, g, "cannot prepare readiness for collection")
 		return
@@ -139,15 +144,24 @@ func (i *segmentChangeInspector) evaluateStaged(ctx context.Context, g *model.Se
 	// First pass: unconvergeable conditions (fail-fast, never a wait).
 	for _, id := range g.NewSegmentIDs {
 		seg := i.mt.GetSegment(ctx, id)
-		if seg == nil || seg.GetState() == commonpb.SegmentState_Dropped {
+		if seg == nil || (seg.GetState() == commonpb.SegmentState_Dropped && !meta.IsEmptySegmentChangeOutput(seg)) {
+			if g.AwaitCommitFence && g.CommitTS == 0 {
+				return // WAL may already be durable; the job owns pre-fence failure.
+			}
 			i.failGroup(ctx, g, fmt.Sprintf("member %d externally dropped", id))
 			return
+		}
+		if meta.IsEmptySegmentChangeOutput(seg) {
+			continue
 		}
 		// C23: a schema bump landing while a group is staged is UNCONVERGEABLE —
 		// the bump materialization only targets visible segments, so nothing can
 		// advance a staged member's SchemaVersion. Fail immediately instead of
 		// waiting out the staging timeout.
-		if !readiness.schemaReady(seg) {
+		if !readiness.SchemaReady(seg) {
+			if g.AwaitCommitFence && g.CommitTS == 0 {
+				return
+			}
 			i.failGroup(ctx, g, fmt.Sprintf("member %d schema version behind collection while staged (C23)", id))
 			return
 		}
@@ -161,8 +175,8 @@ func (i *segmentChangeInspector) evaluateStaged(ctx context.Context, g *model.Se
 			// the next round's unconvergeable scan fail-fast (FAILED).
 			return
 		}
-		if !readiness.Ready(seg) {
-			if i.stagingTimedOut(g) {
+		if !meta.IsEmptySegmentChangeOutput(seg) && !readiness.Ready(seg) {
+			if !g.AwaitCommitFence && i.stagingTimedOut(g) {
 				i.abortGroup(ctx, g, "staging timeout")
 				return
 			}
@@ -193,11 +207,14 @@ func (i *segmentChangeInspector) evaluateStaged(ctx context.Context, g *model.Se
 //   - a member gone from meta or Dropped -> FAILED (unconvergeable);
 //   - every other error is transient -> keep READY, retry next round.
 func (i *segmentChangeInspector) tryPublish(ctx context.Context, g *model.SegmentChangeGroup) {
-	err := i.mt.publishGroup(ctx, g, i.alloc)
+	if g.AwaitCommitFence && g.CommitTS == 0 {
+		return // Only the WAL ack callback can bind the channel's commit TS.
+	}
+	err := i.mt.PublishGroup(ctx, g, i.alloc)
 	if err == nil {
 		return
 	}
-	if errors.Is(err, errSegmentChangeGroupCollectionDropped) {
+	if errors.Is(err, meta.ErrSegmentChangeGroupCollectionDropped) {
 		i.abortGroup(ctx, g, "collection data views dropped at publish")
 		return
 	}
@@ -227,13 +244,13 @@ func (i *segmentChangeInspector) groupNoLongerReady(ctx context.Context, g *mode
 	if coll == nil || coll.Schema == nil {
 		return true
 	}
-	readiness := i.mt.prepareReadiness(coll)
+	readiness := i.mt.PrepareReadiness(coll)
 	if readiness == nil {
 		return true
 	}
 	for _, id := range g.NewSegmentIDs {
 		seg := i.mt.GetSegment(ctx, id)
-		if seg != nil && !readiness.Ready(seg) {
+		if seg != nil && !meta.IsEmptySegmentChangeOutput(seg) && !readiness.Ready(seg) {
 			return true
 		}
 	}
@@ -267,6 +284,9 @@ func (i *segmentChangeInspector) regressToStaged(ctx context.Context, g *model.S
 func (i *segmentChangeInspector) groupUnconvergeable(ctx context.Context, g *model.SegmentChangeGroup) bool {
 	for _, id := range g.NewSegmentIDs {
 		seg := i.mt.GetSegment(ctx, id)
+		if meta.IsEmptySegmentChangeOutput(seg) {
+			continue
+		}
 		if seg == nil || seg.GetState() == commonpb.SegmentState_Dropped {
 			return true
 		}
@@ -285,6 +305,19 @@ func (i *segmentChangeInspector) groupUnconvergeable(ctx context.Context, g *mod
 // stagingTimedOut reports whether the group exceeded SegmentChangeStagingTimeout
 // since CreateTS (Unix seconds). A zero CreateTS (legacy record) never times out.
 func (i *segmentChangeInspector) stagingTimedOut(g *model.SegmentChangeGroup) bool {
+	// The WAL can be durable before the ack callback binds its timetick to
+	// every group. Only the import job's explicit failure path may abandon a
+	// group waiting for that fence.
+	if g.AwaitCommitFence {
+		return false
+	}
+	// These producers already own their job lifecycle. Slow index builds do
+	// not make their outputs invalid and must not introduce a new one-hour
+	// failure where the producer previously waited for completion.
+	switch g.Source {
+	case model.SegmentChangeSourceClustering, model.SegmentChangeSourceCopySegment, model.SegmentChangeSourceExternalRefresh:
+		return false
+	}
 	if g.CreateTS <= 0 {
 		return false
 	}
@@ -315,9 +348,17 @@ func (i *segmentChangeInspector) applyTerminalTransition(ctx context.Context, g 
 			mlog.Err(err))
 		return
 	}
+	i.reclaimGroup(ctx, terminal)
 	mlog.Info(ctx, "segment change group reached terminal state",
 		mlog.Int64("groupID", g.GroupID),
 		mlog.Int64("collectionID", g.CollectionID),
 		mlog.String("state", state.String()),
 		mlog.String("reason", reason))
+}
+
+func (i *segmentChangeInspector) reclaimGroup(ctx context.Context, g *model.SegmentChangeGroup) {
+	if err := i.mt.ReclaimSegmentChangeGroup(ctx, g); err != nil {
+		mlog.Warn(ctx, "segment change member reclamation failed, will retry",
+			mlog.Int64("groupID", g.GroupID), mlog.Err(err))
+	}
 }

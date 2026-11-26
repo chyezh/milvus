@@ -110,55 +110,24 @@ struct IndexMeta {
     std::string index_file_prefix;
 };
 
-struct StorageConfig {
-    std::string address = "localhost:9000";
-    std::string bucket_name = "a-bucket";
-    std::string access_key_id = "minioadmin";
-    std::string access_key_value = "minioadmin";
-    std::string root_path = "files";
-    std::string storage_type = "minio";
-    std::string cloud_provider = "aws";
-    std::string iam_endpoint = "";
-    std::string log_level = "warn";
-    std::string region = "";
-    bool useSSL = false;
-    std::string sslCACert = "";
-    bool useIAM = false;
-    bool useVirtualHost = false;
-    int64_t requestTimeoutMs = 3000;
-    bool gcp_native_without_auth = false;
-    std::string gcp_credential_json = "";
-    uint32_t max_connections = 100;
-    std::string tls_min_version = "";
-    bool use_crc32c_checksum = false;
-    uint32_t talon_mode = 0;
-    uint32_t talon_small_read_threshold = 0;
-    std::string talon_coordinator = "";
-    uint32_t talon_block_size = 0;
-    uint32_t talon_max_idle_per_addr = 0;
-    bool talon_enable_for_external_table = false;
+inline constexpr uint32_t kTalonStageLoadOpen = 1U << 0;
+inline constexpr uint32_t kTalonStageManifest = 1U << 1;
+inline constexpr uint32_t kTalonStagesAll = UINT32_MAX;
 
-    std::string
-    ToString() const {
-        std::stringstream ss;
-        ss << "[address=" << address << ", bucket_name=" << bucket_name
-           << ", root_path=" << root_path << ", storage_type=" << storage_type
-           << ", cloud_provider=" << cloud_provider
-           << ", iam_endpoint=" << iam_endpoint << ", log_level=" << log_level
-           << ", region=" << region << ", useSSL=" << std::boolalpha << useSSL
-           << ", sslCACert=" << sslCACert.size()  // only print cert length
-           << ", useIAM=" << std::boolalpha << useIAM
-           << ", useVirtualHost=" << std::boolalpha << useVirtualHost
-           << ", requestTimeoutMs=" << requestTimeoutMs
-           << ", maxConnections=" << max_connections
-           << ", gcp_native_without_auth=" << std::boolalpha
-           << gcp_native_without_auth << ", tls_min_version=" << tls_min_version
-           << ", use_crc32c_checksum=" << std::boolalpha << use_crc32c_checksum
-           << "]";
-
-        return ss.str();
-    }
+// Routing policy stays in Milvus; connection settings remain in FS properties.
+struct TalonReadConfig {
+    uint32_t mode = 0;
+    uint32_t enabled_stages = 0;
+    bool enable_for_external_table = false;
 };
+
+inline bool
+TalonStageEnabled(const uint32_t enabled_stages, const uint32_t stage) {
+    // Normalize the absent field from legacy producers before testing the bit.
+    const uint32_t mask =
+        enabled_stages == 0 ? kTalonStagesAll : enabled_stages;
+    return (mask & stage) != 0;
+}
 
 struct MmapConfig {
     std::string cache_read_ahead_policy;

@@ -260,18 +260,6 @@ class VirtualPKChunkedColumn : public ChunkedColumnInterface {
     }
 
     void
-    BulkPrimitiveValueAt(milvus::OpContext* op_ctx,
-                         void* dst,
-                         const int64_t* offsets,
-                         int64_t count,
-                         bool small_int_raw_type = false) override {
-        auto typed_dst = static_cast<int64_t*>(dst);
-        for (int64_t i = 0; i < count; i++) {
-            typed_dst[i] = ComputeVirtualPK(offsets[i]);
-        }
-    }
-
-    void
     BulkVectorValueAt(milvus::OpContext* op_ctx,
                       void* dst,
                       const int64_t* offsets,
@@ -301,15 +289,6 @@ class VirtualPKChunkedColumn : public ChunkedColumnInterface {
     int64_t
     GetTruncatedSegmentID() const {
         return truncated_segment_id_;
-    }
-
- protected:
-    std::optional<DataType>
-    GetDefaultScanDataType() const override {
-        // The system-injected __virtual_pk__ field is always INT64. External
-        // collections with a user-defined VARCHAR primary key load that field
-        // through the regular string column implementation instead.
-        return DataType::INT64;
     }
 
  private:

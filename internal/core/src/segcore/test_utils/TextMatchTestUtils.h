@@ -42,11 +42,11 @@
 
 namespace milvus::segcore::text_test {
 
-inline storage::StorageConfig
+inline std::shared_ptr<milvus_storage::api::Properties>
 get_default_local_storage_config() {
-    storage::StorageConfig config;
-    config.storage_type = "local";
-    config.root_path = TestRemotePath;
+    auto config = std::make_shared<milvus_storage::api::Properties>();
+    (*config)[PROPERTY_FS_STORAGE_TYPE] = std::string("local");
+    (*config)[PROPERTY_FS_ROOT_PATH] = std::string(TestRemotePath);
     return config;
 }
 
@@ -208,12 +208,12 @@ CreateSealedWithFieldDataLoaded(const SchemaPtr& schema,
     return segment;
 }
 
-inline IndexPin
-PinSealedText(const SegmentInternalInterface& segment, FieldId field) {
-    const auto capability = segment.IndexCapability(field);
+inline index::IIndexReaderBasePtr
+CreateSealedTextReader(const SegmentInternalInterface& segment, FieldId field) {
+    const auto capability = segment.ResolveIndexCapability(nullptr, field);
     for (const auto& entry : capability.entries()) {
         if (entry.caps.text_match)
-            return segment.PinIndex(nullptr, entry.key);
+            return segment.CreateIndexReader(nullptr, entry.key);
     }
     return {};
 }

@@ -43,8 +43,11 @@ func (c *Client) Search(ctx context.Context, option SearchOption, callOptions ..
 	defer func() {
 		c.recordOperation("Search", collectionName, startTime, err)
 	}()
+	db := c.getCurrentDB()
+	req.DbName = db
+	req.GuaranteeTimestamp = c.guaranteeTimestamp(newCollectionCacheKey(db, collectionName), req.GetConsistencyLevel(), req.GetUseDefaultConsistency())
 
-	collection, err := c.getCollection(ctx, collectionName)
+	collection, err := c.getCollectionInDB(ctx, db, collectionName)
 	if err != nil {
 		return nil, err
 	}
@@ -79,6 +82,18 @@ func (c *Client) handleSearchResult(schema *entity.Schema, outputFields []string
 	queryCount := int(results.GetNumQueries())
 
 	parseWholeResult := queryCount > 0 && len(results.GetTopks()) >= queryCount
+	// element_indices is returned only for element-level searches, one per hit.
+	elementIndices := results.GetElementIndices().GetData()
+	var elementIndicesErr error
+	if len(elementIndices) > 0 {
+		hitCount := 0
+		for _, topk := range results.GetTopks() {
+			hitCount += int(topk)
+		}
+		if hitCount != len(elementIndices) {
+			elementIndicesErr = errors.Newf("search result has %d element indices for %d hits", len(elementIndices), hitCount)
+		}
+	}
 	totalResultCount := 0
 	if parseWholeResult {
 		for _, topk := range results.GetTopks()[:queryCount] {
@@ -125,6 +140,13 @@ func (c *Client) handleSearchResult(schema *entity.Schema, outputFields []string
 				return
 			}
 			entry.Scores = results.GetScores()[offset : offset+rc]
+			if len(elementIndices) > 0 {
+				if elementIndicesErr != nil {
+					entry.Err = elementIndicesErr
+					return
+				}
+				entry.ElementOffsets = elementIndices[offset : offset+rc]
+			}
 
 			// set recall if returned
 			if i < len(results.Recalls) {
@@ -228,6 +250,12 @@ func (c *Client) parseSearchResult(sch *entity.Schema, outputFields []string, fi
 			col.SetNullable(true)
 			if err := col.ValidateNullable(); err != nil {
 				return nil, errors.Wrapf(err, "restore nullable state for field %q", fieldData.GetFieldName())
+			}
+		}
+		if field := schemaFields[fieldData.GetFieldName()]; field != nil && field.DataType == entity.FieldTypeArray &&
+			field.ElementType == entity.FieldTypeStruct && field.StructSchema != nil {
+			if err := column.ApplyStructSchema(col, field.StructSchema); err != nil {
+				return nil, errors.Wrapf(err, "restore struct schema for field %q", fieldData.GetFieldName())
 			}
 		}
 
@@ -350,8 +378,11 @@ func (c *Client) Query(ctx context.Context, option QueryOption, callOptions ...g
 	defer func() {
 		c.recordOperation("Query", collectionName, startTime, err)
 	}()
+	db := c.getCurrentDB()
+	req.DbName = db
+	req.GuaranteeTimestamp = c.guaranteeTimestamp(newCollectionCacheKey(db, collectionName), req.GetConsistencyLevel(), req.GetUseDefaultConsistency())
 
-	collection, err := c.getCollection(ctx, collectionName)
+	collection, err := c.getCollectionInDB(ctx, db, collectionName)
 	if err != nil {
 		return resultSet, err
 	}
@@ -367,21 +398,36 @@ func (c *Client) Query(ctx context.Context, option QueryOption, callOptions ...g
 		if len(outputFields) == 0 {
 			outputFields = req.GetOutputFields()
 		}
-		columns, err := c.parseSearchResult(collection.Schema, outputFields, resp.GetFieldsData(), 0, 0, -1)
-		if err != nil {
-			return err
-		}
-		resultSet = ResultSet{
-			sch:    collection.Schema,
-			Fields: columns,
-		}
-		if len(columns) > 0 {
-			resultSet.ResultCount = columns[0].Len()
-		}
-
-		return nil
+		resultSet, err = c.parseQueryResult(collection.Schema, outputFields, resp)
+		return err
 	})
 	return resultSet, err
+}
+
+// parseQueryResult converts a Query RPC response into a ResultSet, including the matched
+// element offsets of element-level queries.
+func (c *Client) parseQueryResult(sch *entity.Schema, outputFields []string, resp *milvuspb.QueryResults) (ResultSet, error) {
+	columns, err := c.parseSearchResult(sch, outputFields, resp.GetFieldsData(), 0, 0, -1)
+	if err != nil {
+		return ResultSet{}, err
+	}
+	resultSet := ResultSet{
+		sch:    sch,
+		Fields: columns,
+	}
+	if len(columns) > 0 {
+		resultSet.ResultCount = columns[0].Len()
+	}
+	// element_indices is returned only for element-level queries, one list per row.
+	if elementIndices := resp.GetElementIndices(); len(elementIndices) > 0 {
+		if len(elementIndices) != resultSet.ResultCount {
+			return ResultSet{}, errors.Newf("query result has %d element index lists for %d rows", len(elementIndices), resultSet.ResultCount)
+		}
+		resultSet.QueryElementOffsets = lo.Map(elementIndices, func(indices *milvuspb.ElementIndices, _ int) []int64 {
+			return indices.GetIndices().GetData()
+		})
+	}
+	return resultSet, nil
 }
 
 func (c *Client) Get(ctx context.Context, option QueryOption, callOptions ...grpc.CallOption) (ResultSet, error) {
@@ -399,8 +445,11 @@ func (c *Client) HybridSearch(ctx context.Context, option HybridSearchOption, ca
 	defer func() {
 		c.recordOperation("HybridSearch", collectionName, startTime, err)
 	}()
+	db := c.getCurrentDB()
+	req.DbName = db
+	req.GuaranteeTimestamp = c.guaranteeTimestamp(newCollectionCacheKey(db, collectionName), req.GetConsistencyLevel(), req.GetUseDefaultConsistency())
 
-	collection, err := c.getCollection(ctx, collectionName)
+	collection, err := c.getCollectionInDB(ctx, db, collectionName)
 	if err != nil {
 		return nil, err
 	}

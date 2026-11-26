@@ -23,6 +23,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/cockroachdb/errors"
 	"github.com/samber/lo"
@@ -143,6 +144,12 @@ func (opt *columnBasedDataOption) processInsertColumns(colSchema *entity.Schema,
 		if field.Nullable {
 			col.SetNullable(true)
 		}
+		// likewise for element-nullable struct sub-fields
+		if field.DataType == entity.FieldTypeArray && field.ElementType == entity.FieldTypeStruct && field.StructSchema != nil {
+			if err := column.ApplyStructSchema(col, field.StructSchema); err != nil {
+				return nil, 0, err
+			}
+		}
 
 		mNameColumn[col.Name()] = col
 		if col.Type() != field.DataType {
@@ -261,6 +268,13 @@ func (opt *columnBasedDataOption) WithInt64Column(colName string, data []int64) 
 	return opt.WithColumns(column)
 }
 
+// WithTimestamptzColumn appends a TIMESTAMPTZ column for Insert or Upsert.
+// Times are normalized to UTC and truncated to microsecond precision.
+func (opt *columnBasedDataOption) WithTimestamptzColumn(colName string, data []time.Time) *columnBasedDataOption {
+	column := column.NewColumnTimestamptz(colName, data)
+	return opt.WithColumns(column)
+}
+
 func (opt *columnBasedDataOption) WithVarcharColumn(colName string, data []string) *columnBasedDataOption {
 	column := column.NewColumnVarChar(colName, data)
 	return opt.WithColumns(column)
@@ -311,7 +325,12 @@ func (opt *columnBasedDataOption) WithInt8VectorColumn(colName string, dim int, 
 // `rows` is a per-collection-row list; a nil entry represents a null StructArray row. Each
 // non-null entry is a map keyed by sub-field name. The value for a scalar sub-field must be
 // `[]<T>` (e.g. []int32, []string); the value for a vector sub-field must be
-// `[][]float32` / `[][]byte` / `[][]int8` matching the vector type.
+// `[][]float32` / `[][]byte` / `[][]int8` matching the vector type; the value for an Array<T>
+// sub-field must be `[][]<T>`.
+//
+// For a nullable sub-field, a null element is a nil pointer in `[]*<T>`, a nil vector, or a nil
+// inner array; a null leaf of an element-nullable Array<T> sub-field is a nil pointer in
+// `[][]*<T>`. A nullable sub-field may be omitted from a row, making all its elements null.
 //
 // Example:
 //

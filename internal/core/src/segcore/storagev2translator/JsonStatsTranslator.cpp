@@ -28,7 +28,7 @@
 #include "segcore/CacheMetricAttribution.h"
 #include "segcore/Utils.h"
 #include "storage/FileManager.h"
-#include "segcore/storagev2translator/StorageV2Config.h"
+#include "storage/LoadConfig.h"
 
 namespace milvus::segcore::storagev2translator {
 
@@ -59,7 +59,7 @@ JsonStatsTranslator::JsonStatsTranslator(
       info_proto_(std::move(info_proto)),
       chunk_manager_(std::move(chunk_manager)),
       fs_(std::move(fs)),
-      use_async_load_(StorageV2AsyncLoadEnabled()),
+      use_async_load_(milvus::storage::LoadAsyncReadEnabled()),
       key_(fmt::format("seginst_{}_seg_{}_jsonstats_{}_build_{}_version_{}",
                        load_info_.segment_instance_uid,
                        load_info_.segment_id,
@@ -93,14 +93,13 @@ JsonStatsTranslator::cell_id_of(milvus::cachinglayer::uid_t) const {
     return 0;
 }
 
-std::pair<milvus::cachinglayer::ResourceUsage,
-          milvus::cachinglayer::ResourceUsage>
-JsonStatsTranslator::estimated_byte_size_of_cell(
-    milvus::cachinglayer::cid_t) const {
+milvus::cachinglayer::LoadingResourceUsage
+JsonStatsTranslator::estimated_loading_usage(
+    const std::vector<milvus::cachinglayer::cid_t>&) const {
     // This coordination cell does not own another copy of the JSON payload.
     // JsonKeyStats metadata remains segment-management overhead; the inner
     // GroupChunk and BSON slots account for their own payloads.
-    return {{0, 0}, {0, 0}};
+    return {};
 }
 
 int64_t

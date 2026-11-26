@@ -23,39 +23,42 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus/internal/datacoord/meta"
+	"github.com/milvus-io/milvus/internal/datacoord/snapshot"
 	"github.com/milvus-io/milvus/internal/dataview"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
 // seedPublishMeta builds a meta with one staged member (1001, IsInvisible=true,
 // with binlogs) and one visible superseded parent (2001), plus the group in
 // READY state. It returns the ready group clone.
-func seedPublishMeta(t *testing.T, m *meta, source model.SegmentChangeSource) *model.SegmentChangeGroup {
+func seedPublishMeta(t *testing.T, m *meta.Meta, source model.SegmentChangeSource) *model.SegmentChangeGroup {
 	t.Helper()
 	ctx := context.Background()
-	m.AddCollection(&collectionInfo{ID: 10, Schema: readinessVectorSchema()})
+	m.AddCollection(&meta.CollectionInfo{ID: 10, Schema: readinessVectorSchema()})
 
-	for _, seg := range []*SegmentInfo{
-		NewSegmentInfo(&datapb.SegmentInfo{
+	for _, seg := range []*meta.SegmentInfo{
+		meta.NewSegmentInfo(&datapb.SegmentInfo{
 			ID: 1001, CollectionID: 10, PartitionID: 100, InsertChannel: "ch-1",
 			State: commonpb.SegmentState_Flushed, Level: datapb.SegmentLevel_L1, IsInvisible: true,
-			NumOfRows: 42,
-			Stats:     &datapb.Statistics{InsertBinlogSize: 131073, StatsBinlogSize: 65536, DeltaBinlogSize: 65536},
-			Binlogs:   []*datapb.FieldBinlog{{FieldID: 2, Binlogs: []*datapb.Binlog{{LogID: 1}}}},
+			NumOfRows: 42, IsSorted: true,
+			Stats:   &datapb.Statistics{InsertBinlogSize: 131073, StatsBinlogSize: 65536, DeltaBinlogSize: 65536},
+			Binlogs: []*datapb.FieldBinlog{{FieldID: 2, Binlogs: []*datapb.Binlog{{LogID: 1}}}},
 		}),
-		NewSegmentInfo(&datapb.SegmentInfo{
+		meta.NewSegmentInfo(&datapb.SegmentInfo{
 			ID: 2001, CollectionID: 10, PartitionID: 100, InsertChannel: "ch-1",
-			State: commonpb.SegmentState_Flushed, Level: datapb.SegmentLevel_L1,
+			State: commonpb.SegmentState_Flushed, Level: datapb.SegmentLevel_L1, NumOfRows: 42,
 			Binlogs: []*datapb.FieldBinlog{{FieldID: 2, Binlogs: []*datapb.Binlog{{LogID: 2}}}},
 		}),
 	} {
 		require.NoError(t, m.AddSegment(ctx, seg))
 	}
 
-	group := newTestGroup()
+	group := meta.NewTestGroup()
 	group.Source = source
 	require.NoError(t, m.AddSegmentChangeGroup(ctx, group))
 	ready := group.Clone()
@@ -64,15 +67,78 @@ func seedPublishMeta(t *testing.T, m *meta, source model.SegmentChangeSource) *m
 	return ready
 }
 
+func TestSnapshotCandidatesAndPublishShareOneMetadataBoundary(t *testing.T) {
+	ctx := t.Context()
+	m, err := meta.NewMemoryMeta(t)
+	require.NoError(t, err)
+	ready := seedPublishMeta(t, m, model.SegmentChangeSourceMixCompaction)
+	ids := func() []int64 {
+		var result []int64
+		for _, segment := range m.SnapshotCandidateSegments(10) {
+			result = append(result, segment.GetID())
+		}
+		return result
+	}
+	require.Equal(t, []int64{2001}, ids(), "snapshot must retain the parent while its replacement is staged")
+	protection := snapshot.CreateTestSnapshotMetaLoaded(t)
+	m.CompactionProtection = protection
+	protection.SetSnapshotPending(10)
+	require.ErrorIs(t, m.CommitSegmentChangeGroupForTest(ctx, ready, 1), merr.ErrServiceUnavailable,
+		"the final metadata write must honor snapshot protection even after publish preflight")
+	require.Equal(t, []int64{2001}, ids())
+	protection.ClearSnapshotPending(10)
+	require.NoError(t, m.PublishGroup(ctx, ready, meta.NewMockAllocator(t)))
+	require.Equal(t, []int64{1001}, ids(), "snapshot must include the committed replacement")
+}
+
+func TestRowCountExcludesUnpublishedChangeMembers(t *testing.T) {
+	setSegmentChangeTestParam(t, &Params.DataCoordCfg.SegmentChangeEnabled, "true")
+	m, err := meta.NewMemoryMeta(t)
+	require.NoError(t, err)
+	ready := seedPublishMeta(t, m, model.SegmentChangeSourceMixCompaction)
+	count := func() {
+		require.EqualValues(t, 42, m.GetNumRowsOfCollection(t.Context(), 10))
+		require.EqualValues(t, 42, m.GetNumRowsOfPartition(t.Context(), 10, 100))
+		require.Zero(t, m.GetNumRowsOfPartition(t.Context(), 10, 101))
+	}
+	count()
+	// Existing groups still determine visibility after admission is disabled.
+	require.NoError(t, Params.Save(Params.DataCoordCfg.SegmentChangeEnabled.Key, "false"))
+	count()
+	require.NoError(t, m.PublishGroup(t.Context(), ready, meta.NewMockAllocator(t)))
+	count()
+}
+
+func TestRowCountKeepsInvisibleFlushWithoutGroup(t *testing.T) {
+	m, err := meta.NewMemoryMeta(t)
+	require.NoError(t, err)
+	require.NoError(t, m.AddSegment(t.Context(), meta.NewSegmentInfo(&datapb.SegmentInfo{
+		ID: 7, CollectionID: 10, PartitionID: 100, State: commonpb.SegmentState_Flushed,
+		IsInvisible: true, NumOfRows: 42,
+	})))
+	require.EqualValues(t, 42, m.GetNumRowsOfCollection(t.Context(), 10))
+	require.EqualValues(t, 42, m.GetNumRowsOfPartition(t.Context(), 10, 100))
+}
+
+func TestRowCountExcludesAbortedMembersBeforeReclamation(t *testing.T) {
+	m, err := meta.NewMemoryMeta(t)
+	require.NoError(t, err)
+	group := seedPublishMeta(t, m, model.SegmentChangeSourceMixCompaction)
+	group.State = model.SegmentChangeStateAborted
+	require.NoError(t, m.UpdateSegmentChangeGroup(t.Context(), group))
+	require.EqualValues(t, 42, m.GetNumRowsOfCollection(t.Context(), 10))
+	require.EqualValues(t, 42, m.GetNumRowsOfPartition(t.Context(), 10, 100))
+}
+
 func TestPublishGroup_Dataviewless(t *testing.T) {
-	m, err := newMemoryMeta(t)
+	m, err := meta.NewMemoryMeta(t)
 	require.NoError(t, err)
 	ctx := context.Background()
 
 	// No dataViewManager: the dataview-less (3.0-compatible) publish path, a
 	// pure SegmentMeta composite write.
 	ready := seedPublishMeta(t, m, model.SegmentChangeSourceMixCompaction)
-	require.NoError(t, m.publishGroup(ctx, ready, newMockAllocator(t)))
+	require.NoError(t, m.PublishGroup(ctx, ready, meta.NewMockAllocator(t)))
 
 	member := m.GetSegment(ctx, 1001)
 	require.NotNil(t, member)
@@ -103,19 +169,19 @@ func TestPublishGroup_WithDataView(t *testing.T) {
 		require.NoError(t, p.Save(setting.item.Key, setting.value))
 		t.Cleanup(func() { require.NoError(t, p.Save(setting.item.Key, original)) })
 	}
-	m, err := newMemoryMeta(t)
+	m, err := meta.NewMemoryMeta(t)
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	dataViewCatalog, ok := m.catalog.(dataview.Catalog)
+	dataViewCatalog, ok := m.Catalog.(dataview.Catalog)
 	require.True(t, ok, "kv catalog must implement the DataView Catalog interface")
 	dv := dataview.NewManager(dataViewCatalog, nil)
-	m.dataViewManager = dv
+	m.DataViewManager = dv
 	_, err = dv.OnCreateCollection(ctx, dataview.CreateCollectionDataViewEvent{CollectionID: 10, VChannels: []string{"ch-1"}})
 	require.NoError(t, err)
 
 	ready := seedPublishMeta(t, m, model.SegmentChangeSourceMixCompaction)
-	require.NoError(t, m.publishGroup(ctx, ready, newMockAllocator(t)))
+	require.NoError(t, m.PublishGroup(ctx, ready, meta.NewMockAllocator(t)))
 
 	// DataView side: one snapshot with the member in, the parent out, and only
 	// compact_version advanced (streaming_version untouched by staging).
@@ -136,13 +202,13 @@ func TestPublishGroup_WithDataView(t *testing.T) {
 }
 
 func TestPublishGroup_ImportSetsCommitTS(t *testing.T) {
-	m, err := newMemoryMeta(t)
+	m, err := meta.NewMemoryMeta(t)
 	require.NoError(t, err)
 	ctx := context.Background()
 
 	ready := seedPublishMeta(t, m, model.SegmentChangeSourceImportJob)
-	alloc := newMockAllocator(t)
-	require.NoError(t, m.publishGroup(ctx, ready, alloc))
+	alloc := meta.NewMockAllocator(t)
+	require.NoError(t, m.PublishGroup(ctx, ready, alloc))
 
 	member := m.GetSegment(ctx, 1001)
 	require.NotNil(t, member)
@@ -154,28 +220,28 @@ func TestPublishGroup_ImportSetsCommitTS(t *testing.T) {
 }
 
 func TestPublishGroup_RejectsNonReady(t *testing.T) {
-	m, err := newMemoryMeta(t)
+	m, err := meta.NewMemoryMeta(t)
 	require.NoError(t, err)
 	ctx := context.Background()
 
 	staged := seedPublishMeta(t, m, model.SegmentChangeSourceMixCompaction)
 	staged.State = model.SegmentChangeStateStaged
-	err = m.publishGroup(ctx, staged, newMockAllocator(t))
+	err = m.PublishGroup(ctx, staged, meta.NewMockAllocator(t))
 	require.Error(t, err)
 	require.ErrorContains(t, err, "requires READY")
 }
 
 func TestPublishGroup_MemberMissing(t *testing.T) {
-	m, err := newMemoryMeta(t)
+	m, err := meta.NewMemoryMeta(t)
 	require.NoError(t, err)
 	ctx := context.Background()
 
 	ready := seedPublishMeta(t, m, model.SegmentChangeSourceMixCompaction)
 	// Externally drop the staged member (truncate / drop-by-time), so the
 	// publish cannot flip it visible.
-	require.NoError(t, m.UpdateSegmentsInfo(ctx, UpdateStatusOperator(1001, commonpb.SegmentState_Dropped)))
+	require.NoError(t, m.UpdateSegmentsInfo(ctx, meta.UpdateStatusOperator(1001, commonpb.SegmentState_Dropped)))
 
-	err = m.publishGroup(ctx, ready, newMockAllocator(t))
+	err = m.PublishGroup(ctx, ready, meta.NewMockAllocator(t))
 	require.Error(t, err)
 	require.ErrorContains(t, err, "externally dropped")
 	// The group stays READY for the inspector to fail it (unconvergeable).
@@ -184,14 +250,14 @@ func TestPublishGroup_MemberMissing(t *testing.T) {
 }
 
 func TestPublishGroup_CollectionDropped(t *testing.T) {
-	m, err := newMemoryMeta(t)
+	m, err := meta.NewMemoryMeta(t)
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	dataViewCatalog, ok := m.catalog.(dataview.Catalog)
+	dataViewCatalog, ok := m.Catalog.(dataview.Catalog)
 	require.True(t, ok)
 	dv := dataview.NewManager(dataViewCatalog, nil)
-	m.dataViewManager = dv
+	m.DataViewManager = dv
 	_, err = dv.OnCreateCollection(ctx, dataview.CreateCollectionDataViewEvent{CollectionID: 10, VChannels: []string{"ch-1"}})
 	require.NoError(t, err)
 
@@ -199,12 +265,12 @@ func TestPublishGroup_CollectionDropped(t *testing.T) {
 	_, err = dv.OnDropCollection(ctx, 10)
 	require.NoError(t, err)
 
-	err = m.publishGroup(ctx, ready, newMockAllocator(t))
-	require.ErrorIs(t, err, errSegmentChangeGroupCollectionDropped)
+	err = m.PublishGroup(ctx, ready, meta.NewMockAllocator(t))
+	require.ErrorIs(t, err, meta.ErrSegmentChangeGroupCollectionDropped)
 }
 
 func TestPublishGroup_IdempotentReplay(t *testing.T) {
-	m, err := newMemoryMeta(t)
+	m, err := meta.NewMemoryMeta(t)
 	require.NoError(t, err)
 	ctx := context.Background()
 
@@ -214,9 +280,14 @@ func TestPublishGroup_IdempotentReplay(t *testing.T) {
 	// evidence" (design C7): the members were flipped by an earlier chunked
 	// fallback flush while the commit marker did not land. The group is still
 	// ALIVE (READY), so a replayed publish must converge idempotently.
-	require.NoError(t, m.UpdateSegmentsInfo(ctx, SetSegmentIsInvisible(1001, false)))
+	// Inject the persisted crash state directly; ordinary metadata writes are
+	// forbidden from exposing an ALIVE member outside its owning publish.
+	partial := m.GetSegment(ctx, 1001).Clone()
+	partial.IsInvisible = false
+	require.NoError(t, m.Catalog.AlterSegments(ctx, []*datapb.SegmentInfo{partial.SegmentInfo}))
+	m.Segments.SetSegment(1001, partial)
 
-	require.NoError(t, m.publishGroup(ctx, ready, newMockAllocator(t)))
+	require.NoError(t, m.PublishGroup(ctx, ready, meta.NewMockAllocator(t)))
 
 	member := m.GetSegment(ctx, 1001)
 	require.False(t, member.GetIsInvisible())
@@ -242,7 +313,7 @@ func TestGroupUsesPublishCommitTS(t *testing.T) {
 		{model.SegmentChangeSourceExternalRefresh, false},
 	}
 	for _, tc := range cases {
-		require.Equal(t, tc.want, groupUsesPublishCommitTS(tc.source), "source %s", tc.source)
+		require.Equal(t, tc.want, meta.GroupUsesPublishCommitTS(tc.source), "source %s", tc.source)
 	}
 }
 
@@ -251,19 +322,21 @@ func TestPublishGroup_IndexRegressionRejected(t *testing.T) {
 	// the publish (a rebuild retry / index DDL in flight). publishGroup's
 	// Phase-2 re-check must reject the publish instead of exposing an
 	// indexed-out member while its superseded parents are retired.
-	m, err := newMemoryMeta(t)
+	m, err := meta.NewMemoryMeta(t)
 	require.NoError(t, err)
 	ctx := context.Background()
-	m.indexMeta = newReadinessIndexMeta(10, map[int64]*model.Index{10: vectorIndex(2, 10)}, nil)
+	previous := Params.DataCoordCfg.MinSegmentNumRowsToEnableIndex.SwapTempValue("0")
+	defer Params.DataCoordCfg.MinSegmentNumRowsToEnableIndex.SwapTempValue(previous)
+	m.IndexCatalog = newReadinessIndexMeta(10, map[int64]*model.Index{10: vectorIndex(2, 10)}, nil)
 
 	ready := seedPublishMeta(t, m, model.SegmentChangeSourceMixCompaction)
-	err = m.publishGroup(ctx, ready, newMockAllocator(t))
+	err = m.PublishGroup(ctx, ready, meta.NewMockAllocator(t))
 	require.Error(t, err)
 	require.ErrorContains(t, err, "index state regressed")
 
 	// The inspector regresses the group to STAGED for re-evaluation instead of
 	// retrying the impossible publish forever.
-	i := newSegmentChangeInspector(ctx, m, newMockAllocator(t))
+	i := newSegmentChangeInspector(ctx, m, meta.NewMockAllocator(t))
 	i.tryPublish(ctx, ready)
 	got := m.GetSegmentChangeGroup(ctx, 10, 1)
 	require.Equal(t, model.SegmentChangeStateStaged, got.State)
@@ -274,17 +347,17 @@ func TestPublishGroup_SchemaRegressionRejected(t *testing.T) {
 	// F1/C23 at publish: a schema bump landing between READY and publish makes
 	// the member's schema version behind; publishGroup rejects it and the
 	// inspector regresses to STAGED where the C23 fail-fast fails the group.
-	m, err := newMemoryMeta(t)
+	m, err := meta.NewMemoryMeta(t)
 	require.NoError(t, err)
 	ctx := context.Background()
 	ready := seedPublishMeta(t, m, model.SegmentChangeSourceMixCompaction)
 	m.GetCollection(10).Schema.Version = 2 // member SchemaVersion is 0
 
-	err = m.publishGroup(ctx, ready, newMockAllocator(t))
+	err = m.PublishGroup(ctx, ready, meta.NewMockAllocator(t))
 	require.Error(t, err)
 	require.ErrorContains(t, err, "schema version behind")
 
-	i := newSegmentChangeInspector(ctx, m, newMockAllocator(t))
+	i := newSegmentChangeInspector(ctx, m, meta.NewMockAllocator(t))
 	i.tryPublish(ctx, ready)
 	require.Equal(t, model.SegmentChangeStateStaged, m.GetSegmentChangeGroup(ctx, 10, 1).State)
 }

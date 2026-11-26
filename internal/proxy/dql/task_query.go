@@ -3,12 +3,16 @@ package dql
 import (
 	"context"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/cockroachdb/errors"
 	"github.com/samber/lo"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
@@ -24,10 +28,14 @@ import (
 	"github.com/milvus-io/milvus/internal/proxy/taskmodel"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/exprutil"
+	"github.com/milvus-io/milvus/internal/util/queryutil"
+	queryreducestream "github.com/milvus-io/milvus/internal/util/queryutil/reduce_stream"
 	"github.com/milvus-io/milvus/internal/util/reduce"
 	"github.com/milvus-io/milvus/internal/util/reduce/orderby"
 	"github.com/milvus-io/milvus/internal/util/segcore"
 	"github.com/milvus-io/milvus/internal/util/shallowcopy"
+	"github.com/milvus-io/milvus/internal/views/queryclient"
+	"github.com/milvus-io/milvus/internal/views/viewerror"
 	"github.com/milvus-io/milvus/pkg/v3/common"
 	"github.com/milvus-io/milvus/pkg/v3/metrics"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
@@ -58,13 +66,22 @@ type QueryTask struct {
 	Condition
 	*internalpb.RetrieveRequest
 
-	ctx            context.Context
-	result         *milvuspb.QueryResults
-	request        *milvuspb.QueryRequest
+	ctx     context.Context
+	result  *milvuspb.QueryResults
+	request *milvuspb.QueryRequest
+	// ids, when set with a plan, are exactly the pks the plan selects (the
+	// search requery sets both); without a plan, PreExecute turns them into
+	// the request's expression. Materialize fills its result in this order.
 	ids            *schemapb.IDs
 	collectionName string
-	queryParams    *queryParams
-	schema         *schemaInfo
+	// executePath and executeStart time the request from the fan-out to the
+	// reduced result (ProxyQueryExecuteLatency); Execute sets them.
+	executePath       string
+	executeStart      time.Time
+	queryParams       *queryParams
+	schema            *schemaInfo
+	boundReadSchema   *schemaInfo
+	boundCollectionID int64
 
 	translatedOutputFields []string
 	userOutputFields       []string
@@ -77,6 +94,8 @@ type QueryTask struct {
 	partitionKeyMode bool
 	shardclientMgr   shardclient.ShardClientMgr
 	lb               shardclient.LBPolicy
+	viewQueryClient  queryclient.Client
+	queryViewPlans   []queryclient.ShardPlan
 	channelsMvcc     map[string]Timestamp
 	// Output snapshots for internal partial-update reads, independent of the
 	// channelsMvcc input overrides. Only successful shard responses are recorded.
@@ -121,6 +140,7 @@ type QueryTask struct {
 // behavior where such reads are not gated by the partition-key check.
 func NewQueryTask(ctx context.Context, node taskmodel.TaskNode, request *milvuspb.QueryRequest, plan *planpb.PlanNode, retrieveReq *internalpb.RetrieveRequest, cache metacache.Cache, mustUsePartitionKey bool) *QueryTask {
 	return &QueryTask{
+		viewQueryClient: viewQueryClientFromNode(node),
 		baseTask: baseTask{
 			MetaCache: cache,
 		},
@@ -148,6 +168,13 @@ func (t *QueryTask) Result() *milvuspb.QueryResults {
 // feature counters must not see them.
 func (t *QueryTask) MarkInternal() {
 	t.internalTask = true
+}
+
+// BindReadSchema fixes an internal read to its parent operation's schema. A
+// QueryView with that exact schema must be ready; public metadata refreshes must
+// not silently switch a requery or an upsert's read/merge operation.
+func (t *QueryTask) BindReadSchema(collectionID int64, schema *metacache.SchemaInfo) {
+	t.boundCollectionID, t.boundReadSchema = collectionID, schema
 }
 
 // SetActualChannelsMvcc installs the output snapshot for internal partial-update
@@ -722,6 +749,10 @@ func (t *QueryTask) createPlanArgs(ctx context.Context, visitorArgs *planparserv
 		t.plan.DynamicFields = t.userDynamicFields
 	}
 
+	if err := t.prepareQueryFunctionChains(); err != nil {
+		return err
+	}
+
 	mlog.Debug(ctx, "translate output fields to field ids",
 		mlog.Int64s("OutputFieldsID", t.OutputFieldsId),
 		mlog.String("requestType", t.getQueryLabel()))
@@ -815,8 +846,16 @@ func (t *QueryTask) PreExecute(ctx context.Context) error {
 	}
 	log.Debug(ctx, "Get collection ID by name", mlog.Int64("collectionID", t.CollectionID))
 
-	schema := colInfo.Schema
+	schema := t.boundReadSchema
+	if t.boundReadSchema != nil {
+		if t.boundCollectionID != t.CollectionID {
+			return merr.WrapErrServiceUnavailableMsg("collection identity changed during internal query")
+		}
+	} else {
+		schema = colInfo.Schema
+	}
 	t.schema = schema
+	t.SchemaVersion = schema.GetVersion()
 	if err := ValidateTextStorageV3Enabled(t.schema.CollectionSchema); err != nil {
 		return err
 	}
@@ -883,7 +922,7 @@ func (t *QueryTask) PreExecute(ctx context.Context) error {
 
 	t.Limit = queryParams.limit + queryParams.offset
 
-	if t.ids != nil {
+	if t.ids != nil && t.plan == nil {
 		pkField := ""
 		for _, field := range schema.Fields {
 			if field.IsPrimaryKey {
@@ -977,7 +1016,6 @@ func (t *QueryTask) PreExecute(ctx context.Context) error {
 	guaranteeTs := t.request.GetGuaranteeTimestamp()
 	var consistencyLevel commonpb.ConsistencyLevel
 	useDefaultConsistency := t.request.GetUseDefaultConsistency()
-	t.ConsistencyLevel = t.request.GetConsistencyLevel()
 	if useDefaultConsistency {
 		consistencyLevel = collectionInfo.ConsistencyLevel
 		guaranteeTs = ParseGuaranteeTsFromConsistency(guaranteeTs, t.BeginTs(), consistencyLevel)
@@ -991,6 +1029,9 @@ func (t *QueryTask) PreExecute(ctx context.Context) error {
 			guaranteeTs = ParseGuaranteeTsFromConsistency(guaranteeTs, t.BeginTs(), consistencyLevel)
 		}
 	}
+	// Forward the resolved level: QueryView and the delegator plan the read by
+	// it, so it must match the level the guarantee timestamp was computed from.
+	t.ConsistencyLevel = consistencyLevel
 
 	// update actual consistency level
 	accesslog.SetActualConsistencyLevel(ctx, consistencyLevel)
@@ -1007,19 +1048,34 @@ func (t *QueryTask) PreExecute(ctx context.Context) error {
 	physicalTimeMs, _ := tsoutil.ParseHybridTs(guaranteeTs)
 	t.EntityTtlPhysicalTime = uint64(physicalTimeMs * 1000)
 	// need modify mvccTs and guaranteeTs for iterator specially
-	if t.queryParams.isIterator && t.request.GetGuaranteeTimestamp() > 0 {
-		t.MvccTimestamp = t.request.GetGuaranteeTimestamp()
-		t.GuaranteeTimestamp = t.request.GetGuaranteeTimestamp()
+	if t.queryParams.isIterator {
+		if t.request.GetGuaranteeTimestamp() > 0 {
+			t.MvccTimestamp = t.request.GetGuaranteeTimestamp()
+		} else if t.viewQueryClient != nil {
+			// Choose one snapshot before any shard executes, including the
+			// first page. Every retry and subsequent page retains this value.
+			t.MvccTimestamp = t.BeginTs()
+		}
+		if t.MvccTimestamp != 0 {
+			t.GuaranteeTimestamp = t.MvccTimestamp
+			physicalTimeMs, _ = tsoutil.ParseHybridTs(t.MvccTimestamp)
+			t.EntityTtlPhysicalTime = uint64(physicalTimeMs * 1000)
+		}
 	}
 	t.IsIterator = queryParams.isIterator
 
-	if collectionInfo.CollectionTTL != 0 {
-		physicalTime := tsoutil.PhysicalTime(t.GetBase().GetTimestamp())
-		expireTime := physicalTime.Add(-time.Duration(collectionInfo.CollectionTTL))
+	collectionTTL := metacache.GetCollectionTTL(t.schema.GetProperties())
+	if collectionTTL != 0 {
+		ttlTimestamp := t.GetBase().GetTimestamp()
+		if t.queryParams.isIterator && t.MvccTimestamp != 0 {
+			ttlTimestamp = t.MvccTimestamp
+		}
+		physicalTime := tsoutil.PhysicalTime(ttlTimestamp)
+		expireTime := physicalTime.Add(-time.Duration(collectionTTL))
 		t.CollectionTtlTimestamps = tsoutil.ComposeTSByTime(expireTime)
 		// preventing overflow, abort
-		if t.CollectionTtlTimestamps > t.GetBase().GetTimestamp() {
-			return merr.WrapErrServiceInternalMsg("ttl timestamp overflow, base timestamp: %d, ttl duration %v", t.GetBase().GetTimestamp(), collectionInfo.CollectionTTL)
+		if t.CollectionTtlTimestamps > ttlTimestamp {
+			return merr.WrapErrServiceInternalMsg("ttl timestamp overflow, base timestamp: %d, ttl duration %v", ttlTimestamp, collectionTTL)
 		}
 	}
 	deadline, ok := t.TraceCtx().Deadline()
@@ -1039,11 +1095,38 @@ func (t *QueryTask) PreExecute(ctx context.Context) error {
 func (t *QueryTask) Execute(ctx context.Context) error {
 	tr := timerecord.NewTimeRecorder(fmt.Sprintf("proxy execute query %d", t.ID()))
 	defer tr.CtxElapse(ctx, "done")
+
+	t.resultBuf = typeutil.NewConcurrentSet[*internalpb.RetrieveResults]()
+	t.executeStart = time.Now()
+	path, err := executePathQuery, error(nil)
+	// Materialize currently routes through the legacy delegator. QueryView
+	// requests must retain their View-bound execution and requery snapshots.
+	if t.viewQueryClient == nil && paramtable.Get().ProxyCfg.MaterializeEnabled.GetAsBool() && t.materializeInScope() {
+		path, err = t.executeMaterialize(ctx)
+	} else {
+		err = t.executeWorkload(ctx, t.queryShard)
+	}
+	if err == nil {
+		t.executePath = path
+	}
+	return err
+}
+
+// executeWorkload runs exec on every shard of the request, or on its
+// namespace's one channel.
+func (t *QueryTask) executeWorkload(ctx context.Context, exec shardclient.ExecuteFunc) error {
 	log := mlog.With(mlog.Int64("collection", t.GetCollectionID()),
 		mlog.Int64s("partitionIDs", t.GetPartitionIDs()),
 		mlog.String("requestType", t.getQueryLabel()))
 
-	t.resultBuf = typeutil.NewConcurrentSet[*internalpb.RetrieveResults]()
+	if t.viewQueryClient != nil {
+		if err := t.executeByQueryView(ctx); err != nil {
+			log.Warn(ctx, "fail to execute query by query view", mlog.Err(err))
+			return err
+		}
+		log.Debug(ctx, "Query Execute done.")
+		return nil
+	}
 	// Built once, ahead of the namespace fast path below, so that the fast
 	// path derives its single-channel workload from the same value Execute
 	// would fan out -- every collection-level field, the resource-group scope
@@ -1053,7 +1136,7 @@ func (t *QueryTask) Execute(ctx context.Context) error {
 		CollectionID:   t.CollectionID,
 		CollectionName: t.collectionName,
 		Nq:             1,
-		Exec:           t.queryShard,
+		Exec:           exec,
 		PreferredNodes: t.preferredNodes,
 	}
 	if NamespacePartitionKeyModeEnabled(t.schema.CollectionSchema) && t.request.Namespace != nil {
@@ -1086,8 +1169,85 @@ func (t *QueryTask) Execute(ctx context.Context) error {
 	return nil
 }
 
+func (t *QueryTask) executeByQueryView(ctx context.Context) error {
+	legacy := t.viewQueryClient.Legacy()
+	// Refresh applies to new requests, not retries. Retained-plan requery stays on Batch.
+	enableReduceStream := t.queryViewPlans == nil && paramtable.Get().ProxyCfg.EnableReduceStream.GetAsBool()
+	reduceStreamChunkBytes := paramtable.Get().ProxyCfg.ReduceStreamChunkBytes.GetAsInt()
+	request := &queryclient.LegacyQueryRequest{
+		Req: t.RetrieveRequest, Plans: t.queryViewPlans, Schema: t.schema.CollectionSchema,
+		BarrierMVCC: t.MvccTimestamp, AllowStreaming: enableReduceStream,
+		ReduceStreamChunkBytes: reduceStreamChunkBytes,
+	}
+	// Batch retries within each shard before returning. Streaming may fail after
+	// a shard emits a Chunk, so Proxy bounds whole-request retries here.
+	maxAttempts := 1
+	if enableReduceStream {
+		maxAttempts = max(1, legacy.MaxRetries())
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		result, err := legacy.Query(ctx, request)
+		if err != nil {
+			if enableReduceStream && ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if enableReduceStream && viewerror.AsViewError(err).IsRetryable() {
+				lastErr = err
+				continue
+			}
+			return QueryViewLoadError(ctx, t.node, t.GetCollectionID(), t.GetPartitionIDs(), err)
+		}
+		if result == nil {
+			return merr.WrapErrServiceInternalMsg("QueryView Query returned a nil result")
+		}
+		if result.Stream == nil {
+			for _, retrieveResult := range result.Results {
+				t.resultBuf.Insert(retrieveResult)
+			}
+		} else {
+			reducedResult, recvErr := t.consumeQueryResultStream(result.Stream)
+			retryable := recvErr != nil && (viewerror.AsViewError(recvErr).IsRetryable() || status.Code(recvErr) == codes.Unavailable)
+			closeErr := result.Stream.Close()
+			if recvErr != nil {
+				if closeErr != nil {
+					mlog.Warn(ctx, "failed to close Query result stream", mlog.Err(closeErr))
+				}
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				if retryable {
+					// Shard-local recovery is exhausted or has emitted output; discard the whole attempt.
+					request.RetryErrors = append(request.RetryErrors, recvErr)
+					lastErr = recvErr
+					continue
+				}
+				return QueryViewLoadError(ctx, t.node, t.GetCollectionID(), t.GetPartitionIDs(), recvErr)
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+			for _, plan := range result.GetPlans() {
+				reducedResult.FeatureBits |= queryclient.ExecutionSummaryFeatureBits(plan.ExecutionSummary)
+			}
+			t.resultBuf.Insert(reducedResult)
+		}
+
+		// Both frontiers belong to the final successful Strong WAL snapshot,
+		// including successful empty shards.
+		for _, plan := range result.GetPlans() {
+			if t.actualChannelsMvcc != nil {
+				t.RecordChannelMvcc(plan.ShardID.VChannel, max(plan.Mvcc.GetGrowingTimetick(), plan.Mvcc.GetTransformingTimetick()))
+			}
+		}
+		return nil
+	}
+	return QueryViewLoadError(ctx, t.node, t.GetCollectionID(), t.GetPartitionIDs(), lastErr)
+}
+
 func (t *QueryTask) PostExecute(ctx context.Context) error {
-	tr := timerecord.NewTimeRecorder("QueryTask PostExecute")
+	tr := timerecord.NewTimeRecorder("queryTask PostExecute")
 	defer func() {
 		tr.CtxElapse(ctx, "done")
 	}()
@@ -1103,6 +1263,15 @@ func (t *QueryTask) PostExecute(ctx context.Context) error {
 	t.totalRelatedDataSize = 0
 	t.storageCost = segcore.StorageCost{}
 	var execBits uint64
+	collectResult := func(res *internalpb.RetrieveResults) {
+		toReduceResults = append(toReduceResults, res)
+		t.allQueryCnt += res.GetAllRetrieveCount()
+		t.storageCost.ScannedRemoteBytes += res.GetScannedRemoteBytes()
+		t.storageCost.ScannedTotalBytes += res.GetScannedTotalBytes()
+		t.totalRelatedDataSize += res.GetCostAggregation().GetTotalRelatedDataSize()
+		execBits |= res.GetFeatureBits()
+		log.Debug(ctx, "proxy receives one query result", mlog.Int64("sourceID", res.GetBase().GetSourceID()))
+	}
 	select {
 	case <-t.TraceCtx().Done():
 		log.Warn(ctx, "proxy", mlog.Int64("Query: wait to finish failed, timeout!, msgID:", t.ID()))
@@ -1110,13 +1279,7 @@ func (t *QueryTask) PostExecute(ctx context.Context) error {
 	default:
 		log.Debug(ctx, "all queries are finished or canceled")
 		t.resultBuf.Range(func(res *internalpb.RetrieveResults) bool {
-			toReduceResults = append(toReduceResults, res)
-			t.allQueryCnt += res.GetAllRetrieveCount()
-			t.storageCost.ScannedRemoteBytes += res.GetScannedRemoteBytes()
-			t.storageCost.ScannedTotalBytes += res.GetScannedTotalBytes()
-			t.totalRelatedDataSize += res.GetCostAggregation().GetTotalRelatedDataSize()
-			execBits |= res.GetFeatureBits()
-			log.Debug(ctx, "proxy receives one query result", mlog.Int64("sourceID", res.GetBase().GetSourceID()))
+			collectResult(res)
 			return true
 		})
 	}
@@ -1141,6 +1304,10 @@ func (t *QueryTask) PostExecute(ctx context.Context) error {
 		return err
 	}
 
+	// A Materialize request left one result, already deduplicated and in its
+	// final order (finishMaterialize); the plain pipeline's pk reduce passes a
+	// single result through untouched, so only complement_fields and the
+	// steps below act on it -- no cross-shard reduce runs.
 	pipeline, err := NewQueryPipeline(
 		t.schema.CollectionSchema,
 		t.queryParams.limit,
@@ -1184,10 +1351,20 @@ func (t *QueryTask) PostExecute(ctx context.Context) error {
 
 	if t.queryParams.isIterator && t.request.GetGuaranteeTimestamp() == 0 {
 		// first page for iteration, need to set up sessionTs for iterator
-		t.result.SessionTs = getMaxMvccTsFromChannels(t.channelsMvcc, t.BeginTs())
+		if t.viewQueryClient != nil {
+			t.result.SessionTs = t.MvccTimestamp
+		} else {
+			t.result.SessionTs = getMaxMvccTsFromChannels(t.channelsMvcc, t.BeginTs())
+		}
 	}
 	if err := t.formatTimeFields(ctx); err != nil {
 		return err
+	}
+	if t.executePath != "" {
+		// After the reduce: Query reduces across shards here, Materialize
+		// already did in Execute.
+		metrics.ProxyQueryExecuteLatency.WithLabelValues(paramtable.GetStringNodeID(), t.getQueryLabel(), t.executePath).
+			Observe(float64(time.Since(t.executeStart).Microseconds()) / 1000.0)
 	}
 	log.Debug(ctx, "Query PostExecute done")
 	return nil
@@ -1214,19 +1391,160 @@ func (t *QueryTask) formatTimeFields(ctx context.Context) error {
 	return nil
 }
 
+func (t *QueryTask) consumeQueryResultStream(stream queryreducestream.ReduceStream) (*internalpb.RetrieveResults, error) {
+	output := &internalpb.RetrieveResults{
+		Status: merr.Success(),
+		Ids:    &schemapb.IDs{},
+	}
+	maxOutputSize := paramtable.Get().QuotaConfig.MaxOutputSize.GetAsInt64()
+	var outputSize int64
+	// For bounded Query, the internal limit includes the offset. The shared
+	// pipeline, not the stream, applies the offset when it slices the page.
+	limit := t.GetLimit()
+	if len(t.GetGroupByFieldIds()) > 0 && len(t.GetOrderByFields()) > 0 {
+		// Grouped Chunks are unordered. Retain every group for final ordering and pagination.
+		limit = typeutil.Unlimited
+	}
+	// ORDER BY can separate duplicate PKs. Drain finalized vchannel candidates
+	// so cross-vchannel integrity checks also cover rows beyond the client page.
+	drainOrderBy := len(t.GetOrderByFields()) > 0 && len(t.GetGroupByFieldIds()) == 0
+	var collected int64
+	for drainOrderBy || limit <= 0 || collected < limit {
+		chunk, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if chunk == nil {
+			return nil, merr.WrapErrServiceInternalMsg("final Query ReduceStream returned a nil Chunk")
+		}
+		if !merr.Ok(chunk.GetStatus()) {
+			return nil, merr.Error(chunk.GetStatus())
+		}
+
+		computed, err := queryutil.PrepareComputedResults([]*internalpb.RetrieveResults{chunk})
+		if err != nil {
+			return nil, err
+		}
+		// Check only headers against accumulated output; never rescan earlier rows.
+		_, computedSources, err := queryutil.IndexComputedResults([]*internalpb.RetrieveResults{output, chunk})
+		if err != nil {
+			return nil, err
+		}
+		if len(output.GetComputedResults()) == 0 {
+			output.ComputedResults = computed
+		}
+		computedSize := queryutil.NewRowSizeCalculator(&internalpb.RetrieveResults{ComputedResults: chunk.GetComputedResults()})
+		rowCount := queryutil.GetRowCount(chunk)
+		if rowCount == 0 && len(output.GetFieldsData()) == 0 && chunk.GetElementLevel() {
+			output.ElementLevel = true
+		}
+		if rowCount > 0 {
+			if len(chunk.GetFieldsData()) == 0 {
+				return nil, merr.WrapErrServiceInternalMsg("final Query Chunk contains rows without field data")
+			}
+			idCount := typeutil.GetSizeOfIDs(chunk.GetIds())
+			if idCount > 0 && idCount != rowCount {
+				return nil, merr.WrapErrServiceInternalMsg(
+					"final Query Chunk ID count %d does not match row count %d", idCount, rowCount)
+			}
+			if chunk.GetElementLevel() && len(chunk.GetElementIndices()) != rowCount {
+				return nil, merr.WrapErrServiceInternalMsg(
+					"final Query Chunk element index count %d does not match row count %d", len(chunk.GetElementIndices()), rowCount)
+			}
+			if (len(output.GetFieldsData()) > 0 || output.GetElementLevel()) && output.GetElementLevel() != chunk.GetElementLevel() {
+				return nil, merr.WrapErrServiceInternalMsg("final Query Chunks have inconsistent element-level flags")
+			}
+			if len(output.GetFieldsData()) == 0 {
+				output.ElementLevel = chunk.GetElementLevel()
+				capacity := limit
+				if capacity <= 0 {
+					capacity = int64(rowCount)
+				}
+				output.FieldsData = typeutil.PrepareResultFieldData(chunk.GetFieldsData(), capacity)
+			}
+			if len(output.GetFieldsData()) != len(chunk.GetFieldsData()) {
+				return nil, merr.WrapErrServiceInternalMsg(
+					"final Query Chunk field count %d does not match %d", len(chunk.GetFieldsData()), len(output.GetFieldsData()))
+			}
+			indexComputer := typeutil.NewFieldDataIdxComputer(chunk.GetFieldsData())
+			// ORDER BY keeps receiving Chunks for duplicate validation after the
+			// requested window is full, but must not append rows from those Chunks.
+			for row := 0; row < rowCount && (limit <= 0 || collected < limit); row++ {
+				previous := queryutil.GetRowCount(output)
+				for _, column := range output.GetComputedResults() {
+					queryutil.AppendComputedField(column, computedSources[1][column.GetFieldName()], int64(row), previous)
+				}
+				outputSize += computedSize.RowSize(int64(row))
+				fieldIndexes := indexComputer.Compute(int64(row))
+				outputSize += typeutil.AppendFieldData(output.FieldsData, chunk.GetFieldsData(), int64(row), fieldIndexes...)
+				if idCount > 0 {
+					typeutil.AppendPKs(output.Ids, typeutil.GetPK(chunk.GetIds(), int64(row)))
+				}
+				if chunk.GetElementLevel() {
+					indices := chunk.GetElementIndices()[row]
+					output.ElementIndices = append(output.ElementIndices, indices)
+					outputSize += int64(proto.Size(indices))
+					collected += int64(len(indices.GetIndices()))
+				} else {
+					collected++
+				}
+				if outputSize > maxOutputSize {
+					return nil, merr.WrapErrParameterInvalidMsg(
+						"query results exceed the maxOutputSize Limit %d", maxOutputSize)
+				}
+				if limit > 0 && collected >= limit {
+					break
+				}
+			}
+		}
+
+		if output.GetBase() == nil && chunk.GetBase() != nil {
+			output.Base = proto.Clone(chunk.GetBase()).(*commonpb.MsgBase)
+		}
+		if output.GetReqID() == 0 {
+			output.ReqID = chunk.GetReqID()
+		}
+		output.SealedSegmentIDsRetrieved = append(output.SealedSegmentIDsRetrieved, chunk.GetSealedSegmentIDsRetrieved()...)
+		output.ChannelIDsRetrieved = append(output.ChannelIDsRetrieved, chunk.GetChannelIDsRetrieved()...)
+		output.GlobalSealedSegmentIDs = append(output.GlobalSealedSegmentIDs, chunk.GetGlobalSealedSegmentIDs()...)
+		output.AllRetrieveCount += chunk.GetAllRetrieveCount()
+		output.HasMoreResult = output.GetHasMoreResult() || chunk.GetHasMoreResult()
+		output.ScannedRemoteBytes += chunk.GetScannedRemoteBytes()
+		output.ScannedTotalBytes += chunk.GetScannedTotalBytes()
+		output.FeatureBits |= chunk.GetFeatureBits()
+		output.MvccTimestamp = max(output.GetMvccTimestamp(), chunk.GetMvccTimestamp())
+		if cost := chunk.GetCostAggregation(); cost != nil {
+			totalRelatedDataSize := output.GetCostAggregation().GetTotalRelatedDataSize() + cost.GetTotalRelatedDataSize()
+			if output.GetCostAggregation() == nil || output.GetCostAggregation().GetResponseTime() < cost.GetResponseTime() {
+				output.CostAggregation = proto.Clone(cost).(*internalpb.CostAggregation)
+			}
+			output.CostAggregation.TotalRelatedDataSize = totalRelatedDataSize
+		}
+	}
+	return output, nil
+}
+
+// IsInternalTask identifies synthesized reads, including search-by-primary-key
+// lookups that are scheduler tasks but not requery subtasks.
+func (t *QueryTask) IsInternalTask() bool { return t.internalTask || t.reQuery }
+
 func (t *QueryTask) IsSubTask() bool {
 	return t.reQuery
 }
 
-func (t *QueryTask) queryShard(ctx context.Context, nodeID int64, qn types.QueryNodeClient, channel string) error {
-	ctx = retry.WithMaxAttemptsContext(ctx, 1)
+// shardRequest builds the per-shard request queryShard and materializeShard
+// send; skip is true when fastSkip leaves this channel out.
+func (t *QueryTask) shardRequest(nodeID int64, channel string) (req *querypb.QueryRequest, skip bool) {
 	needOverrideMvcc := false
 	mvccTs := t.MvccTimestamp
 	if len(t.channelsMvcc) > 0 {
 		mvccTs, needOverrideMvcc = t.channelsMvcc[channel]
 		// In fast mode, if there is no corresponding channel in channelsMvcc, quickly skip this query.
 		if !needOverrideMvcc && t.fastSkip {
-			return nil
+			return nil, true
 		}
 	}
 
@@ -1236,10 +1554,18 @@ func (t *QueryTask) queryShard(ctx context.Context, nodeID int64, qn types.Query
 		retrieveReq.GuaranteeTimestamp = mvccTs
 	}
 	retrieveReq.ConsistencyLevel = t.ConsistencyLevel
-	req := &querypb.QueryRequest{
+	return &querypb.QueryRequest{
 		Req:         retrieveReq,
 		DmlChannels: []string{channel},
 		Scope:       querypb.DataScope_All,
+	}, false
+}
+
+func (t *QueryTask) queryShard(ctx context.Context, nodeID int64, qn types.QueryNodeClient, channel string) error {
+	ctx = retry.WithMaxAttemptsContext(ctx, 1)
+	req, skip := t.shardRequest(nodeID, channel)
+	if skip {
+		return nil
 	}
 
 	log := mlog.With(mlog.Int64("collection", t.GetCollectionID()),
@@ -1248,32 +1574,55 @@ func (t *QueryTask) queryShard(ctx context.Context, nodeID int64, qn types.Query
 		mlog.String("channel", channel))
 
 	result, err := qn.Query(ctx, req)
-	if err != nil {
-		log.Warn(ctx, "QueryNode query return error", mlog.Err(err))
-		t.shardclientMgr.InvalidateShardLeaderCache([]int64{t.GetCollectionID()})
+	if err := t.shardReplyError(ctx, log, "Query", nodeID, result.GetStatus(), err); err != nil {
 		return err
-	}
-	if result.GetStatus().GetErrorCode() == commonpb.ErrorCode_NotShardLeader {
-		log.Warn(ctx, "QueryNode is not shardLeader")
-		t.shardclientMgr.InvalidateShardLeaderCache([]int64{t.GetCollectionID()})
-		return merr.Error(result.GetStatus())
-	}
-	if result.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
-		log.Warn(ctx, "QueryNode query result error", mlog.Any("errorCode", result.GetStatus().GetErrorCode()), mlog.String("reason", result.GetStatus().GetReason()))
-		statusErr := merr.Error(result.GetStatus())
-		if errors.Is(statusErr, merr.ErrCollectionNotLoaded) {
-			t.shardclientMgr.InvalidateShardLeaderCache([]int64{t.GetCollectionID()})
-		}
-		return errors.Wrapf(statusErr, "fail to Query on QueryNode %d", nodeID)
 	}
 
 	log.Debug(ctx, "get query result")
 	t.resultBuf.Insert(result)
-	if t.actualChannelsMvcc != nil {
-		t.actualChannelsMvcc.Insert(channel, result.GetMvccTimestamp())
-	}
-	t.lb.UpdateCostMetrics(nodeID, result.CostAggregation)
+	t.shardDone(nodeID, channel, result.GetMvccTimestamp(), result.GetCostAggregation())
 	return nil
+}
+
+// shardReplyError returns the error a shard's reply fails the shard with,
+// nil for a successful one: err, the call's, or the reply's status. It
+// invalidates the shard leader cache where the failure says the cached
+// leader may be stale. rpc names the call (Query, Materialize).
+func (t *QueryTask) shardReplyError(ctx context.Context, log *mlog.Logger, rpc string, nodeID int64, status *commonpb.Status, err error) error {
+	if err != nil {
+		log.Warn(ctx, "QueryNode query return error", mlog.String("rpc", rpc), mlog.Err(err))
+		// A request that was canceled fails here for that reason alone; the
+		// shard leader cache is still valid. A timed-out request keeps the
+		// previous behavior and invalidates it.
+		if !merr.IsCanceled(ctx.Err()) {
+			t.shardclientMgr.InvalidateShardLeaderCache([]int64{t.GetCollectionID()})
+		}
+		return err
+	}
+	if status.GetErrorCode() == commonpb.ErrorCode_NotShardLeader {
+		log.Warn(ctx, "QueryNode is not shardLeader", mlog.String("rpc", rpc))
+		t.shardclientMgr.InvalidateShardLeaderCache([]int64{t.GetCollectionID()})
+		return merr.Error(status)
+	}
+	if status.GetErrorCode() != commonpb.ErrorCode_Success {
+		log.Warn(ctx, "QueryNode query result error", mlog.String("rpc", rpc),
+			mlog.Any("errorCode", status.GetErrorCode()), mlog.String("reason", status.GetReason()))
+		statusErr := merr.Error(status)
+		if errors.Is(statusErr, merr.ErrCollectionNotLoaded) {
+			t.shardclientMgr.InvalidateShardLeaderCache([]int64{t.GetCollectionID()})
+		}
+		return merr.Wrapf(statusErr, "fail to %s on QueryNode %d", rpc, nodeID)
+	}
+	return nil
+}
+
+// shardDone applies a shard's successful reply's side effects: the channel's
+// MVCC timestamp and the node's cost.
+func (t *QueryTask) shardDone(nodeID int64, channel string, mvcc uint64, cost *internalpb.CostAggregation) {
+	if t.actualChannelsMvcc != nil {
+		t.actualChannelsMvcc.Insert(channel, mvcc)
+	}
+	t.lb.UpdateCostMetrics(nodeID, cost)
 }
 
 // IDs2Expr converts ids slices to bool expresion with specified field name
@@ -1459,5 +1808,12 @@ func (t *QueryTask) OnEnqueue() error {
 	}
 	t.Base.MsgType = commonpb.MsgType_Retrieve
 	t.Base.SourceID = paramtable.GetNodeID()
+	return nil
+}
+
+func viewQueryClientFromNode(node taskmodel.TaskNode) queryclient.Client {
+	if provider, ok := node.(interface{ ViewQueryClient() queryclient.Client }); ok {
+		return provider.ViewQueryClient()
+	}
 	return nil
 }

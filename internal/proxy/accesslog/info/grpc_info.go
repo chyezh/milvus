@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"path"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -55,6 +54,7 @@ type GrpcAccessInfo struct {
 
 	// runtime set info
 	actualConsistencyLevel atomic.Pointer[commonpb.ConsistencyLevel]
+	coldSearchInfo
 }
 
 func NewGrpcAccessInfo(ctx context.Context, grpcInfo *grpc.UnaryServerInfo, req interface{}) *GrpcAccessInfo {
@@ -217,11 +217,11 @@ func (i *GrpcAccessInfo) respStatus() *commonpb.Status {
 
 func (i *GrpcAccessInfo) ErrorMsg() string {
 	if i.err != nil {
-		return strings.ReplaceAll(i.err.Error(), "\n", "\\n")
+		return i.err.Error()
 	}
 
 	if status := i.respStatus(); status != nil {
-		return strings.ReplaceAll(status.GetReason(), "\n", "\\n")
+		return status.GetReason()
 	}
 
 	return Unknown
@@ -268,6 +268,9 @@ func (i *GrpcAccessInfo) CollectionName() string {
 		// rename references both the source and target collection
 		return fmt.Sprintf("%s->%s", req.GetOldName(), req.GetNewName())
 	case *milvuspb.BatchDescribeCollectionRequest:
+		if len(req.GetCollectionName()) == 0 && len(req.GetCollectionID()) > 0 {
+			return fmt.Sprint(req.GetCollectionID())
+		}
 		return fmt.Sprint(req.GetCollectionName())
 	}
 
@@ -351,12 +354,17 @@ func (i *GrpcAccessInfo) AnnsField() string {
 }
 
 func (i *GrpcAccessInfo) NQ() string {
+	// Not req.GetNq(): a request that does not declare nq only gets the field
+	// filled by the search task, so the line of a request refused before the
+	// task (rate limit, privilege, unknown collection) would show 0.
 	if req, ok := i.req.(*milvuspb.SearchRequest); ok {
-		return fmt.Sprint(req.GetNq())
+		return fmt.Sprint(requestutil.SearchRequestNq(req))
 	}
 
 	if req, ok := i.req.(*milvuspb.HybridSearchRequest); ok {
-		return listToString(lo.Map(req.GetRequests(), func(req *milvuspb.SearchRequest, _ int) string { return fmt.Sprint(req.GetNq()) }))
+		return listToString(lo.Map(req.GetRequests(), func(req *milvuspb.SearchRequest, _ int) string {
+			return fmt.Sprint(requestutil.SearchRequestNq(req))
+		}))
 	}
 	return Unknown
 }

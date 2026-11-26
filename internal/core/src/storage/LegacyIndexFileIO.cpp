@@ -34,6 +34,7 @@
 #include "folly/OperationCancelled.h"
 #include "folly/coro/AsyncScope.h"
 #include "folly/coro/Collect.h"
+#include "folly/coro/CurrentExecutor.h"
 #include "milvus-storage/common/extend_status.h"
 #include "monitor/Monitor.h"
 #include "storage/DataCodec.h"
@@ -402,8 +403,9 @@ InspectLegacyIndexFileImpl(milvus::InputStream& input,
                            proto::common::LoadPriority priority,
                            folly::CancellationToken token,
                            bool use_async) {
-    token = folly::cancellation_token_merge(
-        token, co_await folly::coro::co_current_cancellation_token);
+    const auto caller_token =
+        co_await folly::coro::co_current_cancellation_token;
+    token = folly::cancellation_token_merge(token, caller_token);
     LoadAdmissionLease inspection_lease;
     if (use_async) {
         inspection_lease =
@@ -519,11 +521,14 @@ InspectLegacyIndexFileImpl(milvus::InputStream& input,
     co_return info;
 }
 
-std::unique_ptr<DataCodec>
-ReadLegacyIndexFile(ChunkManager& chunk_manager,
-                    const std::string& path,
-                    proto::common::LoadPriority priority,
-                    folly::CancellationToken token) {
+folly::coro::Task<std::unique_ptr<DataCodec>>
+ReadLegacyIndexFileAsync(ChunkManager& chunk_manager,
+                         const std::string& path,
+                         proto::common::LoadPriority priority,
+                         folly::CancellationToken token) {
+    const auto caller_token =
+        co_await folly::coro::co_current_cancellation_token;
+    token = folly::cancellation_token_merge(token, caller_token);
     ThrowIfCancelled(token, "LegacyIndexFileIO::Download");
     const auto size = chunk_manager.Size(path);
     CheckFormat(
@@ -535,20 +540,23 @@ ReadLegacyIndexFile(ChunkManager& chunk_manager,
                 "short object read");
     ThrowIfCancelled(token, "LegacyIndexFileIO::Download");
     milvus::MemoryInputStream input(buffer.get(), size);
-    const auto info = folly::coro::blockingWait(
-        InspectLegacyIndexFileImpl(input, priority, token, false));
+    const auto info =
+        co_await InspectLegacyIndexFileImpl(input, priority, token, false);
     auto codec = DeserializeFileData(
         buffer, size, true, std::nullopt, info.payload_bytes);
     ThrowIfCancelled(token, "LegacyIndexFileIO::Decode");
-    return codec;
+    co_return codec;
 }
 
-LegacyIndexFileInfo
-InspectLegacyIndexFile(const ChunkManagerPtr& chunk_manager,
-                       const milvus_storage::ArrowFileSystemPtr& fs,
-                       const std::string& path,
-                       proto::common::LoadPriority priority,
-                       folly::CancellationToken token) {
+folly::coro::Task<LegacyIndexFileInfo>
+InspectLegacyIndexFileSyncAsync(const ChunkManagerPtr& chunk_manager,
+                                const milvus_storage::ArrowFileSystemPtr& fs,
+                                const std::string& path,
+                                proto::common::LoadPriority priority,
+                                folly::CancellationToken token) {
+    const auto caller_token =
+        co_await folly::coro::co_current_cancellation_token;
+    token = folly::cancellation_token_merge(token, caller_token);
     ThrowIfCancelled(token, "LegacyIndexFileIO::Inspect");
     std::unique_ptr<milvus::InputStream> input;
     if (ReadsThroughChunkManager(fs)) {
@@ -562,8 +570,27 @@ InspectLegacyIndexFile(const ChunkManagerPtr& chunk_manager,
         }
         input = std::make_unique<RemoteInputStream>(std::move(*opened));
     }
+    co_return co_await InspectLegacyIndexFileImpl(
+        *input, priority, std::move(token), false);
+}
+
+std::unique_ptr<DataCodec>
+ReadLegacyIndexFile(ChunkManager& manager,
+                    const std::string& path,
+                    proto::common::LoadPriority priority,
+                    folly::CancellationToken token) {
     return folly::coro::blockingWait(
-        InspectLegacyIndexFileImpl(*input, priority, std::move(token), false));
+        ReadLegacyIndexFileAsync(manager, path, priority, token));
+}
+
+LegacyIndexFileInfo
+InspectLegacyIndexFile(const ChunkManagerPtr& manager,
+                       const milvus_storage::ArrowFileSystemPtr& fs,
+                       const std::string& path,
+                       proto::common::LoadPriority priority,
+                       folly::CancellationToken token) {
+    return folly::coro::blockingWait(
+        InspectLegacyIndexFileSyncAsync(manager, fs, path, priority, token));
 }
 
 folly::coro::Task<LegacyIndexFileInfo>
@@ -760,6 +787,9 @@ InspectLegacyIndexFilesAsync(std::span<const std::string> files,
     infos->reserve(files.size());
     auto inspect = [&](const std::string& path,
                        LegacyIndexFileInfo& info) -> folly::coro::Task<void> {
+        // GCC can retain transfer frames under ASAN or low optimization;
+        // yield so immediately completed inspections cannot grow the stack.
+        co_await folly::coro::co_reschedule_on_current_executor;
         auto input = co_await OpenLegacyIndexInputAsync(
             chunk_manager, fs, path, priority);
         info = co_await InspectLegacyIndexFileAsync(*input, priority, token);

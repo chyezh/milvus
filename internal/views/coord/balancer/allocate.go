@@ -11,10 +11,12 @@ import (
 )
 
 type allocationResult struct {
-	builder     *qviews.QueryViewAtCoordBuilder
-	assignments map[int64]int64
-	rowsByNode  map[int64]int64
-	more        bool
+	collectionID int64
+	shard        *ShardDataView
+	entries      []*SegmentDataView
+	assignments  map[int64]int64
+	rowsByNode   map[int64]int64
+	more         bool
 }
 
 // allocate produces a complete candidate for shardID against the supplied
@@ -110,21 +112,34 @@ func allocate(p *planningContext, shardID qviews.ShardID, baseRows map[int64]int
 			}
 		}
 	}
+	return &allocationResult{collectionID: desired.CollectionID, shard: shard, entries: entries, assignments: ctx.assignments, rowsByNode: ctx.rows, more: more}
+}
+
+// materialize is called only for submitted candidates. The private sorted slice
+// retains immutable segment metadata; no native DataView protobuf is needed.
+func (r *allocationResult) materialize(p *planningContext, shardID qviews.ShardID) *qviews.QueryViewAtCoordBuilder {
 	assignments := make(map[int64]map[int64][]int64)
-	for _, segment := range entries {
-		node := ctx.assignments[segment.SegmentID]
+	manifests := make(map[int64]int64, len(r.entries))
+	for _, segment := range r.entries {
+		node := r.assignments[segment.SegmentID]
 		if assignments[node] == nil {
 			assignments[node] = make(map[int64][]int64)
 		}
 		assignments[node][segment.PartitionID] = append(assignments[node][segment.PartitionID], segment.SegmentID)
+		manifests[segment.SegmentID] = segment.ManifestVersion
 	}
-	dataVersion, _ := p.DataVersionForCollection(desired.CollectionID)
-	dataView := syntheticDataView(desired, dataVersion, shard)
-	dataView.SchemaVersion = p.SchemaVersion(desired.CollectionID)
-	builder := qviews.NewQueryViewAtCoordBuilder(shardID.ReplicaID, dataView, shardID.VChannel)
-	builder.SetAssignments(assignments)
-	builder.SetLoadInfoVersion(p.ConfigVersion(desired.CollectionID))
-	return &allocationResult{builder: builder, assignments: ctx.assignments, rowsByNode: ctx.rows, more: more}
+	stats := make(map[int64]int64, len(r.shard.Partitions))
+	for _, partition := range r.shard.Partitions {
+		stats[partition.PartitionID] = partition.PartitionStatsVersion
+	}
+	dataVersion, _ := p.DataVersionForCollection(r.collectionID)
+	return qviews.NewQueryViewAtCoordBuilderFromMetadata(shardID, qviews.QueryViewBuilderMetadata{
+		CollectionID: r.collectionID, DataVersion: dataVersion,
+		SchemaVersion:               p.SchemaVersion(r.collectionID),
+		TransformStartAfterTimetick: r.shard.TransformStartAfterTimetick(),
+		SegmentManifestVersions:     manifests, PartitionStatsVersions: stats,
+	}).SetAssignments(assignments).SetLoadInfoVersion(p.ConfigVersion(r.collectionID)).
+		SetPreparationPriority(p.preparationPriority(shardID))
 }
 
 // currentSegmentNodes returns the selected intended placement, preferring a
@@ -172,18 +187,21 @@ func shardDataViewToProto(shard *ShardDataView) *viewpb.DataViewOfShard {
 		return nil
 	}
 	protoShard := &viewpb.DataViewOfShard{
-		Vchannel:                    shard.VChannel,
-		TransformStartAfterTimetick: shard.TransformStartAfterTimetick(),
-		Partitions:                  make([]*viewpb.DataViewOfPartition, 0, len(shard.Partitions)),
+		Vchannel:                             shard.VChannel,
+		GrowingTransformStartAfterTimetick:   shard.GrowingTransformStartAfterTimetick,
+		CompactedTransformStartAfterTimetick: shard.CompactedTransformStartAfterTimetick,
+		Partitions:                           make([]*viewpb.DataViewOfPartition, 0, len(shard.Partitions)),
 	}
 	for _, partition := range shard.Partitions {
 		protoPartition := &viewpb.DataViewOfPartition{
-			PartitionId: partition.PartitionID,
-			SegmentIds:  make([]int64, 0, len(partition.Segments)),
+			PartitionStatsVersion: partition.PartitionStatsVersion,
+			PartitionId:           partition.PartitionID,
+			SegmentIds:            make([]int64, 0, len(partition.Segments)),
 		}
 		for _, segment := range partition.Segments {
 			protoPartition.SegmentIds = append(protoPartition.SegmentIds, segment.SegmentID)
 			protoPartition.SegmentManifestVersions = append(protoPartition.SegmentManifestVersions, segment.ManifestVersion)
+			protoPartition.SegmentTransformStartAfterTimeticks = append(protoPartition.SegmentTransformStartAfterTimeticks, segment.TransformStartAfterTimetick)
 		}
 		protoShard.Partitions = append(protoShard.Partitions, protoPartition)
 	}

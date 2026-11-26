@@ -59,7 +59,7 @@ var (
 			segmentLevelLabelName,
 		})
 
-	DataNodeWriteDataCount = prometheus.NewCounterVec(
+	DataNodeWriteDataCount = newCollectionCounterVec(
 		prometheus.CounterOpts{
 			Namespace: milvusNamespace,
 			Subsystem: typeutil.DataNodeRole,
@@ -93,7 +93,7 @@ var (
 			nodeIDLabelName,
 		})
 
-	DataNodeConsumeTimeTickLag = prometheus.NewGaugeVec(
+	DataNodeConsumeTimeTickLag = newCollectionGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: milvusNamespace,
 			Subsystem: typeutil.DataNodeRole,
@@ -103,9 +103,9 @@ var (
 			nodeIDLabelName,
 			msgTypeLabelName,
 			collectionIDLabelName,
-		})
+		}, collectionGaugeAggregateDisabled)
 
-	DataNodeConsumeMsgCount = prometheus.NewCounterVec(
+	DataNodeConsumeMsgCount = newCollectionCounterVec(
 		prometheus.CounterOpts{
 			Namespace: milvusNamespace,
 			Subsystem: typeutil.DataNodeRole,
@@ -141,7 +141,7 @@ var (
 			segmentLevelLabelName,
 		})
 
-	DataNodeGrowingSourceSyncFailureCount = prometheus.NewGaugeVec(
+	DataNodeGrowingSourceSyncFailureCount = newCollectionVChannelGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: milvusNamespace,
 			Subsystem: typeutil.DataNodeRole,
@@ -151,7 +151,7 @@ var (
 			nodeIDLabelName,
 			collectionIDLabelName,
 			channelNameLabelName,
-		})
+		}, collectionGaugeAggregateDisabled)
 
 	DataNodeAutoFlushBufferCount = prometheus.NewCounterVec( // TODO: arguably
 		prometheus.CounterOpts{
@@ -218,7 +218,7 @@ var (
 			Buckets:   buckets, // unit: ms
 		}, []string{nodeIDLabelName})
 
-	DataNodeFlowGraphBufferDataSize = prometheus.NewGaugeVec(
+	DataNodeFlowGraphBufferDataSize = newCollectionGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: milvusNamespace,
 			Subsystem: typeutil.DataNodeRole,
@@ -227,9 +227,9 @@ var (
 		}, []string{
 			nodeIDLabelName,
 			collectionIDLabelName,
-		})
+		}, collectionGaugeAggregateSum)
 
-	DataNodeMsgDispatcherTtLag = prometheus.NewGaugeVec(
+	DataNodeMsgDispatcherTtLag = newVChannelGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: milvusNamespace,
 			Subsystem: typeutil.DataNodeRole,
@@ -238,9 +238,9 @@ var (
 		}, []string{
 			nodeIDLabelName,
 			channelNameLabelName,
-		})
+		}, collectionGaugeAggregateDisabled)
 
-	DataNodeCompactionDeleteCount = prometheus.NewCounterVec(
+	DataNodeCompactionDeleteCount = newCollectionCounterVec(
 		prometheus.CounterOpts{
 			Namespace: milvusNamespace,
 			Subsystem: typeutil.DataNodeRole,
@@ -248,7 +248,7 @@ var (
 			Help:      "Number of delete entries in compaction",
 		}, []string{collectionIDLabelName})
 
-	DataNodeCompactionMissingDeleteCount = prometheus.NewCounterVec(
+	DataNodeCompactionMissingDeleteCount = newCollectionCounterVec(
 		prometheus.CounterOpts{
 			Namespace: milvusNamespace,
 			Subsystem: typeutil.DataNodeRole,
@@ -431,6 +431,14 @@ var (
 			Help:      "latency of import v3 reshard phases",
 			Buckets:   indexBucket,
 		}, []string{nodeIDLabelName, "stage"})
+
+	DataNodeTaskResource = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: milvusNamespace,
+			Subsystem: typeutil.DataNodeRole,
+			Name:      "task_resource",
+			Help:      "total and available cpu (cores) and memory (bytes) for coordinator-dispatched tasks",
+		}, []string{nodeIDLabelName, "type", "state"})
 )
 
 // DataNode pool metric descriptors (used by dataNodePoolMetricsCollector).
@@ -547,6 +555,7 @@ func registerDataNodeOnce(registry *prometheus.Registry) {
 	registry.MustRegister(DataNodeImportV3ReshardBytes)
 	registry.MustRegister(DataNodeImportV3ReshardRows)
 	registry.MustRegister(DataNodeImportV3ReshardStageLatency)
+	registry.MustRegister(DataNodeTaskResource)
 	registry.MustRegister(&dataNodePoolMetricsCollector{})
 	// DataNode runs the C++ core (index build / analyze via cgo), so it produces
 	// segcore errors too; register the cgo metrics here so UnmappedSegcoreCodeTotal

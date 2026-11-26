@@ -100,6 +100,10 @@ typedef struct CStorageConfig {
     uint32_t talon_block_size;
     uint32_t talon_max_idle_per_addr;
     bool talon_enable_for_external_table;
+    uint32_t crt_queue_sizes;
+    // Milvus-only stage mask; zero from older initializers means all stages.
+    uint32_t talon_enabled_stages;
+    const char* talon_namespace;
 } CStorageConfig;
 
 typedef struct CDiskWriteRateLimiterConfig {

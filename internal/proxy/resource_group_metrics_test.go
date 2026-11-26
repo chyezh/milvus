@@ -21,8 +21,6 @@ import (
 	"testing"
 
 	"github.com/bytedance/mockey"
-	"github.com/prometheus/client_golang/prometheus"
-	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -32,57 +30,7 @@ import (
 	"github.com/milvus-io/milvus/internal/proxy/taskmodel"
 	"github.com/milvus-io/milvus/internal/util/hookutil"
 	"github.com/milvus-io/milvus/pkg/v3/extension"
-	"github.com/milvus-io/milvus/pkg/v3/metrics"
-	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
-
-func TestObserveResourceGroupSQLatencyEmitsNoSeriesForAnUnscopedRequest(t *testing.T) {
-	paramtable.Init()
-	metrics.ProxyResourceGroupSQLatency.Reset()
-
-	observeResourceGroupSQLatency(context.Background(), metrics.SearchLabel, "db", "coll", 12)
-
-	assert.Equal(t, 0, collectSeries(t, metrics.ProxyResourceGroupSQLatency),
-		"a request nothing scoped to a resource group must leave no per-resource-group series")
-}
-
-func TestObserveResourceGroupSQLatencyAttributesToTheScopeRoutingUsed(t *testing.T) {
-	paramtable.Init()
-	metrics.ProxyResourceGroupSQLatency.Reset()
-
-	ctx := extension.WithQueryResourceGroup(context.Background(), "rg-a")
-	observeResourceGroupSQLatency(ctx, metrics.SearchLabel, "db", "coll", 17)
-
-	h, err := metrics.ProxyResourceGroupSQLatency.GetMetricWithLabelValues(
-		paramtable.GetStringNodeID(), metrics.SearchLabel, "db", "coll", "rg-a")
-	require.NoError(t, err)
-	assert.Equal(t, uint64(1), histogramCount(t, h),
-		"the completed search must land in the series of the resource group that served it")
-	assert.Equal(t, 1, collectSeries(t, metrics.ProxyResourceGroupSQLatency))
-}
-
-func collectSeries(t *testing.T, c prometheus.Collector) int {
-	t.Helper()
-	ch := make(chan prometheus.Metric, 64)
-	go func() {
-		c.Collect(ch)
-		close(ch)
-	}()
-	n := 0
-	for range ch {
-		n++
-	}
-	return n
-}
-
-func histogramCount(t *testing.T, o prometheus.Observer) uint64 {
-	t.Helper()
-	m, ok := o.(prometheus.Metric)
-	require.True(t, ok, "a histogram child must also be a Metric")
-	var pb dto.Metric
-	require.NoError(t, m.Write(&pb))
-	return pb.GetHistogram().GetSampleCount()
-}
 
 // scopingHook is a request hook that pins every request to one resource group
 // from Before, the way a deployment that routes queries per resource group

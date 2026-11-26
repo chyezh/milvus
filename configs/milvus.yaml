@@ -84,6 +84,12 @@ tikv:
     tlsCert:  # path to your cert file
     tlsKey:  # path to your key file
     tlsCACert:  # path to your CACert file
+  gc:
+    # Whether MixCoord advances the GC safe point of the TiKV cluster, so that TiKV reclaims old versions of metadata keys.
+    # Enable it only on a dedicated TiKV cluster whose garbage collection is managed by Milvus.
+    enabled: false
+    lifeTime: 600 # seconds, how long TiKV keeps an overwritten or deleted version of a metadata key. A transaction that lasts longer fails.
+    interval: 600 # seconds, how often MixCoord advances the TiKV GC safe point
 
 localStorage:
   # Local path to where vector data are stored during a search or a query to avoid repetitve access to MinIO or S3 service.
@@ -145,12 +151,10 @@ minio:
   # aliyun (ecs): https://www.alibabacloud.com/help/en/elastic-compute-service/latest/attach-an-instance-ram-role
   useIAM: false
   # Cloud Provider of S3. Supports: "aws", "gcp", "aliyun".
-  # Cloud Provider of Google Cloud Storage. Supports: "gcpnative".
   # You can use "aws" for other cloud provider supports S3 API with signature v4, e.g.: minio
   # You can use "gcp" for other cloud provider supports S3 API with signature v2
   # You can use "aliyun" for other cloud provider uses virtual host style bucket
-  # You can use "gcpnative" for the Google Cloud Platform provider. Uses service account credentials
-  # for authentication.
+  # The legacy "gcpnative" provider is not supported by C++ storage.
   # When useIAM enabled, only "aws", "gcp", "aliyun" is supported for now
   cloudProvider: aws
   # The JSON content contains the gcs service account credentials.
@@ -163,6 +167,7 @@ minio:
   region:  # Specify minio storage system location region
   useVirtualHost: false # Whether use virtual host mode for bucket. WARNING: For Aliyun OSS and Tencent COS, this parameter is useless and is set to true by default
   requestTimeoutMs: 10000 # minio timeout for request time in milliseconds
+  crt_queue_sizes: 125 # S3 CRT queue sizes, converted to the SDK throughput target as value * 0.4 Gbps. Requires restart.
   # The maximum number of objects requested per batch in minio ListObjects rpc, 
   # 0 means using oss client by default, decrease these configuration if ListObjects timeout
   listObjectsMaxKeys: 0
@@ -319,7 +324,7 @@ woodpecker:
       conditionWrite: auto
   storage:
     type: minio # The Type of the storage provider. Valid values: [minio, local, service]
-    rootPath: default # The root path of the storage provider. If set to 'default', uses localStorage.path as base directory and creates a woodpecker subdirectory. Otherwise, specifies a custom woodpecker data storage directory.
+    rootPath: default # With 'default', the root is localStorage.path/wp. For embedded local storage, provision localStorage.path and Milvus creates its wp subdirectory. Provision an explicitly configured local root before startup.
 
 # Related configuration of pulsar, used to manage Milvus logs of recent mutation operations, output streaming log, and provide log publish-subscribe services.
 pulsar:
@@ -450,6 +455,11 @@ proxy:
   # Keep this enabled until chunk writing is enabled and observed on every StreamingNode that can own a pchannel.
   # For migration, enable streaming.splitChunkSN first, then disable proxy.splitChunk. Both parameters support live refresh.
   splitChunk: true
+  exprParseCache:
+    enabled: true # Enable caching expression parse trees and parsing errors. These settings apply to all components using the expression parser, not only Proxy; each process maintains its own cache. Restart required; disabling the cache does not reject expressions.
+    maxEntries: 1024 # Maximum number of cached expression parse trees and parsing errors per process. Non-positive or invalid values use 1024. Entries retain the existing 10-minute TTL. Restart required.
+    maxBytes: 67108864 # Maximum aggregate retained byte budget of cached expression parse trees and parsing errors per process. Non-positive or invalid values use 67108864 (64 MiB). Entries retain the existing maxEntries and 10-minute TTL bounds. Restart required.
+    maxEntryBytes: 8388608 # Maximum estimated retained byte cost for a single expression parse cache entry. Non-positive or invalid values use 8388608 (8 MiB), clamped to proxy.exprParseCache.maxBytes. Larger expressions still parse normally without being cached. Restart required.
   timeTickInterval: 200 # The interval at which proxy synchronizes the time tick, unit: ms.
   healthCheckTimeout: 3000 # ms, the interval that to do component healthy check
   msgStream:
@@ -473,6 +483,7 @@ proxy:
   roleNameValidation:
     allowedChars: $ # Additional characters allowed in role names beyond underscores, letters and numbers. Add '-' to allow hyphens in role names.
   maxTaskNum: 1024 # The maximum number of tasks in the task queue of the proxy.
+  enableAutoLoad: false # whether to automatically load an unloaded collection before DQL requests and before writes that read existing rows
   ddlConcurrency: 16 # The concurrent execution number of DDL at proxy.
   dclConcurrency: 16 # The concurrent execution number of DCL at proxy.
   mustUsePartitionKey: false # switch for whether proxy must use partition key for the collection
@@ -502,14 +513,14 @@ proxy:
       base:
         format: "[$time_now] [ACCESS] <$user_name: $user_addr> $method_name [status: $method_status] [code: $error_code] [sdk: $sdk_version] [msg: $error_msg] [traceID: $trace_id] [timeCost: $time_cost] [error_type: $error_type]"
       query:
-        format: "[$time_now] [ACCESS] <$user_name: $user_addr> $method_name [status: $method_status] [code: $error_code] [sdk: $sdk_version] [msg: $error_msg] [traceID: $trace_id] [timeCost: $time_cost] [database: $database_name] [collection: $collection_name] [partitions: $partition_name] [expr: $method_expr] [params: $query_params] [error_type: $error_type]"
-        methods: "Query, Delete, /query, /v2/vectordb/entities/query, /v2/vectordb/entities/get, /v2/vectordb/entities/delete"
+        format: "[$time_now] [ACCESS] <$user_name: $user_addr> $method_name [status: $method_status] [code: $error_code] [sdk: $sdk_version] [msg: $error_msg] [traceID: $trace_id] [timeCost: $time_cost] [database: $database_name] [collection: $collection_name] [partitions: $partition_name] [expr: $method_expr] [params: $query_params] [error_type: $error_type] [is_cold_search: $is_cold_search]"
+        methods: "Query, Delete, /query, /v1/vector/query, /v1/vector/get, /v2/vectordb/entities/query, /v2/vectordb/entities/get, /v2/vectordb/entities/delete"
       search:
-        format: "[$time_now] [ACCESS] <$user_name: $user_addr> $method_name [status: $method_status] [code: $error_code] [sdk: $sdk_version] [msg: $error_msg] [traceID: $trace_id] [timeCost: $time_cost] [database: $database_name] [collection: $collection_name] [partitions: $partition_name] [expr: $method_expr] [nq: $nq] [params: $search_params] [error_type: $error_type]"
-        methods: "HybridSearch, Search, /search, /v2/vectordb/entities/search, /v2/vectordb/entities/advanced_search, /v2/vectordb/entities/hybrid_search"
+        format: "[$time_now] [ACCESS] <$user_name: $user_addr> $method_name [status: $method_status] [code: $error_code] [sdk: $sdk_version] [msg: $error_msg] [traceID: $trace_id] [timeCost: $time_cost] [database: $database_name] [collection: $collection_name] [partitions: $partition_name] [expr: $method_expr] [nq: $nq] [params: $search_params] [error_type: $error_type] [is_cold_search: $is_cold_search]"
+        methods: "HybridSearch, Search, /search, /v1/vector/search, /v2/vectordb/entities/search, /v2/vectordb/entities/advanced_search, /v2/vectordb/entities/hybrid_search"
       upsert:
         format: "[$time_now] [ACCESS] <$user_name: $user_addr> $method_name [status: $method_status] [code: $error_code] [sdk: $sdk_version] [msg: $error_msg] [traceID: $trace_id] [timeCost: $time_cost] [database: $database_name] [collection: $collection_name] [partitions: $partition_name] [partial_update: $partial_update] [error_type: $error_type]"
-        methods: Upsert
+        methods: "Upsert, /v2/vectordb/entities/upsert"
     cacheSize: 0 # Size of log of write cache, in byte. (Close write cache if size was 0)
     cacheFlushInterval: 3 # time interval of auto flush write cache, in seconds. (Close auto flush if interval was 0)
   connectionCheckIntervalSeconds: 120 # the interval time(in seconds) for connection manager to scan inactive client info
@@ -519,6 +530,9 @@ proxy:
   slowQuerySpanInSeconds: 1 # threshold for slow query detection in seconds. For Search/HybridSearch requests, the time is divided by nq for more accurate per-query measurement. Triggers slow log, WebUI display, and metrics.
   queryNodePooling:
     size: 10 # the size for shardleader(querynode) client pool
+  queryView:
+    enableReduceStream: true # Refreshable. Route supported new requests through Streaming Reduce.
+    reduceStreamChunkBytes: 262144 # Refreshable. Reducible-payload byte threshold captured once per request. Invalid or non-positive values use the default of 262144 bytes.
   partialResultRequiredDataRatio: 1 # partial result required data ratio, default to 1 which means disable partial result, otherwise, it will be used as the minimum data ratio for partial result
   http:
     enabled: true # Whether to enable the http server
@@ -620,6 +634,14 @@ queryCoord:
   dispatchInterval: 500
   heartbeatAvailableInterval: 10000 # 10s, Only QueryNodes which fetched heartbeats within the duration are available
   loadTimeoutSeconds: 600
+  autoRelease:
+    enabled: false # whether QueryCoord releases collections after the configured time to idle (TTI) or under Worker QN memory pressure; effective only when proxy.enableAutoLoad is true
+    ttiSeconds: 3600
+    checkIntervalSeconds: 10
+    releaseConcurrency: 16 # maximum concurrent automatic collection releases per scan; runtime updates take effect on the next scan
+    lruHighWatermarkPercentage: 85 # Worker QueryNode pool anonymous resident memory percentage that starts collection LRU release; takes effect on the next scan
+    lruLowWatermarkPercentage: 80 # Worker QueryNode pool anonymous resident memory percentage that stops selecting collection LRU releases; must be below the high watermark
+    lruMaxEvictionsPerScan: 64 # maximum collection LRU releases selected per scan, independent of releaseConcurrency
   distRequestTimeout: 5000 # the request timeout for querycoord fetching data distribution from querynodes, in milliseconds
   heatbeatWarningLag: 5000 # the lag value for querycoord report warning when last heatbeat is too old, in milliseconds
   enableDataDistributionDelta: true # whether querycoord requests delta data distribution reports from querynodes
@@ -661,6 +683,8 @@ queryCoord:
 
 # Related configuration of queryNode, used to run hybrid search between vector and scalar data.
 queryNode:
+  queryView:
+    transformLogDrainConcurrencyRatio: 0.25 # QueryNode-wide TransformLog backlog drain worker count is max(1, floor(CPU count * ratio)). Updates existing worker pools dynamically.
   groupBy:
     strictGroupStrategy: per_group # Strict group completion strategy: original or per_group. Independent phase-one and refinement controls still apply to original.
     strictGroupPhase1CandidateWeight: 0 # Strict group phase-one consumer Next limit is topk * group_size * weight; zero disables truncation. Overflow saturates at INT64_MAX. Only group discovery is limited; completion is not. May reduce recall.
@@ -669,6 +693,7 @@ queryNode:
     publishInterval: 1000 # The interval that query node publishes the node statistics information, including segment status, cpu usage, memory usage, health status, etc. Unit: ms.
   segcore:
     knowhereThreadPoolNumRatio: 4 # The number of threads in knowhere's thread pool. If disk is enabled, the pool size will multiply with knowhereThreadPoolNumRatio([1, 32]).
+    searchFanoutPoolSizeRatio: 2 # Thread-to-core ratio for the search fanout pool; independent of the search executor and not limited by common.threadCoreCoefficient.maxThreadsSize. Invalid, non-positive, non-finite or overflowing values use the default ratio of 2.
     chunkRows: 128 # Row count by which Segcore divides a segment into chunks.
     interimIndex:
       # Whether to create a temporary index for growing segments and sealed segments not yet indexed, improving search performance.
@@ -731,14 +756,13 @@ queryNode:
       # If set to 0, time based eviction is disabled.
       cacheTtl: 0
       storageUsageTrackingEnabled: false # Enable storage usage tracking for Tiered Storage. Defaults to false.
+      lazyIndexSlotEnabled: false # When enabled, sealed scalar, vector, and text index translators and cache slots with warmup=disable are created on first access instead of segment load.
       lazyColumnGroupEnabled: false # When enabled, Storage V3 manifest fields with warmup=disable and no load-time side effects defer projected ChunkReader, translator, and cache creation until first access.
     knowhereScoreConsistency: false # Enable knowhere strong consistency score computation logic
+    chainPoolSizeFactor: 1 # size factor (CPUNum * factor) of the native function-chain pool; isolated from ordinary query field retrieval; values below 1 use 1
     mutatePoolSizeFactor: 2 # size factor (CPUNum * factor) of the online-write cgo pool for segment insert/delete; isolated from the load/management pool so segment loading cannot starve online writes
     dynamicPoolSizeFactor: 1 # size factor (CPUNum * factor) of the dynamic cgo pool for segment create/release/statistics/index-info
     deletePoolSizeFactor: 1 # size factor (CPUNum * factor) of the DeleteBatch dispatch pool
-    storageV2:
-      cellTargetSizeBytes: 4194304 # Target average byte size per storage v2 cache cell. Parquet row groups are greedily packed so that rgs_per_cell * avg_row_group_size ≈ this target. Each cell always contains at least one row group and cells never cross file boundaries. Tune larger for bigger batch IO (fewer cells) or smaller to get finer cache granularity. Default 4 MiB.
-      asyncLoadReadWindowSizeBytes: 16777216 # Target estimated loaded-byte threshold for one Storage V3 async read window. Each window contains at least one cell, so an oversized cell may exceed the threshold. The value must be positive. Default 16 MiB.
     deleteDumpBatchSize: 10000 # Batch size for delete snapshot dump in segcore.
   fmindexCostRatio: 0.001 # FM-index count-first guard threshold. An FMINDEX-accelerated LIKE (prefix/infix/suffix and general LIKE with interior wildcards) runs through the index only when occ * sa_sample_rate < fmindexCostRatio * total_tokens; otherwise it falls back to the raw-data scan (all paths are exact, this only picks the cheaper one). For the anchored forms the index answer is exact; for general LIKE it is candidate generation followed by an exact recheck of the candidate rows on the original VARCHAR data. The bound prices only FM locate, not the recheck bytes, so it stays row-length invariant only for the anchored forms; very long rows with unselective fragments may be routed to a path slower than the scan. Must be in (0, 1]; larger favors the index. Default 0.001 is the conservative crossover measured in benchmarks.
   loadMemoryUsageFactor: 1 # The multiply factor of calculating the memory usage while loading segments
@@ -788,7 +812,7 @@ queryNode:
     nqMergeRatio: 16 # Maximum ratio between merged total NQ and the smaller task NQ when grouping query node read tasks.
     maxDeadlineMergeGap: 50ms # Maximum allowed gap between task context deadlines when grouping query node read tasks. Tasks with only one deadline cannot be grouped. Set a negative duration to disable this check.
     topKMergeRatio: 20
-  standaloneMigrateDataTimeout: 10s # Duration string (e.g. 10s, 3m). In standalone mode, after this duration, the node stops waiting for data migration if no other active query node is available.
+  migrateDataTimeout: 10s # Duration string (e.g. 10s, 3m). After this duration, a stopping query node stops waiting for data migration if no other active query node is available.
   search:
     enableResultZeroCopy: false # When true, delegator passes reduced SearchResultData directly instead of re-marshaling to SlicedBlob. Toggle at runtime for instant fallback.
   levelZeroForwardPolicy: FilterByBF # delegator level zero deletion forward policy, possible option["FilterByBF", "RemoteLoad"]
@@ -858,33 +882,26 @@ dataCoord:
   segment:
     maxSize: 1024 # The maximum size of a segment, unit: MB. datacoord.segment.maxSize and datacoord.segment.sealProportion together determine if a segment can be sealed.
     diskSegmentMaxSize: 2048 # Maximum size of a segment in MB for collection which has Disk index
+    # The maximum number of rows in a segment, for every collection. Segments are sized in bytes (maxSize), but a
+    # segment of maxSize bytes of narrow rows can hold tens of millions of rows, and per-segment work such as building a
+    # scalar index or replaying deletes at load grows with the row count. A segment is therefore sealed, compacted and
+    # imported at maxSize bytes or maxRows rows, whichever comes first. A collection is affected when maxRows of its rows
+    # take less than its byte limit: rows narrower than 268 bytes with the default maxSize of 1024 MB, 537 bytes for a
+    # collection that uses diskSegmentMaxSize. maxRows is an absolute number of rows and does not follow maxSize, so a
+    # deployment that raises maxSize should raise maxRows in proportion to keep the same collections unaffected.
+    # 0 disables the row limit.
+    maxRows: 4000000
     sealProportion: 0.12 # The minimum proportion to datacoord.segment.maxSize to seal a segment. datacoord.segment.maxSize and datacoord.segment.sealProportion together determine if a segment can be sealed.
     sealProportionJitter: 0.1 # segment seal proportion jitter ratio, default value 0.1(10%), if seal proportion is 12%, with jitter=0.1, the actuall applied ratio will be 10.8~12%
-    assignmentExpiration: 2000 # Expiration time of the segment assignment, unit: ms
-    allocLatestExpireAttempt: 200 # The time attempting to alloc latest lastExpire from rootCoord after restart
     maxLife: 86400 # The max lifetime of segment in seconds, 24*60*60
     # If a segment didn't accept dml records in maxIdleTime and the size of segment is greater than
     # minSizeFromIdleToSealed, Milvus will automatically seal it.
     # The max idle time of segment in seconds, 10*60.
     maxIdleTime: 600
     minSizeFromIdleToSealed: 16 # The min size in MB of segment which can be idle from sealed.
-    # The max number of binlog (which is equal to the binlog file num of primary key) for one segment,
-    # the segment will be sealed if the number of binlog file reaches to max value.
-    maxBinlogFileNumber: 32
     smallProportion: 0.5 # Deprecated: unused since two-tier compaction. Replaced by middleSize (idealSize/4) × fillRate.
     compactableProportion: 0.85 # Deprecated: fill rate is now a hardcoded constant (0.85) in the two-tier compaction algorithm.
     expansionRate: 1.25 # Deprecated: no longer used by the mix compaction planner. Still read by v2 trigger and import paths.
-  sealPolicy:
-    channel:
-      # The size threshold in MB, if the total size of growing segments of each shard
-      # exceeds this threshold, the largest growing segment will be sealed.
-      growingSegmentsMemSize: 4096
-      # If the total entry number of l0 logs of each shard
-      # exceeds this threshold, the earliest growing segments will be sealed.
-      blockingL0EntryNum: 5000000
-      # The size threshold in MB, if the total entry number of l0 logs of each shard
-      # exceeds this threshold, the earliest growing segments will be sealed.
-      blockingL0SizeInMB: 64
   autoUpgradeSegmentIndex: false # whether auto upgrade segment index to index engine's version
   forceRebuildSegmentIndex: false # force rebuild segment index to specify index engine's version
   # if param forceRebuildSegmentIndex is enabled, the vector index will be rebuilt to aligned with targetVecIndexVersion.
@@ -898,6 +915,14 @@ dataCoord:
   targetScalarIndexVersion: -1
   enableArraySortIndex: auto # Whether ordinary ARRAY HYBRID may select STL_SORT, ordinary ARRAY may use explicit STL_SORT, and typed JSON ARRAY paths may use HYBRID or STL_SORT. auto: enable once all registered online components reach 3.1.0 and the stability window elapses; false: keep ordinary ARRAY HYBRID high cardinality on INVERTED, downgrade affected AUTOINDEX requests to INVERTED, and reject explicit ARRAY STL_SORT or JSON ARRAY HYBRID/STL_SORT; true: force enable and bypass the software-version gate.
   segmentFlushInterval: 2 # the minimal interval duration(unit: Seconds) between flushing operation on same segment
+  sealPolicy:
+    channel:
+      # If the total entry number of l0 logs of each shard
+      # exceeds this threshold, the earliest growing segments will be sealed.
+      blockingL0EntryNum: 5000000
+      # The size threshold in MB, if the total entry number of l0 logs of each shard
+      # exceeds this threshold, the earliest growing segments will be sealed.
+      blockingL0SizeInMB: 64
   manifestCommitConcurrency: 16 # Maximum concurrent DataCoord manifest commits across L0 compaction, index and stats publication, schema materialization, and GC. Values are clamped to [1, 256]. Workers start on demand. Read once during metadata initialization; changes require restart.
   # Switch value to control if to enable segment compaction.
   # Compaction merges small-size segments into a large segment, and clears the entities deleted beyond the rentention duration of Time Travel.
@@ -971,14 +996,32 @@ dataCoord:
     # Layout 1 cannot be read by 2.6, so enabling it commits the upgrade and gives up the ability to roll back to 2.6. Existing index files keep the layout they were built with, so this switch only affects index files built from now on.
     # Layout 1 is additionally gated on no QueryNode still reporting an older release line, so setting this to 1 during a 2.6 -> 3.0 upgrade still builds layout 0 until every QueryNode is upgraded. That check reads the version each QueryNode publishes in its session, which is a per-release-line constant, so it separates 2.6.x from 3.0.x but does not differentiate binaries within the same release line.
     storePathVersion: 0
-    # Whether completed StorageV3 index artifacts are published in segment manifests. Off (the default) keeps the legacy path: every SegmentIndex task record stays in etcd and no manifest index entry is produced. On still persists Unissued, InProgress, Failed, fake-finished, and other task states in etcd; only a successful build with artifact files is published to the manifest, and that commit atomically deletes the corresponding Finished etcd row. StorageV1/V2 always use etcd.
+    segmentIndexSummariesEnabled: false # Use SegmentInfo summaries and on-demand manifest reads instead of resident completed index records. New empty clusters only; the first startup choice is durable and cannot be changed. Requires common.storage.useLoonFFI=true, manifest index publication and no index migration/rollback. Incompatible snapshot restores are rejected.
+    # Whether completed StorageV3 index artifacts are published in segment manifests. On by default: successful builds with artifact files publish a new manifest revision, which advances the DataView and drives QueryView resource preparation; that commit atomically deletes the corresponding Finished etcd row. Unissued, InProgress, Failed, fake-finished, and other task states remain in etcd. Off keeps the legacy etcd-only path, which does not drive QueryView index refresh. StorageV1/V2 always use etcd.
     # New StorageV3 builds also write artifacts under the segment manifest base/_index/<build>/<version> (path version 2). Upgrade all workers and QueryNodes before enabling. Old-layout tasks keep their original etcd publication mode; external index paths are never added.
     # The setting applies when a build task is created. Existing builds keep their persisted mode across switches and restarts: path version 2 publishes to manifests, while versions 0/1 finish in etcd. Published records remain recoverable through the segment's manifest_has_index marker.
     # The value must be exactly true or false. A value that does not parse as a boolean, such as yes, is silently read as false, i.e. the legacy etcd behavior.
-    writeSegmentIndexToManifest: false
+    writeSegmentIndexToManifest: true
     # Concurrency of StorageV3 manifest index reads during startup and snapshot restore. Reads await asynchronous transaction callbacks in Go. Values are clamped to [1, 256], and the coordinator read limit is also capped by positive minio.maxConnections values. Restore assembly and verification share the same budget.
     # Startup continuously schedules bounded concurrent reads and retries failed reads per segment. An exhausted read or invalid manifest fails startup without replaying successful reads through the metastore retry loop. Recovery follows the durable manifest_has_index marker independently of the current write-mode switch.
     segmentIndexManifestLoadConcurrency: 64
+    manifestIndexBackfill:
+      # Whether DataCoord migrates historical finished StorageV3 SegmentIndex catalog rows into segment manifests. This is an operator-controlled, restart-scoped migration and is inert unless dataCoord.index.writeSegmentIndexToManifest is also true.
+      # Artifact files are copied with object-storage server-side Copy into the segment _index directory before publication; local-storage layout migration is unsupported. Copies run concurrently under a shared storage I/O budget.
+      # Each eligible record is moved through the ordinary segment manifest commit: the new manifest pointer, manifest_has_index marker, and deletion of the old catalog row land in one transaction. No separate index-prune phase is required. Failed, in-flight, fake-finished, deleted, StorageV1/V2, and L0 records remain on their existing lifecycle paths.
+      # Enable only after all DataCoord replicas, workers and QueryNodes support path version 2 and manifest-index reload. Migrated rows are not recreated when this switch is disabled, so rolling DataCoord back to an older version is unsupported after migration starts.
+      # Watch milvus_datacoord_manifest_index_backfill_pending_records. Zero means no eligible historical catalog row remains; mixed manifest and etcd placement is safe while the migration is still running.
+      enabled: false
+      interval: 60 # Interval in seconds between manifest index backfill scans while work remains. Empty scans stop the timer; new catalog-backed finished index records wake the inspector.
+      batchSize: 1000 # Target number of SegmentIndex catalog records migrated per scan. Whole segments are selected, so the last segment may exceed this budget; the pending gauge counts the full backlog.
+      concurrency: 16 # Number of segments whose manifest index backfill may run in parallel. Each segment batches its indexes into one commit unless the etcd transaction operation limit requires splitting.
+    manifestIndexRollback:
+      # Copy StorageV3 path-version-2 index files to index_v1 with object-storage server-side Copy, then atomically restore etcd records with path version 1 and remove their manifest entries. Source files remain retained for readers and snapshots. Local-storage layout migration is unsupported. This restart-scoped switch overrides forward backfill and creation of new manifest index tasks; already-created version-2 tasks still finish in manifests and are then eligible for rollback.
+      # Only in-memory manifest-resident records are migrated. Untracked manifest entries remain owned by GC. Readiness reports that the current record backlog is empty; later records wake the inspector.
+      enabled: false
+      interval: 60 # Seconds between rollback scans while manifest-resident records remain. Scans stop after readiness and resume on manifest-resident record notifications. Nonpositive durations use 60 seconds.
+      batchSize: 1000 # Maximum segments visited per rollback scan. Each visit restores at most maxEtcdTxnNum-1 indexes atomically.
+      concurrency: 8 # Maximum segments processed concurrently during rollback, clamped to [1, 256].
   enableGarbageCollection: true # Switch value to control if to enable garbage collection to clear the discarded data in MinIO or S3 service.
   gc:
     interval: 3600 # The interval at which data coord performs garbage collection, unit: second.
@@ -990,6 +1033,12 @@ dataCoord:
       enabled: true # Enable garbage collection for LOB (TEXT column) files
       safetyWindow: 3600 # Safety window for LOB file GC in seconds. Files older than this are eligible for deletion. Default 1 hour.
       checkInterval: 1800 # Interval for LOB GC check in seconds. Default 30 minutes.
+  pkindex:
+    gc:
+      interval: 3600 # The interval at which data coord runs garbage collection for primary key index files, unit: second.
+      grace: 86400 # Garbage collection keeps an unreferenced primary key index file for at least this time after its last modification, unit: second. The minimum is 600 (10 minutes); a lower value disables the garbage collection of primary key index files.
+      manifestRetainVersions: 8 # The number of the newest primary key index manifest versions that garbage collection keeps for each vchannel.
+      manifestRetainDuration: 3600 # Garbage collection keeps every primary key index manifest version written within this time, unit: second.
   snapshot:
     pendingTimeout: 60 # Timeout in minutes for pending snapshots before GC cleanup
     maxCompactionProtectionSeconds: 604800 # Maximum allowed compaction protection duration in seconds (default 604800 = 7 days)
@@ -1003,7 +1052,8 @@ dataCoord:
   taskRetryBackoffMaxInterval: 60 # Maximum backoff in seconds between re-dispatches of a task that keeps failing on workers.
   brokerTimeout: 5000 # 5000ms, dataCoord broker rpc timeout
   segmentChange:
-    stagingTimeout: 3600 # The maximum duration in seconds a segment change group may stay staged before the batch is aborted (STAGED -> ABORTED), bounding unconvergeable or externally-dropped batches.
+    enabled: false # Experimental opt-in for staged segment membership publication. Do not enable in production until L0 and clustering fairness is implemented: continuous Flush-to-Sort groups can starve L0 delete and clustering compaction. Existing groups finish after disabling this switch. Flush keeps its synchronous version handshake; content-only updates retain their existing protocol.
+    stagingTimeout: 3600 # The maximum duration in seconds that eligible compaction segment change groups may wait for readiness before aborting. Import, clustering, copy and external refresh use their producer lifecycle instead.
     maxMembersPerGroup: 512 # The maximum number of output segments one segment change group may carry before oversized task outputs are split into sequentially published subgroups.
   autoBalance: true # Enable auto balance
   checkAutoBalanceConfigInterval: 10 # the interval of check auto balance config
@@ -1036,7 +1086,7 @@ dataCoord:
     maxImportJobNum: 1024 # Maximum number of import jobs that are executing or pending.
     waitForIndex: true # Indicates whether the import operation waits for the completion of index building.
     enableInReplicatingCluster: false # Whether to allow import in a replicating cluster. When enabled, only auto_commit=false imports are accepted.
-    enableImportV3: false # One-way rollout gate for creating ImportTaskV3 jobs from new ordinary or backup import requests. Keep disabled until all DataNodes and all DataCoords that may become active support Import V3. The gate only selects the version for new requests; persisted WAL messages and jobs always resume with their stored version. Disabling the gate again after activation is unsupported.
+    enableImportV3: auto # One-way rollout gate for creating ImportTaskV3 jobs from new ordinary or backup import requests. auto: switch on automatically once all online DataNodes, StreamingNodes, and DataCoords reach the gate version and the stability window elapses; false: keep disabled (safe while any older DataNode, StreamingNode, or potentially-active DataCoord is still online); true: force enable and bypass the version gate (safe only once all DataNodes, StreamingNodes, and DataCoords support Import V3, such as when upgrading from a release that already ships V3). The gate only selects the version for new requests; persisted WAL messages and jobs always resume with their stored version. Disabling the gate again after activation is unsupported.
     enableL0Import: false # Whether to allow importing L0 (delete-only) segments during a binlog/backup import. Disabled by default because restoring L0 segments is incompatible with commit_timestamp (two-phase-commit / replication imports), where it silently breaks delete semantics. Fold the L0 deletes into per-segment deltalogs before restore instead; set to true only to re-enable the legacy L0 import behavior.
     # Largest parquet footer, in bytes, that import sizing will read to obtain an exact row count.
     # A file declaring a longer footer is rejected at submit. Footer size tracks row_groups * columns, so
@@ -1056,7 +1106,7 @@ dataCoord:
     mixCompactionUsage: 4 # slot usage of mix compaction task.
     l0DeleteCompactionUsage: 8 # slot usage of l0 compaction task.
     bumpSchemaVersionCompactionUsage: 1 # slot usage of schema bump compaction task.
-    indexTaskSlotUsage: 64 # slot usage of index task per 512mb
+    indexTaskSlotUsage: 64 # Deprecated: unused. Vector task slots are estimated from input, build workspace and output memory.
     scalarIndexTaskSlotUsage: 16 # slot usage of scalar index task per 512mb
     statsTaskSlotUsage: 8 # slot usage of stats task per 512mb
     analyzeTaskSlotUsage: 65535 # slot usage of analyze task
@@ -1101,13 +1151,6 @@ dataNode:
     # if this parameter <= 0, will set it as the maximum number of CPUs that can be executing
     # suggest to set it bigger on large collection numbers to avoid blocking
     workPoolSize: -1
-    # specify the size of global work pool for channel checkpoint updating
-    # if this parameter <= 0, will set it as 10
-    updateChannelCheckpointMaxParallel: 10
-    updateChannelCheckpointInterval: 60 # the interval duration(in seconds) for datanode to update channel checkpoint of each channel
-    updateChannelCheckpointRPCTimeout: 20 # timeout in seconds for UpdateChannelCheckpoint RPC call
-    maxChannelCheckpointsPerPRC: 128 # The maximum number of channel checkpoints per UpdateChannelCheckpoint RPC.
-    channelCheckpointUpdateTickInSeconds: 10 # The frequency, in seconds, at which the channel checkpoint updater executes updates.
   import:
     concurrencyPerCPUCore: 4 # The execution concurrency unit for import/pre-import tasks per CPU core.
     maxImportFileSizeInGB: 16 # The maximum file size (in GB) for an import file, where an import file refers to either a Row-Based file or a set of Column-Based files.
@@ -1129,6 +1172,7 @@ dataNode:
     useMergeSort: true # Whether to enable mergeSort mode when performing mixCompaction.
     maxSegmentMergeSort: 30 # The maximum number of segments to be merged in mergeSort mode.
     lobHoleRatioThreshold: 0.3 # The hole ratio threshold for TEXT column compaction. If hole_ratio >= threshold, rewrite LOB files; otherwise reuse existing LOB files.
+    enableDeferredBloomFilter: false # Enable deferred Bloom filter sizing for mix compactions estimated to produce multiple output segments. Read by DataCoord and passed to DataNode in the compaction plan. Single-output estimates use the existing path.
   text:
     inlineThreshold: 65536 # TEXT values smaller than this threshold (in bytes) are stored inline instead of in LOB files.
     maxLobFileBytes: 67108864 # Maximum size of a single LOB file for TEXT column storage (in bytes).
@@ -1253,7 +1297,7 @@ grpc:
     compressionConcurrency: 2
     dialTimeout: 200
     keepAliveTime: 10000
-    keepAliveTimeout: 20000
+    keepAliveTimeout: 2000
     maxMaxAttempts: 10
     initialBackoff: 0.2
     maxBackoff: 10
@@ -1276,14 +1320,18 @@ internaltls:
   sni: localhost # The server name indication (SNI) for internal TLS, should be the same as the name provided by the certificates ref: https://en.wikipedia.org/wiki/Server_Name_Indication
 
 common:
+  cloud:
+    clusterId:  # Cloud cluster ID. Leave empty to use Talon's default namespace. Otherwise Talon uses <clusterId>-<type>-<case-mode>, with all for enabledStages=all and meta for manifest, load_open, or both.
+    instanceType:  # Cloud instance type. VectorLake selects the VectorLake namespace type regardless of classType.
+    classType:  # Cloud class type. For non-VectorLake instances, Talon uses Tiered when classType is Tiered and others otherwise.
   defaultPartitionName: _default # Name of the default partition when a collection is created
   defaultIndexName: _default_idx # Name of the index when it is created with name unspecified
   indexSliceSize: 16 # Index slice size in MB
   threadCoreCoefficient:
     highPriority: 10 # This parameter specify how many times the number of threads is the number of cores in high priority pool
-    middlePriority: 5 # Thread-to-core ratio for each of the independent middle priority and search fanout pools; both follow maxThreadsSize.
+    middlePriority: 5 # Thread-to-core ratio for the middle priority pool; follows maxThreadsSize.
     lowPriority: 1 # This parameter specify how many times the number of threads is the number of cores in low priority pool
-    maxThreadsSize: 16 # The maximum number of threads in the thread pool, only effective when greater than 0
+    maxThreadsSize: 16 # Maximum thread count for the high, middle and low priority pools; only effective when greater than 0. Does not limit the search fanout pool.
   buildIndexThreadPoolRatio: 0.75
   DiskIndex:
     MaxDegree: 56
@@ -1293,14 +1341,13 @@ common:
     SearchCacheBudgetGBRatio: 0.1
     LoadNumThreadRatio: 8
     BeamWidthRatio: 4
-  gracefulTime: 5000 # milliseconds. it represents the interval (in ms) by which the request arrival time needs to be subtracted in the case of Bounded Consistency.
+  gracefulTime: 60000 # milliseconds. it represents the interval (in ms) by which the request arrival time needs to be subtracted in the case of Bounded Consistency.
   gracefulStopTimeout: 1800 # seconds. it will force quit the server if the graceful stop process is not completed during this time.
   parquetStatsSkipIndex:
     enabled: true # whether to force one row group per cache cell and build the sealed-segment chunk skip index from parquet footer statistics. When enabled, packing is 1:1 even without usable statistics; disabling allows target-size packing. Takes effect only at startup (not refreshable): the flag decides the segment cache cell layout, which must not change while queries are running. Storage v2 segments only; manifest-based (v3) segments do not build this index yet.
   storageType: remote # please adjust in embedded Milvus: local, available values are [local, remote], value minio is deprecated, use remote instead
   storage:
     manifestTransactionRetryLimit: 10 # Maximum number of retry attempts for V3 storage manifest transaction commits on optimistic concurrency conflicts
-    useArrowFileSystemChunkManager: false # Whether segcore routes chunk manager IO (segment load, index build/load) through the milvus-storage Arrow FileSystem, unified with storage v2. Applies to both remote and local storage types; when false, the legacy chunk managers are used. Not effective for cloudProvider=gcpnative, which always uses the legacy implementation.
     stv2:
       splitSystemColumn:
         enabled: true # enable split system column policy in storage v2
@@ -1308,7 +1355,7 @@ common:
       splitByAvgSize:
         enabled: true # enable split by average size policy in storage v2
         threshold: 1024 # split by average size policy threshold(in bytes) in storage v2
-    useLoonFFI: false
+    useLoonFFI: true
     enableGrowingSourceFlush: false # enable flushing growing segment payload from QueryNode growing source through StorageV3 manifest path
     iops:
       # Initial ObjectStore request rate used by the Lance AIMD limiter for External Table reads.
@@ -1320,7 +1367,8 @@ common:
       # The default matches the milvus-storage default.
       maxRate: 5000
     talon:
-      mode: 0 # Remote milvus-storage read routing: 0 disables Talon, 1 routes all reads through Talon, and 2 routes only small reads. Requires a restart.
+      mode: 0 # Remote milvus-storage read routing within enabledStages: 0 disables Talon, 1 routes all reads through Talon, and 2 routes only small reads. Requires a restart.
+      enabledStages: all # Comma-separated Talon read stages: all preserves unrestricted routing; load_open enables QueryNode milvus-storage reader-open metadata, including footers; manifest enables QueryNode segment-manifest reads during load. Combine load_open,manifest to enable both. Other reads use origin storage when stages are restricted. Cannot combine all with other stages. Requires a restart.
       enableForExternalTable: false # Apply the configured Talon read routing to remote External Tables when mode is 1 or 2. Requires a restart.
       smallReadThreshold: 524288 # Inclusive request size threshold in bytes for Talon mode 2, before EOF clamping. Defaults to 512 KiB. Valid range: [1, 1048576]. Requires a restart.
       coordinator:  # Talon coordinator address (host:port), required when Talon mode is 1 or 2. Requires a restart.
@@ -1383,12 +1431,23 @@ common:
     # default password for root user. The maximum length is 72 characters. 
     # Large numeric passwords require double quotes to avoid yaml parsing precision issues.
     defaultRootPassword: Milvus
+    # Algorithm used to hash newly created or updated passwords: bcrypt or pbkdf2-sha512.
+    # pbkdf2-sha512 is a FIPS-approved key derivation function. On a build with MILVUS_FIPS_ENABLED=ON it runs on BoringCrypto.
+    # Existing hashes keep working after a change and are rehashed only when the password is updated, including the root hash created at first startup.
+    # Upgrade every node, and every cluster in a CDC topology, before selecting pbkdf2-sha512: older versions cannot verify these hashes, and they stop verifying after a downgrade.
+    passwordHashAlgorithm: bcrypt
     rootShouldBindRole: false # Whether the root user should bind a role when the authorization is enabled.
     enablePublicPrivilege: true # Whether to enable public privilege
     # Whether to expose the feature usage report at GET /management/feature_usage on the Proxy
     # management port. The endpoint requires HTTP Basic Auth as root. See
     # docs/design-docs/design_docs/20260902-feature-usage-reporting.md.
     featureUsageEnabled: false
+    # Configured initial Broker URLs for External Tables, including legacy Azure Brokers.
+    # Redirects follow storage SDK defaults; redirect targets are not checked.
+    # JSON array string, not a YAML list or comma-separated URLs.
+    # Example: '["https://broker.example.com/token?scope=a,b"]'
+    # Empty or [] denies all Brokers. Restart all components after changing this value.
+    credentialBrokerAllowedEndpoints: "[]"
     internaltlsEnabled: false
     tlsMode: 0
   featureUsage:
@@ -1404,6 +1463,8 @@ common:
     varCharLengthAvg: 256 # average length considered per VarChar/Text field when estimating record size
     dynamicFieldLengthAvg: 512 # average length considered per JSON/Array/Geometry field when estimating record size
     sparseFloatVectorSize: 1200 # fallback size (bytes) used when estimating sparse float vector fields
+  metrics:
+    collectionLevelMode: full # controls collection/VChannel-scoped Prometheus metrics: full keeps collection and VChannel values, aggregate replaces them with all and suppresses gauges without a truthful aggregate
   locks:
     metrics:
       enable: false # whether gather statistics for metrics locks
@@ -1411,6 +1472,15 @@ common:
       info: 500 # minimum milliseconds for printing durations in info level
       warn: 1000 # minimum milliseconds for printing durations in warn level
     maxWLockConditionalWaitTime: 600 # seconds before logging a wlock conditional wait that is taking long; the wait itself is not bounded by this value
+  # Whether a collection may have no vector field: CreateCollection accepts such a schema, and the last
+  # vector field of a collection may be dropped. Such a collection supports every operation except search;
+  # a nullable vector field can be added to it later, which makes it a vector collection.
+  # Turning it off rejects new requests to create such a collection, or to drop the last vector field of one,
+  # on this cluster. Collections that already exist keep working, and collections received through
+  # replication are not affected.
+  # It may be turned off for the duration of a rolling upgrade: such a collection created while an old role
+  # is still running cannot be loaded or compacted until every role is upgraded.
+  enableCollectionWithoutVector: true
   traceLogMode: 0 # trace request info
   bloomFilterEnabled: true # whether to load and apply bloom filter/pk stats on querynode
   bloomFilterSize: 100000 # bloom filter initial size
@@ -1519,7 +1589,7 @@ quotaAndLimits:
     # To use this setting, set quotaAndLimits.flushRate.enabled to true at the same time.
     max: -1
     collection:
-      max: 0.1 # qps, default no limit, rate for flush at collection level.
+      max: 1 # Maximum number of flush requests per second for each collection.
     db:
       max: -1 # qps of db level, default no limit, rate for flush
   compactionRate:
@@ -1700,7 +1770,7 @@ queryView:
   idfOracle:
     lazyLoadSealedStats: false # Whether QueryView IDF runtimes defer sealed BM25 resource discovery and stats materialization until the first BM25 search.
     sealedStatsLoadConcurrencyRatio: 4 # Maximum process-wide concurrency for loading sealed BM25 stats, expressed as a ratio of CPU cores.
-  leaseDuration: 60s # Renewable SN Up-view retention after query access. Delays normal Down; non-positive durations disable timed retention. Not refreshable.
+  leaseDuration: 5s # Renewable SN Up-view retention after query access. Delays normal Down; non-positive durations disable timed retention. Not refreshable.
   logicalSize:
     source: rowCount # LogicalSize source: rowCount uses physical rows; insertBytes uses ceil(segment insert_binlog_size / bytesPerUnit). Unsupported values use rowCount. Missing size falls back to rows, then segmentBaseCost is added. Sampled once when the DataView manager is initialized; requires coordinator restart.
     bytesPerUnit: 64KB # Bytes per logical unit for the insertBytes source, parsed as a size (for example 64KB or 1MB). Non-positive or invalid values use 64KB. Sampled once when the DataView manager is initialized; requires coordinator restart. Missing segment size estimates one unit per physical row.
@@ -1730,6 +1800,9 @@ queryView:
 
 # Any configuration related to the streaming service.
 streaming:
+  schemaCacheTTL: 900 # Idle lifetime in seconds of cached schema bodies. Non-positive values disable schema body retention.
+  queryView:
+    liveEventDispatchConcurrencyRatioPerPChannel: 0.25 # QueryRuntime live-event worker count per PChannel is max(1, floor(CPU count * ratio)). Updates existing worker pools dynamically.
   # Whether StreamingNode splits oversized logical messages into physical WAL records.
   # Enable this on every StreamingNode and confirm the live update before disabling proxy.splitChunk.
   # Once chunk records have been written, do not roll StreamingNode back to a version that cannot reassemble them. Both parameters support live refresh.
@@ -1784,6 +1857,8 @@ streaming:
     concurrencyRatio: 4 # The concurrency ratio based on number of CPU for wal broadcaster, 4 by default.
   txn:
     defaultKeepaliveTimeout: 10s # The default keepalive timeout for wal txn, 10s by default
+    tombstoneMaxCount: 1024 # Maximum retained entries per WAL in each of the successful and expired transaction caches; zero disables retention.
+    tombstoneMaxLifetime: 1m # Maximum transaction result retention relative to WAL TimeTick; capacity eviction may shorten this window.
   walWriteAheadBuffer:
     capacity: 64m # WAB cache capacity. Capacity/keepalive eviction only removes records consumed by RecoveryStorage and preserves the durable catchup anchor. Also scales walRateLimit.writeAheadBuffer.slowdownRatio.
     keepalive: 30s # WAB cache TTL. Expired records are evictable only after RecoveryStorage consumes them; the durable catchup anchor is retained.
@@ -1835,8 +1910,19 @@ streaming:
     gracefulCloseTimeout: 3s
     tail:
       lowWatermark: 4g # RecoveryStorage releases WAL append pressure after the unpublished WAL tail falls to this logical size.
-      softWatermark: 8g # RecoveryStorage requests VChannel persistence and slows WAL append after the unpublished WAL tail reaches this logical size.
+      softWatermark: 8g # RecoveryStorage slows WAL append after the unpublished WAL tail reaches this logical size. Independent of the walRecovery.flush persistence thresholds.
       highWatermark: 16g # RecoveryStorage rejects new DML append after the unpublished WAL tail reaches this logical size.
+    flush:
+      sizeThreshold: 6g # Unpublished logical WAL bytes per PChannel that trigger WALSummary sealing and VChannel buffer persistence, without changing append rate limits. Nonpositive values disable this trigger. Applied when the WAL opens.
+      messageThreshold: 6144 # Unpublished persisted WAL message count per PChannel that triggers WALSummary sealing and VChannel buffer persistence, without changing append rate limits. Includes completed but unpublished messages and counts an assembled transaction once. Nonpositive values disable this trigger. Applied when the WAL opens.
+      idleMinSize: 512MB # Unpublished logical WAL bytes per PChannel must exceed this size and remain idle for idleTimeout to trigger WALSummary sealing and VChannel buffer persistence, without changing append rate limits. Nonpositive values disable this trigger. Applied when the WAL opens.
+      idleTimeout: 10m # Idle time without a newly observed persisted non-TimeTick WAL message before triggering buffer persistence above idleMinSize. TimeTicks and volatile heartbeats do not reset it; checkpoint publication does not refresh it. Does not change append rate limits. Nonpositive values disable this trigger. Applied when the WAL opens.
+  idempotency:
+    ttlPerPChannel: 1h # Idle lifetime of committed Insert idempotency records per PChannel. Duplicate access refreshes the in-memory lifetime; recovery uses the original WAL commit time. Applied when the WAL opens.
+    maxSizePerPChannel: 256MB # PChannel-wide estimated byte budget for committed Insert idempotency records. Eviction follows last access order. Recovery preselects a newest chunk suffix using encoded Insert and Idempotency section lengths and ttl, including one whole boundary chunk. This is not a process RSS limit. Applied when the WAL opens.
+    bestEffortMinCountPerVChannel: 16 # Best-effort minimum retained-record count per VChannel. Capacity eviction prefers channels above this count; ttl and the PChannel maxSize take precedence. Recovery does not reserve this count. Zero disables the preference. Applied when the WAL opens.
+  transformLog:
+    catchupConcurrencyRatioPerPChannel: 0.25 # TransformLog catch-up worker count for each consumer's PChannel stream is max(1, floor(CPU count * ratio)). Updates existing worker pools dynamically.
   replication:
     pendingMessagesQueueLength: 128 # The capacity of pending message queue for each replication stream client.
     pendingMessagesQueueMaxSize: 134217728 # The maximum size (in bytes) of pending message queue for each replication stream client. Default is 128MB.
@@ -1881,6 +1967,12 @@ credential:
 
 # Any configuration related to functions
 function:
+  grep:
+    maxArgumentBytes: 65536 # Maximum byte length of GrepOp arguments. Invalid or non-positive values fall back to 65536. Changes apply to newly prepared operators.
+    maxRegexBytes: 10485760 # Regex engine compiled-program size budget in bytes. Invalid or non-positive values fall back to 10485760. Changes apply to newly prepared operators.
+    maxDFACacheBytes: 8388608 # Regex engine DFA cache budget in bytes; not an aggregate process memory limit. Invalid or non-positive values fall back to 8388608. Changes apply to newly prepared operators.
+    batchSize: 128 # Candidate text rows per Grep read batch, independent of the matching limit. Invalid or non-positive configuration falls back to 128. Changes apply to newly prepared operators.
+    maxScanRows: 0 # Soft threshold for text rows scanned by Grep per segment. 0 disables it; invalid or negative configuration falls back to 0. Checked between batches, so scans may exceed the threshold. NGRAM-rejected rows and NULLs do not count; Probe scans do. Candidate offsets remain complete. Stopping with unread candidates may produce incomplete results. Changes apply to newly prepared Grep operators.
   model:
     requestTimeout: 30s # Global timeout for external model requests, e.g. 30s. Function param timeout_ms overrides it.
   textEmbedding:

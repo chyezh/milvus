@@ -25,6 +25,7 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/exprutil"
 	"github.com/milvus-io/milvus/internal/util/segcore"
+	"github.com/milvus-io/milvus/internal/views/queryclient"
 	"github.com/milvus-io/milvus/pkg/v3/common"
 	"github.com/milvus-io/milvus/pkg/v3/metrics"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
@@ -279,8 +280,11 @@ type DeleteRunner struct {
 	result          *milvuspb.MutationResult
 	// userPlanIsSimple: the user's filter names primary keys only (delete by ids).
 	userPlanIsSimple bool
-	node             taskmodel.TaskNode
-	metaCache        Cache
+	// readAttempted: a later read attempt runs Init again, which must not count the
+	// request twice.
+	readAttempted bool
+	node          taskmodel.TaskNode
+	metaCache     Cache
 
 	// channel
 	vChannels []vChan
@@ -297,10 +301,11 @@ type DeleteRunner struct {
 	plan         *planpb.PlanNode
 
 	// for query
-	msgID int64
-	ts    uint64
-	lb    shardclient.LBPolicy
-	count atomic.Int64
+	msgID           int64
+	ts              uint64
+	lb              shardclient.LBPolicy
+	count           atomic.Int64
+	viewQueryClient queryclient.Client
 
 	// task queue
 	queue *scheduler.DmTaskQueue
@@ -326,6 +331,11 @@ func NewDeleteRunner(node taskmodel.TaskNode, request *milvuspb.DeleteRequest, m
 		lb:              lb,
 		limiter:         limiter,
 	}
+}
+
+// SetViewQueryClient selects the QueryView execution path for complex deletes.
+func (dr *DeleteRunner) SetViewQueryClient(client queryclient.Client) {
+	dr.viewQueryClient = client
 }
 
 // Result returns the mutation result after execution.
@@ -375,10 +385,16 @@ func (dr *DeleteRunner) Init(ctx context.Context) error {
 	}
 	dr.dbID = db.DBID
 
-	dr.collectionID, err = dr.GetMetaCache().GetCollectionID(ctx, dr.req.GetDbName(), collName)
+	collectionID, err := dr.GetMetaCache().GetCollectionID(ctx, dr.req.GetDbName(), collName)
 	if err != nil {
 		return ErrWithLog(log, "Failed to get collection id", err)
 	}
+	// A retry may refresh the read schema, but a replacement collection is a
+	// different mutation target even when it has the same name.
+	if dr.readAttempted && collectionID != dr.collectionID {
+		return merr.WrapErrCollectionNotFound(dr.collectionID)
+	}
+	dr.collectionID = collectionID
 	colInfo, err := dr.GetMetaCache().GetCollectionInfo(ctx, dr.req.GetDbName(), collName, dr.collectionID)
 	if err != nil {
 		return ErrWithLog(log, "Failed to get collection info", err)
@@ -416,7 +432,9 @@ func (dr *DeleteRunner) Init(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	dql.RecordExprTemplateFeatures(&exprFeatures, dr.req.GetExprTemplateValues())
+	if !dr.readAttempted {
+		dql.RecordExprTemplateFeatures(&exprFeatures, dr.req.GetExprTemplateValues())
+	}
 	if planparserv2.IsAlwaysTruePlan(userPlan) {
 		return merr.WrapErrAsInputError(merr.WrapErrParameterInvalidMsg("delete plan can't be empty or always true : %s", dr.req.GetExpr()))
 	}
@@ -437,6 +455,7 @@ func (dr *DeleteRunner) Init(ctx context.Context) error {
 
 	dr.plan.Namespace = dql.NamespaceForPlan(dr.schema.CollectionSchema, dr.req.Namespace)
 	// Set partitionIDs, could be empty if no partition name specified and no partition key
+	dr.partitionIDs = nil
 	partName := dr.req.GetPartitionName()
 	if dql.NamespacePartitionKeyMode(dr.schema.CollectionSchema) && dr.req.Namespace != nil {
 		if len(partName) > 0 {
@@ -505,7 +524,7 @@ func (dr *DeleteRunner) Run(ctx context.Context) error {
 	} else {
 		// if get complex delete expr
 		// need query from querynode before delete
-		err := dr.complexDelete(ctx, dr.plan)
+		err := dr.complexDelete(ctx)
 		if err != nil {
 			mlog.Warn(ctx, "complex delete failed,but delete some data", mlog.Int64("count", dr.result.DeleteCnt), mlog.String("expr", dr.req.GetExpr()))
 			return err
@@ -572,6 +591,7 @@ func (dr *DeleteRunner) getStreamingQueryAndDelteFunc(
 				ReqID:              paramtable.GetNodeID(),
 				DbID:               0, // TODO
 				CollectionID:       dr.collectionID,
+				SchemaVersion:      dr.schema.GetVersion(),
 				PartitionIDs:       dr.partitionIDs,
 				SerializedExprPlan: serializedPlan,
 				OutputFieldsId:     outputFieldIDs,
@@ -676,33 +696,18 @@ func (dr *DeleteRunner) receiveQueryResult(ctx context.Context, client querypb.Q
 	}
 }
 
-func (dr *DeleteRunner) complexDelete(ctx context.Context, plan *planpb.PlanNode) error {
+func (dr *DeleteRunner) complexDelete(ctx context.Context) error {
+	if dr.viewQueryClient != nil {
+		return dr.complexDeleteByQueryView(ctx)
+	}
 	rc := timerecord.NewTimeRecorder("QueryStreamDelete")
-	var err error
 
-	_, outputFieldIDs := translatePkOutputFields(dr.schema.CollectionSchema)
-	outputFieldIDs = append(outputFieldIDs, common.TimeStampField)
-	plan.OutputFieldIds = outputFieldIDs
-
-	// Budget and marshal once before LB fan-out. A roaring plan can be tens of
-	// MiB; marshaling inside each concurrent shard callback would multiply that
-	// transient buffer by shard count and repeat it on retries.
-	serializedPlan, _, err := dql.MarshalPlanWithMembershipFilterSizeLimit(plan, 0)
-	if err != nil {
-		return err
-	}
-	exec := dr.getStreamingQueryAndDelteFunc(serializedPlan, outputFieldIDs)
-
-	dr.msgID, err = dr.idAllocator.AllocOne()
+	serializedPlan, err := dr.prepareQuery(ctx)
 	if err != nil {
 		return err
 	}
 
-	dr.ts, err = dr.tsoAllocatorIns.AllocOne(ctx)
-	if err != nil {
-		return err
-	}
-
+	exec := dr.getStreamingQueryAndDelteFunc(serializedPlan, dr.plan.GetOutputFieldIds())
 	channelName, useNamespaceChannel, err := dql.NamespaceShardingChannel(dr.schema.CollectionSchema, dr.req.Namespace, dr.vChannels)
 	if err != nil {
 		return err
@@ -733,6 +738,120 @@ func (dr *DeleteRunner) complexDelete(ctx context.Context, plan *planpb.PlanNode
 	}
 	mlog.Info(ctx, "complex delete finished", mlog.Int64("deleteCnt", dr.result.GetDeleteCnt()), mlog.Duration("interval", rc.ElapseSpan()))
 	return nil
+}
+
+// prepareQuery fixes the output fields, serialized plan and snapshot of one read.
+func (dr *DeleteRunner) prepareQuery(ctx context.Context) ([]byte, error) {
+	_, outputFieldIDs := translatePkOutputFields(dr.schema.CollectionSchema)
+	outputFieldIDs = append(outputFieldIDs, common.TimeStampField)
+	dr.plan.OutputFieldIds = outputFieldIDs
+
+	// Budget and marshal once before LB fan-out. A roaring plan can be tens of
+	// MiB; marshaling inside each concurrent shard callback would multiply that
+	// transient buffer by shard count and repeat it on retries.
+	serializedPlan, _, err := dql.MarshalPlanWithMembershipFilterSizeLimit(dr.plan, 0)
+	if err != nil {
+		return nil, err
+	}
+	dr.msgID, err = dr.idAllocator.AllocOne()
+	if err != nil {
+		return nil, err
+	}
+
+	dr.ts, err = dr.tsoAllocatorIns.AllocOne(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return serializedPlan, nil
+}
+
+func (dr *DeleteRunner) queryByView(ctx context.Context) (*queryclient.LegacyQueryResult, error) {
+	// A delete must retrieve every match, without the ordinary query limit.
+	dr.plan.GetQuery().Limit = typeutil.Unlimited
+	serializedPlan, err := dr.prepareQuery(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := dr.viewQueryClient.Legacy().Query(ctx, &queryclient.LegacyQueryRequest{
+		Schema:      dr.schema.CollectionSchema,
+		BarrierMVCC: dr.ts,
+		Req: &internalpb.RetrieveRequest{
+			Base: commonpbutil.NewMsgBase(
+				commonpbutil.WithMsgType(commonpb.MsgType_Retrieve),
+				commonpbutil.WithMsgID(dr.msgID),
+				commonpbutil.WithSourceID(paramtable.GetNodeID()),
+			),
+			ReqID:              paramtable.GetNodeID(),
+			DbID:               dr.dbID,
+			CollectionID:       dr.collectionID,
+			PartitionIDs:       dr.partitionIDs,
+			SchemaVersion:      dr.schema.GetVersion(),
+			SerializedExprPlan: serializedPlan,
+			OutputFieldsId:     dr.plan.GetOutputFieldIds(),
+			ConsistencyLevel:   dr.req.GetConsistencyLevel(),
+			GuaranteeTimestamp: dql.ParseGuaranteeTsFromConsistency(dr.ts, dr.ts, dr.req.GetConsistencyLevel()),
+			Limit:              typeutil.Unlimited,
+			QueryLabel:         metrics.DeleteQueryLabel,
+		},
+	})
+	if err != nil {
+		return nil, dql.QueryViewLoadError(ctx, dr.node, dr.collectionID, dr.partitionIDs, err)
+	}
+	return result, nil
+}
+
+func (dr *DeleteRunner) complexDeleteByQueryView(ctx context.Context) error {
+	queryRunner, ok := dr.node.(taskmodel.QueryRunner)
+	if !ok {
+		return merr.WrapErrServiceInternalMsg("host node does not implement QueryRunner")
+	}
+	// The read is one DQL attempt, so an unloaded collection is loaded first.
+	// TODO: use a streaming QueryView interface when available. Materialize the
+	// complete batch before producing any deletes, so query retries have no
+	// write side effects and failed/oversized reads cannot silently delete a prefix.
+	var result *queryclient.LegacyQueryResult
+	err := queryRunner.RetryRead(ctx, dr.req.GetDbName(), dr.req.GetCollectionName(), func(ctx context.Context) error {
+		if dr.readAttempted {
+			// Refresh the read schema and rebuild the plan for this collection.
+			if err := dr.Init(ctx); err != nil {
+				return err
+			}
+		}
+		dr.readAttempted = true
+		var err error
+		result, err = dr.queryByView(ctx)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+
+	primaryKeys := &schemapb.IDs{}
+	seen := typeutil.NewSet[any]()
+	for _, batch := range result.Results {
+		if batch.GetHasMoreResult() {
+			return merr.WrapErrServiceInternalMsg("incomplete QueryView batch for complex delete")
+		}
+		dr.allQueryCnt.Add(batch.GetAllRetrieveCount())
+		dr.scannedRemoteBytes.Add(batch.GetScannedRemoteBytes())
+		dr.scannedTotalBytes.Add(batch.GetScannedTotalBytes())
+		for i := 0; i < typeutil.GetSizeOfIDs(batch.GetIds()); i++ {
+			pk := typeutil.GetPK(batch.GetIds(), int64(i))
+			if !seen.Contain(pk) {
+				seen.Insert(pk)
+				typeutil.AppendID(primaryKeys, pk)
+			}
+		}
+	}
+	if seen.Len() == 0 {
+		return nil
+	}
+	if dr.limiter != nil {
+		if err := dr.limiter.Alloc(ctx, dr.dbID, map[int64][]int64{dr.collectionID: dr.partitionIDs}, internalpb.RateType_DMLDelete, proto.Size(primaryKeys)); err != nil {
+			return err
+		}
+	}
+	return dr.simpleDelete(ctx, primaryKeys, int64(seen.Len()))
 }
 
 func (dr *DeleteRunner) simpleDelete(ctx context.Context, pk *schemapb.IDs, numRow int64) error {

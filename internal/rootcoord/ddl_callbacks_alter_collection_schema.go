@@ -20,6 +20,7 @@ import (
 	"context"
 
 	"github.com/samber/lo"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
@@ -78,7 +79,7 @@ func (c *Core) broadcastAlterCollectionSchema(ctx context.Context, req *milvuspb
 	}
 }
 
-// broadcastAlterCollectionSchemaAdd handles AddRequest: adding function fields.
+// broadcastAlterCollectionSchemaAdd handles AddRequest: adding fields or function fields.
 func (c *Core) broadcastAlterCollectionSchemaAdd(ctx context.Context, broadcaster broadcaster.BroadcastAPI, coll *model.Collection, req *milvuspb.AlterCollectionSchemaRequest) error {
 	addRequest := req.GetAction().GetAddRequest()
 	plan, err := schemautil.ParseAlterSchemaAddRequest(addRequest)
@@ -86,8 +87,14 @@ func (c *Core) broadcastAlterCollectionSchemaAdd(ctx context.Context, broadcaste
 		return err
 	}
 	if plan.HasField() {
-		if err := prepareAlterSchemaAddField(coll, plan); err != nil {
-			return err
+		if plan.Kind == schemautil.AlterSchemaAddStructSubField {
+			if err := prepareAlterSchemaAddStructSubField(coll, plan); err != nil {
+				return err
+			}
+		} else {
+			if err := prepareAlterSchemaAddField(coll, plan); err != nil {
+				return err
+			}
 		}
 		fieldNames := typeutil.NewSet[string]()
 		for _, field := range coll.Fields {
@@ -128,6 +135,17 @@ func (c *Core) broadcastAlterCollectionSchemaAdd(ctx context.Context, broadcaste
 	if plan.HasFunction() {
 		if err := validator.ValidateFunction(schema, plan.Function.GetName(), true); err != nil {
 			return merr.Wrap(err, "invalid function schema")
+		}
+		// The Coordinator is the authoritative admission boundary: older Proxy
+		// versions or direct callers must not commit an impossible handoff.
+		if err := schemautil.ValidateAddFunctionRequiresStorageV3(); err != nil {
+			return err
+		}
+		if err := schemautil.ValidateAddFunctionInputNotText(schema, plan.Function); err != nil {
+			return err
+		}
+		if typeutil.IsExternalCollection(schema) {
+			return merr.WrapErrParameterInvalidMsg("adding a function to an external collection cannot backfill historical outputs")
 		}
 	}
 	if err := typeutil.ValidateExternalCollectionResolvedSchema(schema); err != nil {
@@ -175,7 +193,7 @@ func (c *Core) broadcastAlterCollectionSchemaAdd(ctx context.Context, broadcaste
 				BoundFieldIndexes: boundFieldIndexes,
 			},
 		}).
-		WithBroadcast(coll.VirtualChannelNames).
+		WithBroadcast(coll.VirtualChannelNames, message.OptBuildBroadcastAckSyncUp()).
 		MustBuildBroadcast()
 	if _, err := broadcaster.Broadcast(ctx, msg); err != nil {
 		rollbackAlterCollectionAnalyzerFileResourceReservation(ctx, c.meta, coll.CollectionID, addedFileResourceIds, err)
@@ -316,6 +334,62 @@ func prepareAlterSchemaAddField(coll *model.Collection, plan *schemautil.AlterSc
 	return nil
 }
 
+func prepareAlterSchemaAddStructSubField(coll *model.Collection, plan *schemautil.AlterSchemaAddPlan) error {
+	var parent *model.StructArrayField
+	for _, structField := range coll.StructArrayFields {
+		if structField.Name == plan.StructPath {
+			parent = structField
+			break
+		}
+	}
+	if parent == nil {
+		return merr.WrapErrParameterInvalidMsg("struct field %q not found", plan.StructPath)
+	}
+
+	field := plan.Field
+	originalName := plan.SubFieldName()
+	if err := validateAddedStructFieldName(originalName); err != nil {
+		return err
+	}
+	if isReservedStructFieldName(originalName) {
+		return merr.WrapErrParameterInvalidMsg("not support to add system field, field name = %s", originalName)
+	}
+	if !field.GetElementNullable() {
+		return merr.WrapErrParameterInvalidMsg("added sub-field %q of struct field %q must set element_nullable=true", originalName, parent.Name)
+	}
+	if err := schemautil.FillAddedStructSubFieldMaxCapacity(model.MarshalStructArrayFieldModel(parent), field); err != nil {
+		return err
+	}
+	if err := validateAddedStructSubFieldProperties(originalName, field); err != nil {
+		return err
+	}
+	if err := schemautil.RejectStructSubFieldOriginMarker(field); err != nil {
+		return err
+	}
+	// Only the added sub-field: stored siblings may carry these params from an
+	// earlier version, so the merged struct below is not checked for them.
+	if err := schemautil.RejectStructSubFieldTextMatch(field); err != nil {
+		return err
+	}
+	// Segments written before this add have no column for the new sub-field;
+	// the marker keeps it from becoming the only remaining sub-field, which
+	// would leave those segments without a stored sibling (see
+	// schemautil.CheckStructKeepsOriginalSubField).
+	schemautil.MarkAddedStructSubField(field)
+
+	field.Nullable = parent.Nullable
+	if typeutil.IsNestedArrayTypeSchema(field.GetTypeSchema()) {
+		field.TypeSchema.Nullable = parent.Nullable
+	}
+	// MarshalStructArrayFieldModel already deep-copies the sub-fields.
+	merged := model.MarshalStructArrayFieldModel(parent)
+	merged.Fields = append(merged.Fields, proto.Clone(field).(*schemapb.FieldSchema))
+	if err := checkStructArrayFieldSchema([]*schemapb.StructArrayFieldSchema{merged}); err != nil {
+		return err
+	}
+	return validateStructArrayFieldDataType([]*schemapb.StructArrayFieldSchema{merged})
+}
+
 func buildAlterSchemaAddSchema(coll *model.Collection, plan *schemautil.AlterSchemaAddPlan) (*schemapb.CollectionSchema, []*commonpb.KeyValuePair, error) {
 	schema := coll.ToCollectionSchemaPB()
 	name2id := make(map[string]int64, len(coll.Fields)+1)
@@ -325,7 +399,9 @@ func buildAlterSchemaAddSchema(coll *model.Collection, plan *schemautil.AlterSch
 
 	if plan.HasField() {
 		plan.Field.FieldID = maxAssignedFieldIDFromSchema(schema) + 1
-		name2id[plan.Field.GetName()] = plan.Field.GetFieldID()
+		if plan.Kind != schemautil.AlterSchemaAddStructSubField {
+			name2id[plan.Field.GetName()] = plan.Field.GetFieldID()
+		}
 	}
 	if plan.HasFunction() {
 		function := plan.Function
@@ -375,7 +451,16 @@ func buildAlterSchemaAddSchema(coll *model.Collection, plan *schemautil.AlterSch
 	}
 
 	if plan.HasField() {
-		schema.Fields = append(schema.Fields, plan.Field)
+		if plan.Kind == schemautil.AlterSchemaAddStructSubField {
+			for _, structField := range schema.StructArrayFields {
+				if structField.GetName() == plan.StructPath {
+					structField.Fields = append(structField.Fields, plan.Field)
+					break
+				}
+			}
+		} else {
+			schema.Fields = append(schema.Fields, plan.Field)
+		}
 	}
 	properties := updateMaxFieldIDProperty(coll.Properties, maxAssignedFieldIDFromSchema(schema))
 	schema.Properties = properties
@@ -384,6 +469,9 @@ func buildAlterSchemaAddSchema(coll *model.Collection, plan *schemautil.AlterSch
 
 // broadcastAlterCollectionSchemaDrop handles DropRequest: dropping fields or functions.
 func (c *Core) broadcastAlterCollectionSchemaDrop(ctx context.Context, broadcaster broadcaster.BroadcastAPI, coll *model.Collection, req *milvuspb.AlterCollectionSchemaRequest) error {
+	if typeutil.IsExternalCollection(coll.ToCollectionSchemaPB()) {
+		return merr.WrapErrOperationNotSupportedMsg("external collections do not support dropping fields or functions")
+	}
 	dropReq := req.GetAction().GetDropRequest()
 	if dropReq == nil {
 		return merr.WrapErrParameterInvalidMsg("drop_request is nil")
@@ -440,7 +528,7 @@ func (c *Core) broadcastAlterCollectionSchemaDrop(ctx context.Context, broadcast
 				Properties: properties,
 			},
 		}).
-		WithBroadcast(coll.VirtualChannelNames).
+		WithBroadcast(coll.VirtualChannelNames, message.OptBuildBroadcastAckSyncUp()).
 		MustBuildBroadcast()
 	if _, err := broadcaster.Broadcast(ctx, msg); err != nil {
 		rollbackAlterCollectionAnalyzerFileResourceReservation(ctx, c.meta, coll.CollectionID, addedFileResourceIds, err)
@@ -450,9 +538,8 @@ func (c *Core) broadcastAlterCollectionSchemaDrop(ctx context.Context, broadcast
 }
 
 // buildSchemaForDropField builds the new schema, properties, and droppedFieldIds for dropping a field.
-// It looks up the target by fieldName or fieldID across top-level Fields and StructArrayFields,
-// removes it from the schema, and updates max_field_id. Dropping a sub-field of a struct array
-// field is rejected (no symmetric add-sub-field support).
+// It looks up the target by fieldName or fieldID across top-level fields, whole
+// struct array fields, and their sub-fields, then removes it from the schema.
 func buildSchemaForDropField(coll *model.Collection, fieldName string, fieldID int64) (
 	schema *schemapb.CollectionSchema,
 	properties []*commonpb.KeyValuePair,
@@ -480,7 +567,7 @@ func buildSchemaForDropField(coll *model.Collection, fieldName string, fieldID i
 			droppedField = f
 			continue
 		}
-		newFields = append(newFields, model.MarshalFieldModel(f))
+		newFields = append(newFields, model.CloneField(f))
 	}
 	if droppedField != nil {
 		// Mirror the proxy guard for direct-coord callers: a field a function
@@ -498,12 +585,8 @@ func buildSchemaForDropField(coll *model.Collection, fieldName string, fieldID i
 		return schema, properties, []int64{droppedField.FieldID}, nil
 	}
 
-	// Struct array field path: remove the whole entry from StructArrayFields.
-	// droppedFieldIds includes the struct ID plus every sub-field ID so that
-	// index cascade (matched by FieldID) and segcore filtering (schema.has_field)
-	// naturally cover every column that physically goes away.
-	// Sub-field drops are already rejected at the proxy layer; if one reaches
-	// here we fall through to the generic "field not found" tail.
+	// Whole struct path: remove the struct and all its sub-fields. Include each
+	// physical column ID so index cascade and segment filtering see the drop.
 	var droppedStruct *model.StructArrayField
 	newStructs := make([]*schemapb.StructArrayFieldSchema, 0, len(coll.StructArrayFields))
 	for _, s := range coll.StructArrayFields {
@@ -530,6 +613,40 @@ func buildSchemaForDropField(coll *model.Collection, fieldName string, fieldID i
 			droppedFieldIds = append(droppedFieldIds, subField.FieldID)
 		}
 		return schema, properties, droppedFieldIds, nil
+	}
+
+	// Sub-field path: the persisted name may be raw in older collections, so
+	// compare its canonical stored name while keeping the sub-field ID for drop.
+	for i, s := range coll.StructArrayFields {
+		for j, sub := range s.Fields {
+			storedName := storedRootStructSubFieldName(s.Name, sub.Name)
+			selected := fieldName != "" && storedName == fieldName || fieldName == "" && fieldID > 0 && sub.FieldID == fieldID
+			if !selected {
+				continue
+			}
+			if len(s.Fields) == 1 {
+				return nil, nil, nil, merr.WrapErrParameterInvalidMsg("cannot drop the last sub-field %q of struct field %q, drop the struct field instead", storedName, s.Name)
+			}
+			if sub.IsPrimaryKey || sub.AutoID || sub.IsPartitionKey || sub.IsClusteringKey || sub.IsDynamic || sub.IsFunctionOutput || sub.ExternalField != "" {
+				return nil, nil, nil, merr.WrapErrParameterInvalidMsg("cannot drop struct sub-field %q with a protected role", storedName)
+			}
+			if fn, kind := functionReferencing(coll.Functions, storedName); fn != "" {
+				return nil, nil, nil, merr.WrapErrParameterInvalidMsg("field is referenced by function %s as %s, drop function first", fn, kind)
+			}
+			if typeutil.IsVectorType(sub.DataType) && len(typeutil.GetVectorFieldSchemas(coll.ToCollectionSchemaPB())) <= 1 &&
+				!paramtable.Get().CommonCfg.EnableCollectionWithoutVector.GetAsBool() {
+				return nil, nil, nil, merr.WrapErrParameterInvalidMsg("cannot drop field %s: it would leave no vector field in the collection", storedName)
+			}
+
+			schema = coll.ToCollectionSchemaPB()
+			maxFieldID := maxAssignedFieldIDFromSchema(schema)
+			newStructs[i].Fields = append(newStructs[i].Fields[:j], newStructs[i].Fields[j+1:]...)
+			schema.StructArrayFields = newStructs
+			properties = updateMaxFieldIDProperty(coll.Properties, maxFieldID)
+			schema.Properties = properties
+			schema.Version = coll.SchemaVersion + 1
+			return schema, properties, []int64{sub.FieldID}, nil
+		}
 	}
 
 	if fieldName != "" {
@@ -608,21 +725,22 @@ func buildSchemaForDropFunctionField(coll *model.Collection, functionName string
 	}
 
 	// Mirror the proxy guard for direct-coord callers: dropping the output vector
-	// field(s) must not leave the collection with no vector field.
+	// field(s) may leave the collection with no vector field only while such
+	// collections may be created.
 	removedVectors := 0
 	for _, field := range coll.Fields {
 		if _, ok := outputFieldIDSet[field.FieldID]; ok && typeutil.IsVectorType(field.DataType) {
 			removedVectors++
 		}
 	}
-	if removedVectors > 0 && removedVectors >= len(typeutil.GetVectorFieldSchemas(coll.ToCollectionSchemaPB())) {
+	if removedVectors > 0 && removedVectors >= len(typeutil.GetVectorFieldSchemas(coll.ToCollectionSchemaPB())) && !paramtable.Get().CommonCfg.EnableCollectionWithoutVector.GetAsBool() {
 		return nil, nil, nil, merr.WrapErrParameterInvalidMsg("cannot drop function %s: it would leave no vector field in the collection", functionName)
 	}
 
 	newFields := make([]*schemapb.FieldSchema, 0, len(coll.Fields))
 	for _, field := range coll.Fields {
 		if _, ok := outputFieldIDSet[field.FieldID]; !ok {
-			newFields = append(newFields, model.MarshalFieldModel(field))
+			newFields = append(newFields, model.CloneField(field))
 		}
 	}
 

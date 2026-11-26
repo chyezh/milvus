@@ -111,6 +111,8 @@ type Server struct {
 
 	etcdCli        *clientv3.Client
 	mixCoordClient types.MixCoordClient
+
+	viewQueryClientClose func()
 }
 
 // NewServer create a Proxy server.
@@ -164,10 +166,19 @@ func authenticate(c *gin.Context) {
 		mlog.Warn(c.Request.Context(), "fail to verify apikey", mlog.Err(err))
 	}
 
-	hookutil.GetExtension().ReportAction(c.Request.Context(), nil, &milvuspb.BoolResponse{
+	// The request ends here. Leave behind what the gRPC entry leaves for a
+	// refused request, so the access log and the audit report can show it when
+	// their configuration asks for it: the user name the client claimed, the
+	// returned code and message, and the gin context the audit report reads the
+	// client address and user agent from. No handler runs after the abort, so
+	// the claimed name is never taken for an authenticated identity.
+	if username != "" {
+		c.Set(httpserver.ContextUsername, username)
+	}
+	hookutil.GetExtension().ReportAction(httpserver.ContextWithGin(c.Request.Context(), c), nil, &milvuspb.BoolResponse{
 		Status: merr.Status(merr.ErrNeedAuthenticate),
 	}, nil, c.FullPath(), hookutil.ActionAuthorize)
-	c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{mhttp.HTTPReturnCode: merr.Code(merr.ErrNeedAuthenticate), mhttp.HTTPReturnMessage: merr.ErrNeedAuthenticate.Error()})
+	httpserver.HTTPAbortReturn(c, http.StatusUnauthorized, gin.H{mhttp.HTTPReturnCode: merr.Code(merr.ErrNeedAuthenticate), mhttp.HTTPReturnMessage: merr.ErrNeedAuthenticate.Error()})
 }
 
 // registerHTTPServer register the http server, panic when failed
@@ -628,6 +639,21 @@ func (s *Server) init() error {
 	s.proxy.SetMixCoordClient(s.mixCoordClient)
 	mlog.Debug(context.TODO(), "set MixCoord client for Proxy done")
 
+	viewQueryClientReady := false
+	if setter, ok := s.proxy.(viewQueryClientSetter); ok {
+		mlog.Debug(context.TODO(), "init view query client for Proxy")
+		if err := s.initViewQueryClient(setter); err != nil {
+			mlog.Warn(context.TODO(), "failed to init view query client for Proxy", mlog.Err(err))
+			return err
+		}
+		defer func() {
+			if !viewQueryClientReady {
+				s.closeViewQueryClient()
+			}
+		}()
+		mlog.Debug(context.TODO(), "init view query client for Proxy done")
+	}
+
 	if HTTPParams.Enabled.GetAsBool() {
 		registerHTTPHandlerOnce.Do(func() {
 			mlog.Info(context.TODO(), "register Proxy http server")
@@ -648,6 +674,7 @@ func (s *Server) init() error {
 	// Intentionally print to stdout, which is usually a sign that Milvus is ready to serve.
 	fmt.Println("---Milvus Proxy successfully initialized and ready to serve!---")
 
+	viewQueryClientReady = true
 	return nil
 }
 
@@ -692,6 +719,7 @@ func (s *Server) Stop() (err error) {
 	if s.etcdCli != nil {
 		defer s.etcdCli.Close()
 	}
+	defer s.closeViewQueryClient()
 
 	gracefulWg := sync.WaitGroup{}
 
@@ -1037,7 +1065,7 @@ func (s *Server) GetCompactionStateWithPlans(ctx context.Context, req *milvuspb.
 	return s.proxy.GetCompactionStateWithPlans(ctx, req)
 }
 
-// GetFlushState gets the flush state of the collection based on the provided flush ts and segment IDs.
+// GetFlushState gets the flush state based on the provided segment IDs.
 func (s *Server) GetFlushState(ctx context.Context, req *milvuspb.GetFlushStateRequest) (*milvuspb.GetFlushStateResponse, error) {
 	return s.proxy.GetFlushState(ctx, req)
 }
@@ -1357,6 +1385,29 @@ func (s *Server) GetFeatureUsage(ctx context.Context, req *internalpb.GetFeature
 
 func (s *Server) ClearReadTaskQueue(ctx context.Context, req *internalpb.ClearReadTaskQueueRequest) (*internalpb.ClearReadTaskQueueResponse, error) {
 	return s.proxy.ClearReadTaskQueue(ctx, req)
+}
+
+// ListRunningRequests is the public, cluster-wide call: this proxy asks the
+// coordinator, which fans out to every proxy.
+func (s *Server) ListRunningRequests(ctx context.Context, req *milvuspb.ListRunningRequestsRequest) (*milvuspb.ListRunningRequestsResponse, error) {
+	return s.proxy.ListRunningRequests(ctx, req)
+}
+
+// CancelRequests is the public, cluster-wide call.
+func (s *Server) CancelRequests(ctx context.Context, req *milvuspb.CancelRequestsRequest) (*milvuspb.CancelRequestsResponse, error) {
+	return s.proxy.CancelRequests(ctx, req)
+}
+
+// ListLocalRunningRequests is the internal call the coordinator makes: it
+// answers for this proxy alone.
+func (s *Server) ListLocalRunningRequests(ctx context.Context, req *milvuspb.ListRunningRequestsRequest) (*milvuspb.ListRunningRequestsResponse, error) {
+	return s.proxy.ListLocalRunningRequests(ctx, req)
+}
+
+// CancelLocalRequests is the internal call the coordinator makes: it cancels
+// on this proxy alone.
+func (s *Server) CancelLocalRequests(ctx context.Context, req *milvuspb.CancelRequestsRequest) (*milvuspb.CancelRequestsResponse, error) {
+	return s.proxy.CancelLocalRequests(ctx, req)
 }
 
 // AddFileResource add file resource

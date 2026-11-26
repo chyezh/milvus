@@ -21,9 +21,12 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/samber/lo"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 
@@ -144,6 +147,21 @@ func (s *SearchIteratorSuite) TestSearchIteratorInit() {
 				return rand.Float32()
 			}))))
 			s.Error(err)
+		})
+
+		// The RPC succeeds but its status carries the error; the iterator must
+		// return it instead of searching without a collection ID and schema.
+		s.Run("describe_status_fail", func() {
+			collectionName := fmt.Sprintf("coll_%s", s.randString(6))
+
+			s.mock.EXPECT().DescribeCollection(mock.Anything, mock.Anything).Return(&milvuspb.DescribeCollectionResponse{
+				Status: merr.Status(merr.WrapErrCollectionNotFound(collectionName)),
+			}, nil).Once()
+			_, err := s.client.SearchIterator(ctx, NewSearchIteratorOption(collectionName, entity.FloatVector(lo.RepeatBy(128, func(_ int) float32 {
+				return rand.Float32()
+			}))))
+			s.ErrorIs(err, merr.ErrCollectionNotFound)
+			s.NotErrorIs(err, ErrServerVersionIncompatible)
 		})
 
 		s.Run("not_v2_result", func() {
@@ -436,6 +454,189 @@ func (s *SearchIteratorSuite) TestNextWithLimit() {
 	s.ErrorIs(err, io.EOF, "limit reached, return EOF")
 }
 
+func (s *SearchIteratorSuite) TestNextPinsSessionTs() {
+	ctx := context.Background()
+	collectionName := fmt.Sprintf("coll_%s", s.randString(6))
+
+	token := fmt.Sprintf("iter_token_%s", s.randString(8))
+	const sessionTs = uint64(123456)
+
+	s.mock.EXPECT().DescribeCollection(mock.Anything, mock.Anything).Return(&milvuspb.DescribeCollectionResponse{
+		CollectionID: 1,
+		Schema:       s.schema.ProtoMessage(),
+	}, nil).Once()
+	// compatibility probe, the server returns the session ts it selected
+	s.mock.EXPECT().Search(mock.Anything, mock.Anything).Return(&milvuspb.SearchResults{
+		Status:    merr.Success(),
+		SessionTs: sessionTs,
+		Results: &schemapb.SearchResultData{
+			NumQueries:              1,
+			TopK:                    1,
+			Ids:                     &schemapb.IDs{IdField: &schemapb.IDs_IntId{IntId: &schemapb.LongArray{Data: []int64{1}}}},
+			Scores:                  []float32{0.1},
+			Topks:                   []int64{1},
+			SearchIteratorV2Results: &schemapb.SearchIteratorV2Results{Token: token},
+		},
+	}, nil).Once()
+
+	iter, err := s.client.SearchIterator(ctx, NewSearchIteratorOption(collectionName, entity.FloatVector(lo.RepeatBy(128, func(_ int) float32 {
+		return rand.Float32()
+	}))))
+	s.Require().NoError(err)
+
+	// first page already carries the session ts pinned from the probe
+	s.mock.EXPECT().Search(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, sr *milvuspb.SearchRequest) (*milvuspb.SearchResults, error) {
+		s.EqualValues(sessionTs, sr.GetGuaranteeTimestamp())
+		return &milvuspb.SearchResults{
+			Status:    merr.Success(),
+			SessionTs: sessionTs,
+			Results: &schemapb.SearchResultData{
+				NumQueries: 1,
+				TopK:       1,
+				FieldsData: []*schemapb.FieldData{
+					s.getInt64FieldData("ID", []int64{1}),
+				},
+				Ids: &schemapb.IDs{
+					IdField: &schemapb.IDs_IntId{
+						IntId: &schemapb.LongArray{
+							Data: []int64{1},
+						},
+					},
+				},
+				Scores:  []float32{0.5},
+				Topks:   []int64{1},
+				Recalls: []float32{1},
+				SearchIteratorV2Results: &schemapb.SearchIteratorV2Results{
+					Token:     token,
+					LastBound: 0.5,
+				},
+			},
+		}, nil
+	}).Once()
+
+	rs, err := iter.Next(ctx)
+	s.NoError(err)
+	s.EqualValues(1, rs.IDs.Len())
+
+	// second page: request must pin the session ts as guarantee timestamp
+	s.mock.EXPECT().Search(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, sr *milvuspb.SearchRequest) (*milvuspb.SearchResults, error) {
+		s.EqualValues(sessionTs, sr.GetGuaranteeTimestamp())
+		return &milvuspb.SearchResults{
+			Status:    merr.Success(),
+			SessionTs: sessionTs,
+			Results: &schemapb.SearchResultData{
+				NumQueries: 1,
+				TopK:       1,
+				FieldsData: []*schemapb.FieldData{
+					s.getInt64FieldData("ID", []int64{}),
+				},
+				Ids: &schemapb.IDs{
+					IdField: &schemapb.IDs_IntId{
+						IntId: &schemapb.LongArray{
+							Data: []int64{},
+						},
+					},
+				},
+				Scores:  []float32{},
+				Topks:   []int64{0},
+				Recalls: []float32{1.0},
+				SearchIteratorV2Results: &schemapb.SearchIteratorV2Results{
+					Token:     token,
+					LastBound: 0.5,
+				},
+			},
+		}, nil
+	}).Once()
+
+	_, err = iter.Next(ctx)
+	s.ErrorIs(err, io.EOF)
+}
+
+func (s *SearchIteratorSuite) TestNextMalformedResponse() {
+	ctx := context.Background()
+	token := fmt.Sprintf("iter_token_%s", s.randString(8))
+	idsOf := func(ids ...int64) *schemapb.IDs {
+		return &schemapb.IDs{IdField: &schemapb.IDs_IntId{IntId: &schemapb.LongArray{Data: ids}}}
+	}
+
+	cases := []struct {
+		name    string
+		results *schemapb.SearchResultData
+		errMsg  string
+	}{
+		{
+			name: "element indices mismatch hit count",
+			results: &schemapb.SearchResultData{
+				NumQueries:     1,
+				TopK:           2,
+				Ids:            idsOf(1, 2),
+				Scores:         []float32{0.2, 0.1},
+				Topks:          []int64{2},
+				ElementIndices: &schemapb.LongArray{Data: []int64{0}},
+			},
+			errMsg: "1 element indices for 2 hits",
+		},
+		{
+			name: "topk missing",
+			results: &schemapb.SearchResultData{
+				NumQueries: 1,
+				TopK:       1,
+				Ids:        idsOf(1),
+				Scores:     []float32{0.1},
+			},
+			errMsg: "topk not returned",
+		},
+		{
+			name: "no query",
+			results: &schemapb.SearchResultData{
+				NumQueries: 0,
+				TopK:       1,
+			},
+			errMsg: "no result set",
+		},
+	}
+
+	for _, tc := range cases {
+		s.Run(tc.name, func() {
+			collectionName := fmt.Sprintf("coll_%s", s.randString(6))
+			s.mock.EXPECT().DescribeCollection(mock.Anything, mock.Anything).Return(&milvuspb.DescribeCollectionResponse{
+				CollectionID: 1,
+				Schema:       s.schema.ProtoMessage(),
+			}, nil).Once()
+			// compatibility probe
+			s.mock.EXPECT().Search(mock.Anything, mock.Anything).Return(&milvuspb.SearchResults{
+				Status: merr.Success(),
+				Results: &schemapb.SearchResultData{
+					NumQueries:              1,
+					TopK:                    1,
+					Ids:                     idsOf(1),
+					Scores:                  []float32{0.1},
+					Topks:                   []int64{1},
+					SearchIteratorV2Results: &schemapb.SearchIteratorV2Results{Token: token},
+				},
+			}, nil).Once()
+
+			iter, err := s.client.SearchIterator(ctx, NewSearchIteratorOption(collectionName, entity.FloatVector(lo.RepeatBy(128, func(_ int) float32 {
+				return rand.Float32()
+			}))))
+			s.Require().NoError(err)
+
+			tc.results.SearchIteratorV2Results = &schemapb.SearchIteratorV2Results{Token: token}
+			s.mock.EXPECT().Search(mock.Anything, mock.Anything).Return(&milvuspb.SearchResults{
+				Status:  merr.Success(),
+				Results: tc.results,
+			}, nil).Once()
+
+			s.NotPanics(func() {
+				_, err = iter.Next(ctx)
+			})
+			s.Require().Error(err)
+			s.NotErrorIs(err, io.EOF)
+			s.ErrorContains(err, tc.errMsg)
+		})
+	}
+}
+
 func TestSearchIterator(t *testing.T) {
 	suite.Run(t, new(SearchIteratorSuite))
 }
@@ -653,6 +854,52 @@ func (s *QueryIteratorSuite) TestQueryIteratorWithLimit() {
 	s.ErrorIs(err, io.EOF, "limit reached, return EOF")
 }
 
+func (s *QueryIteratorSuite) TestQueryIteratorPinsSessionTs() {
+	ctx := context.Background()
+	collectionName := fmt.Sprintf("coll_%s", s.randString(6))
+	const sessionTs = uint64(987654)
+
+	s.mock.EXPECT().DescribeCollection(mock.Anything, mock.Anything).Return(&milvuspb.DescribeCollectionResponse{
+		CollectionID: 1,
+		Schema:       s.schema.ProtoMessage(),
+	}, nil).Once()
+
+	// init query: request has no guarantee timestamp, server returns session ts
+	s.mock.EXPECT().Query(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, qr *milvuspb.QueryRequest) (*milvuspb.QueryResults, error) {
+		s.Zero(qr.GetGuaranteeTimestamp())
+		return &milvuspb.QueryResults{
+			Status:    merr.Success(),
+			SessionTs: sessionTs,
+			FieldsData: []*schemapb.FieldData{
+				s.getInt64FieldData("ID", []int64{1, 2, 3}),
+				s.getVarcharFieldData("Name", []string{"a", "b", "c"}),
+			},
+		}, nil
+	}).Once()
+
+	iter, err := s.client.QueryIterator(ctx, NewQueryIteratorOption(collectionName).
+		WithOutputFields("ID", "Name").
+		WithBatchSize(3))
+	s.Require().NoError(err)
+
+	// first Next returns the cached first page
+	rs, err := iter.Next(ctx)
+	s.NoError(err)
+	s.EqualValues(3, rs.ResultCount)
+
+	// subsequent page: request must pin the session ts as guarantee timestamp
+	s.mock.EXPECT().Query(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, qr *milvuspb.QueryRequest) (*milvuspb.QueryResults, error) {
+		s.EqualValues(sessionTs, qr.GetGuaranteeTimestamp())
+		return &milvuspb.QueryResults{
+			Status:     merr.Success(),
+			FieldsData: []*schemapb.FieldData{},
+		}, nil
+	}).Once()
+
+	_, err = iter.Next(ctx)
+	s.ErrorIs(err, io.EOF)
+}
+
 func (s *QueryIteratorSuite) TestQueryIteratorWithVarCharPK() {
 	ctx := context.Background()
 	collectionName := fmt.Sprintf("coll_%s", s.randString(6))
@@ -747,4 +994,38 @@ func (s *QueryIteratorSuite) TestQueryIteratorWithFilter() {
 
 func TestQueryIterator(t *testing.T) {
 	suite.Run(t, new(QueryIteratorSuite))
+}
+
+func TestComposeIteratorExprVarChar(t *testing.T) {
+	newIt := func(expr string, pk any) *queryIterator {
+		return &queryIterator{
+			expr:    expr,
+			pkField: entity.NewField().WithName("ID").WithDataType(entity.FieldTypeVarChar),
+			lastPK:  pk,
+		}
+	}
+
+	t.Run("plain value", func(t *testing.T) {
+		assert.Equal(t, `ID > "abc"`, newIt("", "abc").composeIteratorExpr())
+	})
+
+	t.Run("value with double quote", func(t *testing.T) {
+		assert.Equal(t, `ID > "a\"b"`, newIt("", `a"b`).composeIteratorExpr())
+	})
+
+	t.Run("special characters round-trip", func(t *testing.T) {
+		// The emitted literal must unquote back to the original value, the way the
+		// server parses it, so iteration keeps advancing past such a key.
+		for _, pk := range []string{`a"b`, `a\b`, "a\nb", "trailing\\", "plain"} {
+			got := newIt("", pk).composeIteratorExpr()
+			literal := strings.TrimPrefix(got, "ID > ")
+			unquoted, err := strconv.Unquote(literal)
+			assert.NoError(t, err)
+			assert.Equal(t, pk, unquoted)
+		}
+	})
+
+	t.Run("combined with base expression", func(t *testing.T) {
+		assert.Equal(t, `(age > 10) and ID > "a\"b"`, newIt("age > 10", `a"b`).composeIteratorExpr())
+	})
 }

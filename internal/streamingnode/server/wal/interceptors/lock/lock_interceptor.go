@@ -22,6 +22,10 @@ type lockAppendInterceptor struct {
 }
 
 func (r *lockAppendInterceptor) DoAppend(ctx context.Context, msg message.MutableMessage, append interceptors.Append) (message.MessageID, error) {
+	if msg.MessageType() == message.MessageTypeAlterWAL && r.buildParam != nil {
+		r.buildParam.TimeTickSyncMu.Lock()
+		defer r.buildParam.TimeTickSyncMu.Unlock()
+	}
 	unlock := r.acquireLockGuard(msg)
 	defer unlock()
 
@@ -53,9 +57,9 @@ func (r *lockAppendInterceptor) DoAppend(ctx context.Context, msg message.Mutabl
 	// the WAL lock. Failed, deduplicated and explicitly ignored operations do not.
 	vchannel := msg.VChannel()
 	if vchannel == "" || vchannel == r.channel.Name || msg.IsPChannelLevel() {
-		r.txnManager.FailTxnAtVChannel("")
+		r.txnManager.FailTxnAtVChannel("", msg.TimeTick())
 	} else if !funcutil.IsControlChannel(vchannel) {
-		r.txnManager.FailTxnAtVChannel(vchannel)
+		r.txnManager.FailTxnAtVChannel(vchannel, msg.TimeTick())
 	}
 	return msgID, nil
 }

@@ -218,9 +218,8 @@ func assembleOperatorResult(ctx *types.FuncContext, inputDF *DataFrame, outputs 
 		if err := builder.addColumn(col.Field.Name, col.Data); err != nil {
 			return nil, err
 		}
-		builder.SetFieldNullable(col.Field.Name, col.Field.Nullable)
-		if typ, err := ToMilvusType(col.Field.Type); err == nil {
-			builder.SetFieldType(col.Field.Name, typ)
+		if err := builder.SetComputedField(col.Field); err != nil {
+			return nil, err
 		}
 		fields = append(fields, col.Field)
 	}
@@ -309,7 +308,7 @@ func selectColumn(ctx *types.FuncContext, col *arrow.Chunked, selection *RowSele
 				chunks[i] = array.NewSlice(input, 0, 0)
 				continue
 			}
-			// Keep the legacy scalar-type dispatch: TakeArray in our pinned Arrow
+			// Use direct scalar/List<Int32> selection: TakeArray in our pinned Arrow
 			// v17 fork has quadratic allocation/copy costs for strings and lists.
 			// Reconsider TakeArray after upgrading Arrow with the performance fixes
 			// in apache/arrow-go#557 and #573 (released in v18.5.0).

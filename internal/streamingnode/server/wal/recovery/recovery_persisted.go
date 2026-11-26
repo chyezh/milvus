@@ -12,6 +12,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus/internal/metastore"
+	"github.com/milvus-io/milvus/internal/storagecommon"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
@@ -95,8 +96,11 @@ func (r *recoveryStorageImpl) recoverRecoveryInfoFromMeta(ctx context.Context, c
 	if err := validateRecoveredViewMeta(
 		vchannelMetas,
 		segmentMetas,
-		r.checkpoint.Magic == utility.RecoveryMagicRecoveryStorageV2,
+		r.checkpoint.Magic >= utility.RecoveryMagicRecoveryStorageV2,
 	); err != nil {
+		return err
+	}
+	if err := r.alignCollectionSchema(ctx, vchannelMetas); err != nil {
 		return err
 	}
 	r.Logger().Info(context.TODO(), "recover segment info done", mlog.Int("segments", len(segmentMetas)))
@@ -133,7 +137,7 @@ func (r *recoveryStorageImpl) migrateLegacyRecoveryInfo(
 	if r.checkpoint == nil {
 		return false, merr.WrapErrDataIntegrityMsg("missing recovery checkpoint")
 	}
-	if r.checkpoint.Magic == utility.RecoveryMagicRecoveryStorageV2 {
+	if r.checkpoint.Magic == utility.RecoveryMagicRecoveryStorageV2 || r.checkpoint.Magic == utility.RecoveryMagicSchemaMetadataAligned || r.checkpoint.Magic == utility.RecoveryMagicHotWALSwitch {
 		return false, nil
 	}
 	if r.checkpoint.Magic != utility.RecoveryMagicStreamingInitialized {
@@ -425,6 +429,9 @@ func rebuildLegacySegmentSnapshot(
 	if storageVersion == 0 {
 		storageVersion = legacy.GetStorageVersion()
 	}
+	if err := storagecommon.ValidateSegmentStorageVersion(legacy.GetSegmentId(), storageVersion); err != nil {
+		return nil, false, err
+	}
 	return &streamingpb.SegmentAssignmentMeta{
 		CollectionId:       legacy.GetCollectionId(),
 		PartitionId:        legacy.GetPartitionId(),
@@ -663,6 +670,9 @@ func validateRecoveredViewMeta(
 		}
 	}
 	for segmentID, segment := range segments {
+		if err := storagecommon.ValidateSegmentStorageVersion(segmentID, segment.GetStorageVersion()); err != nil {
+			return err
+		}
 		if segment.GetSegmentId() == 0 {
 			return merr.WrapErrDataIntegrityMsg("segment missing segment owner in recovery meta")
 		}

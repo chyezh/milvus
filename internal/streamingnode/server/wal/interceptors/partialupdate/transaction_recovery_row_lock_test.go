@@ -77,7 +77,8 @@ func TestPartialUpdateRecoveryRegistersLeaseCleanup(t *testing.T) {
 	env.txnManager.CleanupTxnUntil(math.MaxUint64)
 	require.Nil(t, env.partial.state.getTxn(1))
 	_, err := env.txnManager.GetSessionOfTxn(1)
-	require.True(t, status.AsStreamingError(err).IsTxnExpired())
+	require.ErrorContains(t, err, "not found")
+	require.False(t, status.AsStreamingError(err).IsTxnExpired())
 	requireTestRowLocksAvailable(t, env.partial.state.rowLocks, "v1", 10)
 }
 
@@ -176,7 +177,7 @@ func TestPartialUpdateVersionlessInsertWithoutSchemaFailsClosed(t *testing.T) {
 				require.False(t, appended)
 				// The rejected body never reached the WAL and left no write set.
 				_, err = env.append(newCommitTxnMessage("v1", result.TxnCtx.TxnID, 0), nil)
-				require.NoError(t, err)
+				require.ErrorContains(t, err, "cannot commit an empty transaction")
 			case "recovered_transaction":
 				// The durable body's PK descriptor cannot be resolved, so the
 				// transaction is incomplete and its commit is rejected before

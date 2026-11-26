@@ -72,6 +72,7 @@ func nullableUpsertVector(dataType schemapb.DataType, values []int64, valid []bo
 }
 
 func TestUpsertPreExecuteNullableVectorValidity(t *testing.T) {
+	metacache.MockWriteSchemaForTest(t)
 	for _, dataType := range []schemapb.DataType{
 		schemapb.DataType_FloatVector, schemapb.DataType_BinaryVector,
 		schemapb.DataType_Float16Vector, schemapb.DataType_BFloat16Vector,
@@ -172,6 +173,19 @@ func TestUpsertPreExecuteNullableVectorValidity(t *testing.T) {
 						}).Build()
 						t.Cleanup(func() { allocation.UnPatch() })
 						patch(retrieveByPKs, queryResult, segcore.StorageCost{}, nil)
+						bind := mockey.Mock((*UpsertTask).preparePartialUpdateCASGroups).To(func(task *UpsertTask, ctx context.Context) error {
+							groups, err := task.buildPartialUpdateCASGroups()
+							if err != nil {
+								return err
+							}
+							for _, proof := range groups {
+								proof.ReadTs = 1000
+								proof.ObservedPchannelTerm = 9
+							}
+							task.partialUpdateCASGroups = groups
+							return nil
+						}).Build()
+						t.Cleanup(func() { bind.UnPatch() })
 
 						// Exercise the input boundary, partial merge, and final insert validation.
 						err := task.PreExecute(context.Background())
@@ -210,7 +224,8 @@ func TestUpsertPreExecuteNullableVectorValidity(t *testing.T) {
 						require.NotNil(t, merged)
 						expected := nullableUpsertVector(dataType, expectedIDs, expectedValid)
 						require.True(t, proto.Equal(expected.GetVectors(), merged.GetVectors()), "expected %v, got %v", expected.GetVectors(), merged.GetVectors())
-						require.Empty(t, merged.GetValidData())
+						// Row validity is kept in both locations.
+						require.Equal(t, merged.GetVectors().GetValidData(), merged.GetValidData())
 						require.EqualValues(t, 3, task.result.InsertCnt)
 						require.EqualValues(t, len(existing), task.result.DeleteCnt)
 					})

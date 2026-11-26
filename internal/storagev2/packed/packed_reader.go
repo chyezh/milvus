@@ -176,8 +176,10 @@ func NewPackedReaderWithExtfs(
 			tls_min_version:                 C.CString(tlsMinVersionForStorage(storageConfig.GetSslTlsMinVersion())),
 			use_crc32c_checksum:             C.bool(storageConfig.GetUseCrc32CChecksum()),
 			talon_mode:                      C.uint32_t(storageConfig.GetTalonMode()),
+			talon_enabled_stages:            C.uint32_t(storageConfig.GetTalonEnabledStages()),
 			talon_small_read_threshold:      C.uint32_t(storageConfig.GetTalonSmallReadThreshold()),
 			talon_coordinator:               C.CString(storageConfig.GetTalonCoordinator()),
+			talon_namespace:                 C.CString(storageConfig.GetTalonNamespace()),
 			talon_block_size:                C.uint32_t(storageConfig.GetTalonBlockSize()),
 			talon_max_idle_per_addr:         C.uint32_t(storageConfig.GetTalonMaxIdlePerAddr()),
 			talon_enable_for_external_table: C.bool(storageConfig.GetTalonEnableForExternalTable()),
@@ -196,6 +198,7 @@ func NewPackedReaderWithExtfs(
 		defer C.free(unsafe.Pointer(cStorageConfig.gcp_credential_json))
 		defer C.free(unsafe.Pointer(cStorageConfig.tls_min_version))
 		defer C.free(unsafe.Pointer(cStorageConfig.talon_coordinator))
+		defer C.free(unsafe.Pointer(cStorageConfig.talon_namespace))
 
 		status = C.NewPackedReaderWithStorageConfig(cFilePathsArray, cNumPaths, cSchema, cBufferSize, cEagerPrebuffer, cStorageConfig, &cPackedReader, pluginContextPtr)
 	} else {
@@ -258,4 +261,53 @@ func (pr *PackedReader) Close() error {
 	}
 	pr.cPackedReader = nil
 	return nil
+}
+
+// GetPackedFileFieldIDs returns, for each packed file, the field IDs of the
+// columns it stores, taken from the PARQUET:field_id metadata in its footer.
+// Only the footers are read, once per file; the filesystem is resolved as
+// NewPackedReader does. A failed read keeps the storage error code the C++
+// side attached (transient storage errors stay retriable).
+func GetPackedFileFieldIDs(filePaths []string, storageConfig *indexpb.StorageConfig, storagePluginContext *indexcgopb.StoragePluginContext) ([][]int64, error) {
+	if len(filePaths) == 0 {
+		return nil, nil
+	}
+	cFilePaths := make([]*C.char, len(filePaths))
+	for i, path := range filePaths {
+		cFilePaths[i] = C.CString(path)
+		defer C.free(unsafe.Pointer(cFilePaths[i]))
+	}
+
+	var cStorageConfigPtr *C.CStorageConfig
+	if storageConfig != nil {
+		cStorageConfig, release := newCStorageConfig(storageConfig)
+		defer release()
+		cStorageConfigPtr = &cStorageConfig
+	}
+	cPluginContext, releasePluginContext := newCPluginContext(storagePluginContext)
+	defer releasePluginContext()
+
+	var cFieldIDs *C.int64_t
+	var cFieldCounts *C.int64_t
+	status := C.GetPackedFileFieldIDs((**C.char)(unsafe.Pointer(&cFilePaths[0])), C.int64_t(len(filePaths)),
+		cStorageConfigPtr, cPluginContext, &cFieldIDs, &cFieldCounts)
+	if err := ConsumeCStatusIntoError(&status); err != nil {
+		return nil, err
+	}
+	defer C.free(unsafe.Pointer(cFieldIDs))
+	defer C.free(unsafe.Pointer(cFieldCounts))
+
+	counts := unsafe.Slice((*int64)(unsafe.Pointer(cFieldCounts)), len(filePaths))
+	total := int64(0)
+	for _, count := range counts {
+		total += count
+	}
+	ids := unsafe.Slice((*int64)(unsafe.Pointer(cFieldIDs)), total)
+	result := make([][]int64, len(filePaths))
+	offset := int64(0)
+	for i, count := range counts {
+		result[i] = append([]int64(nil), ids[offset:offset+count]...)
+		offset += count
+	}
+	return result, nil
 }

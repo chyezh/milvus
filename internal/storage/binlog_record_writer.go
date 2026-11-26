@@ -125,6 +125,11 @@ type packedBinlogRecordWriterBase struct {
 
 	// Track null counts per field for nullable fields
 	nullCounts map[FieldID]int64
+	// Valid element counts of VectorArray fields; a field whose column could
+	// not be counted is dropped from the map and listed in
+	// validElementUnknown, so its binlogs carry no count.
+	validElementCounts  map[FieldID]int64
+	validElementUnknown map[FieldID]struct{}
 }
 
 func (pw *packedBinlogRecordWriterBase) getColumnStatsFromRecord(r Record, allFields []*schemapb.FieldSchema) map[int64]storagecommon.ColumnStats {
@@ -271,6 +276,12 @@ func (pw *packedBinlogRecordWriterBase) collectNullCounts(r Record) {
 			pw.nullCounts[field.FieldID] += int64(col.NullN())
 		}
 	}
+	pw.validElementCounts, pw.validElementUnknown = CollectVectorArrayValidElements(
+		pw.schema, r, pw.validElementCounts, pw.validElementUnknown)
+}
+
+func (pw *packedBinlogRecordWriterBase) getFieldValidElementCountsForColumnGroup(columnGroup storagecommon.ColumnGroup) map[int64]int64 {
+	return ColumnGroupValidElementCounts(columnGroup, pw.validElementCounts)
 }
 
 func (pw *packedBinlogRecordWriterBase) getFieldNullCountsForColumnGroup(columnGroup storagecommon.ColumnGroup) map[int64]int64 {
@@ -371,13 +382,14 @@ func (pw *PackedBinlogRecordWriter) finalizeBinlogs() {
 			}
 		}
 		pw.fieldBinlogs[columnGroupID].Binlogs = append(pw.fieldBinlogs[columnGroupID].Binlogs, &datapb.Binlog{
-			LogSize:         int64(pw.writer.GetColumnGroupWrittenCompressed(columnGroupID)),
-			MemorySize:      int64(pw.writer.GetColumnGroupWrittenUncompressed(columnGroupID)),
-			LogPath:         pw.writer.GetWrittenPaths(columnGroupID),
-			EntriesNum:      pw.writer.GetWrittenRowNum(),
-			TimestampFrom:   pw.tsFrom,
-			TimestampTo:     pw.tsTo,
-			FieldNullCounts: pw.getFieldNullCountsForColumnGroup(columnGroup),
+			LogSize:                 int64(pw.writer.GetColumnGroupWrittenCompressed(columnGroupID)),
+			MemorySize:              int64(pw.writer.GetColumnGroupWrittenUncompressed(columnGroupID)),
+			LogPath:                 pw.writer.GetWrittenPaths(columnGroupID),
+			EntriesNum:              pw.writer.GetWrittenRowNum(),
+			TimestampFrom:           pw.tsFrom,
+			TimestampTo:             pw.tsTo,
+			FieldNullCounts:         pw.getFieldNullCountsForColumnGroup(columnGroup),
+			FieldValidElementCounts: pw.getFieldValidElementCountsForColumnGroup(columnGroup),
 		})
 	}
 	pw.manifest = pw.writer.GetWrittenManifest()
@@ -456,6 +468,14 @@ type PackedManifestRecordWriter struct {
 	textRefsAsBinary bool
 }
 
+// GetFieldLogicalSizes reports only rows registered by a successful manifest commit.
+func (pw *PackedManifestRecordWriter) GetFieldLogicalSizes() *datapb.FieldLogicalSizes {
+	if pw.manifest == "" {
+		return nil
+	}
+	return pw.writer.GetFieldLogicalSizes()
+}
+
 func (pw *PackedManifestRecordWriter) Write(r Record) error {
 	if err := pw.initWriters(r); err != nil {
 		return err
@@ -532,13 +552,14 @@ func (pw *PackedManifestRecordWriter) finalizeBinlogs() {
 			}
 		}
 		pw.fieldBinlogs[columnGroupID].Binlogs = append(pw.fieldBinlogs[columnGroupID].Binlogs, &datapb.Binlog{
-			LogSize:         int64(pw.writer.GetColumnGroupWrittenCompressed(columnGroupID)),
-			MemorySize:      int64(pw.writer.GetColumnGroupWrittenUncompressed(columnGroupID)),
-			LogPath:         pw.writer.GetWrittenPaths(columnGroupID),
-			EntriesNum:      pw.writer.GetWrittenRowNum(),
-			TimestampFrom:   pw.tsFrom,
-			TimestampTo:     pw.tsTo,
-			FieldNullCounts: pw.getFieldNullCountsForColumnGroup(columnGroup),
+			LogSize:                 int64(pw.writer.GetColumnGroupWrittenCompressed(columnGroupID)),
+			MemorySize:              int64(pw.writer.GetColumnGroupWrittenUncompressed(columnGroupID)),
+			LogPath:                 pw.writer.GetWrittenPaths(columnGroupID),
+			EntriesNum:              pw.writer.GetWrittenRowNum(),
+			TimestampFrom:           pw.tsFrom,
+			TimestampTo:             pw.tsTo,
+			FieldNullCounts:         pw.getFieldNullCountsForColumnGroup(columnGroup),
+			FieldValidElementCounts: pw.getFieldValidElementCountsForColumnGroup(columnGroup),
 		})
 	}
 }
@@ -691,6 +712,13 @@ type PackedTextManifestRecordWriter struct {
 	textColumnConfigs []packed.TextColumnConfig
 }
 
+func (pw *PackedTextManifestRecordWriter) GetFieldLogicalSizes() *datapb.FieldLogicalSizes {
+	if pw.manifest == "" {
+		return nil
+	}
+	return pw.writer.GetFieldLogicalSizes()
+}
+
 func (pw *PackedTextManifestRecordWriter) Write(r Record) error {
 	if err := pw.initWriters(r); err != nil {
 		return err
@@ -770,13 +798,14 @@ func (pw *PackedTextManifestRecordWriter) finalizeBinlogs() {
 			}
 		}
 		pw.fieldBinlogs[columnGroupID].Binlogs = append(pw.fieldBinlogs[columnGroupID].Binlogs, &datapb.Binlog{
-			LogSize:         int64(pw.writer.GetColumnGroupWrittenCompressed(columnGroupID)),
-			MemorySize:      int64(pw.writer.GetColumnGroupWrittenUncompressed(columnGroupID)),
-			LogPath:         pw.writer.GetWrittenPaths(columnGroupID),
-			EntriesNum:      pw.writer.GetWrittenRowNum(),
-			TimestampFrom:   pw.tsFrom,
-			TimestampTo:     pw.tsTo,
-			FieldNullCounts: pw.getFieldNullCountsForColumnGroup(columnGroup),
+			LogSize:                 int64(pw.writer.GetColumnGroupWrittenCompressed(columnGroupID)),
+			MemorySize:              int64(pw.writer.GetColumnGroupWrittenUncompressed(columnGroupID)),
+			LogPath:                 pw.writer.GetWrittenPaths(columnGroupID),
+			EntriesNum:              pw.writer.GetWrittenRowNum(),
+			TimestampFrom:           pw.tsFrom,
+			TimestampTo:             pw.tsTo,
+			FieldNullCounts:         pw.getFieldNullCountsForColumnGroup(columnGroup),
+			FieldValidElementCounts: pw.getFieldValidElementCountsForColumnGroup(columnGroup),
 		})
 	}
 }

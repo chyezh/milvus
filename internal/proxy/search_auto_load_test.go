@@ -1,0 +1,1017 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package proxy
+
+import (
+	"context"
+	"net"
+	"sync/atomic"
+	"testing"
+	"testing/synctest"
+	"time"
+
+	"github.com/bytedance/mockey"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
+
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/mocks"
+	"github.com/milvus-io/milvus/internal/proxy/accesslog"
+	"github.com/milvus-io/milvus/internal/proxy/accesslog/info"
+	"github.com/milvus-io/milvus/internal/proxy/dql"
+	"github.com/milvus-io/milvus/internal/proxy/scheduler"
+	"github.com/milvus-io/milvus/internal/proxy/taskmodel"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
+	"github.com/milvus-io/milvus/internal/util/segcore"
+	"github.com/milvus-io/milvus/internal/views/queryclient"
+	"github.com/milvus-io/milvus/internal/views/qviews"
+	"github.com/milvus-io/milvus/internal/views/viewerror"
+	"github.com/milvus-io/milvus/pkg/v3/metrics"
+	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v3/util/ratelimitutil"
+	"github.com/milvus-io/milvus/pkg/v3/util/testutils"
+)
+
+func TestEnsureCollectionReadyUsesOneRPC(t *testing.T) {
+	enableAutoLoad(t)
+	for _, want := range []error{nil, merr.ErrIndexNotFound, merr.ErrServiceUnavailable, context.DeadlineExceeded} {
+		name := "ready"
+		if want != nil {
+			name = want.Error()
+		}
+		t.Run(name, func(t *testing.T) {
+			cache := mockSearchCollectionMeta(t, 100, []string{"v0", "v1"})
+			coord := mocks.NewMockMixCoordClient(t)
+			coord.EXPECT().EnsureCollectionReady(mock.Anything, mock.Anything).RunAndReturn(
+				func(_ context.Context, req *querypb.EnsureCollectionReadyRequest, _ ...grpc.CallOption) (*commonpb.Status, error) {
+					require.EqualValues(t, 100, req.GetCollectionID())
+					require.Equal(t, []string{"v0", "v1"}, req.GetExpectedVchannels())
+					return merr.Status(want), nil
+				}).Once()
+			node := &Proxy{metaCache: cache, mixCoord: coord}
+			node.UpdateStateCode(commonpb.StateCode_Healthy)
+			err := node.ensureCollectionReady(context.Background(), "db", "collection")
+			if want == nil {
+				require.NoError(t, err)
+			} else {
+				require.Equal(t, merr.Code(want), merr.Code(err))
+			}
+			// Any GetLoadState, DescribeIndex, AllocTimestamp or LoadCollection call
+			// would fail because the coordinator has no expectation for it.
+		})
+	}
+}
+
+func TestEnsureCollectionReadyRejectsUnhealthyProxy(t *testing.T) {
+	node := &Proxy{}
+	node.UpdateStateCode(commonpb.StateCode_Abnormal)
+	require.ErrorIs(t, node.ensureCollectionReady(context.Background(), "db", "collection"), merr.ErrServiceNotReady)
+}
+
+func TestEnsureCollectionReadyCallerCancellation(t *testing.T) {
+	enableAutoLoad(t)
+	coord := mocks.NewMockMixCoordClient(t)
+	entered := make(chan struct{})
+	coord.EXPECT().EnsureCollectionReady(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, _ *querypb.EnsureCollectionReadyRequest, _ ...grpc.CallOption) (*commonpb.Status, error) {
+			close(entered)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}).Once()
+	node := &Proxy{mixCoord: coord, metaCache: mockSearchCollectionMeta(t, 100, []string{"v0"})}
+	node.UpdateStateCode(commonpb.StateCode_Healthy)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- node.ensureCollectionReady(ctx, "db", "collection") }()
+	awaitAutoLoadSchedulerResult(t, entered)
+	cancel()
+	require.ErrorIs(t, awaitAutoLoadSchedulerResult(t, done), context.Canceled)
+}
+
+func TestEnsureCollectionReadyRequiresQueryPrivilegeOnly(t *testing.T) {
+	enableAutoLoad(t)
+	for _, key := range []string{Params.CommonCfg.AuthorizationEnabled.Key, Params.ProxyCfg.ResolveAliasForPrivilege.Key} {
+		require.NoError(t, Params.Save(key, "true"))
+		t.Cleanup(func() { require.NoError(t, Params.Reset(key)) })
+	}
+	coord := &MockMixCoordClientInterface{}
+	coord.listPolicy = func(context.Context, *internalpb.ListPolicyRequest) (*internalpb.ListPolicyResponse, error) {
+		return &internalpb.ListPolicyResponse{
+			Status: merr.Success(),
+			PolicyInfos: []string{
+				funcutil.PolicyForPrivilege("reader", commonpb.ObjectType_Collection.String(), "collection", commonpb.ObjectPrivilege_PrivilegeSearch.String(), "db"),
+				funcutil.PolicyForPrivilege("reader", commonpb.ObjectType_Collection.String(), "collection", commonpb.ObjectPrivilege_PrivilegeQuery.String(), "db"),
+			},
+			UserRoles: []string{
+				funcutil.EncodeUserRoleCache("search_user", "reader"),
+			},
+		}, nil
+	}
+	cache := mustInitMetaCacheForTest(context.Background(), coord).(*MetaCache)
+	cache.SeedCollectionForTest("db", "collection", 100, "alias").VChannels = []string{"v0"}
+	var readinessCalls int
+	mix := &MixCoordMock{EnsureCollectionReadyFunc: func(_ context.Context, req *querypb.EnsureCollectionReadyRequest, _ ...grpc.CallOption) (*commonpb.Status, error) {
+		readinessCalls++
+		require.EqualValues(t, 100, req.GetCollectionID())
+		require.Equal(t, []string{"v0"}, req.GetExpectedVchannels())
+		return merr.Success(), nil
+	}}
+	node := &Proxy{metaCache: cache, mixCoord: mix}
+	node.UpdateStateCode(commonpb.StateCode_Healthy)
+	interceptor := UnaryServerInterceptor(PrivilegeInterceptorWithMetaCache(node.GetMetaCache))
+	ctx := GetContext(context.Background(), "search_user:pwd")
+	for _, req := range []any{
+		&milvuspb.SearchRequest{DbName: "db", CollectionName: "alias"},
+		&milvuspb.QueryRequest{DbName: "db", CollectionName: "alias"},
+	} {
+		_, err := interceptor(ctx, req, &grpc.UnaryServerInfo{}, func(ctx context.Context, _ any) (any, error) {
+			return nil, node.ensureCollectionReady(ctx, "db", "alias")
+		})
+		require.NoError(t, err)
+		_, err = interceptor(GetContext(context.Background(), "ungranted_user:pwd"), req, &grpc.UnaryServerInfo{}, func(context.Context, any) (any, error) {
+			t.Fatal("a request without query privilege reached the handler")
+			return nil, nil
+		})
+		require.Equal(t, codes.PermissionDenied, grpcstatus.Code(err))
+	}
+	// The query user's policy grants no explicit LoadCollection permission.
+	_, err := interceptor(ctx, &milvuspb.LoadCollectionRequest{DbName: "db", CollectionName: "alias"}, &grpc.UnaryServerInfo{}, func(context.Context, any) (any, error) {
+		t.Fatal("a request without Load privilege reached the handler")
+		return nil, nil
+	})
+	require.Equal(t, codes.PermissionDenied, grpcstatus.Code(err))
+	require.Equal(t, 2, readinessCalls)
+}
+
+func TestSearchReturnsAutoLoadFailureAfterFirstAttempt(t *testing.T) {
+	enableAutoLoad(t)
+	for _, loadErr := range []error{merr.ErrIndexNotFound, context.DeadlineExceeded} {
+		t.Run(loadErr.Error(), func(t *testing.T) {
+			node := &Proxy{}
+			node.UpdateStateCode(commonpb.StateCode_Healthy)
+			readinessMock := mockey.Mock((*Proxy).ensureCollectionReady).To(
+				func(_ *Proxy, _ context.Context, dbName, collectionName string) error {
+					require.Equal(t, "db", dbName)
+					require.Equal(t, "collection", collectionName)
+					return loadErr
+				}).Build()
+			searchMock := mockey.Mock((*Proxy).search).Return(
+				&milvuspb.SearchResults{Status: merr.Status(merr.ErrCollectionNotLoaded)}, false, false, false, nil).Build()
+			defer readinessMock.UnPatch()
+			defer searchMock.UnPatch()
+
+			req := &milvuspb.SearchRequest{
+				DbName:         "db",
+				CollectionName: "collection",
+			}
+			accessInfo := info.NewGrpcAccessInfo(t.Context(), &grpc.UnaryServerInfo{}, req)
+			ctx := context.WithValue(t.Context(), accesslog.AccessKey{}, accessInfo)
+			response, err := node.Search(ctx, req)
+			require.NoError(t, err)
+			require.Equal(t, merr.Code(loadErr), response.GetStatus().GetCode())
+			require.Equal(t, 1, readinessMock.Times())
+			require.Equal(t, 1, searchMock.Times())
+			require.Equal(t, "true", accessInfo.IsColdSearch())
+		})
+	}
+}
+
+func mockSearchCollectionMeta(t *testing.T, collectionID int64, vchannels []string) *MetaCache {
+	metaCache := &MetaCache{}
+	getCollectionInfoMock := mockey.Mock((*MetaCache).GetCollectionInfo).Return(&collectionInfo{
+		CollID:    collectionID,
+		VChannels: vchannels,
+	}, nil).Build()
+	t.Cleanup(func() {
+		getCollectionInfoMock.UnPatch()
+	})
+	return metaCache
+}
+
+func enableAutoLoad(t *testing.T) {
+	t.Helper()
+	require.NoError(t, Params.Save(Params.ProxyCfg.EnableAutoLoad.Key, "true"))
+	t.Cleanup(func() { require.NoError(t, Params.Reset(Params.ProxyCfg.EnableAutoLoad.Key)) })
+}
+
+// Use a real scheduler with metadata and coordinator test doubles.
+func newAutoLoadSchedulingProxy(t *testing.T) (*Proxy, *mocks.MockMixCoordClient) {
+	t.Helper()
+	enableAutoLoad(t)
+	for _, setting := range []struct {
+		key, previous, value string
+	}{
+		{Params.ProxyCfg.MaxTaskNum.Key, Params.ProxyCfg.MaxTaskNum.GetValue(), "1"},
+		{Params.ProxyCfg.DDLConcurrency.Key, Params.ProxyCfg.DDLConcurrency.GetValue(), "1"},
+		{Params.CommonCfg.AuthorizationEnabled.Key, Params.CommonCfg.AuthorizationEnabled.GetValue(), "false"},
+	} {
+		require.NoError(t, Params.Save(setting.key, setting.value))
+		t.Cleanup(func() { require.NoError(t, Params.Save(setting.key, setting.previous)) })
+	}
+
+	schema, err := newSchemaInfo(&schemapb.CollectionSchema{
+		Name: "collection",
+		Fields: []*schemapb.FieldSchema{
+			{FieldID: 100, Name: "id", DataType: schemapb.DataType_Int64, IsPrimaryKey: true},
+			{
+				FieldID: 101, Name: "vector", DataType: schemapb.DataType_FloatVector,
+				TypeParams: []*commonpb.KeyValuePair{{Key: "dim", Value: "4"}},
+			},
+		},
+	})
+	require.NoError(t, err)
+	cache := NewMockCache(t)
+	remove := mockey.Mock((*MockCache).RemoveCollection).Return().Build()
+	t.Cleanup(func() { remove.UnPatch() })
+	cache.EXPECT().GetCollectionID(mock.Anything, "db", "collection").Return(int64(100), nil).Maybe()
+	cache.EXPECT().GetCollectionInfo(mock.Anything, "db", "collection", mock.Anything).Return(&collectionInfo{
+		CollID: 100, VChannels: []string{"v0"}, Schema: schema,
+	}, nil).Maybe()
+	cache.EXPECT().GetCollectionSchema(mock.Anything, "db", "collection").Return(schema, nil).Maybe()
+
+	coordinator := mocks.NewMockMixCoordClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	allocator, err := newTimestampAllocator(newMockTimestampAllocatorInterface(), 0)
+	require.NoError(t, err)
+	sched, err := scheduler.NewTaskScheduler(ctx, allocator)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		cancel()
+		sched.Close()
+	})
+	node := &Proxy{
+		ctx: ctx, sched: sched, metaCache: cache, mixCoord: coordinator, tsoAllocator: allocator,
+	}
+	node.UpdateStateCode(commonpb.StateCode_Healthy)
+	return node, coordinator
+}
+
+type autoLoadSchedulerTask struct {
+	*dqlFullMockTask
+	execute func(context.Context) error
+}
+
+func newAutoLoadSchedulerBase(ctx context.Context) *dqlFullMockTask {
+	return &dqlFullMockTask{TaskCondition: taskmodel.NewTaskCondition(ctx), name: taskmodel.SearchTaskName}
+}
+
+func (t *autoLoadSchedulerTask) TraceCtx() context.Context {
+	return t.Ctx()
+}
+
+func (t *autoLoadSchedulerTask) Execute(ctx context.Context) error {
+	return t.execute(ctx)
+}
+
+func (t *autoLoadSchedulerTask) IsSubTask() bool {
+	return false
+}
+
+func awaitAutoLoadSchedulerResult[T any](t *testing.T, ch <-chan T) T {
+	t.Helper()
+	select {
+	case result := <-ch:
+		return result
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for scheduler progress")
+		var zero T
+		return zero
+	}
+}
+
+func TestAutoLoadBypassesSaturatedTaskQueues(t *testing.T) {
+	node, coordinator := newAutoLoadSchedulingProxy(t)
+	loaded := make(chan *querypb.EnsureCollectionReadyRequest, 1)
+	coordinator.EXPECT().EnsureCollectionReady(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, request *querypb.EnsureCollectionReadyRequest, _ ...grpc.CallOption) (*commonpb.Status, error) {
+			loaded <- request
+			return merr.Success(), nil
+		}).Once()
+	require.NoError(t, node.sched.Start())
+
+	for _, queue := range []scheduler.TaskQueue{node.sched.DdQueue, node.sched.DqQueue} {
+		started := make(chan struct{})
+		release := make(chan struct{})
+		t.Cleanup(func() { close(release) })
+		blocker := &autoLoadSchedulerTask{
+			dqlFullMockTask: newAutoLoadSchedulerBase(node.ctx),
+			execute: func(ctx context.Context) error {
+				close(started)
+				select {
+				case <-release:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			},
+		}
+		require.NoError(t, queue.Enqueue(blocker))
+		awaitAutoLoadSchedulerResult(t, started)
+		// Occupy the dispatcher in Submit, then fill the pending queue too.
+		require.NoError(t, queue.Enqueue(newAutoLoadSchedulerBase(node.ctx)))
+		require.Eventually(t, func() bool { return queue.FrontUnissuedTask() == nil }, time.Second, time.Millisecond)
+		require.NoError(t, queue.Enqueue(newAutoLoadSchedulerBase(node.ctx)))
+	}
+
+	require.NoError(t, node.ensureCollectionReady(node.ctx, "db", "collection"))
+	request := awaitAutoLoadSchedulerResult(t, loaded)
+	require.Equal(t, int64(100), request.GetCollectionID())
+	require.Equal(t, []string{"v0"}, request.GetExpectedVchannels())
+
+	// The explicit API must still respect the saturated DDL queue.
+	status, err := node.LoadCollection(node.ctx, &milvuspb.LoadCollectionRequest{DbName: "db", CollectionName: "collection"})
+	require.NoError(t, err)
+	require.ErrorIs(t, merr.Error(status), merr.ErrServiceTooManyRequests)
+}
+
+type dqlRetryServer struct {
+	viewpb.UnimplementedQueryPlanServiceServer
+	viewpb.UnimplementedViewQueryServiceServer
+	loaded    atomic.Bool
+	injected  atomic.Bool
+	plans     atomic.Int32
+	searches  atomic.Int32
+	queries   atomic.Int32
+	failPhase string
+	// retrieved is what QueryOnView returns.
+	retrieved *schemapb.IDs
+}
+
+func (s *dqlRetryServer) failure(phase string) error {
+	if s.failPhase == phase && s.injected.CompareAndSwap(false, true) {
+		s.loaded.Store(false)
+		return viewerror.NewGRPCStatusFromViewError(viewerror.NewViewInvalidated("collection released during %s", phase)).Err()
+	}
+	if !s.loaded.Load() {
+		return viewerror.NewGRPCStatusFromViewError(viewerror.NewViewNotFound("collection is released")).Err()
+	}
+	return nil
+}
+
+func (s *dqlRetryServer) GetQueryPlan(_ context.Context, req *viewpb.GetQueryPlanRequest) (*viewpb.GetQueryPlanResponse, error) {
+	s.plans.Add(1)
+	if err := s.failure("plan"); err != nil {
+		return nil, err
+	}
+	plan := &viewpb.QueryPlan{
+		ShardId: &viewpb.ShardID{Vchannel: req.GetShardId().GetVchannel(), ReplicaId: 1},
+		Version: &viewpb.QueryViewVersion{},
+		Mvcc:    &viewpb.QueryPlanMVCC{GrowingTimetick: 1000, TransformingTimetick: 1000},
+		WorkNodes: []*viewpb.QueryPlanWorkNode{{Node: &viewpb.QueryPlanWorkNode_QueryNode{
+			QueryNode: &viewpb.QueryWorkNode{NodeId: 11},
+		}}},
+	}
+	if search := req.GetLegacySearchRequest(); search != nil {
+		plan.Request = &viewpb.QueryPlan_LegacySearchRequest{LegacySearchRequest: search}
+	} else {
+		plan.Request = &viewpb.QueryPlan_LegacyRetrieveRequest{LegacyRetrieveRequest: req.GetLegacyRetrieveRequest()}
+	}
+	return &viewpb.GetQueryPlanResponse{Plan: plan}, nil
+}
+
+func (s *dqlRetryServer) SearchOnView(context.Context, *viewpb.SearchOnViewRequest) (*viewpb.SearchOnViewResponse, error) {
+	s.searches.Add(1)
+	if err := s.failure("search"); err != nil {
+		return nil, err
+	}
+	return &viewpb.SearchOnViewResponse{LegacyResults: &internalpb.SearchResults{Status: merr.Success()}}, nil
+}
+
+func (s *dqlRetryServer) QueryOnView(context.Context, *viewpb.QueryOnViewRequest) (*viewpb.QueryOnViewResponse, error) {
+	s.queries.Add(1)
+	if err := s.failure("query"); err != nil {
+		return nil, err
+	}
+	return &viewpb.QueryOnViewResponse{LegacyResults: &internalpb.RetrieveResults{Status: merr.Success(), Ids: s.retrieved}}, nil
+}
+
+type dqlRetryPlanClient struct {
+	replicas wal.ReplicaWatchStream
+	ctx      context.Context
+	queryclient.QueryPlanClient
+	client     viewpb.QueryPlanServiceClient
+	subscribed chan struct{}
+}
+
+func (c *dqlRetryPlanClient) SubscribeReplicas(vc string, h wal.ReplicaWatchHandler) (wal.ReplicaWatchSubscription, error) {
+	sub, err := c.replicas.Subscribe(c.ctx, vc, h)
+	if c.subscribed != nil {
+		close(c.subscribed)
+	}
+	return sub, err
+}
+
+func (c *dqlRetryPlanClient) GetQueryPlan(ctx context.Context, _ qviews.ShardID, req *viewpb.GetQueryPlanRequest) (*viewpb.GetQueryPlanResponse, error) {
+	resp, err := c.client.GetQueryPlan(ctx, req)
+	return resp, viewerror.ConvertViewError("GetQueryPlan", err)
+}
+
+type dqlRetryServiceClient struct {
+	queryclient.ViewQueryServiceClient
+	client viewpb.ViewQueryServiceClient
+}
+
+func (c *dqlRetryServiceClient) SearchOnView(ctx context.Context, _ qviews.WorkNode, req *viewpb.SearchOnViewRequest) (*viewpb.SearchOnViewResponse, error) {
+	resp, err := c.client.SearchOnView(ctx, req)
+	return resp, viewerror.ConvertViewError("SearchOnView", err)
+}
+
+func (c *dqlRetryServiceClient) QueryOnView(ctx context.Context, _ qviews.WorkNode, req *viewpb.QueryOnViewRequest) (*viewpb.QueryOnViewResponse, error) {
+	resp, err := c.client.QueryOnView(ctx, req)
+	return resp, viewerror.ConvertViewError("QueryOnView", err)
+}
+
+type dqlRetryClient struct {
+	queryclient.Client
+	server         *dqlRetryServer
+	coordinator    *mocks.MockMixCoordClient
+	checks         atomic.Int32
+	loads          atomic.Int32
+	publishReplica func()
+	subscribed     chan struct{}
+}
+
+func (c *dqlRetryClient) ResolveVChannels(context.Context, int64) ([]string, error) {
+	return []string{"v0"}, nil
+}
+
+func newDQLRetryClient(t *testing.T, phase string, loadInfo queryclient.LoadInfoClient) *dqlRetryClient {
+	t.Helper()
+	server := &dqlRetryServer{failPhase: phase}
+	server.loaded.Store(true)
+	listener := bufconn.Listen(1024 * 1024)
+	grpcServer := grpc.NewServer()
+	viewpb.RegisterQueryPlanServiceServer(grpcServer, server)
+	viewpb.RegisterViewQueryServiceServer(grpcServer, server)
+	go func() { _ = grpcServer.Serve(listener) }()
+	t.Cleanup(func() { grpcServer.Stop(); _ = listener.Close() })
+	conn, err := grpc.NewClient("passthrough:///dql-retry", grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	directory := snview.NewReplicaDirectoryForTest()
+	publishReplica := func() { directory.Set("v0", 1, &qviews.QueryViewVersion{}, false) }
+	client := &dqlRetryClient{server: server, publishReplica: publishReplica}
+	switch phase {
+	case "unloaded":
+		server.loaded.Store(false)
+	case "initializing":
+		client.subscribed = make(chan struct{})
+		directory.Set("v0", 1, nil, true)
+	default:
+		publishReplica()
+	}
+	stream := directory.AcquireStream(t.Context(), funcutil.ToPhysicalChannel("v0"), nil)
+	t.Cleanup(func() { stream.Close(); directory.Close() })
+	client.Client = queryclient.NewLegacyViewQueryClient(queryclient.ViewQueryClientConfig{LoadInfoClient: loadInfo},
+		&dqlRetryPlanClient{client: viewpb.NewQueryPlanServiceClient(conn), replicas: stream, ctx: t.Context(), subscribed: client.subscribed},
+		&dqlRetryServiceClient{client: viewpb.NewViewQueryServiceClient(conn)}, client)
+	t.Cleanup(client.Close)
+	return client
+}
+
+// autoLoadTestRow is one row of the schema newAutoLoadSchedulingProxy creates.
+func autoLoadTestRow() []*schemapb.FieldData {
+	return []*schemapb.FieldData{
+		testutils.GenerateScalarFieldDataWithValue(schemapb.DataType_Int64, "id", 100, []int64{1}),
+		testutils.GenerateVectorFieldDataWithValue(schemapb.DataType_FloatVector, "vector", 101, []float32{1, 2, 3, 4}, 4),
+	}
+}
+
+// newDQLRetryProxy connects a scheduling Proxy to a dqlRetryClient whose coordinator
+// reports the server's load state.
+func newDQLRetryProxy(t *testing.T, phase string) (*Proxy, *dqlRetryClient) {
+	t.Helper()
+	// The retry fixture only implements the unary QueryView RPCs.
+	params := paramtable.Get()
+	key, old := params.ProxyCfg.EnableReduceStream.Key, params.ProxyCfg.EnableReduceStream.GetValue()
+	t.Cleanup(func() { require.NoError(t, params.Save(key, old)) })
+	require.NoError(t, params.Save(key, "false"))
+
+	node, coordinator := newAutoLoadSchedulingProxy(t)
+	oldRateCol := rateCol
+	require.NoError(t, node.initRateCollector())
+	t.Cleanup(func() { rateCol = oldRateCol })
+	client := newDQLRetryClient(t, phase, coordinator)
+	client.coordinator = coordinator
+	loadInfo := mockey.Mock((*mocks.MockMixCoordClient).GetQueryViewLoadInfo).To(func(_ *mocks.MockMixCoordClient, _ context.Context, _ *querypb.GetQueryViewLoadInfoRequest, _ ...grpc.CallOption) (*querypb.GetQueryViewLoadInfoResponse, error) {
+		if !client.server.loaded.Load() {
+			return nil, merr.WrapErrCollectionNotLoaded(100)
+		}
+		return &querypb.GetQueryViewLoadInfoResponse{Status: merr.Success()}, nil
+	}).Build()
+	t.Cleanup(func() { loadInfo.UnPatch() })
+	node.viewQueryClient = client
+	return node, client
+}
+
+// expectAutoLoad makes EnsureCollectionReady load a released collection.
+func (c *dqlRetryClient) expectAutoLoad(t *testing.T) {
+	c.coordinator.EXPECT().EnsureCollectionReady(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, req *querypb.EnsureCollectionReadyRequest, _ ...grpc.CallOption) (*commonpb.Status, error) {
+			require.EqualValues(t, 100, req.GetCollectionID())
+			c.checks.Add(1)
+			if !c.server.loaded.Load() {
+				c.loads.Add(1)
+				c.server.loaded.Store(true)
+				c.publishReplica()
+			}
+			if c.server.failure("wait") != nil {
+				return merr.Status(merr.WrapErrCollectionNotLoaded(100)), nil
+			}
+			return merr.Success(), nil
+		})
+}
+
+// Use the real public Proxy entry, scheduler, task Execute, legacy query client,
+// shard retries, gRPC error transport and full DQL retries. Coordinator
+// responses and result parsing and reduction are supplied by test doubles.
+func TestDQLAutoLoadRetryThroughTaskAndGRPC(t *testing.T) {
+	for _, test := range []struct{ method, phase string }{
+		{"Search", "plan"},
+		{"Search", "search"},
+		{"HybridSearch", "plan"},
+		{"HybridSearch", "search"},
+		{"Query", "query"},
+		{"Requery", "query"},
+		{"SearchByPK", "query"},
+		{"SearchByPK", "search"},
+		{"Search", "wait"},
+		{"Search", "unloaded"},
+		{"HybridSearch", "unloaded"},
+		{"Query", "unloaded"},
+		{"Search", "initializing"},
+		{"Search", "hot"},
+		{"HybridSearch", "hot"},
+		{"Query", "hot"},
+	} {
+		t.Run(test.method+"/"+test.phase, func(t *testing.T) {
+			node, client := newDQLRetryProxy(t, test.phase)
+			if test.phase == "wait" {
+				client.server.loaded.Store(false)
+			}
+			if test.phase != "hot" && test.phase != "initializing" {
+				client.coordinator.EXPECT().EnsureCollectionReady(mock.Anything, mock.Anything).RunAndReturn(
+					func(_ context.Context, req *querypb.EnsureCollectionReadyRequest, _ ...grpc.CallOption) (*commonpb.Status, error) {
+						require.EqualValues(t, 100, req.GetCollectionID())
+						if test.phase == "unloaded" {
+							// The only DQL worker can serve another task during Ensure.
+							task := newAutoLoadSchedulerBase(node.ctx)
+							require.NoError(t, node.sched.DqQueue.Enqueue(task))
+							require.NoError(t, task.WaitToFinish())
+						}
+						if !client.server.loaded.Load() {
+							client.server.loaded.Store(true)
+							client.publishReplica()
+						}
+						if client.server.failure("wait") != nil {
+							return merr.Status(merr.WrapErrCollectionNotLoaded(100)), nil
+						}
+						return merr.Success(), nil
+					}).Once()
+			}
+
+			if test.method == "Requery" {
+				// Internal requery tasks use the scheduler's subtask path; their
+				// parent search is still occupying a DQL worker.
+				subtask := mockey.Mock((*queryTask).IsSubTask).Return(true).Build()
+				t.Cleanup(func() { subtask.UnPatch() })
+			}
+			var searchTasks, queryTasks atomic.Int32
+			searchPre := mockey.Mock((*searchTask).PreExecute).To(func(st *searchTask, _ context.Context) error {
+				searchTasks.Add(1)
+				st.CollectionID = 100
+				st.Nq = 1
+				return nil
+			}).Build()
+			t.Cleanup(func() { searchPre.UnPatch() })
+			queryPre := mockey.Mock((*queryTask).PreExecute).To(func(qt *queryTask, _ context.Context) error {
+				queryTasks.Add(1)
+				schema, err := node.metaCache.GetCollectionSchema(node.ctx, "db", "collection")
+				if err != nil {
+					return err
+				}
+				dql.SetQueryReadSchemaForTest(qt, schema)
+				qt.CollectionID = 100
+				return nil
+			}).Build()
+			t.Cleanup(func() { queryPre.UnPatch() })
+			var queryResult *milvuspb.QueryResults
+			queryResultMock := mockey.Mock((*queryTask).Result).To(func(*queryTask) *milvuspb.QueryResults { return queryResult }).Build()
+			t.Cleanup(func() { queryResultMock.UnPatch() })
+			queryPost := mockey.Mock((*queryTask).PostExecute).To(func(qt *queryTask, _ context.Context) error {
+				queryResult = &milvuspb.QueryResults{Status: merr.Success()}
+				if test.method == "SearchByPK" {
+					queryResult.FieldsData = autoLoadTestRow()
+				}
+				return nil
+			}).Build()
+			t.Cleanup(func() { queryPost.UnPatch() })
+			var searchResult *milvuspb.SearchResults
+			searchResultMock := mockey.Mock((*searchTask).Result).To(func(*searchTask) *milvuspb.SearchResults { return searchResult }).Build()
+			t.Cleanup(func() { searchResultMock.UnPatch() })
+			searchPost := mockey.Mock((*searchTask).PostExecute).To(func(st *searchTask, ctx context.Context) error {
+				if test.method == "Requery" {
+					// The requery pipeline now lives in dql. Exercise its TaskNode
+					// query-execution boundary without reaching private operator fields.
+					qt := NewQueryTask(ctx, node, &milvuspb.QueryRequest{DbName: "db", CollectionName: "collection"}, nil,
+						&internalpb.RetrieveRequest{Base: &commonpb.MsgBase{MsgType: commonpb.MsgType_Retrieve}, QueryLabel: metrics.ReQueryLabel}, node.GetMetaCache(), false)
+					_, _, err := node.ExecuteQuery(ctx, qt, trace.SpanFromContext(ctx))
+					if err != nil {
+						return err
+					}
+				}
+				searchResult = &milvuspb.SearchResults{Status: merr.Success(), Results: &schemapb.SearchResultData{NumQueries: 1}}
+				return nil
+			}).Build()
+			t.Cleanup(func() { searchPost.UnPatch() })
+			require.NoError(t, node.sched.Start())
+
+			otherTask := make(chan error, 1)
+			if test.phase == "initializing" {
+				go func() {
+					select {
+					case <-client.subscribed:
+					case <-node.ctx.Done():
+						otherTask <- node.ctx.Err()
+						return
+					}
+					task := newAutoLoadSchedulerBase(node.ctx)
+					err := node.sched.DqQueue.Enqueue(task)
+					if err == nil {
+						err = task.WaitToFinish()
+					}
+					otherTask <- err
+					client.publishReplica()
+				}()
+			}
+
+			accessInfo := info.NewGrpcAccessInfo(node.ctx, &grpc.UnaryServerInfo{}, nil)
+			requestCtx := context.WithValue(node.ctx, accesslog.AccessKey{}, accessInfo)
+			var status *commonpb.Status
+			switch test.method {
+			case "HybridSearch":
+				resp, err := node.HybridSearch(requestCtx, &milvuspb.HybridSearchRequest{DbName: "db", CollectionName: "collection"})
+				require.NoError(t, err)
+				status = resp.GetStatus()
+			case "Query":
+				resp, err := node.Query(requestCtx, &milvuspb.QueryRequest{DbName: "db", CollectionName: "collection"})
+				require.NoError(t, err)
+				status = resp.GetStatus()
+			default:
+				req := &milvuspb.SearchRequest{DbName: "db", CollectionName: "collection", Nq: 1}
+				if test.method == "SearchByPK" {
+					req.SearchInput = &milvuspb.SearchRequest_Ids{Ids: &schemapb.IDs{IdField: &schemapb.IDs_IntId{IntId: &schemapb.LongArray{Data: []int64{1}}}}}
+				}
+				resp, err := node.Search(requestCtx, req)
+				require.NoError(t, err)
+				status = resp.GetStatus()
+			}
+			if test.phase == "wait" {
+				require.ErrorIs(t, merr.Error(status), merr.ErrCollectionNotLoaded)
+				require.Equal(t, "true", accessInfo.IsColdSearch())
+				require.True(t, client.server.injected.Load())
+				// The stale replica is tried once before Ensure observes the release.
+				require.EqualValues(t, 1, searchTasks.Load())
+				return
+			}
+			require.NoError(t, merr.Error(status))
+			if test.phase == "hot" || test.phase == "initializing" {
+				require.Equal(t, "false", accessInfo.IsColdSearch())
+				if test.phase == "initializing" {
+					require.NoError(t, awaitAutoLoadSchedulerResult(t, otherTask))
+				}
+				return
+			}
+			require.Equal(t, "true", accessInfo.IsColdSearch())
+			if test.phase == "unloaded" {
+				require.EqualValues(t, 1, searchTasks.Load()+queryTasks.Load())
+				return
+			}
+			require.True(t, client.server.injected.Load())
+			if test.method == "SearchByPK" && test.phase == "search" {
+				// qv recreates the PK lookup from the original IDs on each search attempt.
+				require.EqualValues(t, 2, queryTasks.Load())
+				require.EqualValues(t, 2, searchTasks.Load())
+			} else if test.method == "Query" || test.method == "SearchByPK" {
+				require.EqualValues(t, 2, queryTasks.Load())
+			} else {
+				require.EqualValues(t, 2, searchTasks.Load())
+			}
+		})
+	}
+}
+
+func TestDQLAutoLoadEnsuresAtStartOfRetry(t *testing.T) {
+	enableAutoLoad(t)
+	coord := mocks.NewMockMixCoordClient(t)
+	var readyAt time.Time
+	coord.EXPECT().EnsureCollectionReady(mock.Anything, mock.Anything).RunAndReturn(func(context.Context, *querypb.EnsureCollectionReadyRequest, ...grpc.CallOption) (*commonpb.Status, error) {
+		readyAt = time.Now()
+		return merr.Success(), nil
+	}).Once()
+	node := &Proxy{metaCache: mockSearchCollectionMeta(t, 100, []string{"v0"}), mixCoord: coord}
+	node.UpdateStateCode(commonpb.StateCode_Healthy)
+	synctest.Test(t, func(t *testing.T) {
+		accessInfo := info.NewGrpcAccessInfo(t.Context(), &grpc.UnaryServerInfo{}, nil)
+		ctx := context.WithValue(t.Context(), accesslog.AccessKey{}, accessInfo)
+		started := time.Now()
+		calls := 0
+		err := node.retryDQL(ctx, "", "collection_alias", nil, func(context.Context) (bool, error) {
+			calls++
+			if calls == 1 {
+				require.Equal(t, "false", accessInfo.IsColdSearch())
+				return false, merr.WrapErrCollectionNotLoaded(100)
+			}
+			coord.AssertNumberOfCalls(t, "EnsureCollectionReady", 1)
+			require.True(t, readyAt.After(started), "Ensure starts after the retry backoff")
+			require.Equal(t, readyAt, time.Now(), "execute immediately after Ensure succeeds")
+			require.Equal(t, "true", accessInfo.IsColdSearch())
+			return false, nil
+		})
+		require.NoError(t, err)
+		require.Equal(t, 2, calls)
+	})
+}
+
+func TestDQLAutoLoadRetriesIteratorAfterRepeatedRelease(t *testing.T) {
+	enableAutoLoad(t)
+	coord := mocks.NewMockMixCoordClient(t)
+	coord.EXPECT().EnsureCollectionReady(mock.Anything, mock.Anything).Return(merr.Success(), nil).Times(3)
+	node := &Proxy{metaCache: mockSearchCollectionMeta(t, 100, []string{"v0"}), mixCoord: coord}
+	node.UpdateStateCode(commonpb.StateCode_Healthy)
+
+	params := []*commonpb.KeyValuePair{{Key: IteratorField, Value: "true"}}
+	attempts := 0
+	err := node.retryDQL(t.Context(), "db", "collection", params, func(context.Context) (bool, error) {
+		attempts++
+		if attempts <= 3 {
+			return false, merr.WrapErrCollectionNotLoaded(100)
+		}
+		return false, nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, 4, attempts)
+}
+
+func TestDQLAutoLoadRetryStopsOnPermanentErrorsAndCancellation(t *testing.T) {
+	enableAutoLoad(t)
+	node := &Proxy{}
+	ready := mockey.Mock((*Proxy).ensureCollectionReady).Return(nil).Build()
+	defer ready.UnPatch()
+	for _, want := range []error{
+		merr.ErrCollectionNotFound,
+		merr.ErrParameterInvalid,
+		merr.WrapErrServiceUnavailableMsg("shutdown"),
+	} {
+		calls := 0
+		err := node.retryDQL(context.Background(), "db", "collection", nil, func(context.Context) (bool, error) {
+			calls++
+			return false, want
+		})
+		require.ErrorIs(t, err, want)
+		require.Equal(t, 1, calls)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	err := node.retryDQL(ctx, "db", "collection", nil, func(context.Context) (bool, error) {
+		calls++
+		cancel()
+		return false, merr.Wrap(merr.ErrQueryViewNotReady, "released")
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, calls)
+	require.Zero(t, ready.Times())
+}
+
+func TestDQLAutoLoadUsesConfigAtRequestStart(t *testing.T) {
+	enableAutoLoad(t)
+	coord := mocks.NewMockMixCoordClient(t)
+	coord.EXPECT().EnsureCollectionReady(mock.Anything, mock.Anything).RunAndReturn(
+		func(context.Context, *querypb.EnsureCollectionReadyRequest, ...grpc.CallOption) (*commonpb.Status, error) {
+			require.NoError(t, Params.Save(Params.ProxyCfg.EnableAutoLoad.Key, "false"))
+			return merr.Success(), nil
+		}).Once()
+	coord.EXPECT().EnsureCollectionReady(mock.Anything, mock.Anything).Return(merr.Success(), nil).Twice()
+	node := &Proxy{metaCache: mockSearchCollectionMeta(t, 100, []string{"v0"}), mixCoord: coord}
+	node.UpdateStateCode(commonpb.StateCode_Healthy)
+	attempts := 0
+	execute := func(context.Context) (bool, error) {
+		attempts++
+		if attempts <= 3 {
+			return false, merr.WrapErrCollectionNotLoaded(100)
+		}
+		return false, nil
+	}
+	require.NoError(t, node.retryDQL(t.Context(), "db", "collection", nil, execute))
+	require.Equal(t, 4, attempts)
+
+	attempts = 0
+	require.ErrorIs(t, node.retryDQL(t.Context(), "db", "collection", nil, execute), merr.ErrCollectionNotLoaded)
+	require.Equal(t, 1, attempts)
+}
+
+func TestDQLAutoLoadRetryQueryCreatesFreshTask(t *testing.T) {
+	enableAutoLoad(t)
+	node := &Proxy{metaCache: &MetaCache{}}
+	node.UpdateStateCode(commonpb.StateCode_Healthy)
+	oldRateCol := rateCol
+	require.NoError(t, node.initRateCollector())
+	defer func() { rateCol = oldRateCol }()
+	ready := mockey.Mock((*Proxy).ensureCollectionReady).Return(nil).Build()
+	defer ready.UnPatch()
+	request := &milvuspb.QueryRequest{DbName: "db", CollectionName: "collection", Expr: "id > 0", GuaranteeTimestamp: 1234}
+	var tasks []*queryTask
+	query := mockey.Mock((*Proxy).query).To(func(_ *Proxy, _ context.Context, qt *queryTask, _ trace.Span) (*milvuspb.QueryResults, segcore.StorageCost, error) {
+		tasks = append(tasks, qt)
+		require.Same(t, request, qt.Request())
+		if len(tasks) == 1 {
+			require.Equal(t, "id > 0", qt.Request().Expr)
+		} else {
+			require.Equal(t, "changed", qt.Request().Expr)
+		}
+		require.EqualValues(t, 1234, qt.Request().GuaranteeTimestamp)
+		qt.Request().Expr = "changed"
+		if len(tasks) == 1 {
+			err := merr.Wrap(merr.ErrQueryViewNotReady, "released")
+			return &milvuspb.QueryResults{Status: merr.Status(err)}, segcore.StorageCost{}, err
+		}
+		return &milvuspb.QueryResults{Status: merr.Success()}, segcore.StorageCost{}, nil
+	}).Build()
+	defer query.UnPatch()
+	resp, err := node.Query(context.Background(), request)
+	require.NoError(t, err)
+	require.NoError(t, merr.Error(resp.GetStatus()))
+	require.Len(t, tasks, 2)
+	require.NotSame(t, tasks[0], tasks[1])
+	require.NotSame(t, tasks[0].Condition, tasks[1].Condition)
+	require.Equal(t, "changed", request.Expr)
+}
+
+func TestDQLAutoLoadRetryHonorsDeadline(t *testing.T) {
+	enableAutoLoad(t)
+	node := &Proxy{}
+	ready := mockey.Mock((*Proxy).ensureCollectionReady).Return(nil).Build()
+	defer ready.UnPatch()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	calls := 0
+	err := node.retryDQL(ctx, "db", "collection", nil, func(ctx context.Context) (bool, error) {
+		calls++
+		<-ctx.Done()
+		return false, merr.Wrap(merr.ErrQueryViewNotReady, "released while request timed out")
+	})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Equal(t, 1, calls)
+}
+
+func TestDQLAutoLoadRetryPreservesLatestReadinessTimeout(t *testing.T) {
+	enableAutoLoad(t)
+	node := &Proxy{metaCache: &MetaCache{}}
+	readinessCalls := 0
+	ready := mockey.Mock((*Proxy).ensureCollectionReady).To(
+		func(_ *Proxy, ctx context.Context, _, _ string) error {
+			readinessCalls++
+			if readinessCalls == 1 {
+				return nil
+			}
+			childCtx, cancel := context.WithTimeout(ctx, time.Nanosecond)
+			defer cancel()
+			<-childCtx.Done()
+			return context.Cause(childCtx)
+		}).Build()
+	defer ready.UnPatch()
+
+	parentCtx := context.Background()
+	executeCalls := 0
+	err := node.retryDQL(parentCtx, "db", "collection", nil, func(context.Context) (bool, error) {
+		executeCalls++
+		return false, merr.WrapErrCollectionNotLoaded(100)
+	})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.NoError(t, parentCtx.Err())
+	require.Equal(t, 2, readinessCalls)
+	require.Equal(t, 2, executeCalls)
+}
+
+func TestDQLAutoLoadRetryPreservesSearchFallbackAndRecall(t *testing.T) {
+	for _, mode := range []string{"fallback", "recall"} {
+		t.Run(mode, func(t *testing.T) {
+			enableAutoLoad(t)
+			key := Params.AutoIndexConfig.EnableResultLimitCheck.Key
+			previous := Params.AutoIndexConfig.EnableResultLimitCheck.GetValue()
+			require.NoError(t, Params.Save(key, "true"))
+			t.Cleanup(func() { require.NoError(t, Params.Save(key, previous)) })
+			node := &Proxy{metaCache: &MetaCache{}}
+			checks := 0
+			ready := mockey.Mock((*Proxy).ensureCollectionReady).To(func(*Proxy, context.Context, string, string) error {
+				checks++
+				return nil
+			}).Build()
+			defer ready.UnPatch()
+			calls := 0
+			search := mockey.Mock((*Proxy).search).To(func(_ *Proxy, _ context.Context, _ *milvuspb.SearchRequest, optimized, recall bool, _ bool) (*milvuspb.SearchResults, bool, bool, bool, error) {
+				calls++
+				if calls == 1 {
+					require.True(t, optimized)
+					return &milvuspb.SearchResults{Status: merr.Success()}, mode == "fallback", mode == "fallback", mode == "recall", nil
+				}
+				if calls == 2 {
+					require.False(t, optimized)
+					require.Equal(t, mode == "recall", recall)
+					err := merr.Wrap(merr.ErrQueryViewNotReady, "released during extra search")
+					return &milvuspb.SearchResults{Status: merr.Status(err)}, false, false, false, err
+				}
+				return &milvuspb.SearchResults{Status: merr.Success()}, false, false, false, nil
+			}).Build()
+			defer search.UnPatch()
+			resp, err := node.Search(context.Background(), &milvuspb.SearchRequest{DbName: "db", CollectionName: "collection"})
+			require.NoError(t, err)
+			require.NoError(t, merr.Error(resp.GetStatus()))
+			require.Equal(t, 3, calls)
+			require.Zero(t, checks, "a View refresh must not trigger AutoLoad")
+		})
+	}
+}
+
+func TestDQLAutoLoadRetryPreservesInconsistentRequery(t *testing.T) {
+	require.NoError(t, Params.Save(Params.ProxyCfg.EnableAutoLoad.Key, "false"))
+	t.Cleanup(func() { require.NoError(t, Params.Reset(Params.ProxyCfg.EnableAutoLoad.Key)) })
+	node := &Proxy{metaCache: &MetaCache{}}
+	node.UpdateStateCode(commonpb.StateCode_Healthy)
+	calls := 0
+	search := mockey.Mock((*Proxy).hybridSearch).To(func(*Proxy, context.Context, *milvuspb.HybridSearchRequest, bool, bool) (*milvuspb.SearchResults, bool, bool, error) {
+		calls++
+		if calls == 1 {
+			return &milvuspb.SearchResults{Status: merr.Status(merr.ErrInconsistentRequery)}, false, false, nil
+		}
+		return &milvuspb.SearchResults{Status: merr.Success()}, false, false, nil
+	}).Build()
+	defer search.UnPatch()
+	resp, err := node.HybridSearch(context.Background(), &milvuspb.HybridSearchRequest{DbName: "db", CollectionName: "collection"})
+	require.NoError(t, err)
+	require.NoError(t, merr.Error(resp.GetStatus()))
+	require.Equal(t, 2, calls)
+}
+
+func TestDQLQueryRetryCountsRequestOnce(t *testing.T) {
+	enableAutoLoad(t)
+	node := &Proxy{metaCache: &MetaCache{}}
+	node.UpdateStateCode(commonpb.StateCode_Healthy)
+	previous := rateCol
+	require.NoError(t, node.initRateCollector())
+	t.Cleanup(func() { rateCol = previous })
+	counter := metrics.ProxyReceivedNQ.WithLabelValues(paramtable.GetStringNodeID(), metrics.QueryLabel, "db", "retry_count")
+	before := testutil.ToFloat64(counter)
+	ready := mockey.Mock((*Proxy).ensureCollectionReady).Return(nil).Build()
+	defer ready.UnPatch()
+	calls := 0
+	query := mockey.Mock((*Proxy).query).To(func(*Proxy, context.Context, *queryTask, trace.Span) (*milvuspb.QueryResults, segcore.StorageCost, error) {
+		calls++
+		if calls <= 2 {
+			err := merr.Wrap(merr.ErrQueryViewNotReady, "retry query")
+			return &milvuspb.QueryResults{Status: merr.Status(err)}, segcore.StorageCost{}, err
+		}
+		return &milvuspb.QueryResults{Status: merr.Success()}, segcore.StorageCost{}, nil
+	}).Build()
+	defer query.UnPatch()
+	resp, err := node.Query(context.Background(), &milvuspb.QueryRequest{DbName: "db", CollectionName: "retry_count"})
+	require.NoError(t, err)
+	require.NoError(t, merr.Error(resp.GetStatus()))
+	require.Equal(t, 3, calls)
+	require.Equal(t, before+1, testutil.ToFloat64(counter))
+	rate, err := rateCol.Rate(internalpb.RateType_DQLQuery.String(), ratelimitutil.DefaultWindow)
+	require.NoError(t, err)
+	require.InDelta(t, 1/float64(ratelimitutil.DefaultWindow/ratelimitutil.DefaultGranularity), rate, 1e-9)
+}

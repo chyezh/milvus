@@ -1,6 +1,6 @@
 FROM ghcr.io/astral-sh/uv:0.11.23 AS uv
 
-FROM nvidia/cuda:12.9.1-devel-ubuntu22.04 as builder
+FROM nvidia/cuda:13.2.0-devel-ubuntu22.04 as builder
 
 ARG TARGETARCH
 
@@ -28,14 +28,19 @@ RUN uv python install 3.12.13 && \
         setuptools==80.9.0 wheel==0.45.1 && \
     uv tool install --python python3.12 conan==2.25.1
 
+# upgrade gcc to 12
+RUN apt-get update && apt-get install -y gcc-12 g++-12 && cd /usr/bin \
+    && unlink gcc && ln -s gcc-12 gcc \
+    && unlink g++ && ln -s g++-12 g++ \
+    && unlink gcov && ln -s gcov-12 gcov
 
 
 # Install go
-RUN mkdir -p /usr/local/go && wget -qO- "https://go.dev/dl/go1.26.10.linux-$TARGETARCH.tar.gz" | tar --strip-components=1 -xz -C /usr/local/go
+RUN mkdir -p /usr/local/go && wget -qO- "https://go.dev/dl/go1.26.11.linux-$TARGETARCH.tar.gz" | tar --strip-components=1 -xz -C /usr/local/go
 # Install conan
 # Install rust
 RUN curl https://sh.rustup.rs -sSf | \
-    sh -s -- --default-toolchain=1.94 -y
+    sh -s -- --default-toolchain=1.95.0 -y
 ENV PATH=/root/.cargo/bin:/usr/local/bin:/usr/local/go/bin:$PATH
 
 # refer: https://code.visualstudio.com/docs/remote/containers-advanced#_avoiding-extension-reinstalls-on-container-rebuild

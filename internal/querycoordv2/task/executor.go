@@ -18,7 +18,6 @@ package task
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"sync"
 	"time"
@@ -27,9 +26,11 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/samber/lo"
 	"go.uber.org/atomic"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
-	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/metacache"
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	. "github.com/milvus-io/milvus/internal/querycoordv2/params"
 	"github.com/milvus-io/milvus/internal/querycoordv2/session"
@@ -40,7 +41,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/util/commonpbutil"
-	"github.com/milvus-io/milvus/pkg/v3/util/conc"
 	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/indexparams"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
@@ -69,8 +69,6 @@ type Executor struct {
 	executingTasks    *typeutil.ConcurrentSet[string] // task index
 	channelTaskNum    atomic.Int32                    // channel task pool counter
 	nonChannelTaskNum atomic.Int32                    // non-channel task pool counter
-
-	collectionInfoSingleflight conc.Singleflight[*milvuspb.DescribeCollectionResponse]
 }
 
 func NewExecutor(nodeID int64,
@@ -253,8 +251,8 @@ func (ex *Executor) loadSegment(task *SegmentTask, step int) error {
 	req := packLoadSegmentRequest(
 		task,
 		action,
-		collectionInfo.GetSchema(),
-		collectionInfo.GetProperties(),
+		collectionInfo.Schema,
+		collectionInfo.Properties,
 		loadMeta,
 		loadInfo,
 		indexInfos,
@@ -264,7 +262,8 @@ func (ex *Executor) loadSegment(task *SegmentTask, step int) error {
 	replica := ex.meta.Get(ctx, task.ReplicaID())
 	if replica == nil {
 		msg := "node doesn't belong to any replica"
-		err := merr.WrapErrNodeNotAvailable(action.Node())
+		// assign the outer err so the deferred task.Fail observes the failure
+		err = merr.WrapErrNodeNotAvailable(action.Node())
 		mlog.Warn(ctx, msg, mlog.Err(err))
 		return err
 	}
@@ -295,30 +294,6 @@ func (ex *Executor) loadSegment(task *SegmentTask, step int) error {
 
 	return nil
 }
-
-// If we enable following checking when loading segments,
-// 1. all segment should always be loaded by streamingnode but not 2.5 querynode, make some search and query failure when upgrading.
-// Otherwise, some search and query result will be wrong when upgrading.
-// We choose to disable this checking for now to promise available search and query when upgrading.
-//
-// Because the L0 management at 2.6 and 2.5 is different, so when upgrading mixcoord,
-// the new mixcoord will make a wrong plan when balancing a segment from one query node to another by 2.5 delegator.
-// We need to balance the 2.5 delegator to 2.6 delegator before balancing any segment by 2.6 mixcoord.
-// func (ex *Executor) checkIfShardLeaderIsStreamingNode(view *meta.DmChannel) error {
-// 	if !streamingutil.IsStreamingServiceEnabled() {
-// 		return nil
-// 	}
-//
-// 	node := ex.nodeMgr.Get(view.Node)
-// 	if node == nil {
-// 		return merr.WrapErrServiceInternalMsg("node %d is not found", view.Node)
-// 	}
-// 	nodes := snmanager.StaticStreamingNodeManager.GetStreamingQueryNodeIDs()
-// 	if !nodes.Contain(view.Node) {
-// 		return merr.WrapErrServiceInternalMsg("channel %s at node %d is not working at streamingnode, skip load segment", view.GetChannelName(), view.Node)
-// 	}
-// 	return nil
-// }
 
 func (ex *Executor) releaseSegment(task *SegmentTask, step int) {
 	defer ex.removeTask(task, step)
@@ -415,7 +390,7 @@ func (ex *Executor) subscribeChannel(task *ChannelTask, step int) error {
 
 	ctx := task.Context()
 
-	collectionInfo, err := ex.broker.DescribeCollection(ctx, task.CollectionID())
+	collectionInfo, err := ex.meta.GetCollectionInfo(task.CollectionID())
 	if err != nil {
 		mlog.Warn(context.TODO(), "failed to get collection info", mlog.Err(err))
 		return err
@@ -431,7 +406,7 @@ func (ex *Executor) subscribeChannel(task *ChannelTask, step int) error {
 		mlog.Warn(context.TODO(), "fail to get index meta of collection", mlog.Err(err))
 		return err
 	}
-	dbResp, err := ex.broker.DescribeDatabase(ctx, collectionInfo.GetDbName())
+	dbInfo, err := ex.meta.GetDatabaseInfo(collectionInfo.DatabaseName)
 	if err != nil {
 		mlog.Warn(context.TODO(), "failed to get database info", mlog.Err(err))
 		return err
@@ -443,7 +418,7 @@ func (ex *Executor) subscribeChannel(task *ChannelTask, step int) error {
 		loadFields,
 		partitions...,
 	)
-	loadMeta.DbProperties = dbResp.GetProperties()
+	loadMeta.DbProperties = dbInfo.Properties
 
 	dmChannel := ex.targetMgr.GetDmChannel(ctx, task.CollectionID(), action.ChannelName(), meta.NextTarget)
 	if dmChannel == nil {
@@ -463,8 +438,8 @@ func (ex *Executor) subscribeChannel(task *ChannelTask, step int) error {
 	req := packSubChannelRequest(
 		task,
 		action,
-		collectionInfo.GetSchema(),
-		collectionInfo.GetProperties(),
+		collectionInfo.Schema,
+		collectionInfo.Properties,
 		loadMeta,
 		dmChannel,
 		indexInfo,
@@ -634,9 +609,11 @@ func (ex *Executor) setDistribution(task *LeaderTask, step int) error {
 		),
 		CollectionID: task.collectionID,
 		Channel:      task.Shard(),
-		Schema:       collectionInfo.GetSchema(),
-		LoadMeta:     loadMeta,
-		ReplicaID:    task.ReplicaID(),
+		// The view's schema is shared, and an in-process QueryNode receives
+		// this request as is.
+		Schema:    proto.Clone(collectionInfo.Schema).(*schemapb.CollectionSchema),
+		LoadMeta:  loadMeta,
+		ReplicaID: task.ReplicaID(),
 		Actions: []*querypb.SyncAction{
 			{
 				Type:        querypb.SyncType_Set,
@@ -709,10 +686,10 @@ func (ex *Executor) removeDistribution(task *LeaderTask, step int) error {
 	return nil
 }
 
-func (ex *Executor) getMetaInfo(ctx context.Context, task Task) (*milvuspb.DescribeCollectionResponse, *querypb.LoadMetaInfo, *meta.DmChannel, error) {
+func (ex *Executor) getMetaInfo(ctx context.Context, task Task) (*metacache.CollectionInfo, *querypb.LoadMetaInfo, *meta.DmChannel, error) {
 	collectionID := task.CollectionID()
 	shard := task.Shard()
-	collectionInfo, err := ex.getCollectionInfo(ctx, collectionID)
+	collectionInfo, err := ex.meta.GetCollectionInfo(collectionID)
 	if err != nil {
 		mlog.Warn(context.TODO(), "failed to get collection info", mlog.Err(err))
 		return nil, nil, nil, err
@@ -733,22 +710,6 @@ func (ex *Executor) getMetaInfo(ctx context.Context, task Task) (*milvuspb.Descr
 	}
 
 	return collectionInfo, loadMeta, channel, nil
-}
-
-func (ex *Executor) getCollectionInfo(ctx context.Context, collectionID int64) (*milvuspb.DescribeCollectionResponse, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
-	ch := ex.collectionInfoSingleflight.DoChan(fmt.Sprint(collectionID), func() (*milvuspb.DescribeCollectionResponse, error) {
-		return ex.broker.DescribeCollection(context.WithoutCancel(ctx), collectionID)
-	})
-	select {
-	case result := <-ch:
-		return result.Val, result.Err
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
 }
 
 func (ex *Executor) getLoadInfo(ctx context.Context, collectionID, segmentID int64, channel *meta.DmChannel, priority commonpb.LoadPriority) (*querypb.SegmentLoadInfo, []*indexpb.IndexInfo, error) {

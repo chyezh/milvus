@@ -25,6 +25,11 @@ namespace milvus::segcore {
 
 inline constexpr const char* kMilvusDataTypeMetadataKey = "milvus.data_type";
 
+// System column names shared by Arrow producers and consumers.
+inline constexpr char kSegOffsetFieldName[] = "$seg_offset";
+inline constexpr char kQueryElementIndicesFieldName[] =
+    "$query_element_indices";
+
 // Classify a failed in-memory Arrow conversion/export at the C Data boundary.
 // Unlike storage's mapper, Invalid/Type/Index errors here describe internal
 // result contracts, not corrupt persisted data or invalid client parameters.
@@ -108,6 +113,7 @@ FieldDataToArrow(const std::string& field_name,
                  const milvus::DataArray& field_data,
                  size_t total_valid,
                  bool preserve_integer_width = false,
-                 const ProtoOwner& owner = nullptr);
+                 const ProtoOwner& owner = nullptr,
+                 const milvus::FieldMeta* field_meta = nullptr);
 
 }  // namespace milvus::segcore

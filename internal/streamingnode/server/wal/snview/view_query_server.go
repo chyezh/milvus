@@ -3,8 +3,6 @@ package snview
 import (
 	"context"
 
-	"github.com/cockroachdb/errors"
-
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/views/viewerror"
 	"github.com/milvus-io/milvus/internal/views/viewquery"
@@ -36,9 +34,29 @@ func (s *PChannelViewQueryServer) SearchOnView(ctx context.Context, req *viewpb.
 	}
 	provider, err := s.taskProviderForVChannel(ctx, req.GetShardId().GetVchannel())
 	if err != nil {
-		return nil, asViewQueryGRPCError(err)
+		return nil, err
 	}
 	return viewquery.NewServer(provider, s.scheduler).SearchOnView(ctx, req)
+}
+
+func (s *PChannelViewQueryServer) SearchOnViewStream(stream viewpb.ViewQueryService_SearchOnViewStreamServer) error {
+	initial, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+	prefetched := &prefetchedSearchOnViewStream{
+		ViewQueryService_SearchOnViewStreamServer: stream,
+		initial: initial,
+	}
+	request := initial.GetRequest()
+	if request == nil || request.GetShardId() == nil {
+		return viewquery.NewServer(nil, s.scheduler).SearchOnViewStream(prefetched)
+	}
+	provider, err := s.taskProviderForVChannel(stream.Context(), request.GetShardId().GetVchannel())
+	if err != nil {
+		return err
+	}
+	return viewquery.NewServer(provider, s.scheduler).SearchOnViewStream(prefetched)
 }
 
 func (s *PChannelViewQueryServer) QueryOnView(ctx context.Context, req *viewpb.QueryOnViewRequest) (*viewpb.QueryOnViewResponse, error) {
@@ -47,13 +65,29 @@ func (s *PChannelViewQueryServer) QueryOnView(ctx context.Context, req *viewpb.Q
 	}
 	provider, err := s.taskProviderForVChannel(ctx, req.GetShardId().GetVchannel())
 	if err != nil {
-		return nil, asViewQueryGRPCError(err)
+		return nil, err
 	}
 	return viewquery.NewServer(provider, s.scheduler).QueryOnView(ctx, req)
 }
 
-func (s *PChannelViewQueryServer) RequeryOnView(ctx context.Context, req *viewpb.RequeryOnViewRequest) (*viewpb.RequeryOnViewResponse, error) {
-	return viewquery.NewServer(nil, s.scheduler).RequeryOnView(ctx, req)
+func (s *PChannelViewQueryServer) QueryOnViewStream(stream viewpb.ViewQueryService_QueryOnViewStreamServer) error {
+	initial, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+	prefetched := &prefetchedQueryOnViewStream{
+		ViewQueryService_QueryOnViewStreamServer: stream,
+		initial:                                  initial,
+	}
+	request := initial.GetRequest()
+	if request == nil || request.GetShardId() == nil {
+		return viewquery.NewServer(nil, s.scheduler).QueryOnViewStream(prefetched)
+	}
+	provider, err := s.taskProviderForVChannel(stream.Context(), request.GetShardId().GetVchannel())
+	if err != nil {
+		return err
+	}
+	return viewquery.NewServer(provider, s.scheduler).QueryOnViewStream(prefetched)
 }
 
 func (s *PChannelViewQueryServer) taskProviderForVChannel(ctx context.Context, vchannel string) (viewquery.TaskProvider, error) {
@@ -82,16 +116,34 @@ func (s *PChannelViewQueryServer) taskProviderForVChannel(ctx context.Context, v
 	return provider, nil
 }
 
-func asViewQueryGRPCError(err error) error {
-	if err == nil {
-		return nil
-	}
-	if errors.IsAny(err, context.Canceled, context.DeadlineExceeded) {
-		return err
-	}
-	return viewerror.NewGRPCStatusFromViewError(viewerror.AsViewError(err)).Err()
-}
-
 type pchannelWALProvider interface {
 	GetAvailableWAL(channel types.PChannelInfo) (wal.WAL, error)
+}
+
+type prefetchedSearchOnViewStream struct {
+	viewpb.ViewQueryService_SearchOnViewStreamServer
+	initial *viewpb.SearchOnViewStreamRequest
+}
+
+func (s *prefetchedSearchOnViewStream) Recv() (*viewpb.SearchOnViewStreamRequest, error) {
+	if s.initial != nil {
+		initial := s.initial
+		s.initial = nil
+		return initial, nil
+	}
+	return s.ViewQueryService_SearchOnViewStreamServer.Recv()
+}
+
+type prefetchedQueryOnViewStream struct {
+	viewpb.ViewQueryService_QueryOnViewStreamServer
+	initial *viewpb.QueryOnViewStreamRequest
+}
+
+func (s *prefetchedQueryOnViewStream) Recv() (*viewpb.QueryOnViewStreamRequest, error) {
+	if s.initial != nil {
+		initial := s.initial
+		s.initial = nil
+		return initial, nil
+	}
+	return s.ViewQueryService_QueryOnViewStreamServer.Recv()
 }

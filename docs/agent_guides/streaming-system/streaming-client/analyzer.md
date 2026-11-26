@@ -10,6 +10,39 @@ Proxy assembles and forwards requests directly, without a scheduler task or TSO
 allocation. QueryCoord, QueryNode and ManagerClient are not involved in this call
 path. Analyzer calls do not use the DQL task queue or its concurrency limit.
 
+The unpublished request uses two independent oneofs: `source` selects the
+analyzer, and `operation` selects `TokenizeOptions`, `PhraseMatchOptions` or
+`HighlightOptions`.
+`placeholder` is shared input. Tokenization options carry `with_detail` and
+`with_hash`; phrase options carry `query_text`. Responses have a matching
+`result` oneof (`TokenizeResult`, `PhraseMatchResult` or `HighlightResult`) and
+a common business Status. An absent operation is rejected; there is no legacy-field fallback.
+
+Public `ComputePhraseMatchSlop` adapts to this same RunAnalyzer RPC with inline
+parameters. It needs no Coordinator, QueryNode, collection or load state. The
+StreamingNode tokenizes the query once per normalized analyzer name and processes
+data in batches of at most 32 rows and 64 KiB of input. An individually larger
+text is processed alone; this batching introduces no new input limit. Analyzer
+groups are processed sequentially and results retain the original row order, so
+only one group's query tokens and the current data batch are retained. Input and
+output arrays still scale with the request, and a single text's token expansion
+is not capped by the batch budget. Using detailed native positions, execution
+computes the smallest range covering aligned occurrences of all query
+terms. The position calculation matches the legacy Tantivy implementation,
+including repeated terms and stop-word position gaps. A missing term yields
+`is_match=false, slop=-1`; empty query or empty batch yields an empty result.
+Analyzer construction, resource loading and execution failures return business
+Status rather than being treated as non-matches. No new native ABI is needed.
+
+All operations share native tokenization and the same analyzer resource leases.
+Inline resources live until the tokenizer and token streams are destroyed;
+returned token strings and positions are Go-owned, so slop computation retains
+no native pointer. Field operations hold the existing WAL lifetime and runner
+pin through all batches and slop calculations. Each query/data pair uses the same
+named field analyzer, even if the collection schema changes during the request.
+The old QueryCoord/QueryNode ComputePhraseMatchSlop RPCs remain implemented, but
+Proxy no longer calls them.
+
 The request selects one of two sources:
 
 - Inline `analyzer_params`: call the existing handler service without a target
@@ -39,11 +72,15 @@ ready entry. Native code retains parameter and filename validation.
 Inline execution constructs a temporary analyzer and destroys it and each token
 stream on exit. Field execution validates assignment ownership and holds the
 WAL's Working lifetime. FunctionRunnerManager resolves collection ID +
-WAL-vchannel key + field ID using that key's current schema. No Proxy schema
-version is sent or compared. Managed BM25/MinHash analyzers are pinned
-through BatchAnalyze; ordinary analyzer-enabled fields use a copied field schema
-and temporary analyzer. GC before pin returns a transient error; after pin it
-waits for execution. WAL shutdown waits for admitted field analyzer calls through
+WAL-vchannel key + field ID using that key's current schema. Public standalone
+analyzer requests use the current WAL schema. Internal
+rendering supplies optional `read_schema_version`, including zero, to select the
+search schema. The WAL adaptor resolves that exact version and allocates a
+request-scoped function-runner key, released after the operation. Managed
+BM25/MinHash analyzers are pinned
+through the entire operation; ordinary analyzer-enabled fields use one copied
+field schema and temporary analyzer for the operation. GC before pin returns a
+transient error; after pin it waits for execution. WAL shutdown waits for admitted field analyzer calls through
 the existing WAL lifetime. Inline analyzers own their resources, and the existing
 gRPC graceful shutdown waits for their requests to finish; the handler service
 needs no additional shutdown lifecycle. Cancellation is checked before native
@@ -59,7 +96,9 @@ progress.
   reuses `createHandlerAfterStreamingNodeReady` for assignment discovery, error
   reporting and backoff until the caller context ends. Field attempts copy the
   request with the latest assignment. Inline attempts have no PChannel and use
-  the ready-connection picker. Unsupported RPCs return Unimplemented immediately.
+  the ready-connection picker. Unsupported RPCs return Unimplemented immediately. Transport message-size
+  failures also return immediately with their original ResourceExhausted status;
+  transient resource pressure and streaming rate-limit errors retain retries.
 - Analyzer failures (file-resource preparation, parameters, schema admission,
   runner availability and execution) use Milvus Status in the response.
   HandlerClient forwards these responses without retrying or converting them to
@@ -80,7 +119,8 @@ HandlerClient does not interpret business Status or retry business failures.
 Collection identity is pinned before execution: Proxy resolves field/channel
 metadata by the original collection ID, and all streaming recovery attempts retain
 that ID. A same-name drop/recreate cannot redirect a request to the new collection.
-There is no historical schema lookup or schema-version admission check.
+Internal highlighting resolves the exact search schema; an unavailable version
+fails rather than falling back to the latest write schema.
 
 ## Compatibility
 
@@ -222,7 +262,34 @@ an unsupported new RPC surfaces as Unimplemented.
 - `internal/streamingnode/server/wal/adaptor/analyzer.go` — WAL field execution.
 - `internal/util/function/manager.go` — schema selection and runner lifetime.
 - `internal/proxy/impl.go` — SDK adaptation and collection identity.
-- `pkg/proto/streaming.proto` — additive request/response and service method.
+- `pkg/proto/streaming.proto` — analyzer source, operation and result oneofs.
 - `internal/util/fileresource/pull.go` — process-wide analyzer resource manager access.
 - `internal/util/fileresource/analyzer_resource_manager.go` — ID-keyed loading, download flights, resource ownership and idle leases.
 - `internal/rootcoord/file_resource_fetch.go` — Fetch and name resolution.
+
+## Lexical highlighting
+
+After search field retrieval, Proxy sends search/query/corpus texts in the shared
+placeholder, with per-text analyzer names in the field source and layout/fragment
+parameters in `HighlightOptions` (including the extra query-text count).
+Streaming defines its own fragment and row-result messages; the wire protocol
+does not import QueryCoord messages. A Go adapter reuses the existing fragment
+algorithm without changing the legacy GetHighlight API. The source retains the original CollectionID
+and exact search SchemaVersion, including zero. StreamingNode holds one analyzer
+and resource binding through tokenization and `highlight.BuildFragments`, then
+returns only `HighlightResult` fragments. Proxy inserts the display tags. The
+existing DQL highlight task queue remains in use; the legacy QueryNode
+GetHighlight RPC remains available for older callers.
+
+The Highlight operation supports the same inline and field sources as ordinary
+tokenization. It returns no intermediate tokens. The fragment algorithm, corpus
+ordering and byte-to-rune offset conversion are shared with legacy GetHighlight.
+Tokenization still materializes a field task's token working set on SN; this
+change does not impose a token-memory cap. Request texts or unusually large
+fragment outputs can still hit gRPC limits, which fail without size-error retries.
+
+The exact schema binding lasts through each analyzer call. It does not reserve
+schema history between search and highlighting: concurrent DDL/history cleanup
+can make the selected version unavailable. Upgrade SNs to support the Highlight
+operation and exact-schema analysis before activating the new Proxy path. An older
+SN rejects an absent/unknown operation; there is no fallback to detailed tokens.

@@ -7,19 +7,21 @@ import (
 )
 
 type SegmentIndex struct {
-	SegmentID      int64
-	CollectionID   int64
-	PartitionID    int64
-	NumRows        int64
-	IndexID        int64
-	BuildID        int64
-	NodeID         int64
-	IndexVersion   int64
-	IndexState     commonpb.IndexState
-	FailReason     string
-	IsDeleted      bool
-	CreatedUTCTime uint64
-	IndexFileKeys  []string
+	// ArtifactPresent is set on transient projections of SegmentInfo summaries.
+	ArtifactPresent bool
+	SegmentID       int64
+	CollectionID    int64
+	PartitionID     int64
+	NumRows         int64
+	IndexID         int64
+	BuildID         int64
+	NodeID          int64
+	IndexVersion    int64
+	IndexState      commonpb.IndexState
+	FailReason      string
+	IsDeleted       bool
+	CreatedUTCTime  uint64
+	IndexFileKeys   []string
 	// The byte size of serialized index data at oos. (compressed)
 	IndexSerializedSize uint64
 	// The byte size of index data in memory. (uncompressed)
@@ -38,6 +40,12 @@ type SegmentIndex struct {
 	// FinishTask. Readers that construct paths from this field must check
 	// IndexState == Finished first.
 	IndexStorePathVersion indexpb.IndexStorePathVersion
+	// ManifestPublished tracks manifest placement with no catalog row. This is
+	// process-local: reload derives it from the record's source, and writing the
+	// index back to the catalog clears it. Superseded builds retained in memory
+	// keep it even after their entry leaves the current manifest. The zero value
+	// conservatively treats a record as catalog-backed. It is not serialized.
+	ManifestPublished bool
 }
 
 func UnmarshalSegmentIndexModel(segIndex *indexpb.SegmentIndex) *SegmentIndex {
@@ -101,6 +109,7 @@ func MarshalSegmentIndexModel(segIdx *SegmentIndex) *indexpb.SegmentIndex {
 
 func CloneSegmentIndex(segIndex *SegmentIndex) *SegmentIndex {
 	return &SegmentIndex{
+		ArtifactPresent:           segIndex.ArtifactPresent,
 		SegmentID:                 segIndex.SegmentID,
 		CollectionID:              segIndex.CollectionID,
 		PartitionID:               segIndex.PartitionID,
@@ -122,5 +131,8 @@ func CloneSegmentIndex(segIndex *SegmentIndex) *SegmentIndex {
 		CurrentScalarIndexVersion: segIndex.CurrentScalarIndexVersion,
 		IndexType:                 segIndex.IndexType,
 		IndexStorePathVersion:     segIndex.IndexStorePathVersion,
+		ManifestPublished:         segIndex.ManifestPublished,
 	}
 }
+
+func (s *SegmentIndex) HasArtifact() bool { return s.ArtifactPresent || len(s.IndexFileKeys) > 0 }

@@ -116,6 +116,7 @@ type Task interface {
 
 	// MarshalJSON marshal task info to json
 	MarshalJSON() ([]byte, error)
+
 	Name() string
 	GetReason() string
 
@@ -160,8 +161,10 @@ type baseTask struct {
 	priority Priority
 	err      error
 	actions  []Action
-	step     int
-	reason   string
+	// The scheduler advances step under the collection lock; monitoring reads
+	// it independently when serializing task statistics.
+	step   atomic.Int32
+	reason string
 
 	// span for tracing
 	span trace.Span
@@ -219,14 +222,7 @@ func newBaseTask(ctx context.Context, timeout time.Duration, source Source, coll
 // whose distribution/leader-promotion confirmation is slow can still be
 // starved by a deadline armed for an earlier, already-returned RPC. Fully
 // isolating "wait for dist confirmation" from "RPC in flight" needs its own
-// design, in the same bucket as the no-backoff TODO below.
-//
-// TODO: this is still a flat wall-clock budget per step, on the assumption a
-// single action always finishes within its configured timeout
-// (segmentTaskTimeout defaults to 5min). A real operation that legitimately
-// runs longer never gets a chance to finish: the checker rebuilds it with the
-// same budget on every check tick, forever. See
-// SegmentChecker.createSegmentLoadTasks / ChannelChecker's equivalent.
+// design.
 func (task *baseTask) ActivateDeadline(step int) {
 	if task.timeout <= 0 {
 		return
@@ -390,12 +386,11 @@ func (task *baseTask) Actions() []Action {
 }
 
 func (task *baseTask) Step() int {
-	return task.step
+	return int(task.step.Load())
 }
 
 func (task *baseTask) StepUp() int {
-	task.step++
-	return task.step
+	return int(task.step.Inc())
 }
 
 func (task *baseTask) IsFinished(distMgr *meta.DistributionManager) bool {
@@ -524,6 +519,9 @@ func (task *SegmentTask) SetShardLeaderID(id int64) {
 
 type ChannelTask struct {
 	*baseTask
+	// watchVersion is the generation carried by every Watch this task sends,
+	// so re-sending it does not advance an already subscribed delegator.
+	watchVersion atomic.Int64
 }
 
 // NewChannelTask creates a ChannelTask with actions,
@@ -562,6 +560,23 @@ func NewChannelTask(ctx context.Context,
 
 func (task *ChannelTask) Channel() string {
 	return task.shard
+}
+
+// WatchVersion returns the delegator version this task subscribes with,
+// fixed when the task first sends a Watch.
+//
+// The value is QueryCoord's wall clock. It only has to order Watches of the
+// same channel issued by the active coordinator: GetShardLeader prefers the
+// higher version among serviceable delegators, and the channel checker
+// retires the lower one. If the clock steps backwards (NTP correction, or
+// failover to a host with a slower clock), new Watches compare lower than an
+// existing delegator and that channel's handoff stalls until the clock passes
+// the old value; query results are unaffected. A monotonic source such as TSO,
+// or clamping to the highest version already reported for the channel, would
+// close that window.
+func (task *ChannelTask) WatchVersion() int64 {
+	task.watchVersion.CompareAndSwap(0, time.Now().UnixNano())
+	return task.watchVersion.Load()
 }
 
 func (task *ChannelTask) Index() string {

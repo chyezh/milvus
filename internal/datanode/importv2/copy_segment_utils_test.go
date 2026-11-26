@@ -1378,6 +1378,7 @@ func TestBuildIndexInfoFromSource(t *testing.T) {
 				BuildID:        1002,
 				IndexFilePaths: []string{"files/index_files/1002/1/222/333/index1"},
 				SerializedSize: 5000,
+				MemSize:        12000,
 			},
 		},
 		TextIndexFiles: map[int64]*datapb.TextIndexStats{
@@ -1464,6 +1465,7 @@ func TestBuildIndexInfoFromSource(t *testing.T) {
 		assert.Equal(t, int64(1001), indexInfos[1002].IndexId)
 		assert.Equal(t, int64(1002), indexInfos[1002].BuildId)
 		assert.Equal(t, int64(5000), indexInfos[1002].IndexSize)
+		assert.Equal(t, uint64(12000), indexInfos[1002].GetMemSize())
 		assert.Equal(t, "files/index_files/1002/1/555/666/index1", indexInfos[1002].IndexFilePaths[0])
 
 		// Verify text index info
@@ -1492,6 +1494,14 @@ func TestBuildIndexInfoFromSource(t *testing.T) {
 		assert.Equal(t, "files/json_stats/2/3002/1/444/555/666/102/shared_key_index/index1", jsonKeyIndexInfos[102].Files[0])
 		assert.Equal(t, "files/json_stats/2/3002/1/444/555/666/102/shredding_data/data1", jsonKeyIndexInfos[102].Files[1])
 	})
+
+	t.Run("older snapshot without memory estimate", func(t *testing.T) {
+		legacy := proto.Clone(source).(*datapb.CopySegmentSource)
+		legacy.IndexFiles[0].MemSize = 0
+		indexInfos, _, _, err := buildIndexInfoFromSource(legacy, target, mappings)
+		require.NoError(t, err)
+		require.Nil(t, indexInfos[1002].MemSize)
+	})
 }
 
 func TestBuildIndexInfoFromSource_PreservesIndexStorePathVersion(t *testing.T) {
@@ -1505,6 +1515,7 @@ func TestBuildIndexInfoFromSource_PreservesIndexStorePathVersion(t *testing.T) {
 				IndexID:               10,
 				BuildID:               1001,
 				IndexName:             "idx_v0",
+				IndexType:             "HNSW_SQ",
 				IndexVersion:          1,
 				SerializedSize:        1024,
 				IndexStorePathVersion: indexpb.IndexStorePathVersion_INDEX_STORE_PATH_VERSION_BUILD_ROOTED,
@@ -1537,6 +1548,8 @@ func TestBuildIndexInfoFromSource_PreservesIndexStorePathVersion(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, indexpb.IndexStorePathVersion_INDEX_STORE_PATH_VERSION_BUILD_ROOTED, indexInfos[2001].GetIndexStorePathVersion())
 	assert.Equal(t, indexpb.IndexStorePathVersion_INDEX_STORE_PATH_VERSION_COLLECTION_ROOTED, indexInfos[2002].GetIndexStorePathVersion())
+	assert.Equal(t, "HNSW_SQ", indexInfos[2001].GetIndexType())
+	assert.Empty(t, indexInfos[2002].GetIndexType())
 }
 
 func TestCopySegmentAndIndexFiles_ReturnsFileList(t *testing.T) {
@@ -3278,7 +3291,11 @@ func TestCopySegmentAndIndexFiles_WithManifest_NoPbBinlogs(t *testing.T) {
 		StorageVersion:   storage.StorageV3,
 		ManifestPath:     manifestPath,
 		ManifestHasIndex: proto.Bool(false),
-		InsertBinlogs:    []*datapb.FieldBinlog{},
+		NumOfRows:        3,
+		FieldLogicalSizes: &datapb.FieldLogicalSizes{Version: 1, RowCount: 3, Fields: map[int64]*datapb.FieldLogicalSize{
+			100: {}, 101: {PayloadBytes: 9, ValidityBits: 3},
+		}},
+		InsertBinlogs: []*datapb.FieldBinlog{},
 	}
 
 	target := &datapb.CopySegmentTarget{
@@ -3304,9 +3321,11 @@ func TestCopySegmentAndIndexFiles_WithManifest_NoPbBinlogs(t *testing.T) {
 		nil,
 	)
 
-	assert.NoError(t, err)
-	assert.NotNil(t, result)
-	assert.Equal(t, int64(0), result.ImportedRows)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.EqualValues(t, 3, result.ImportedRows)
+	assert.True(t, proto.Equal(source.GetFieldLogicalSizes(), result.GetFieldLogicalSizes()))
+	assert.NotSame(t, source.FieldLogicalSizes.Fields[100], result.FieldLogicalSizes.Fields[100])
 	assert.Len(t, copiedFiles, 1)
 	assert.NotEmpty(t, result.ManifestPath)
 	assert.NotNil(t, result.ManifestIndexRewritten)
@@ -3790,13 +3809,21 @@ func TestBuildTargetManifestIndexes(t *testing.T) {
 	assert.Equal(t, int64(2), entry.IndexVersion)
 	assert.Equal(t, int64(4096), entry.NumRows)
 	assert.Equal(t, []string{"a", "b"}, entry.IndexFileKeys)
-	assert.Equal(t, "16", entry.Properties["M"])
-	assert.Equal(t, "HNSW", entry.Properties[common.IndexTypeKey])
+	assert.Empty(t, entry.Properties, "ignore collection parameters even from older coordinators")
 
 	expectedPath, err := packed.ManifestIndexRelativePath("files/insert_log/100/200/300", "files/insert_log/100/200/300/_index/888/2")
 	assert.NoError(t, err)
 	assert.Equal(t, expectedPath, entry.Path)
 	assert.Equal(t, "888/2", entry.Path)
+	indexInfos[888].IndexType = "HNSW_SQ"
+	entries, err = buildTargetManifestIndexes(context.TODO(), manifestPath, target, 4096, indexInfos)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "HNSW_SQ", entries[0].IndexType)
+	assert.Empty(t, entries[0].Properties)
+	assert.Equal(t, "vec_idx", entries[0].IndexName)
+	assert.Equal(t, "HNSW", target.TargetIndexes[0].IndexType)
+	assert.NotContains(t, target.TargetIndexes[0].Properties, common.IndexTypeKey)
 }
 
 func TestBuildTargetManifestIndexes_NoTargetDefinition(t *testing.T) {
@@ -3939,9 +3966,12 @@ func TestRepublishCopiedManifestIndexes_WritePlacementMatrix(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		enabled bool
+		memSize *uint64
+		wantMem int64
 	}{
 		{name: "manifest writes disabled", enabled: false},
-		{name: "manifest writes enabled", enabled: true},
+		{name: "manifest writes enabled", enabled: true, memSize: proto.Uint64(256), wantMem: 256},
+		{name: "older worker result", enabled: true, wantMem: 64},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := &indexpb.StorageConfig{StorageType: "local", RootPath: t.TempDir()}
@@ -3982,6 +4012,8 @@ func TestRepublishCopiedManifestIndexes_WritePlacementMatrix(t *testing.T) {
 					IndexStorePathVersion: indexpb.IndexStorePathVersion_INDEX_STORE_PATH_VERSION_SEGMENT_ROOTED,
 					BuildId:               888,
 					Version:               2,
+					IndexSize:             64,
+					MemSize:               tc.memSize,
 					IndexFilePaths:        []string{filepath.Join(basePath, "_index/888/2/target.bin")},
 				},
 			}
@@ -3997,6 +4029,8 @@ func TestRepublishCopiedManifestIndexes_WritePlacementMatrix(t *testing.T) {
 				assert.Equal(t, int64(777), entries[0].IndexID)
 				assert.Equal(t, int64(888), entries[0].BuildID)
 				assert.Equal(t, "vec_idx", entries[0].IndexName)
+				assert.EqualValues(t, 64, entries[0].SerializedSize)
+				assert.Equal(t, tc.wantMem, entries[0].MemSize)
 			} else {
 				assert.Empty(t, publishedBuildIDs)
 				assert.Empty(t, entries)

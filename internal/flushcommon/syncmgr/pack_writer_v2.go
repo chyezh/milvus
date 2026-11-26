@@ -18,7 +18,6 @@ package syncmgr
 
 import (
 	"context"
-	"encoding/base64"
 	"math"
 
 	"github.com/apache/arrow/go/v17/arrow/array"
@@ -64,8 +63,7 @@ func (bw *BulkPackWriterV2) PreparedStats() *metacache.SegmentStats {
 // untouched, mutated only by SyncTask.Run (via the installed preparedStats)
 // after the DataCoord ack. The clone is stashed as preparedStats and its
 // Publish() returned to DataCoord, so the two are one object. Shared by V2 and
-// the embedding V3 writer; only the statsBlobSize source differs (V2 sums the
-// returned stats/bm25 arrays, V3 tracks bw.statsBlobSize). digested is false for
+// the embedding V3 writer, which also provides measured field sizes. digested is false for
 // an empty sync, where the publish returns the segment's prior cumulative value.
 func (bw *BulkPackWriterV2) finalizeStats(
 	pack *SyncPack,
@@ -73,6 +71,7 @@ func (bw *BulkPackWriterV2) finalizeStats(
 	inserts map[int64]*datapb.FieldBinlog,
 	deltas *datapb.FieldBinlog,
 	statsBlobSize int64,
+	fieldSizes *datapb.FieldLogicalSizes,
 ) (*datapb.Statistics, error) {
 	seg, ok := bw.metaCache.GetSegmentByID(pack.segmentID)
 	if !ok {
@@ -80,7 +79,7 @@ func (bw *BulkPackWriterV2) finalizeStats(
 	}
 	clone := seg.Statistics().Clone()
 	if digested {
-		clone.Digest(inserts, deltas, statsBlobSize, pack.batchRows, pack.tsFrom, pack.tsTo)
+		clone.DigestWithFieldSizes(inserts, deltas, statsBlobSize, pack.batchRows, pack.tsFrom, pack.tsTo, fieldSizes)
 	}
 	bw.preparedStats = clone
 	return clone.Publish(), nil
@@ -151,7 +150,7 @@ func (bw *BulkPackWriterV2) Write(ctx context.Context, pack *SyncPack) (
 		}
 	}
 
-	segmentStats, err = bw.finalizeStats(pack, digested, inserts, deltas, statsBlobSize)
+	segmentStats, err = bw.finalizeStats(pack, digested, inserts, deltas, statsBlobSize, nil)
 	return
 }
 
@@ -172,24 +171,8 @@ func (bw *BulkPackWriterV2) getBucketName() string {
 	return paramtable.Get().MinioCfg.BucketName.GetValue()
 }
 
-func (bw *BulkPackWriterV2) getPluginContext(collectionID int64) *indexcgopb.StoragePluginContext {
-	if !hookutil.IsClusterEncryptionEnabled() {
-		return nil
-	}
-	ez := hookutil.GetEzByCollProperties(bw.schema.GetProperties(), collectionID)
-	if ez == nil {
-		return nil
-	}
-	unsafe := hookutil.GetCipher().GetUnsafeKey(ez.EzID, ez.CollectionID)
-	if len(unsafe) == 0 {
-		return nil
-	}
-
-	return &indexcgopb.StoragePluginContext{
-		EncryptionZoneId: ez.EzID,
-		CollectionId:     ez.CollectionID,
-		EncryptionKey:    base64.StdEncoding.EncodeToString(unsafe),
-	}
+func (bw *BulkPackWriterV2) getPluginContext(collectionID int64) (*indexcgopb.StoragePluginContext, error) {
+	return hookutil.GetCollectionPluginContext(bw.schema.GetProperties(), collectionID)
 }
 
 func (bw *BulkPackWriterV2) getTsRange(rec storage.Record) (tsFrom, tsTo uint64) {
@@ -221,7 +204,10 @@ func (bw *BulkPackWriterV2) writeInserts(ctx context.Context, pack *SyncPack) (m
 	defer rec.Release()
 
 	tsFrom, tsTo := bw.getTsRange(rec)
-	pluginContextPtr := bw.getPluginContext(pack.collectionID)
+	pluginContextPtr, err := bw.getPluginContext(pack.collectionID)
+	if err != nil {
+		return nil, "", err
+	}
 
 	// Allocate logIDs once, before the retry loop. writeInsertsIntoStorage builds the
 	// actual writer and performs the IO; retries must only repeat the IO, never draw
@@ -310,6 +296,7 @@ func (bw *BulkPackWriterV2) writeInsertsIntoStorage(_ context.Context,
 		return nil, "", err
 	}
 	// workaround to store row num
+	validElementCounts, _ := storage.CollectVectorArrayValidElements(bw.schema, rec, nil, nil)
 	for _, columnGroup := range columnGroups {
 		columnGroupID := columnGroup.GroupID
 		logs[columnGroupID] = &datapb.FieldBinlog{
@@ -324,6 +311,8 @@ func (bw *BulkPackWriterV2) writeInsertsIntoStorage(_ context.Context,
 					TimestampFrom:   tsFrom,
 					TimestampTo:     tsTo,
 					FieldNullCounts: getFieldNullCounts(columnGroup),
+					FieldValidElementCounts: storage.ColumnGroupValidElementCounts(
+						columnGroup, validElementCounts),
 				},
 			},
 		}

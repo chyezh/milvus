@@ -57,8 +57,8 @@ const (
 )
 
 // mapVectorMetricToEmbListMetric maps element-level vector metrics to EmbList-level metrics for ArrayOfVector.
-// Autoindex configs use element-level metrics (e.g., IP, L2, COSINE), but ArrayOfVector fields
-// require EmbList metrics (e.g., MaxSimIP, MaxSimL2, MaxSimCosine).
+// Autoindex configs use element-level metrics (e.g., IP, L2, COSINE), while
+// non-element-nullable ArrayOfVector defaults to EmbList metrics.
 func mapVectorMetricToEmbListMetric(metricType string) string {
 	switch strings.ToUpper(metricType) {
 	case strings.ToUpper(metric.COSINE):
@@ -156,6 +156,7 @@ func (cit *CreateIndexTask) parseIndexParams(ctx context.Context) error {
 	}
 
 	isVecIndex := typeutil.IsVectorType(cit.fieldSchema.DataType)
+	isTextField := typeutil.IsTextType(cit.fieldSchema.DataType)
 	indexParamsMap, err := indexparamcheck.ExpandIndexParams(cit.req.GetExtraParams())
 	if err != nil {
 		return err
@@ -175,8 +176,8 @@ func (cit *CreateIndexTask) parseIndexParams(ctx context.Context) error {
 		return err
 	}
 
-	if cit.fieldSchema.GetDataType() == schemapb.DataType_Text {
-		return merr.WrapErrParameterInvalidMsg("TEXT field does not support user-created scalar index")
+	if isTextField && indexParamsMap[common.IndexTypeKey] != indexparamcheck.IndexNGRAM {
+		return merr.WrapErrParameterInvalidMsg("TEXT fields require an explicit NGRAM index; AUTOINDEX and other scalar index types are not supported")
 	}
 
 	if err := fieldvalidator.ValidateAutoIndexMmapConfig(isVecIndex, indexParamsMap); err != nil {
@@ -209,7 +210,9 @@ func (cit *CreateIndexTask) parseIndexParams(ctx context.Context) error {
 		specifyIndexType, exist := indexParamsMap[common.IndexTypeKey]
 		autoIndexEnable := paramtable.Get().AutoIndexConfig.ScalarAutoIndexEnable.GetAsBool()
 
-		if autoIndexEnable || !exist || specifyIndexType == AutoIndexName {
+		// TEXT supports explicit NGRAM only. Preserve that choice even when
+		// scalar autoindex overrides explicit types for other scalar fields.
+		if !isTextField && (autoIndexEnable || !exist || specifyIndexType == AutoIndexName) {
 			getPrimitiveIndexType := func(dataType schemapb.DataType) string {
 				if typeutil.IsBoolType(dataType) {
 					return paramtable.Get().AutoIndexConfig.ScalarBoolIndexType.GetValue()
@@ -307,9 +310,9 @@ func (cit *CreateIndexTask) parseIndexParams(ctx context.Context) error {
 				// make the users' metric type first class citizen.
 				indexParamsMap[common.MetricTypeKey] = metricType
 				cit.userAutoIndexMetricTypeSpecified = true
-			} else if typeutil.IsArrayOfVectorType(cit.fieldSchema.DataType) {
+			} else if typeutil.IsArrayOfVectorType(cit.fieldSchema.DataType) && !cit.fieldSchema.GetElementNullable() {
 				// When user does not specify metric, autoindex config provides element-level metrics.
-				// Map them to EmbList metrics since ArrayOfVector requires EmbList metrics.
+				// Map them to EmbList metrics for non-element-nullable ArrayOfVector.
 				if m, ok := indexParamsMap[common.MetricTypeKey]; ok {
 					indexParamsMap[common.MetricTypeKey] = mapVectorMetricToEmbListMetric(m)
 				}
@@ -391,8 +394,8 @@ func (cit *CreateIndexTask) parseIndexParams(ctx context.Context) error {
 					return err
 				}
 			}
-			// When user does not specify metric, map autoindex config's element-level metrics to EmbList
-			if !metricTypeExist && typeutil.IsArrayOfVectorType(cit.fieldSchema.DataType) {
+			// For non-element-nullable ArrayOfVector, map autoindex's default element metric to EmbList.
+			if !metricTypeExist && typeutil.IsArrayOfVectorType(cit.fieldSchema.DataType) && !cit.fieldSchema.GetElementNullable() {
 				if m, ok := indexParamsMap[common.MetricTypeKey]; ok {
 					indexParamsMap[common.MetricTypeKey] = mapVectorMetricToEmbListMetric(m)
 				}
@@ -464,7 +467,7 @@ func (cit *CreateIndexTask) parseIndexParams(ctx context.Context) error {
 				return merr.WrapErrParameterInvalid("valid index params", "invalid index params", "int vector index does not support metric type: "+metricType)
 			}
 		} else if typeutil.IsArrayOfVectorType(cit.fieldSchema.DataType) {
-			if err := indexparamcheck.ValidateArrayOfVectorMetricType(cit.fieldSchema.ElementType, metricType); err != nil {
+			if err := indexparamcheck.ValidateArrayOfVectorMetricType(cit.fieldSchema.ElementType, cit.fieldSchema.GetElementNullable(), metricType); err != nil {
 				return merr.WrapErrParameterInvalid("valid index params", "invalid index params", err.Error())
 			}
 		}
@@ -475,6 +478,9 @@ func (cit *CreateIndexTask) parseIndexParams(ctx context.Context) error {
 		if _, exist := indexParamsMap[common.JSONPathKey]; !exist {
 			indexParamsMap[common.JSONPathKey] = cit.req.FieldName
 		}
+	}
+	if isTextField && (indexParamsMap[common.IndexTypeKey] != indexparamcheck.IndexNGRAM || cit.isAutoIndex) {
+		return merr.WrapErrServiceInternalMsg("explicit TEXT NGRAM index changed during parameter resolution")
 	}
 
 	if err := indexparamcheck.ValidateIndexParamsMapSize(indexParamsMap); err != nil {
@@ -510,6 +516,11 @@ func (cit *CreateIndexTask) parseIndexParams(ctx context.Context) error {
 
 	for k, v := range typeParamsMap {
 		if _, ok := indexParamsMap[k]; ok {
+			continue
+		}
+		// The struct sub-field origin marker is a schema-internal key; keep it
+		// out of index meta, DescribeIndex and the index build parameters.
+		if k == common.StructSubFieldAddedKey {
 			continue
 		}
 		cit.newTypeParams = append(cit.newTypeParams, &commonpb.KeyValuePair{Key: k, Value: v})

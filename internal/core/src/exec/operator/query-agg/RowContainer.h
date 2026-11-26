@@ -151,7 +151,7 @@ class RowContainer {
                       "rows container for now");
         } else {
             using T = typename TypeTraits<Type>::NativeType;
-            T raw_value = column->ValueAt<T>(index);
+            const T& raw_value = column->ValueAtRef<T>(index);
             bool equal = false;
             if constexpr (std::is_same_v<T, std::string>) {
                 equal = (raw_value == *(strAt(row, offset)));
@@ -465,6 +465,24 @@ class RowContainer {
         }
         rows_.clear();
         numRows_ = 0;
+    }
+
+    /// Frees the strings owned by 'row' (same per-row logic as clear()) and
+    /// re-initializes it, so the row can be reused for another store(). The
+    /// row stays owned by the container.
+    void
+    resetRow(char* row) {
+        for (auto i = 0; i < variable_offsets_.size(); i++) {
+            auto& off = variable_offsets_[i];
+            auto& row_col = columnAt(variable_idxes_[i]);
+            bool isStrNull =
+                isNullAt(row, row_col.nullByte(), row_col.nullMask());
+            auto str = *reinterpret_cast<std::string**>(row + off);
+            if (!isStrNull && str) {
+                delete str;
+            }
+        }
+        initializeRow(row);
     }
 
     char*

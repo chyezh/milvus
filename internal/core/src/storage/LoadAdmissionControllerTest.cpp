@@ -45,7 +45,7 @@
 #include "monitor/monitor_c.h"
 #include "common/init_c.h"
 #include "cachinglayer/lrucache/DList.h"
-#include "segcore/storagev2translator/StorageV2Config.h"
+#include "storage/LoadConfig.h"
 #include "storage/AsyncLoadExecutor.h"
 #include "storage/LoadOverheadController.h"
 #include "storage/ThreadPools.h"
@@ -99,9 +99,8 @@ class LoadAdmissionControllerAsyncTest : public testing::Test {
  protected:
     void
     SetUp() override {
-        previous_enabled_ =
-            segcore::storagev2translator::StorageV2AsyncLoadEnabled();
-        segcore::storagev2translator::SetStorageV2AsyncLoadEnabled(true);
+        previous_enabled_ = milvus::storage::LoadAsyncReadEnabled();
+        milvus::storage::SetLoadAsyncReadEnabled(true);
         budget_.SetCapacityBytes(0);
         budget_.SetCapacitySlots(0);
     }
@@ -110,8 +109,7 @@ class LoadAdmissionControllerAsyncTest : public testing::Test {
     TearDown() override {
         budget_.SetCapacityBytes(0);
         budget_.SetCapacitySlots(0);
-        segcore::storagev2translator::SetStorageV2AsyncLoadEnabled(
-            previous_enabled_);
+        milvus::storage::SetLoadAsyncReadEnabled(previous_enabled_);
     }
 
     bool previous_enabled_;
@@ -134,11 +132,12 @@ TEST_F(LoadAdmissionControllerAsyncTest, SharedOverheadFollowsAdmissionLimits) {
     const auto check = [&](ResourceUsage expected) {
         const auto result =
             list.ReserveLoadingResourceWithTimeout(
-                    {}, overhead, &config, std::chrono::milliseconds(0))
+                    {{}, {}, overhead}, &config, std::chrono::milliseconds(0))
                 .get();
         ASSERT_TRUE(result.success);
         EXPECT_EQ(result.reserved, expected);
-        EXPECT_EQ(list.ReleaseLoadingResource({}, overhead, &config), expected);
+        EXPECT_EQ(list.ReleaseLoadingResource({{}, {}, overhead}, &config),
+                  expected);
         EXPECT_EQ(LoadMemoryOverheadController::GetInstance().GetOrCreate(),
                   memory);
         EXPECT_EQ(LoadFileOverheadController::GetInstance().GetOrCreate(),
@@ -183,10 +182,9 @@ TEST_F(LoadAdmissionControllerAsyncTest, SharedOverheadFollowsAdmissionLimits) {
 
 TEST_F(LoadAdmissionControllerAsyncTest, SharedOverheadFollowsActiveMode) {
     using namespace cachinglayer;
-    using segcore::storagev2translator::SetStorageV2AsyncLoadEnabled;
-    SetStorageV2AsyncLoadEnabled(false);
-    const auto high = ThreadPools::GetThreadPool(HIGH).GetMaxThreadNum();
-    const auto low = ThreadPools::GetThreadPool(LOW).GetMaxThreadNum();
+    milvus::storage::SetLoadAsyncReadEnabled(false);
+    const auto high = ThreadPools::GetExecutor(HIGH).numThreads();
+    const auto low = ThreadPools::GetExecutor(LOW).numThreads();
     auto restore = folly::makeGuard([&] {
         ThreadPools::ResizeThreadPool(HIGH, static_cast<float>(high) / CPU_NUM);
         ThreadPools::ResizeThreadPool(LOW, static_cast<float>(low) / CPU_NUM);
@@ -209,18 +207,19 @@ TEST_F(LoadAdmissionControllerAsyncTest, SharedOverheadFollowsActiveMode) {
                            ResourceUsage expected) {
         const auto result =
             list.ReserveLoadingResourceWithTimeout(
-                    {}, overhead, &config, std::chrono::milliseconds(0))
+                    {{}, {}, overhead}, &config, std::chrono::milliseconds(0))
                 .get();
         ASSERT_TRUE(result.success);
         EXPECT_EQ(result.reserved, expected);
-        EXPECT_EQ(list.ReleaseLoadingResource({}, overhead, &config), expected);
+        EXPECT_EQ(list.ReleaseLoadingResource({{}, {}, overhead}, &config),
+                  expected);
     };
     budget_.SetCapacitySlots(8);
     budget_.SetCapacityBytes(600);
     check(sync, {200, 100});  // Inactive admission settings do not affect sync.
     ThreadPools::ResizeThreadPool(HIGH, 3.0f / CPU_NUM);
     check(sync, {400, 200});
-    SetStorageV2AsyncLoadEnabled(true);
+    milvus::storage::SetLoadAsyncReadEnabled(true);
     EXPECT_EQ(memory.GetOrCreate(), sync.memory->group);
     EXPECT_EQ(file.GetOrCreate(), sync.file->group);
     check(sync, {600, 400});
@@ -228,13 +227,13 @@ TEST_F(LoadAdmissionControllerAsyncTest, SharedOverheadFollowsActiveMode) {
     check(sync, {600, 400});  // Inactive workers do not overwrite admission.
     budget_.SetCapacityBytes(0);
     check(sync, {800, 400});
-    SetStorageV2AsyncLoadEnabled(false);
+    milvus::storage::SetLoadAsyncReadEnabled(false);
     check(sync, {500, 250});  // Picks up the latest worker count.
     ThreadPools::ResizeThreadPool(HIGH, 1.0f / CPU_NUM);
     check(sync, {300, 150});
     budget_.SetCapacitySlots(0);
     check(sync, {300, 150});
-    SetStorageV2AsyncLoadEnabled(true);
+    milvus::storage::SetLoadAsyncReadEnabled(true);
     check(sync, overhead);  // Unlimited async must not inherit worker bounds.
 }
 
@@ -285,19 +284,19 @@ TEST_F(LoadAdmissionControllerAsyncTest,
         folly::makeGuard([&] { list.UnbindLoadingOverheadGroups(config); });
     // File accepts the executor policy; memory rejects it. The C boundary must
     // return an error and the file policy must be restored to Passthrough.
-    auto status = ::SetStorageV2AsyncLoadEnabled(false);
+    auto status = ::SetLoadAsyncReadEnabled(false);
     auto release_error = folly::makeGuard(
         [&] { std::free(const_cast<char*>(status.error_msg)); });
     EXPECT_NE(status.error_code, 0);
-    EXPECT_TRUE(segcore::storagev2translator::StorageV2AsyncLoadEnabled());
+    EXPECT_TRUE(milvus::storage::LoadAsyncReadEnabled());
     const ResourceUsage demand{1000000, 1000000};
     const auto result =
         list.ReserveLoadingResourceWithTimeout(
-                {}, demand, &config, std::chrono::milliseconds(0))
+                {{}, {}, demand}, &config, std::chrono::milliseconds(0))
             .get();
     ASSERT_TRUE(result.success);
     EXPECT_EQ(result.reserved, demand);
-    EXPECT_EQ(list.ReleaseLoadingResource({}, demand, &config), demand);
+    EXPECT_EQ(list.ReleaseLoadingResource({{}, {}, demand}, &config), demand);
 }
 
 TEST_F(LoadAdmissionControllerAsyncTest,
@@ -328,11 +327,12 @@ TEST_F(LoadAdmissionControllerAsyncTest,
     const ResourceUsage expected{100, 50};
     const auto result =
         list.ReserveLoadingResourceWithTimeout(
-                {}, demand, &complete, std::chrono::milliseconds(0))
+                {{}, {}, demand}, &complete, std::chrono::milliseconds(0))
             .get();
     ASSERT_TRUE(result.success);
     EXPECT_EQ(result.reserved, expected);
-    EXPECT_EQ(list.ReleaseLoadingResource({}, demand, &complete), expected);
+    EXPECT_EQ(list.ReleaseLoadingResource({{}, {}, demand}, &complete),
+              expected);
 }
 
 TEST_F(LoadAdmissionControllerAsyncTest, MetricsExposeReservationsAndCapacity) {

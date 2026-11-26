@@ -52,6 +52,7 @@ type packedBatchWriter interface {
 	GetColumnGroupWrittenUncompressed(columnGroup typeutil.UniqueID) uint64
 	GetWrittenPaths(columnGroup typeutil.UniqueID) string
 	GetWrittenRowNum() int64
+	GetFieldLogicalSizes() *datapb.FieldLogicalSizes
 }
 
 type BulkPackWriterV3 struct {
@@ -146,12 +147,13 @@ func (bw *BulkPackWriterV3) loadPriorBM25Stats(ctx context.Context, fieldPaths m
 	return combined, nil
 }
 
-// Write executes a SyncPack as do-then-commit:
+// Write executes one Storage V3 write attempt as do-then-commit:
 //
-//  1. Phase 1 (slow, runs once): write all data files — parquet/LOB via the
+//  1. Phase 1 (slow, runs once per attempt): write all data files — parquet/LOB via the
 //     loon writer, deltalog via the deltalog writer, stat blobs via the
 //     filesystem FFI — and assemble a single packed.ManifestUpdates payload
-//     describing every change the segment needs to register.
+//     describing every change the segment needs to register. SyncTask retries
+//     transient failures with a fresh writer, including failures in Write/Close.
 //  2. Phase 2 (fast, retried on transient loon errors): call
 //     packed.CommitManifestUpdates once. The loon transaction handle is
 //     opened, all changes are staged, and the transaction is committed in
@@ -186,6 +188,7 @@ func (bw *BulkPackWriterV3) Write(ctx context.Context, pack *SyncPack) (
 	// final ManifestUpdates instead of mutating shared state.
 	var (
 		insertFiles  packed.WriterOutput
+		fieldSizes   *datapb.FieldLogicalSizes
 		statEntries  []packed.StatEntry
 		deltaEntries []packed.DeltaLogEntry
 		bm25Entries  []packed.StatEntry
@@ -196,7 +199,7 @@ func (bw *BulkPackWriterV3) Write(ctx context.Context, pack *SyncPack) (
 		}
 	}()
 
-	if inserts, insertFiles, err = bw.writeInserts(ctx, pack, basePath); err != nil {
+	if inserts, insertFiles, fieldSizes, err = bw.writeInserts(ctx, pack, basePath); err != nil {
 		mlog.Warn(ctx, "failed to write insert data", mlog.Err(err))
 		return
 	}
@@ -227,7 +230,7 @@ func (bw *BulkPackWriterV3) Write(ctx context.Context, pack *SyncPack) (
 	err = retry.Do(ctx, func() error {
 		newPath, commitErr := packed.CommitManifestUpdates(bw.initialManifestPath, bw.storageConfig, updates)
 		if commitErr != nil {
-			return classifyLoonErr(commitErr)
+			return classifyStorageV3Err(commitErr)
 		}
 		bw.manifestPath = newPath
 		return nil
@@ -243,22 +246,24 @@ func (bw *BulkPackWriterV3) Write(ctx context.Context, pack *SyncPack) (
 
 	// V3 feeds the tracked statsBlobSize instead of summing a stats array (it
 	// returns no stats array); finalizeStats produces the cumulative Statistics.
-	segmentStats, err = bw.finalizeStats(pack, digested, inserts, deltas, bw.statsBlobSize)
+	segmentStats, err = bw.finalizeStats(pack, digested, inserts, deltas, bw.statsBlobSize, fieldSizes)
+	if err != nil {
+		// The manifest is already committed. A bookkeeping failure must not
+		// restart phase 1 and publish the same batch a second time.
+		err = retry.Unrecoverable(err)
+	}
 	return
 }
 
-// classifyLoonErr maps loon FFI failures to retryable errors and everything
-// else to retry.Unrecoverable so the outer retry loop terminates immediately.
-//
-// HandleLoonFFIResult now classifies by the FFI err_code (the producer's
-// loon_ffi_is_retryable_errcode): only genuinely transient failures carry
-// packed.ErrLoonTransient; access-denied/corrupt-data/malformed-input carry
-// packed.ErrLoonPermanent and terminate the loop via retry.Unrecoverable.
-func classifyLoonErr(err error) error {
+// classifyStorageV3Err retries explicitly transient failures. Loon FFI errors
+// carry ErrLoonTransient/ErrLoonPermanent; the older packed writer used for
+// deltalogs carries a retriable merr classification instead. Other failures
+// terminate the retry loop immediately.
+func classifyStorageV3Err(err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, packed.ErrLoonTransient) {
+	if errors.Is(err, packed.ErrLoonTransient) || merr.IsRetryableErr(err) {
 		return err
 	}
 	return retry.Unrecoverable(err)
@@ -268,22 +273,25 @@ func classifyLoonErr(err error) error {
 // the produced WriterOutput plus the per-column-group binlog metadata.
 // The returned WriterOutput is owned by the caller and must be Destroy'd
 // after the surrounding commit (success or failure).
-func (bw *BulkPackWriterV3) writeInserts(ctx context.Context, pack *SyncPack, basePath string) (logs map[int64]*datapb.FieldBinlog, files packed.WriterOutput, err error) {
+func (bw *BulkPackWriterV3) writeInserts(ctx context.Context, pack *SyncPack, basePath string) (logs map[int64]*datapb.FieldBinlog, files packed.WriterOutput, fieldSizes *datapb.FieldLogicalSizes, err error) {
 	if len(pack.insertData) == 0 {
-		return make(map[int64]*datapb.FieldBinlog), nil, nil
+		return make(map[int64]*datapb.FieldBinlog), nil, nil, nil
 	}
 
 	rec, err := bw.serializeBinlog(ctx, pack)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	defer rec.Release()
 
 	tsFrom, tsTo := bw.getTsRange(rec)
-	pluginContextPtr := bw.getPluginContext(pack.collectionID)
+	pluginContextPtr, err := bw.getPluginContext(pack.collectionID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	writerFormat, schemaBasedFormats, err := bw.resolveInsertWriterFormats()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// LOB base path is at partition level: {basePath}/.. = {root}/insert_log/{coll}/{part}
@@ -303,7 +311,7 @@ func (bw *BulkPackWriterV3) writeInserts(ctx context.Context, pack *SyncPack, ba
 			bw.bufferSize, bw.multiPartUploadSize, bw.columnGroups, bw.storageConfig, pluginContextPtr, writerFormat, schemaBasedFormats)
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// Ensure the FFI writer's C resources are reclaimed even if Write fails
@@ -325,12 +333,12 @@ func (bw *BulkPackWriterV3) writeInserts(ctx context.Context, pack *SyncPack, ba
 			mlog.FieldCollectionID(pack.collectionID),
 			mlog.FieldSegmentID(pack.segmentID),
 			mlog.Err(err))
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	closeAttempted = true
 	if files, err = w.Close(); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	getFieldNullCounts := func(columnGroup storagecommon.ColumnGroup) map[int64]int64 {
@@ -354,7 +362,29 @@ func (bw *BulkPackWriterV3) writeInserts(ctx context.Context, pack *SyncPack, ba
 		w.GetWrittenPaths,
 		getFieldNullCounts,
 	)
-	return logs, files, nil
+	setFieldValidElementCounts(logs, bw.columnGroups, bw.schema, rec)
+	return logs, files, w.GetFieldLogicalSizes(), nil
+}
+
+// setFieldValidElementCounts records the valid element counts of the
+// VectorArray fields of rec on the binlog of each column group.
+func setFieldValidElementCounts(logs map[int64]*datapb.FieldBinlog, columnGroups []storagecommon.ColumnGroup,
+	schema *schemapb.CollectionSchema, rec storage.Record,
+) {
+	counts, _ := storage.CollectVectorArrayValidElements(schema, rec, nil, nil)
+	if len(counts) == 0 {
+		return
+	}
+	for _, columnGroup := range columnGroups {
+		fieldBinlog := logs[columnGroup.GroupID]
+		if fieldBinlog == nil {
+			continue
+		}
+		groupCounts := storage.ColumnGroupValidElementCounts(columnGroup, counts)
+		for _, binlog := range fieldBinlog.GetBinlogs() {
+			binlog.FieldValidElementCounts = groupCounts
+		}
+	}
 }
 
 func buildV3ColumnGroupFieldBinlogs(

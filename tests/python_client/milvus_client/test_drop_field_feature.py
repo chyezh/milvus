@@ -521,8 +521,9 @@ class TestMilvusClientDropFieldFeature(TestMilvusClientV2Base):
         TC-L1-01: Drop one vector field and keep another vector field.
 
         target: verify multi-vector collection keeps remaining vector field searchable after dropping one vector field
-        method: create dense1 and dense2, build indexes, drop dense2, then search dense1 and reject dense2/last-vector drop
-        expected: dense2 disappears; dense1 search works; dense2 search fails; dropping dense1 is rejected as last vector field
+        method: create dense1 and dense2, build indexes, drop dense2, search dense1, then drop dense1 too
+        expected: dense2 disappears; dense1 search works; dense2 search fails; dropping dense1 succeeds and
+                  leaves a collection without a vector field
         """
         client = self._client()
         collection_name = cf.gen_collection_name_by_testcase_name()
@@ -608,7 +609,8 @@ class TestMilvusClientDropFieldFeature(TestMilvusClientV2Base):
         assert "age" in dense1_res[0][0]["entity"]
         assert "dense2" not in dense1_res[0][0]["entity"]
 
-        # Step 6: Verify dropped vector search fails and the last vector field cannot be dropped.
+        # Step 6: Verify dropped vector search fails and the last vector field can be dropped too,
+        # which leaves a collection without a vector field.
         self.search(
             client,
             collection_name,
@@ -623,12 +625,18 @@ class TestMilvusClientDropFieldFeature(TestMilvusClientV2Base):
             },
         )
 
-        self.drop_collection_field(
+        self.drop_collection_field(client, collection_name, field_name="dense1")
+        desc = client.describe_collection(collection_name)
+        assert "dense1" not in [field["name"] for field in desc["fields"]]
+        self.search(
             client,
             collection_name,
-            field_name="dense1",
+            data=[[0.0, 0.0, 0.0, 0.0]],
+            anns_field="dense1",
+            limit=5,
+            output_fields=["id"],
             check_task=ct.CheckTasks.err_res,
-            check_items={ct.err_code: 1100, ct.err_msg: "cannot drop the last vector field: dense1"},
+            check_items={ct.err_code: 1100, ct.err_msg: "has no vector field, search is not supported"},
         )
         self.drop_collection(client, collection_name)
 
@@ -932,13 +940,14 @@ class TestMilvusClientDropFieldFeature(TestMilvusClientV2Base):
         self.drop_collection(client, collection_name)
 
     @pytest.mark.tags(CaseLabel.L1)
-    def test_drop_struct_array_field_and_reject_sub_field_drop(self):
+    def test_drop_struct_array_sub_field_then_whole_field(self):
         """
-        TC-L1-05: Drop StructArray field and reject sub-field drop.
+        TC-L1-05: Drop a StructArray sub-field, then the whole StructArray field.
 
-        target: verify whole StructArray field can be dropped and StructArray sub-field drop is rejected
-        method: reject events[name] drop first, then drop events and verify nested index cascade
-        expected: failed sub-field drop does not change schema; events and nested indexes disappear after whole-field drop
+        target: verify a StructArray sub-field can be dropped, then the whole StructArray field
+        method: drop events[name] first, then drop events and verify nested index cascade at each step
+        expected: events[name] and its index disappear while the other sub-fields stay readable; events and
+            the remaining nested indexes disappear after whole-field drop
         """
         client = self._client()
         collection_name = cf.gen_collection_name_by_testcase_name()
@@ -1016,22 +1025,34 @@ class TestMilvusClientDropFieldFeature(TestMilvusClientV2Base):
         assert len(pre_drop_rows) == 1
         assert pre_drop_rows[0]["events"][0]["name"] == "event_1"
 
-        # Step 3: Reject direct sub-field drop and verify schema/indexes are unchanged.
-        self.drop_collection_field(
-            client,
-            collection_name,
-            field_name="events[name]",
-            check_task=ct.CheckTasks.err_res,
-            check_items={ct.err_code: 1100, ct.err_msg: "field not found: events[name]: invalid parameter"},
-        )
+        # Step 3: Drop the events[name] sub-field; its index is dropped with it.
+        client.drop_collection_field(collection_name, "events[name]")
 
         desc = client.describe_collection(collection_name)
-        field_names = [field["name"] for field in desc["fields"]]
-        assert "events" in field_names
-        indexes = client.list_indexes(collection_name)
+        events_field = next(field for field in desc["fields"] if field["name"] == "events")
+        assert {field["name"] for field in events_field["struct_fields"]} == {"embedding", "score"}
+
+        for _ in range(30):
+            indexes = client.list_indexes(collection_name)
+            if "events[name]" not in indexes:
+                break
+            time.sleep(1)
+
+        assert "events[name]" not in indexes
         assert "events[embedding]" in indexes
-        assert "events[name]" in indexes
         assert "vec" in indexes
+        assert client.describe_index(collection_name, index_name="events[name]") is None
+
+        post_drop_rows = client.query(
+            collection_name,
+            filter="id == 1",
+            output_fields=["id", "events"],
+        )
+        assert len(post_drop_rows) == 1
+        assert len(post_drop_rows[0]["events"]) == 2
+        for element, score in zip(post_drop_rows[0]["events"], [1, 101]):
+            assert "name" not in element
+            assert element["score"] == score
 
         # Step 4: Drop the whole StructArray field.
         client.drop_collection_field(collection_name, "events")
@@ -1285,7 +1306,7 @@ class TestMilvusClientDropFieldFeature(TestMilvusClientV2Base):
         assert "sparse" in field_names
         assert "bm25" in function_names
 
-        # Step 4: Create a separate collection for the last-vector constraint.
+        # Step 4: Create a separate collection whose only vector field is dropped.
         last_vector_schema = client.create_schema(enable_dynamic_field=False, auto_id=False)
         last_vector_schema.add_field("id", DataType.INT64, is_primary=True)
         last_vector_schema.add_field("vec", DataType.FLOAT_VECTOR, dim=4)
@@ -1297,19 +1318,13 @@ class TestMilvusClientDropFieldFeature(TestMilvusClientV2Base):
             consistency_level="Strong",
         )
 
-        self.drop_collection_field(
-            client,
-            last_vector_collection_name,
-            field_name="vec",
-            check_task=ct.CheckTasks.err_res,
-            check_items={ct.err_code: 1100, ct.err_msg: "cannot drop the last vector field: vec"},
-        )
+        self.drop_collection_field(client, last_vector_collection_name, field_name="vec")
 
-        # Step 5: Verify the last-vector rejection did not mutate the schema.
+        # Step 5: Verify only the vector field is gone; the collection has no vector field now.
         desc = client.describe_collection(last_vector_collection_name)
         field_names = [field["name"] for field in desc["fields"]]
         assert "id" in field_names
-        assert "vec" in field_names
+        assert "vec" not in field_names
         assert "age" in field_names
         for name in [collection_name, last_vector_collection_name]:
             self.drop_collection(client, name)
@@ -1436,25 +1451,14 @@ class TestMilvusClientDropFieldFeature(TestMilvusClientV2Base):
             consistency_level="Strong",
         )
 
-        # Step 6: Reject cascade Drop Function because it would remove the last vector field.
-        self.drop_function_field(
-            client,
-            last_vector_collection_name,
-            "bm25",
-            check_task=ct.CheckTasks.err_res,
-            check_items={
-                ct.err_code: 1100,
-                ct.err_msg: (
-                    "cannot drop function bm25: it would leave no vector field in the collection: invalid parameter"
-                ),
-            },
-        )
+        # Step 6: Cascade Drop Function removes the last vector field; the collection has none left.
+        self.drop_function_field(client, last_vector_collection_name, "bm25")
 
         desc = client.describe_collection(last_vector_collection_name)
         field_names = [field["name"] for field in desc["fields"]]
         function_names = [func["name"] for func in desc.get("functions", [])]
-        assert "bm25" in function_names
-        assert "sparse" in field_names
+        assert "bm25" not in function_names
+        assert "sparse" not in field_names
         assert "text" in field_names
         for name in [collection_name, last_vector_collection_name]:
             self.drop_collection(client, name)

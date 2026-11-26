@@ -2,13 +2,14 @@ package recovery
 
 import (
 	"context"
-	"math"
+	"time"
 
+	"github.com/milvus-io/milvus/internal/storagecommon"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/idempotencyview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
-	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
@@ -34,9 +35,11 @@ func (r *recoveryStorageImpl) runBoundedRecovery(
 
 	r.Logger().Info(context.TODO(), "recover from wal stream...")
 	recoveryTimeTick := r.checkpoint.TimeTick
+	var lastSwitchTick uint64
 	rs := recoveryStreamBuilder.Build(BuildRecoveryStreamParam{
 		StartCheckpoint: r.checkpoint.MessageID,
 		RecoveryBarrier: lastTimeTickMessage,
+		StopAtWALSwitch: true,
 	})
 	r.recoveryStream = rs
 	defer func() {
@@ -44,6 +47,8 @@ func (r *recoveryStorageImpl) runBoundedRecovery(
 			r.Logger().Warn(context.TODO(), "recovery from wal stream failed", mlog.Err(err))
 		}
 	}()
+	tombstones := utility.NewTxnTombstones()
+	tombstones.Advance(lastTimeTickMessage.TimeTick())
 L:
 	for {
 		select {
@@ -56,23 +61,64 @@ L:
 				}
 				return nil, merr.WrapErrServiceUnavailableMsg("recovery stream ended before the startup barrier")
 			}
+			// Result recovery also uses complete transactions in the replayed prefix,
+			// even when their data effects are already checkpointed.
+			tombstones.Observe(msg)
 			// LastConfirmedMessageID can replay an already completed prefix.
 			// Filter after scanner ordering and transaction assembly so older txn
 			// fragments can still contribute to a commit beyond the checkpoint.
 			if msg.TimeTick() > recoveryTimeTick {
+				if msg.MessageType() == message.MessageTypeCreateSegment {
+					header := message.MustAsImmutableCreateSegmentMessageV2(msg).Header()
+					if err := storagecommon.ValidateSegmentStorageVersion(header.GetSegmentId(), header.GetStorageVersion()); err != nil {
+						return nil, err
+					}
+				}
 				r.observeMessage(ctx, msg)
 			}
+			if message.IsWALSwitch(msg) {
+				start, switchErr := message.WALSwitchStart(msg)
+				if switchErr != nil {
+					return nil, switchErr
+				}
+				if start.WALName() != msg.WALName() {
+					if msg.TimeTick() <= lastSwitchTick {
+						return nil, merr.WrapErrDataIntegrityMsg("non-increasing WAL switch boundary during recovery")
+					}
+					lastSwitchTick = msg.TimeTick()
+					switcher, ok := recoveryStreamBuilder.(RecoveryWALSwitcher)
+					if !ok {
+						return nil, merr.WrapErrServiceInternalMsg("recovery stream cannot switch physical WAL")
+					}
+					_ = rs.Close()
+					lastTimeTickMessage, err = switcher.SwitchWAL(ctx, start)
+					if err != nil {
+						return nil, merr.Wrap(err, "open next WAL recovery leg")
+					}
+					rs = recoveryStreamBuilder.Build(BuildRecoveryStreamParam{
+						StartCheckpoint: start, StartAfterCheckpoint: true,
+						RecoveryBarrier: lastTimeTickMessage, StopAtWALSwitch: true,
+					})
+					r.recoveryStream = rs
+					continue
+				}
+			}
 			if msg.MessageType() == message.MessageTypeRecoveryBarrier &&
-				msg.TimeTick() == lastTimeTickMessage.TimeTick() && msg.MessageID().EQ(lastTimeTickMessage.MessageID()) {
+				msg.TimeTick() == lastTimeTickMessage.TimeTick() && msg.WALName() == lastTimeTickMessage.WALName() && msg.MessageID().EQ(lastTimeTickMessage.MessageID()) {
 				break L
 			}
 		}
 	}
 	snapshot = r.buildInitialRecoverySnapshot()
+	snapshot.RecoveryBarrier = lastTimeTickMessage
 	snapshot.TxnBuffer = rs.TxnBuffer()
-	snapshot.SummarySnapshots, err = r.buildIdempotencySnapshots(ctx)
+	snapshot.TxnTombstones = tombstones
+	snapshot.SummaryRecovery, err = r.buildIdempotencySnapshots(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if snapshot.SummaryRecovery != nil {
+		snapshot.SummarySnapshots = snapshot.SummaryRecovery.VChannels
 	}
 	vchannelCount := len(snapshot.WritePathRecovery.VChannels)
 	segmentCount := len(snapshot.WritePathRecovery.GrowingSegments)
@@ -82,11 +128,6 @@ L:
 		mlog.Int("segments", segmentCount),
 		mlog.String("checkpoint", snapshot.Checkpoint.MessageID.String()),
 		mlog.Uint64("checkpointTimeTick", snapshot.Checkpoint.TimeTick),
-	}
-	if state := snapshot.PChannelControl.GetAlterWalState(); state.GetStage() != streamingpb.AlterWALStage_NONE {
-		logFields = append(logFields,
-			mlog.Stringer("targetWALName", state.GetTargetWalName()),
-		)
 	}
 	r.Logger().Info(context.TODO(), "recovery from wal stream done", logFields...)
 	return snapshot, nil
@@ -107,55 +148,16 @@ func (r *recoveryStorageImpl) buildInitialRecoverySnapshot() *RecoverySnapshot {
 	return snapshot
 }
 
-// buildIdempotencySnapshots combines retained chunks with the records staged during
-// startup replay, including sealed chunks whose uploads are still pending. It
-// runs at the recovery barrier before the interceptor accepts writes.
-//
-// The whole retained range is read. What bounds it is retention itself -- the
-// summary applies its retention policy to the chunk set -- and the window
-// applies its own byte cap when it loads them.
-//
-// Transient object reads retry in the shared load until recovery or cancellation.
-// A permanent read failure or cancellation fails WAL open, never yielding a partial window. A
-// window missing entries answers a retry of a write that DID land by appending
-// it again, which is a way to duplicate writes on a channel whose clients were
-// told they had idempotency.
-func (r *recoveryStorageImpl) buildIdempotencySnapshots(
-	ctx context.Context,
-) (map[string]*idempotencyview.Snapshot, error) {
+// buildIdempotencySnapshots restores only the newest retained keyed facts within
+// the PChannel's TTL and size budget. Process-local access refreshes and soft
+// per-VChannel floors are deliberately not recovery promises.
+func (r *recoveryStorageImpl) buildIdempotencySnapshots(ctx context.Context) (*idempotencyview.RecoverySnapshot, error) {
 	if r.summaryManager == nil {
 		return nil, nil
 	}
-	// The vchannels come from the summary rather than the recovered write path:
-	// the write path's vchannels are collections and segments, a different
-	// question from which channels have a dedup history, and a pchannel holds
-	// records for vchannels the write path does not know about yet.
-	vchannels := r.summaryManager.IdempotencyVChannels()
-	if len(vchannels) == 0 {
-		return nil, nil
-	}
-	// One pass over the chunks for ALL vchannels: a chunk is a pchannel-wide
-	// object, so reading them one vchannel at a time would download each chunk
-	// once per vchannel and block the WAL open for as long as that takes.
-	allSections, err := r.summaryManager.ReadIdempotencyEntriesOfVChannels(ctx, vchannels, 0, math.MaxUint64)
+	snapshots, err := r.summaryManager.ReadIdempotencyRecovery(ctx, idempotencyview.LoadRetentionConfig(), time.Now())
 	if err != nil {
 		return nil, merr.Wrap(err, "failed to read the idempotency summary")
-	}
-	snapshots := make(map[string]*idempotencyview.Snapshot, len(vchannels))
-	for _, vchannel := range vchannels {
-		sections, ok := allSections[vchannel]
-		if !ok || len(sections.Inserts) == 0 {
-			continue
-		}
-		records, err := idempotencyview.RecordsFromSections(sections.Idempotency, sections.Inserts)
-		if err != nil {
-			return nil, merr.Wrapf(err, "failed to rebuild the idempotency window of vchannel %s", vchannel)
-		}
-		snapshots[vchannel] = &idempotencyview.Snapshot{
-			PChannel: r.channel.Name,
-			VChannel: vchannel,
-			Records:  records,
-		}
 	}
 	return snapshots, nil
 }

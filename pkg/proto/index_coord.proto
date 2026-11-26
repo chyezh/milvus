@@ -191,6 +191,7 @@ message IndexFilePathInfo {
     uint64 mem_size = 12;
     int32 current_scalar_index_version = 13;
     IndexStorePathVersion index_store_path_version = 14;
+    string index_type = 15;
 }
 
 message SegmentInfo {
@@ -261,6 +262,10 @@ message StorageConfig {
     uint32 talon_block_size = 22;
     uint32 talon_max_idle_per_addr = 23;
     bool talon_enable_for_external_table = 24;
+    // Milvus stage mask; absent/zero preserves unrestricted legacy routing.
+    uint32 talon_enabled_stages = 25;
+    // Empty selects Talon's default namespace.
+    string talon_namespace = 26;
 }
 
 // Synchronously modify OptionalFieldInfo in index_cgo_msg.proto file

@@ -37,6 +37,8 @@
 #include "common/Schema.h"
 #include "common/Types.h"
 #include "folly/ScopeGuard.h"
+#include "folly/coro/WithCancellation.h"
+#include "storage/LoadAdmissionController.h"
 #include "folly/executors/CPUThreadPoolExecutor.h"
 #include "gtest/gtest.h"
 #include "mmap/ChunkedColumnGroup.h"
@@ -45,7 +47,7 @@
 #include "segcore/memory_planner.h"
 #include "segcore/storagev2translator/GroupCTMeta.h"
 #include "segcore/storagev2translator/ManifestGroupTranslator.h"
-#include "segcore/storagev2translator/StorageV2Config.h"
+#include "storage/LoadConfig.h"
 #include "storage/EntryStreamUtils.h"
 #include "storage/LoadOverheadController.h"
 #include "storage/LocalFileIOPool.h"
@@ -241,15 +243,20 @@ class CountingChunkReader : public milvus_storage::api::ChunkReader {
     get_chunks(const std::vector<int64_t>& chunk_indices,
                size_t parallelism) override {
         sync_calls_.fetch_add(1);
+        if (before_sync_read) {
+            before_sync_read();
+        }
         return inner_->get_chunks(chunk_indices, parallelism);
     }
 
     folly::SemiFuture<
         arrow::Result<std::vector<std::shared_ptr<arrow::RecordBatch>>>>
     get_chunks_async(const std::vector<int64_t>& chunk_indices,
-                     size_t parallelism) override {
+                     size_t parallelism,
+                     folly::CancellationToken cancellation) override {
         async_calls_.fetch_add(1);
-        return inner_->get_chunks_async(chunk_indices, parallelism);
+        return inner_->get_chunks_async(
+            chunk_indices, parallelism, cancellation);
     }
 
     arrow::Result<std::vector<uint64_t>>
@@ -269,6 +276,8 @@ class CountingChunkReader : public milvus_storage::api::ChunkReader {
         }
         return inner_->get_chunk_rows();
     }
+
+    std::function<void()> before_sync_read;
 
     size_t
     SyncCalls() const {
@@ -444,7 +453,10 @@ TEST_P(ManifestGroupTranslatorTest, TestScalarColumnGroup) {
 
     // estimated byte size
     for (size_t i = 0; i < num_cells; ++i) {
-        auto [loading, storage] = translator->estimated_byte_size_of_cell(i);
+        auto [loading, private_overhead, shared_overhead] =
+            translator->estimated_loading_usage(
+                {static_cast<cachinglayer::cid_t>(i)});
+        const auto storage = private_overhead + shared_overhead;
         if (use_mmap) {
             EXPECT_GT(loading.file_bytes, 0) << "cid=" << i;
             EXPECT_GT(storage.file_bytes, 0) << "cid=" << i;
@@ -453,6 +465,34 @@ TEST_P(ManifestGroupTranslatorTest, TestScalarColumnGroup) {
             EXPECT_GT(storage.memory_bytes, 0) << "cid=" << i;
         }
     }
+
+    std::vector<cachinglayer::cid_t> estimate_cids{0};
+    if (translator->num_cells() > 1) {
+        estimate_cids.push_back(translator->num_cells() - 1);
+    }
+    int64_t expected_batch_bytes = 0;
+    for (const auto cid : estimate_cids) {
+        expected_batch_bytes += static_cast<GroupCTMeta*>(translator->meta())
+                                    ->chunk_memory_size_[cid];
+    }
+    const auto batch = translator->estimated_loading_usage(estimate_cids);
+    EXPECT_EQ(
+        batch.resident,
+        (use_mmap ? cachinglayer::ResourceUsage{0, expected_batch_bytes}
+                  : cachinglayer::ResourceUsage{expected_batch_bytes, 0}));
+    // The scalar group contains ARRAY fields, whose memory scratch is doubled.
+    const cachinglayer::ResourceUsage expected_overhead{
+        2 * expected_batch_bytes, use_mmap ? expected_batch_bytes : 0};
+    EXPECT_EQ(batch.private_overhead + batch.shared_overhead,
+              expected_overhead);
+    EXPECT_EQ(batch.shared_overhead,
+              translator->meta()->loading_overhead_config
+                  ? expected_overhead
+                  : cachinglayer::ResourceUsage{});
+    const auto empty = translator->estimated_loading_usage({});
+    EXPECT_EQ(empty.resident, cachinglayer::ResourceUsage{});
+    EXPECT_EQ(empty.private_overhead, cachinglayer::ResourceUsage{});
+    EXPECT_EQ(empty.shared_overhead, cachinglayer::ResourceUsage{});
 
     // get_cells — load all cells
     std::vector<cachinglayer::cid_t> cids;
@@ -519,7 +559,10 @@ TEST_P(ManifestGroupTranslatorTest, TestVectorColumnGroup) {
 
     // estimated byte size
     for (size_t i = 0; i < num_cells; ++i) {
-        auto [loading, storage] = translator->estimated_byte_size_of_cell(i);
+        auto [loading, private_overhead, shared_overhead] =
+            translator->estimated_loading_usage(
+                {static_cast<cachinglayer::cid_t>(i)});
+        const auto storage = private_overhead + shared_overhead;
         if (use_mmap) {
             EXPECT_GT(loading.file_bytes, 0) << "cid=" << i;
         } else {
@@ -1297,7 +1340,8 @@ TEST_P(ManifestGroupTranslatorTest, TestAsyncLoadParity) {
         EXPECT_EQ(mmap_files_before_async, mmap_files_before_sync);
     }
     storage::LocalFileIOPool::GetInstance().Configure(1);
-    auto async_cells = async_translator->get_cells(nullptr, cids);
+    auto async_cells = folly::coro::blockingWait(
+        async_translator->get_cells_async(nullptr, cids));
     auto mmap_files_after_async = count_mmap_files();
     if (use_mmap) {
         EXPECT_GT(mmap_files_after_async, mmap_files_before_async);
@@ -1324,18 +1368,119 @@ TEST_P(ManifestGroupTranslatorTest, TestAsyncLoadParity) {
     }
 }
 
+TEST_P(ManifestGroupTranslatorTest, LegacyReadYieldsAndDrainsOnCancellation) {
+    auto reader =
+        std::make_shared<CountingChunkReader>(test_data_->CreateChunkReader(0));
+    auto translator = MakeTranslator(0, GetParam(), false, reader);
+    const std::vector<cachinglayer::cid_t> cids{0};
+    folly::CPUThreadPoolExecutor caller(1);
+    folly::CancellationSource cancellation;
+    std::promise<void> started;
+    auto started_future = started.get_future();
+    std::promise<void> release;
+    auto released = release.get_future().share();
+    reader->before_sync_read = [&] {
+        started.set_value();
+        released.wait();
+    };
+    auto operation = std::async(std::launch::async, [&] {
+        return folly::coro::blockingWait(folly::coro::co_withExecutor(
+            &caller,
+            folly::coro::co_withCancellation(
+                cancellation.getToken(),
+                translator->get_cells_async(nullptr, cids))));
+    });
+    auto cleanup = folly::makeGuard([&] { release.set_value(); });
+    ASSERT_EQ(started_future.wait_for(std::chrono::seconds(5)),
+              std::future_status::ready);
+    auto marker = std::make_shared<std::promise<void>>();
+    auto marker_future = marker->get_future();
+    caller.add([marker] { marker->set_value(); });
+    EXPECT_EQ(marker_future.wait_for(std::chrono::seconds(2)),
+              std::future_status::ready);
+    cancellation.requestCancellation();
+    EXPECT_EQ(operation.wait_for(std::chrono::milliseconds(30)),
+              std::future_status::timeout);
+    release.set_value();
+    cleanup.dismiss();
+    ASSERT_EQ(operation.wait_for(std::chrono::seconds(5)),
+              std::future_status::ready);
+    try {
+        operation.get();
+        FAIL()
+            << "expected inherited cancellation after synchronous read drains";
+    } catch (const SegcoreError& error) {
+        EXPECT_EQ(error.get_error_code(), ErrorCode::FollyCancel);
+    }
+    EXPECT_GT(reader->SyncCalls(), 0);
+    EXPECT_EQ(reader->AsyncCalls(), 0);
+}
+
+TEST_P(ManifestGroupTranslatorTest,
+       LegacyBudgetWaitYieldsAndCancelsBeforeRead) {
+    auto reader =
+        std::make_shared<CountingChunkReader>(test_data_->CreateChunkReader(0));
+    auto translator = MakeTranslator(0, GetParam(), false, reader);
+    const std::vector<cachinglayer::cid_t> cids{0};
+    auto& budget = storage::LoadAdmissionController::GetInstance();
+    const auto capacity = budget.CapacityBytes();
+    budget.SetCapacityBytes(1);
+    budget.Acquire({1, 1}, storage::LoadAdmissionPriority::High);
+    auto restore = folly::makeGuard([&] { budget.SetCapacityBytes(capacity); });
+    folly::CPUThreadPoolExecutor caller(1);
+    folly::CancellationSource cancellation;
+    std::promise<void> started;
+    auto started_future = started.get_future();
+    auto load = [&]()
+        -> folly::coro::Task<std::vector<
+            std::pair<cachinglayer::cid_t, std::unique_ptr<GroupChunk>>>> {
+        started.set_value();
+        co_return co_await translator->get_cells_async(nullptr, cids);
+    };
+    auto operation = std::async(std::launch::async, [&] {
+        return folly::coro::blockingWait(folly::coro::co_withExecutor(
+            &caller,
+            folly::coro::co_withCancellation(cancellation.getToken(), load())));
+    });
+    auto cleanup = folly::makeGuard([&] {
+        cancellation.requestCancellation();
+        budget.Release({1, 1});
+    });
+    ASSERT_EQ(started_future.wait_for(std::chrono::seconds(5)),
+              std::future_status::ready);
+    auto marker = std::make_shared<std::promise<void>>();
+    auto marker_future = marker->get_future();
+    caller.add([marker] { marker->set_value(); });
+    EXPECT_EQ(marker_future.wait_for(std::chrono::seconds(2)),
+              std::future_status::ready);
+    EXPECT_EQ(operation.wait_for(std::chrono::milliseconds(20)),
+              std::future_status::timeout);
+    cancellation.requestCancellation();
+    ASSERT_EQ(operation.wait_for(std::chrono::seconds(5)),
+              std::future_status::ready);
+    try {
+        operation.get();
+        FAIL() << "expected inherited cancellation while awaiting budget";
+    } catch (const SegcoreError& error) {
+        EXPECT_EQ(error.get_error_code(), ErrorCode::FollyCancel);
+    }
+    EXPECT_EQ(reader->SyncCalls(), 0);
+    EXPECT_EQ(reader->AsyncCalls(), 0);
+}
+
 TEST_P(ManifestGroupTranslatorTest, AsyncOverheadBoundsWholeWindows) {
-    const auto previous_window = StorageV2AsyncLoadReadWindowSizeBytes();
+    const auto previous_window =
+        milvus::storage::LoadFieldDataReadWindowSizeBytes();
     const auto previous_cell_target = GetCellTargetSizeBytes();
     auto restore = folly::makeGuard([&] {
-        SetStorageV2AsyncLoadReadWindowSizeBytes(previous_window);
+        milvus::storage::SetLoadFieldDataReadWindowSizeBytes(previous_window);
         SetCellTargetSizeBytes(previous_cell_target);
     });
     SetCellTargetSizeBytes(1);
     const int64_t wide_window = 4 * FieldDataLoadBatchTargetBytes();
     for (const int64_t window :
          {int64_t{1}, wide_window, std::numeric_limits<int64_t>::max()}) {
-        SetStorageV2AsyncLoadReadWindowSizeBytes(window);
+        milvus::storage::SetLoadFieldDataReadWindowSizeBytes(window);
         // Group 0 contains arrays; group 1 contains only a vector field.
         for (const int64_t group : {int64_t{0}, int64_t{1}}) {
             auto translator = MakeTranslator(group, GetParam(), true);
@@ -1367,9 +1512,10 @@ TEST_P(ManifestGroupTranslatorTest, AsyncOverheadBoundsWholeWindows) {
 }
 
 TEST_P(ManifestGroupTranslatorTest, AsyncReadWindowIsCapturedForReloads) {
-    auto previous = StorageV2AsyncLoadReadWindowSizeBytes();
-    auto restore = folly::makeGuard(
-        [previous]() { SetStorageV2AsyncLoadReadWindowSizeBytes(previous); });
+    auto previous = milvus::storage::LoadFieldDataReadWindowSizeBytes();
+    auto restore = folly::makeGuard([previous]() {
+        milvus::storage::SetLoadFieldDataReadWindowSizeBytes(previous);
+    });
     auto previous_cell_target = GetCellTargetSizeBytes();
     auto restore_cell_target = folly::makeGuard([previous_cell_target]() {
         SetCellTargetSizeBytes(previous_cell_target);
@@ -1377,7 +1523,7 @@ TEST_P(ManifestGroupTranslatorTest, AsyncReadWindowIsCapturedForReloads) {
     auto use_mmap = GetParam();
 
     SetCellTargetSizeBytes(1);
-    SetStorageV2AsyncLoadReadWindowSizeBytes(
+    milvus::storage::SetLoadFieldDataReadWindowSizeBytes(
         std::numeric_limits<int64_t>::max());
     auto wide_window_reader =
         std::make_shared<CountingChunkReader>(test_data_->CreateChunkReader(0));
@@ -1391,7 +1537,7 @@ TEST_P(ManifestGroupTranslatorTest, AsyncReadWindowIsCapturedForReloads) {
     EXPECT_EQ(wide_window_cells.size(), num_cells);
     EXPECT_EQ(wide_window_reader->AsyncCalls(), 1);
 
-    SetStorageV2AsyncLoadReadWindowSizeBytes(1);
+    milvus::storage::SetLoadFieldDataReadWindowSizeBytes(1);
     auto reloaded_cells = wide_window_translator->get_cells(nullptr, cids);
     EXPECT_EQ(reloaded_cells.size(), num_cells);
     EXPECT_EQ(wide_window_reader->AsyncCalls(), 2);
@@ -1403,7 +1549,7 @@ TEST_P(ManifestGroupTranslatorTest, AsyncReadWindowIsCapturedForReloads) {
     EXPECT_EQ(limited_cells.size(), num_cells);
     EXPECT_EQ(limited_reader->AsyncCalls(), num_cells);
 
-    SetStorageV2AsyncLoadReadWindowSizeBytes(
+    milvus::storage::SetLoadFieldDataReadWindowSizeBytes(
         std::numeric_limits<int64_t>::max());
     auto limited_reload = limited_translator->get_cells(nullptr, cids);
     EXPECT_EQ(limited_reload.size(), num_cells);
@@ -1438,6 +1584,7 @@ TEST_P(ManifestGroupTranslatorTest, RoutesAsyncFinalizationByMmapMode) {
     std::vector<cachinglayer::cid_t> cids{0};
     using CellResult =
         std::pair<cachinglayer::cid_t, std::unique_ptr<GroupChunk>>;
+    folly::CPUThreadPoolExecutor caller(1);
     std::future<std::vector<CellResult>> load;
     bool blocker_released = false;
     auto release_guard = folly::makeGuard([&]() {
@@ -1445,8 +1592,9 @@ TEST_P(ManifestGroupTranslatorTest, RoutesAsyncFinalizationByMmapMode) {
             release_blocker_promise->set_value();
         }
     });
-    load = std::async(std::launch::async, [&translator, &cids]() {
-        return translator->get_cells(nullptr, cids);
+    load = std::async(std::launch::async, [&translator, &cids, &caller]() {
+        return folly::coro::blockingWait(folly::coro::co_withExecutor(
+            &caller, translator->get_cells_async(nullptr, cids)));
     });
 
     if (use_mmap) {
@@ -1459,6 +1607,12 @@ TEST_P(ManifestGroupTranslatorTest, RoutesAsyncFinalizationByMmapMode) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         EXPECT_GT(worker_executor->getPendingTaskCount(), 0);
+        auto progress = std::make_shared<std::promise<void>>();
+        auto progressed = progress->get_future();
+        caller.add([progress] { progress->set_value(); });
+        EXPECT_EQ(progressed.wait_for(std::chrono::seconds(2)),
+                  std::future_status::ready)
+            << "the translator must release its caller while local I/O waits";
         EXPECT_EQ(load.wait_for(std::chrono::milliseconds(0)),
                   std::future_status::timeout);
     } else {
@@ -1476,12 +1630,12 @@ TEST_P(ManifestGroupTranslatorTest, RoutesAsyncFinalizationByMmapMode) {
 }
 
 TEST_P(ManifestGroupTranslatorTest, CapturesAsyncRolloutAtConstruction) {
-    SetStorageV2AsyncLoadEnabled(false);
+    milvus::storage::SetLoadAsyncReadEnabled(false);
     auto sync_reader =
         std::make_shared<CountingChunkReader>(test_data_->CreateChunkReader(0));
-    auto sync_translator =
-        MakeTranslator(0, GetParam(), StorageV2AsyncLoadEnabled(), sync_reader);
-    SetStorageV2AsyncLoadEnabled(true);
+    auto sync_translator = MakeTranslator(
+        0, GetParam(), milvus::storage::LoadAsyncReadEnabled(), sync_reader);
+    milvus::storage::SetLoadAsyncReadEnabled(true);
     sync_translator->get_cells(nullptr, {0});
     EXPECT_GT(sync_reader->SyncCalls(), 0);
     EXPECT_EQ(sync_reader->AsyncCalls(), 0);
@@ -1489,8 +1643,8 @@ TEST_P(ManifestGroupTranslatorTest, CapturesAsyncRolloutAtConstruction) {
     auto async_reader =
         std::make_shared<CountingChunkReader>(test_data_->CreateChunkReader(0));
     auto async_translator = MakeTranslator(
-        0, GetParam(), StorageV2AsyncLoadEnabled(), async_reader);
-    SetStorageV2AsyncLoadEnabled(false);
+        0, GetParam(), milvus::storage::LoadAsyncReadEnabled(), async_reader);
+    milvus::storage::SetLoadAsyncReadEnabled(false);
     async_translator->get_cells(nullptr, {0});
     EXPECT_EQ(async_reader->SyncCalls(), 0);
     EXPECT_GT(async_reader->AsyncCalls(), 0);

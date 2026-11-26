@@ -28,6 +28,9 @@ import (
 const (
 	CanceledCode int32 = 10000
 	TimeoutCode  int32 = 10001
+	// RequestCanceledCode is the code of ErrRequestCanceled: a request an
+	// operator stopped with CancelRequests.
+	RequestCanceledCode int32 = 3002
 )
 
 type ErrorType int32
@@ -69,6 +72,9 @@ var (
 	ErrServiceUnimplemented        = newMilvusError("service unimplemented", 10, false)
 	ErrServiceTimeTickLongDelay    = newMilvusError("time tick long delay", 11, false)
 	ErrServiceResourceInsufficient = newMilvusError("service resource insufficient", 12, true)
+	// Missing transaction history cannot establish whether a write committed.
+	// Keep this a non-retriable system error: replay can duplicate the write.
+	ErrServiceWriteOutcomeUnknown = newMilvusError("write result is unknown because the transaction outcome could not be determined; the write may have succeeded, and retrying may result in duplicate data", 13, false)
 
 	// Collection related
 	ErrCollectionNotFound                      = newMilvusError("collection not found", 100, false) // SystemError by default: internal retry.Do paths (datacoord handler/recovery) must keep retrying through a transient not-found; the proxy boundary stamps it InputError for users via WrapErrAsInputErrorWhen.
@@ -86,6 +92,9 @@ var (
 	// ErrCollectionPartialUpdateConflict prevents clients from automatically
 	// replaying non-idempotent relative updates after a CAS rejection.
 	ErrCollectionPartialUpdateConflict = newMilvusError("partial update conflict", 111, false)
+
+	// ErrCollectionConditionalUpsertExecution means the request may have partially committed.
+	ErrCollectionConditionalUpsertExecution = newMilvusError("conditional upsert execution failed", 112, false)
 
 	// Partition related
 	ErrPartitionNotFound       = newMilvusError("partition not found", 200, false) // SystemError by default; the proxy GetPartitionInfo name chokepoint stamps InputError for user-supplied partition names, while id-based lookups stay system.
@@ -124,6 +133,11 @@ var (
 	// stale shard-map at the caller (proxy). Retryable so the caller can
 	// re-resolve the shard map and dispatch to the correct node.
 	ErrChannelMisrouted = newMilvusError("channel misrouted: not owned by this node", 507, true)
+	// A primary key index flush adds an SST whose ID is not above the
+	// reclaimed SST ID of the manifest pointer: garbage collection may have
+	// deleted that SST. The flush did not take effect. A retry with the same
+	// request fails again; the caller must use new SST IDs.
+	ErrChannelPKIndexSSTReclaimed = newMilvusError("primary key index sst may be reclaimed", 508, false)
 
 	// Segment related
 	ErrSegmentNotFound    = newMilvusError("segment not found", 600, false)
@@ -278,6 +292,10 @@ var (
 	ErrInconsistentRequery = newMilvusError("inconsistent requery result", 2200, true)
 	ErrQueryPlan           = newMilvusError("query plan failed", 2201, false, WithErrorType(InputError))
 
+	// ErrQueryViewNotReady asks the query owner to replan after its view was
+	// retired or became unavailable. It does not imply collection release.
+	ErrQueryViewNotReady = newMilvusError("query view not ready", 2202, true)
+
 	// Compaction
 	ErrCompactionReadDeltaLogErr                  = newMilvusError("fail to read delta log", 2300, false)
 	ErrIllegalCompactionPlan                      = newMilvusError("compaction plan illegal", 2301, false)
@@ -323,6 +341,15 @@ var (
 	ErrOperationNotSupported = newMilvusError("unsupported operation", 3000, false)
 
 	ErrOldSessionExists = newMilvusError("old session exists", 3001, false)
+
+	// Request lifecycle: an operator canceled an in-flight request through the
+	// CancelRequests API. Deliberately distinct from CanceledCode (10000), which
+	// merr synthesizes from context.Canceled and which therefore also covers a
+	// client that simply went away, and from ErrSegcoreFollyCancel (2038), which
+	// is a QueryNode-internal signal. Non-retriable: the request was stopped on
+	// purpose, so an SDK must not re-issue it.
+	ErrRequestCanceled = newMilvusError("request canceled", RequestCanceledCode, false)
+	ErrRequestNotFound = newMilvusError("request not found", 3003, false, WithErrorType(InputError))
 )
 
 type errorOption func(*milvusError)

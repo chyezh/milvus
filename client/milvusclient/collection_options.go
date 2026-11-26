@@ -19,6 +19,7 @@ package milvusclient
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/samber/lo"
 	"google.golang.org/protobuf/proto"
@@ -174,8 +175,12 @@ func (opt *createCollectionOption) Request() *milvuspb.CreateCollectionRequest {
 func (opt *createCollectionOption) Indexes() []CreateIndexOption {
 	// fast create
 	if opt.isFast && opt.indexOptions == nil {
+		params := map[string]string{}
+		if opt.metricType != "" {
+			params[index.MetricTypeKey] = string(opt.metricType)
+		}
 		return []CreateIndexOption{
-			NewCreateIndexOption(opt.name, opt.vectorFieldName, index.NewGenericIndex("", map[string]string{})),
+			NewCreateIndexOption(opt.name, opt.vectorFieldName, index.NewGenericIndex("", params)),
 		}
 	}
 	return opt.indexOptions
@@ -238,13 +243,24 @@ type DescribeCollectionOption interface {
 }
 
 type describeCollectionOption struct {
-	name string
+	name   string
+	dbName string
 }
 
 func (opt *describeCollectionOption) Request() *milvuspb.DescribeCollectionRequest {
 	return &milvuspb.DescribeCollectionRequest{
 		CollectionName: opt.name,
+		DbName:         opt.dbName,
 	}
+}
+
+// withDBName pins the describe request to the given database. It is used by
+// the collection cache to fetch the schema for the database recorded in the
+// cache key instead of the connection's current database, which may have
+// changed by the time the RPC is sent.
+func (opt *describeCollectionOption) withDBName(dbName string) *describeCollectionOption {
+	opt.dbName = dbName
+	return opt
 }
 
 // NewDescribeCollectionOption composes a describeCollectionOption with provided collection name.
@@ -668,6 +684,35 @@ type addCollectionFieldOption struct {
 	fieldSch       *entity.Field
 }
 
+// splitStructSubFieldPath splits a struct sub-field path "s[b]" into the struct and sub-field
+// names. ok is false for a plain field name.
+func splitStructSubFieldPath(name string) (structName string, subName string, ok bool, err error) {
+	if !strings.ContainsAny(name, "[]") {
+		return "", "", false, nil
+	}
+	open := strings.IndexByte(name, '[')
+	if open > 0 && strings.HasSuffix(name, "]") {
+		structName, subName = name[:open], name[open+1:len(name)-1]
+	}
+	if structName == "" || subName == "" || strings.ContainsAny(subName, "[]") {
+		return "", "", false, merr.WrapErrParameterInvalidMsg("invalid struct sub-field path %q, expect \"struct[sub_field]\"", name)
+	}
+	return structName, subName, true, nil
+}
+
+// alterSchemaRequest returns the AlterCollectionSchema request adding a struct sub-field when the
+// field name is a sub-field path "s[b]". The full name is sent and the server parses it. The
+// sub-field describes one struct element, as in entity.StructSchema; the server fills its
+// row-level nullable and max_capacity from the struct.
+func (c *addCollectionFieldOption) alterSchemaRequest() (*milvuspb.AlterCollectionSchemaRequest, bool, error) {
+	_, _, ok, err := splitStructSubFieldPath(c.fieldSch.Name)
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	fieldSchema := entity.StructSubFieldProto(c.fieldSch, false, "")
+	return newAlterCollectionSchemaAddRequest(c.collectionName, fieldSchema, nil), true, nil
+}
+
 func (c *addCollectionFieldOption) Request() *milvuspb.AddCollectionFieldRequest {
 	bs, _ := proto.Marshal(c.fieldSch.ProtoMessage())
 	return &milvuspb.AddCollectionFieldRequest{
@@ -678,6 +723,21 @@ func (c *addCollectionFieldOption) Request() *milvuspb.AddCollectionFieldRequest
 
 // Validate validates the option before sending request
 func (c *addCollectionFieldOption) Validate() error {
+	if c.fieldSch == nil {
+		return merr.WrapErrParameterMissingMsg("field schema is required")
+	}
+	structName, subName, isSubField, err := splitStructSubFieldPath(c.fieldSch.Name)
+	if err != nil {
+		return err
+	}
+	if isSubField {
+		if !c.fieldSch.Nullable {
+			return merr.WrapErrParameterInvalidMsg("adding struct sub-field %s requires nullable=true", c.fieldSch.Name)
+		}
+		sub := *c.fieldSch
+		sub.Name = subName
+		return entity.NewStructSchema().WithField(&sub).Validate(structName)
+	}
 	// Vector fields must be nullable when adding to existing collection
 	if c.fieldSch.DataType.IsVectorType() && !c.fieldSch.Nullable {
 		return fmt.Errorf("adding vector field to existing collection requires nullable=true, field name = %s", c.fieldSch.Name)

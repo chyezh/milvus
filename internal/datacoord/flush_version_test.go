@@ -11,10 +11,13 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
+	"github.com/milvus-io/milvus/internal/datacoord/meta"
 	"github.com/milvus-io/milvus/internal/dataview"
 	memkv "github.com/milvus-io/milvus/internal/kv/mem"
 	"github.com/milvus-io/milvus/internal/metastore"
 	datacoordkv "github.com/milvus-io/milvus/internal/metastore/kv/datacoord"
+	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v3/kv/predicates"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
@@ -23,20 +26,176 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
+// Flush keeps its synchronous SN handoff while opt-in compaction changes the
+// subsequent physical layout through a separate compact_version publication.
+func (s *ServerSuite) TestSegmentChangeFlushToMix() {
+	t := s.T()
+	setSegmentChangeTestParam(t, &Params.DataCoordCfg.SegmentChangeEnabled, "true")
+	setSegmentChangeTestParam(t, &Params.DataCoordCfg.EnableSortCompaction, "false")
+	ctx := t.Context()
+	_, manager := s.setupFlushVersionCatalog()
+	m := s.testServer.meta
+	m.DataViewManager = manager
+	schema := readinessVectorSchema()
+	m.AddCollection(&meta.CollectionInfo{ID: 100, Schema: schema, VChannelNames: []string{"ch1"}})
+	req := s.addFlushVersionSegment(10, 10)
+	firstFlush := s.flushVersion(req)
+	s.flushVersion(s.addFlushVersionSegment(20, 10))
+	task := &datapb.CompactionTask{
+		PlanID: 5000, CollectionID: 100, PartitionID: 10, Channel: "ch1",
+		InputSegments: []int64{10, 20}, Type: datapb.CompactionType_MixCompaction, Schema: schema,
+	}
+	_, err := m.CompleteCompactionMutation(ctx, task, &datapb.CompactionPlanResult{
+		PlanID: 5000, Segments: []*datapb.CompactionSegment{{
+			SegmentID: 30, NumOfRows: 20,
+			InsertLogs: []*datapb.FieldBinlog{{FieldID: 2, Binlogs: []*datapb.Binlog{{LogID: 30, EntriesNum: 20}}}},
+		}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.SegmentState_Flushed, m.GetSegment(ctx, 10).GetState())
+	require.True(t, proto.Equal(firstFlush, s.flushVersion(req)), "SN retry must keep the original seal binding while a group waits")
+	before, err := manager.Latest(ctx, 100)
+	require.NoError(t, err)
+	defer before.Deref()
+	inspector := newSegmentChangeInspector(ctx, m, meta.NewMockAllocator(t))
+	inspector.checkAllGroups(ctx)
+	inspector.checkAllGroups(ctx)
+	require.Equal(t, model.SegmentChangeStateCommitted, m.GetSegmentChangeGroup(ctx, 100, 5000).State)
+	require.Equal(t, commonpb.SegmentState_Dropped, m.GetSegment(ctx, 10).GetState())
+	require.True(t, proto.Equal(firstFlush, s.flushVersion(req)), "SN retry after compaction must not republish the retired source")
+	after, err := manager.Latest(ctx, 100)
+	require.NoError(t, err)
+	defer after.Deref()
+	require.Equal(t, before.Version().GetStreamingVersion(), after.Version().GetStreamingVersion())
+	require.Equal(t, before.Version().GetCompactVersion()+1, after.Version().GetCompactVersion())
+	var ids []int64
+	for _, shard := range after.DataView().GetShards() {
+		for _, partition := range shard.GetPartitions() {
+			ids = append(ids, partition.GetSegmentIds()...)
+		}
+	}
+	require.Equal(t, []int64{30}, ids)
+}
+
+func (s *ServerSuite) TestSegmentChangePreservesSortEnabledFlushHandoff() {
+	t := s.T()
+	setSegmentChangeTestParam(t, &Params.DataCoordCfg.SegmentChangeEnabled, "true")
+	setSegmentChangeTestParam(t, &Params.DataCoordCfg.EnableCompaction, "true")
+	setSegmentChangeTestParam(t, &Params.DataCoordCfg.EnableSortCompaction, "true")
+	_, manager := s.setupFlushVersionCatalog()
+	req := s.addFlushVersionSegment(10, 10)
+	version := s.flushVersion(req)
+	require.NotNil(t, version)
+	seg := s.testServer.meta.GetSegment(t.Context(), 10)
+	require.True(t, seg.GetIsInvisible())
+	require.True(t, proto.Equal(version, seg.GetSealedAtDataVersion()))
+	require.False(t, s.testServer.meta.HasStagedSegment(t.Context(), 100, 10))
+	ref, err := manager.Latest(t.Context(), 100)
+	require.NoError(t, err)
+	defer ref.Deref()
+	require.Equal(t, []int64{10}, ref.DataView().GetShards()[0].GetPartitions()[0].GetSegmentIds())
+	require.True(t, proto.Equal(version, s.flushVersion(req)))
+}
+
+func TestSortEnabledFlushHandoffWithSegmentChangeDisabled(t *testing.T) {
+	setSegmentChangeTestParam(t, &Params.DataCoordCfg.SegmentChangeEnabled, "false")
+	setSegmentChangeTestParam(t, &Params.DataCoordCfg.EnableCompaction, "true")
+	setSegmentChangeTestParam(t, &Params.DataCoordCfg.EnableSortCompaction, "true")
+	m, err := meta.NewMemoryMeta(t)
+	require.NoError(t, err)
+	manager := dataview.NewManager(m.Catalog.(dataview.Catalog), nil)
+	m.DataViewManager = manager
+	schema := readinessVectorSchema()
+	m.AddCollection(&meta.CollectionInfo{ID: 100, Schema: schema, VChannelNames: []string{"ch1"}})
+	_, err = manager.OnCreateCollection(t.Context(), dataview.CreateCollectionDataViewEvent{
+		CollectionID: 100, VChannels: []string{"ch1"},
+	})
+	require.NoError(t, err)
+	// This is the SegmentMeta shape written by a sort-enabled flush with the
+	// flag off: still invisible to compaction, but already sealed in DataView.
+	require.NoError(t, m.AddSegment(t.Context(), meta.NewSegmentInfo(&datapb.SegmentInfo{
+		ID: 10, CollectionID: 100, PartitionID: 10, InsertChannel: "ch1",
+		State: commonpb.SegmentState_Flushed, Level: datapb.SegmentLevel_L1,
+		NumOfRows: 10, IsInvisible: true, SealedAtDataVersion: &viewpb.DataVersion{StreamingVersion: 1},
+		Binlogs: []*datapb.FieldBinlog{{FieldID: 2, Binlogs: []*datapb.Binlog{{LogID: 10, EntriesNum: 10}}}},
+	})))
+	_, err = manager.RecomputeNow(t.Context(), 100, m.LoadableProjection)
+	require.NoError(t, err)
+	ref, err := manager.Latest(t.Context(), 100)
+	require.NoError(t, err)
+	require.Equal(t, []int64{10}, ref.DataView().GetShards()[0].GetPartitions()[0].GetSegmentIds())
+	ref.Deref()
+
+	_, err = m.CompleteCompactionMutation(t.Context(), &datapb.CompactionTask{
+		PlanID: 5000, CollectionID: 100, PartitionID: 10, Channel: "ch1",
+		Type: datapb.CompactionType_SortCompaction, InputSegments: []int64{10}, Schema: schema,
+	}, &datapb.CompactionPlanResult{
+		PlanID: 5000, Segments: []*datapb.CompactionSegment{{
+			SegmentID: 20, NumOfRows: 10, IsSorted: true,
+			InsertLogs: []*datapb.FieldBinlog{{FieldID: 2, Binlogs: []*datapb.Binlog{{LogID: 20, EntriesNum: 10}}}},
+		}},
+	})
+	require.NoError(t, err)
+	_, err = manager.RecomputeNow(t.Context(), 100, m.LoadableProjection)
+	require.NoError(t, err)
+	ref, err = manager.Latest(t.Context(), 100)
+	require.NoError(t, err)
+	defer ref.Deref()
+	require.Equal(t, []int64{20}, ref.DataView().GetShards()[0].GetPartitions()[0].GetSegmentIds())
+}
+
+func (s *ServerSuite) TestSegmentChangeFlushToSort() {
+	t := s.T()
+	setSegmentChangeTestParam(t, &Params.DataCoordCfg.SegmentChangeEnabled, "true")
+	setSegmentChangeTestParam(t, &Params.DataCoordCfg.EnableCompaction, "true")
+	setSegmentChangeTestParam(t, &Params.DataCoordCfg.EnableSortCompaction, "true")
+	_, manager := s.setupFlushVersionCatalog()
+	m := s.testServer.meta
+	m.DataViewManager = manager
+	schema := readinessVectorSchema()
+	m.AddCollection(&meta.CollectionInfo{ID: 100, Schema: schema, VChannelNames: []string{"ch1"}})
+	req := s.addFlushVersionSegment(10, 10)
+	seal := s.flushVersion(req)
+	_, err := m.CompleteCompactionMutation(t.Context(), &datapb.CompactionTask{
+		PlanID: 5000, CollectionID: 100, PartitionID: 10, Channel: "ch1",
+		Type: datapb.CompactionType_SortCompaction, InputSegments: []int64{10}, Schema: schema,
+	}, &datapb.CompactionPlanResult{
+		PlanID:   5000,
+		Segments: []*datapb.CompactionSegment{{SegmentID: 20, NumOfRows: 10, IsSorted: true, InsertLogs: []*datapb.FieldBinlog{{FieldID: 2, Binlogs: []*datapb.Binlog{{LogID: 20, EntriesNum: 10}}}}}},
+	})
+	require.NoError(t, err)
+	_, err = manager.RecomputeNow(t.Context(), 100, m.LoadableProjection)
+	require.NoError(t, err)
+	ref, err := manager.Latest(t.Context(), 100)
+	require.NoError(t, err)
+	require.Equal(t, []int64{10}, ref.DataView().GetShards()[0].GetPartitions()[0].GetSegmentIds())
+	ref.Deref()
+	inspector := newSegmentChangeInspector(t.Context(), m, meta.NewMockAllocator(t))
+	inspector.checkAllGroups(t.Context())
+	inspector.checkAllGroups(t.Context())
+	require.Equal(t, model.SegmentChangeStateCommitted, m.GetSegmentChangeGroup(t.Context(), 100, 5000).State)
+	ref, err = manager.Latest(t.Context(), 100)
+	require.NoError(t, err)
+	defer ref.Deref()
+	require.Equal(t, []int64{20}, ref.DataView().GetShards()[0].GetPartitions()[0].GetSegmentIds())
+	require.Equal(t, seal.GetStreamingVersion(), ref.Version().GetStreamingVersion())
+	require.True(t, proto.Equal(seal, s.flushVersion(req)))
+}
+
 func (s *ServerSuite) setupFlushVersionCatalog() (*datacoordkv.Catalog, dataview.Manager) {
-	catalog := datacoordkv.NewCatalog(NewMetaMemoryKV(), "", "")
+	catalog := datacoordkv.NewCatalog(meta.NewMetaMemoryKV(), "", "")
 	manager := dataview.NewManager(catalog, nil)
 	_, err := manager.OnCreateCollection(context.Background(), dataview.CreateCollectionDataViewEvent{
 		CollectionID: 100, VChannels: []string{"ch1"},
 	})
 	require.NoError(s.T(), err)
-	s.testServer.meta.catalog = catalog
+	s.testServer.meta.Catalog = catalog
 	s.testServer.dataViewManager = manager
 	return catalog, manager
 }
 
 func (s *ServerSuite) addFlushVersionSegment(id, rows int64) *datapb.SaveBinlogPathsRequest {
-	require.NoError(s.T(), s.testServer.meta.AddSegment(context.Background(), NewSegmentInfo(&datapb.SegmentInfo{
+	require.NoError(s.T(), s.testServer.meta.AddSegment(context.Background(), meta.NewSegmentInfo(&datapb.SegmentInfo{
 		ID: id, CollectionID: 100, PartitionID: 10, InsertChannel: "ch1",
 		State: commonpb.SegmentState_Growing, Level: datapb.SegmentLevel_L1,
 		NumOfRows: rows, StorageVersion: storage.StorageV2,
@@ -81,11 +240,15 @@ func (s *ServerSuite) TestFlushVersionSurvivesRetryRecoveryAndDataViewGC() {
 	segments, err := catalog.ListSegments(ctx, 100)
 	require.NoError(s.T(), err)
 	// Background compaction still reads segment indexes during this simulated restart.
-	s.testServer.meta.segMu.Lock()
+	segmentIDs := make([]int64, 0, len(segments))
 	for _, segment := range segments {
-		s.testServer.meta.segments.SetSegment(segment.GetID(), NewSegmentInfo(segment))
+		segmentIDs = append(segmentIDs, segment.GetID())
 	}
-	s.testServer.meta.segMu.Unlock()
+	unlock := s.testServer.meta.LockSegments(segmentIDs...)
+	for _, segment := range segments {
+		s.testServer.meta.Segments.SetSegment(segment.GetID(), meta.NewSegmentInfo(segment))
+	}
+	unlock()
 	recovered, err := dataview.RecoverManager(ctx, catalog, func(context.Context, int64) (bool, error) {
 		return true, nil
 	}, nil, nil, nil)
@@ -95,8 +258,8 @@ func (s *ServerSuite) TestFlushVersionSurvivesRetryRecoveryAndDataViewGC() {
 
 	// Compaction may retire the source before SN retries. The original version
 	// must survive, and a retry must not put the source back into membership.
-	require.NoError(s.T(), s.testServer.meta.UpdateSegmentsInfo(ctx, UpdateStatusOperator(10, commonpb.SegmentState_Dropped)))
-	_, err = recovered.RecomputeNow(ctx, 100, func(context.Context, int64) ([]dataview.LoadableSegment, error) {
+	require.NoError(s.T(), s.testServer.meta.UpdateSegmentsInfo(ctx, meta.UpdateStatusOperator(10, commonpb.SegmentState_Dropped)))
+	_, err = recovered.RecomputeNow(ctx, 100, func(context.Context, int64, *viewpb.DataViewOfCollection) ([]dataview.LoadableSegment, error) {
 		return []dataview.LoadableSegment{{SegmentID: 20, VChannel: "ch1", PartitionID: 10, RowNum: 10}}, nil
 	})
 	require.NoError(s.T(), err)
@@ -151,7 +314,7 @@ func (s *ServerSuite) TestFlushVersionEmptyAndDropped() {
 	require.Equal(s.T(), int64(1), ref.Version().GetStreamingVersion())
 
 	req = s.addFlushVersionSegment(20, 10)
-	require.NoError(s.T(), s.testServer.meta.UpdateSegmentsInfo(context.Background(), UpdateStatusOperator(20, commonpb.SegmentState_Dropped)))
+	require.NoError(s.T(), s.testServer.meta.UpdateSegmentsInfo(context.Background(), meta.UpdateStatusOperator(20, commonpb.SegmentState_Dropped)))
 	require.Nil(s.T(), s.flushVersion(req))
 }
 
@@ -182,7 +345,7 @@ func (s *ServerSuite) TestFlushVersionFailedPublicationDoesNotInstallBinding() {
 // Force the catalog's large-binlog fallback and fail its final transaction.
 func TestFlushVersionChunkedCatalogCommit(t *testing.T) {
 	ctx := context.Background()
-	store := NewMetaMemoryKV()
+	store := meta.NewMetaMemoryKV()
 	catalog := datacoordkv.NewCatalog(store, "", "")
 	segment := &datapb.SegmentInfo{ID: 10, CollectionID: 100, PartitionID: 10, NumOfRows: 10, State: commonpb.SegmentState_Growing}
 	require.NoError(t, catalog.AddSegment(ctx, segment))
@@ -242,7 +405,7 @@ func TestFlushVersionChunkedCatalogCommit(t *testing.T) {
 // its many source records must remain eligible for the chunked write phase.
 func TestFlushVersionDoesNotExpandCompactionCommit(t *testing.T) {
 	ctx := context.Background()
-	catalog := datacoordkv.NewCatalog(NewMetaMemoryKV(), "", "")
+	catalog := datacoordkv.NewCatalog(meta.NewMetaMemoryKV(), "", "")
 	limit := mockey.Mock((*memkv.MemoryKV).MaxTxnOps).Return(2).Build()
 	defer limit.UnPatch()
 	var actions []metastore.UpdateAction
@@ -302,4 +465,70 @@ func (s *ServerSuite) TestFlushPublishesCommittedSize() {
 	require.True(s.T(), ok)
 	require.Zero(s.T(), stat.Size)
 	require.Equal(s.T(), int64(17), stat.LogicalSize)
+}
+
+func (s *ServerSuite) TestDualFrontierFlushTransactionAndCheckpointIsolation() {
+	t := s.T()
+	catalog := datacoordkv.NewCatalog(meta.NewMetaMemoryKV(), "", "")
+	manager := dataview.NewManager(catalog, nil,
+		dataview.WithFrontierProjector(func(context.Context, int64) (map[string]uint64, error) {
+			t.Fatal("native Flush must not read collection cache or checkpoint")
+			return nil, nil
+		}),
+		dataview.WithPendingTransformProjector(func(ctx context.Context, view *viewpb.DataViewOfCollection) (map[string]uint64, error) {
+			return pendingTransformBounds(ctx, s.testServer.meta, nil, view)
+		}))
+	_, err := manager.OnCreateCollection(t.Context(), dataview.CreateCollectionDataViewEvent{CollectionID: 100, VChannels: []string{"ch1"}, TransformStarts: map[string]uint64{"ch1": 10}})
+	require.NoError(t, err)
+	s.testServer.meta.Catalog = catalog
+	s.testServer.dataViewManager = manager
+	req := s.addFlushVersionSegment(10, 10)
+	// Final Flush follows the durable first-pack publication.
+	require.NoError(t, s.testServer.meta.UpdateSegmentsInfo(t.Context(), meta.UpdateStartPosition([]*datapb.SegmentStartPosition{{SegmentID: 10, StartPosition: &msgpb.MsgPosition{MsgID: []byte{1}, Timestamp: 50}}})))
+	req.GrowingTransformStartAfterTimetick = 100
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	patch := mockey.Mock((*datacoordkv.Catalog).Update).To(func(_ *datacoordkv.Catalog, _ context.Context, _ ...metastore.UpdateAction) error {
+		cancel()
+		return context.Canceled
+	}).Build()
+	defer patch.UnPatch()
+	resp, err := s.testServer.SaveBinlogPaths(ctx, proto.Clone(req).(*datapb.SaveBinlogPathsRequest))
+	require.Error(t, merr.CheckRPCCall(resp, err))
+	require.Positive(t, patch.Times(), "failure must reach the atomic persistence boundary")
+	ref, err := manager.Latest(t.Context(), 100)
+	require.NoError(t, err)
+	require.Equal(t, uint64(10), ref.DataView().Shards[0].GetGrowingTransformStartAfterTimetick())
+	ref.Deref()
+	patch.UnPatch()
+	version := s.flushVersion(req)
+	ref, err = manager.Latest(t.Context(), 100)
+	require.NoError(t, err)
+	defer ref.Deref()
+	published := ref.DataView()
+	require.Equal(t, uint64(100), published.Shards[0].GetGrowingTransformStartAfterTimetick())
+	require.Equal(t, uint64(50), published.Shards[0].GetCompactedTransformStartAfterTimetick())
+	stored, err := catalog.ListDataViews(t.Context(), 100)
+	require.NoError(t, err)
+	found := false
+	for _, view := range stored {
+		if proto.Equal(view.GetDataVersion(), version) {
+			require.True(t, proto.Equal(published, view))
+			found = true
+		}
+	}
+	require.True(t, found)
+	// A newer proof on a duplicate RPC must not change the original binding.
+	req.GrowingTransformStartAfterTimetick = 500
+	require.True(t, proto.Equal(version, s.flushVersion(req)))
+	recompute := mockey.Mock((*meta.Meta).RecomputeDataView).To(func(_ *meta.Meta, _ context.Context, _ int64) {
+		t.Fatal("checkpoint report must not enqueue a DataView")
+	}).Build()
+	defer recompute.UnPatch()
+	require.NoError(t, s.testServer.meta.UpdateChannelCheckpoint(t.Context(), "ch1", &msgpb.MsgPosition{ChannelName: "ch1", MsgID: []byte{2}, Timestamp: 200}))
+	require.NoError(t, s.testServer.meta.UpdateChannelCheckpoints(t.Context(), []*msgpb.MsgPosition{{ChannelName: "ch1", MsgID: []byte{3}, Timestamp: 300}}))
+	latest, err := manager.Latest(t.Context(), 100)
+	require.NoError(t, err)
+	defer latest.Deref()
+	require.True(t, proto.Equal(published, latest.DataView()))
 }

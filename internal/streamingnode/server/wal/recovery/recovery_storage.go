@@ -20,6 +20,10 @@ type WALCheckpoint = utility.WALCheckpoint
 
 // RecoverySnapshot is the snapshot of the recovery info.
 type RecoverySnapshot struct {
+	// RecoveryBarrier is the final physical leg's barrier, after all startup switches.
+	RecoveryBarrier message.ImmutableMessage
+	// TxnTombstones contains bounded successful Commit results observed in startup replay.
+	TxnTombstones     *utility.TxnTombstones
 	WritePathRecovery *moduleapi.WritePathRecoveryModuleSnapshot
 	// Checkpoint is the in-memory completed frontier after bounded startup
 	// replay. It fences write-path recovery, but is not catalog-published until
@@ -30,14 +34,18 @@ type RecoverySnapshot struct {
 	// SummarySnapshots restores the interceptor windows from retained summary
 	// history and startup replay before the WAL accepts writes.
 	SummarySnapshots map[string]*idempotencyview.Snapshot
+	// SummaryRecovery preserves ordered chunk boundaries for the startup fast path.
+	// SummarySnapshots remains the compatibility view of the same Records.
+	SummaryRecovery *idempotencyview.RecoverySnapshot
 }
 
 type dirtyPersistSnapshot struct {
-	Checkpoint        *WALCheckpoint
-	LogicalEndOffset  uint64
-	CheckpointDirty   bool
-	ModuleDirtySnaps  []moduleapi.DirtySnapshot
-	SalvageCheckpoint *utility.ReplicateCheckpoint
+	Checkpoint             *WALCheckpoint
+	LogicalEndOffset       uint64
+	LogicalEndMessageCount uint64
+	CheckpointDirty        bool
+	ModuleDirtySnaps       []moduleapi.DirtySnapshot
+	SalvageCheckpoint      *utility.ReplicateCheckpoint
 }
 
 func clonePChannelControl(control *streamingpb.PChannelRecoveryControlMeta) *streamingpb.PChannelRecoveryControlMeta {
@@ -48,7 +56,9 @@ func clonePChannelControl(control *streamingpb.PChannelRecoveryControlMeta) *str
 }
 
 type BuildRecoveryStreamParam struct {
-	StartCheckpoint message.MessageID
+	StartCheckpoint      message.MessageID
+	StartAfterCheckpoint bool
+	StopAtWALSwitch      bool
 	// RecoveryBarrier marks the startup snapshot boundary. The stream continues
 	// after this message with the same ordering and transaction state.
 	RecoveryBarrier message.ImmutableMessage
@@ -84,6 +94,12 @@ type RecoveryStreamBuilder interface {
 
 	// Return the underlying walimpls.WALImpls.
 	RWWALImpls() walimpls.WALImpls
+}
+
+// RecoveryWALSwitcher is used by RecoveryStorage to advance a physical replay leg.
+// It acquires the target writer and appends its barrier; it does not scan data.
+type RecoveryWALSwitcher interface {
+	SwitchWAL(context.Context, message.MessageID) (message.ImmutableMessage, error)
 }
 
 // RecoveryStream is an interface that is used to recover the recovery storage from the WAL.

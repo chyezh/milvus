@@ -25,9 +25,11 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/pkg/v3/metrics"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
@@ -71,6 +73,52 @@ func TestGetCollectionNameFromRequest(t *testing.T) {
 				t.Errorf("GetCollectionNameFromRequest() got1 = %v, want %v", got1, tt.want1)
 			}
 		})
+	}
+}
+
+func TestConditionalWriteState(t *testing.T) {
+	assert.Nil(t, ConditionalWriteStateFromContext(context.Background()))
+	ctx, state := WithConditionalWriteState(context.Background())
+	nested, same := WithConditionalWriteState(ctx)
+	assert.Equal(t, ctx, nested)
+	assert.Same(t, state, same)
+	assert.Same(t, state, ConditionalWriteStateFromContext(ctx))
+	assert.True(t, state.TryAppend())
+	assert.True(t, state.TryAppend(), "later attempts retain the submission state")
+	err := state.Cancel(context.DeadlineExceeded)
+	assert.EqualValues(t, 112, merr.Code(err))
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Equal(t, err, state.Cancel(err))
+	assert.False(t, merr.IsRetryableErr(err))
+
+	var canceled ConditionalWriteState
+	assert.Equal(t, context.DeadlineExceeded, canceled.Cancel(context.DeadlineExceeded))
+	assert.Equal(t, context.Canceled, canceled.Cancel(context.Canceled))
+	assert.False(t, canceled.TryAppend(), "a pre-submission timeout must prevent a late append")
+}
+
+func TestConditionalWriteStateSubmissionRacesCancellation(t *testing.T) {
+	for range 100 {
+		var state ConditionalWriteState
+		start := make(chan struct{})
+		appended := make(chan bool, 1)
+		canceled := make(chan error, 1)
+		go func() {
+			<-start
+			appended <- state.TryAppend()
+		}()
+		go func() {
+			<-start
+			canceled <- state.Cancel(context.DeadlineExceeded)
+		}()
+		close(start)
+		won, err := <-appended, <-canceled
+		if won {
+			assert.EqualValues(t, 112, merr.Code(err))
+		} else {
+			assert.Equal(t, context.DeadlineExceeded, err)
+			assert.False(t, state.TryAppend())
+		}
 	}
 }
 
@@ -625,6 +673,34 @@ func TestParseMetricLabel(t *testing.T) {
 	assertLabels(metrics.FailLabel, metrics.CauseCancel, restCancel, merr.Error(restCancel))
 }
 
+// An operator cancel (CancelRequests) ends the request with
+// ErrRequestCanceled (3002) rather than the client cancellation code, so that
+// the client can tell the two apart. For the request metrics it is the same
+// kind of outcome: a cancellation, not a system failure, in each of the forms
+// the gRPC interceptor and the REST v2 wrapper hand over.
+func TestParseMetricLabelOperatorCancel(t *testing.T) {
+	operatorCancel := merr.WrapErrRequestCanceled("root", "too heavy")
+	st := merr.Status(operatorCancel)
+	assert.Equal(t, int32(3002), st.GetCode())
+
+	for _, tc := range []struct {
+		name       string
+		resp       any
+		err        error
+		wantStatus string
+	}{
+		{"gRPC: response carries the status, err nil", &milvuspb.SearchResults{Status: st}, nil, metrics.FailLabel},
+		{"REST v2: response status and err rebuilt from it", st, merr.Error(st), metrics.FailLabel},
+		{"err only", &commonpb.Status{}, operatorCancel, metrics.RejectedLabel},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, cause := ParseMetricLabel(tc.resp, tc.err)
+			assert.Equal(t, tc.wantStatus, status)
+			assert.Equal(t, metrics.CauseCancel, cause)
+		})
+	}
+}
+
 // The status label is a public monitoring contract: dashboards and alert rules
 // written against status="fail" / status="rejected" predate the cause dimension
 // and must keep working. Splitting the responsible party into new status values
@@ -668,4 +744,19 @@ func TestParseMetricLabelStatusDomainIsStable(t *testing.T) {
 			assert.Truef(t, knownCause.Contain(cause), "unknown cause %q", cause)
 		})
 	}
+}
+
+func TestSearchRequestNq(t *testing.T) {
+	group, err := proto.Marshal(&commonpb.PlaceholderGroup{Placeholders: []*commonpb.PlaceholderValue{
+		{Tag: "$0", Type: commonpb.PlaceholderType_FloatVector, Values: [][]byte{{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}},
+	}})
+	assert.NoError(t, err)
+
+	assert.EqualValues(t, 0, SearchRequestNq(nil))
+	assert.EqualValues(t, 7, SearchRequestNq(&milvuspb.SearchRequest{Nq: 7, SearchInput: &milvuspb.SearchRequest_PlaceholderGroup{PlaceholderGroup: group}}), "a declared nq is taken as is")
+	assert.EqualValues(t, 3, SearchRequestNq(&milvuspb.SearchRequest{SearchInput: &milvuspb.SearchRequest_PlaceholderGroup{PlaceholderGroup: group}}))
+	assert.EqualValues(t, 2, SearchRequestNq(&milvuspb.SearchRequest{
+		SearchInput: &milvuspb.SearchRequest_Ids{Ids: &schemapb.IDs{IdField: &schemapb.IDs_IntId{IntId: &schemapb.LongArray{Data: []int64{1, 2}}}}},
+	}))
+	assert.EqualValues(t, 0, SearchRequestNq(&milvuspb.SearchRequest{SearchInput: &milvuspb.SearchRequest_PlaceholderGroup{PlaceholderGroup: []byte{0xff}}}), "a malformed group counts as 0")
 }

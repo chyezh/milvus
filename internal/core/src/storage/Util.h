@@ -18,11 +18,12 @@
 
 #include <algorithm>
 #include "common/FastMem.h"
+#include "common/Consts.h"
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <exception>
-#include <future>
+#include <folly/futures/Future.h>
 #include <map>
 #include <memory>
 #include <functional>
@@ -57,10 +58,12 @@
 #include "storage/PayloadStream.h"
 #include "storage/StatusToErrorCode.h"
 #include "storage/ThreadPools.h"
-#include "storage/StorageV2FSCache.h"
 #include "storage/Types.h"
 
 namespace milvus::storage {
+
+void
+WriteRawData(const std::string& path, const void* data, size_t bytes);
 
 // Controls how parent-valid external dense-vector rows with a mixture of
 // valid and null child elements are normalized. All-null child ranges are
@@ -99,6 +102,9 @@ std::shared_ptr<arrow::ArrayBuilder>
 CreateArrowBuilder(DataType data_type);
 
 std::shared_ptr<arrow::ArrayBuilder>
+CreateArrowBuilder(const FieldMeta& field_meta);
+
+std::shared_ptr<arrow::ArrayBuilder>
 CreateArrowBuilder(DataType data_type,
                    DataType element_type,
                    int dim,
@@ -119,6 +125,9 @@ CreateArrowScalarFromDefaultValue(const FieldMeta& field_meta);
 
 std::shared_ptr<arrow::Schema>
 CreateArrowSchema(DataType data_type, bool nullable);
+
+std::shared_ptr<arrow::Schema>
+CreateArrowSchema(const FieldMeta& field_meta);
 
 std::shared_ptr<arrow::Schema>
 CreateArrowSchema(DataType data_type, int dim, bool nullable);
@@ -217,7 +226,7 @@ EncodeAndUploadIndexSlice(ChunkManager* chunk_manager,
                           std::string object_key,
                           std::shared_ptr<CPluginContext> plugin_context);
 
-std::vector<std::future<std::unique_ptr<DataCodec>>>
+std::vector<folly::SemiFuture<std::unique_ptr<DataCodec>>>
 GetObjectData(
     ChunkManager* remote_chunk_manager,
     const std::vector<std::string>& remote_files,
@@ -228,12 +237,12 @@ GetObjectData(
 // Helper function to wait for all futures and collect exceptions
 // This ensures all background threads complete before rethrowing exception
 inline void
-WaitAllFutures(std::vector<std::future<void>>& futures) {
+WaitAllFutures(std::vector<folly::SemiFuture<folly::Unit>>& futures) {
     std::exception_ptr first_exception = nullptr;
 
     for (auto& future : futures) {
         try {
-            future.get();  // return type is void
+            std::move(future).get();
         } catch (...) {
             if (!first_exception) {
                 first_exception = std::current_exception();
@@ -250,7 +259,7 @@ WaitAllFutures(std::vector<std::future<void>>& futures) {
 // This ensures all background threads complete before rethrowing exception
 template <typename T>
 std::vector<T>
-WaitAllFutures(std::vector<std::future<T>> futures) {
+WaitAllFutures(std::vector<folly::SemiFuture<T>> futures) {
     std::vector<T> results;
     results.reserve(futures.size());
     std::exception_ptr first_exception = nullptr;
@@ -258,7 +267,7 @@ WaitAllFutures(std::vector<std::future<T>> futures) {
     // Wait for all futures to complete and collect exceptions
     for (auto& future : futures) {
         try {
-            results.emplace_back(future.get());
+            results.emplace_back(std::move(future).get());
         } catch (...) {
             if (!first_exception) {
                 first_exception = std::current_exception();
@@ -282,12 +291,12 @@ WaitAllFutures(std::vector<std::future<T>> futures) {
 // use-after-free on resources captured by background threads (see #46958).
 template <typename T, typename Processor>
 void
-ProcessFuturesInOrder(std::vector<std::future<T>>& futures,
+ProcessFuturesInOrder(std::vector<folly::SemiFuture<T>>& futures,
                       Processor&& processor) {
     std::exception_ptr first_exception = nullptr;
     for (auto& future : futures) {
         try {
-            auto result = future.get();
+            auto result = std::move(future).get();
             if (!first_exception) {
                 processor(std::move(result));
             }
@@ -315,7 +324,7 @@ DrainFutures(FutureContainer& futures) noexcept {
             continue;
         }
         try {
-            future.get();
+            std::move(future).get();
         } catch (...) {
         }
     }
@@ -323,12 +332,12 @@ DrainFutures(FutureContainer& futures) noexcept {
 
 template <typename T>
 void
-DrainFuture(std::future<T>& future) noexcept {
+DrainFuture(folly::SemiFuture<T>& future) noexcept {
     if (!future.valid()) {
         return;
     }
     try {
-        future.get();
+        std::move(future).get();
     } catch (...) {
     }
 }
@@ -350,11 +359,10 @@ enum class VisitOutcome {
 
 using FieldDataVisitor = std::function<VisitControl(FieldDataPtr)>;
 
-// Visits storage-v2 data on the calling thread in numeric binlog-ID order,
-// preserving row-group order within each file. Stop takes effect after the
-// current row group: no later row group is read, but a row group is not a fixed
-// byte bound and may itself be large. Producer work for the current row group
-// is complete before the visitor is called.
+// Visits on the caller thread in numeric binlog and row-group order. Parallel
+// reads use serial windows charged by all columns' stored Arrow byte estimate;
+// oversized or unknown-size groups run alone. Stop drains and joins the current
+// window before returning. Decoder and visitor memory add to the estimate.
 VisitOutcome
 VisitFieldDataFromStorageV2(
     const std::vector<std::vector<std::string>>& remote_files,
@@ -364,6 +372,24 @@ VisitFieldDataFromStorageV2(
     int64_t dim,
     milvus_storage::ArrowFileSystemPtr fs,
     const FieldDataVisitor& visitor);
+
+namespace detail {
+
+// Internal window budget override for tests; public readers use the default.
+VisitOutcome
+VisitFieldDataFromStorageV2Paged(
+    const std::vector<std::vector<std::string>>& remote_files,
+    int64_t field_id,
+    DataType data_type,
+    DataType element_type,
+    int64_t dim,
+    milvus_storage::ArrowFileSystemPtr fs,
+    const FieldDataVisitor& visitor,
+    size_t max_rows,
+    size_t offset,
+    size_t window_bytes = DEFAULT_FIELD_MAX_MEMORY_LIMIT);
+
+}  // namespace detail
 
 std::vector<FieldDataPtr>
 GetFieldDatasFromStorageV2(std::vector<std::vector<std::string>>& remote_files,
@@ -402,6 +428,15 @@ constexpr int64_t kStreamingInflightBytes = 512LL << 20;
 // are enough to keep fetch and decode overlapped.
 constexpr int64_t kAccumulatingInflightBytes = 64LL << 20;
 
+// Reads a complete non-null dense column into caller-owned memory. Unsupported
+// layouts return nullopt before allocating; ordinary visitors supply defaults,
+// nullable compaction and external-column normalization.
+std::optional<size_t>
+ReadFieldDataFromManifestInto(const std::string& manifest_path,
+                              const FileManagerContext& context,
+                              size_t expected_rows,
+                              const std::function<uint8_t*()>& allocate);
+
 // Visits manifest data on the calling thread in source order. Stop prevents
 // further ReadNext calls, decode submissions, and callbacks. Decode work
 // already submitted within the bounded input-byte window is still joined via
@@ -410,7 +445,8 @@ constexpr int64_t kAccumulatingInflightBytes = 64LL << 20;
 VisitOutcome
 VisitFieldDataFromManifest(
     const std::string& manifest_path,
-    const std::shared_ptr<milvus_storage::api::Properties>& loon_ffi_properties,
+    const std::shared_ptr<const milvus_storage::api::Properties>&
+        loon_ffi_properties,
     const FieldDataMeta& field_meta,
     std::optional<DataType> data_type,
     int64_t dim,
@@ -429,14 +465,16 @@ VisitFieldDataFromManifest(
 VisitOutcome
 VisitTextFieldDataFromManifest(
     const std::string& manifest_path,
-    const std::shared_ptr<milvus_storage::api::Properties>& loon_ffi_properties,
+    const std::shared_ptr<const milvus_storage::api::Properties>&
+        loon_ffi_properties,
     const FieldDataMeta& field_meta,
     const FieldDataVisitor& visitor);
 
 void
 IterateFieldDataFromManifest(
     const std::string& manifest_path,
-    const std::shared_ptr<milvus_storage::api::Properties>& loon_ffi_properties,
+    const std::shared_ptr<const milvus_storage::api::Properties>&
+        loon_ffi_properties,
     const FieldDataMeta& field_meta,
     std::optional<DataType> data_type,
     int64_t dim,
@@ -450,7 +488,8 @@ IterateFieldDataFromManifest(
 std::vector<FieldDataPtr>
 GetFieldDatasFromManifest(
     const std::string& manifest_path,
-    const std::shared_ptr<milvus_storage::api::Properties>& loon_ffi_properties,
+    const std::shared_ptr<const milvus_storage::api::Properties>&
+        loon_ffi_properties,
     const FieldDataMeta& field_meta,
     std::optional<DataType> data_type,
     int64_t dim,
@@ -462,7 +501,8 @@ GetFieldDatasFromManifest(
 std::vector<FieldDataPtr>
 GetTextFieldDatasFromManifest(
     const std::string& manifest_path,
-    const std::shared_ptr<milvus_storage::api::Properties>& loon_ffi_properties,
+    const std::shared_ptr<const milvus_storage::api::Properties>&
+        loon_ffi_properties,
     const FieldDataMeta& field_meta);
 
 std::map<std::string, int64_t>
@@ -480,34 +520,32 @@ GetNumRowsForLoadInfo(const LoadFieldDataInfo& load_info);
 void
 ReleaseArrowUnused();
 
+// Properties are built at the C/protobuf boundary, then shared without mutation.
+template <typename T>
+inline T
+GetStorageProperty(
+    const std::shared_ptr<const milvus_storage::api::Properties>& properties,
+    const char* key) {
+    auto value = milvus_storage::api::GetValue<T>(properties, key);
+    if (!value.ok()) {
+        ThrowInfo(ConfigInvalid,
+                  "invalid storage property: {}",
+                  value.status().ToString());
+    }
+    return std::move(*value);
+}
+
 ChunkManagerPtr
-CreateChunkManager(const StorageConfig& storage_config);
+CreateChunkManager(
+    const std::shared_ptr<const milvus_storage::api::Properties>& properties);
 
-// Build a legacy chunk manager (LocalChunkManager / the AWS-SDK based
-// MinioChunkManager family) for this storage config, bypassing the
-// ArrowFileSystem switch. Used both as the fallback inside CreateChunkManager
-// and as the remote control-plane delegate of ArrowFileSystemChunkManager.
-ChunkManagerPtr
-CreateLegacyChunkManager(const StorageConfig& storage_config);
-
-// Process-wide switch selecting the remote ChunkManager backend built by
-// CreateChunkManager: legacy AWS-SDK based managers (default) vs the
-// milvus-storage ArrowFileSystem backed ArrowFileSystemChunkManager.
-// Delivered from Go via SetArrowFileSystemChunkManagerEnabled (storage_c.h),
-// sourced from `common.storage.useArrowFileSystemChunkManager`.
-void
-SetUseArrowFileSystemChunkManager(bool use);
-
-bool
-UseArrowFileSystemChunkManager();
-
-// Translate a segcore StorageConfig into the StorageV2FSCache key used to
-// build/lookup the shared milvus-storage ArrowFileSystem.
-StorageV2FSCache::Key
-ToStorageV2FSCacheKey(const StorageConfig& storage_config);
+arrow::Result<milvus_storage::ArrowFileSystemPtr>
+GetArrowFileSystem(
+    const std::shared_ptr<const milvus_storage::api::Properties>& properties);
 
 milvus_storage::ArrowFileSystemPtr
-InitArrowFileSystem(milvus::storage::StorageConfig storage_config);
+InitArrowFileSystem(
+    const std::shared_ptr<const milvus_storage::api::Properties>& properties);
 
 FieldDataPtr
 CreateFieldData(
@@ -629,6 +667,14 @@ GetFieldIDList(FieldId column_group_id,
                const std::string& filepath,
                const std::shared_ptr<arrow::Schema>& arrow_schema,
                milvus_storage::ArrowFileSystemPtr fs);
+
+// Returns the PARQUET:field_id of every column stored in a packed file, in
+// column order, reading only the file footer. Throws a SegcoreError carrying
+// the storage error code on a failed read, and DataFormatBroken when a column
+// has no valid field id.
+std::vector<int64_t>
+GetPackedFileColumnFieldIDs(const milvus_storage::ArrowFileSystemPtr& fs,
+                            const std::string& filepath);
 
 // Convert a single row of an Arrow ListArray to a protobuf ScalarField.
 // The element type is inferred from the ListArray's value type.

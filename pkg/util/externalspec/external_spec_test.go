@@ -18,16 +18,52 @@ package externalspec
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/pkg/v3/util/externalspec/specutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
+
+func TestMarshalCollectionSchemaNormalizesHistoricalSpec(t *testing.T) {
+	schema := &schemapb.CollectionSchema{
+		Name: "historical", ExternalSource: "s3://bucket/table",
+		ExternalSpec: `{"Format":"paimon-table","SNAPSHOT_ID":5320540205222981137,"SCAN_MODE":"data-split","CUSTOM":{"n":9007199254740993}}`,
+	}
+	original := proto.Clone(schema)
+	blob, err := MarshalCollectionSchema(schema)
+	require.NoError(t, err)
+	var nativeSchema schemapb.CollectionSchema
+	require.NoError(t, proto.Unmarshal(blob, &nativeSchema))
+	require.JSONEq(t, `{"format":"paimon-table","snapshot_id":"5320540205222981137","scan_mode":"data-split","CUSTOM":{"n":9007199254740993}}`, nativeSchema.GetExternalSpec())
+	require.Contains(t, nativeSchema.GetExternalSpec(), `9007199254740993`)
+	require.True(t, proto.Equal(original, schema), "shared schema must remain immutable")
+	nativeSchema.ExternalSpec = schema.ExternalSpec
+	require.True(t, proto.Equal(schema, &nativeSchema))
+
+	schema.ExternalSpec = `{"Scan_Mode":true}`
+	_, err = MarshalCollectionSchema(schema)
+	require.ErrorIs(t, err, merr.ErrParameterInvalid)
+
+	schema.ExternalSpec = ""
+	blob, err = MarshalCollectionSchema(schema)
+	require.NoError(t, err)
+	require.NoError(t, proto.Unmarshal(blob, &nativeSchema))
+	require.True(t, proto.Equal(schema, &nativeSchema))
+}
+
+func TestValidateSourceAndSpecLegacyKeys(t *testing.T) {
+	require.NoError(t, ValidateSourceAndSpec("s3://bucket/table",
+		`{"Format":"paimon-table","SNAPSHOT_ID":"7","Scan_Mode":"data-split","EXTFS":{"cloud_provider":"aws","region":"us-east-1","anonymous":"true"}}`))
+}
 
 func TestParseExternalSpec_Empty(t *testing.T) {
 	spec, err := ParseExternalSpec("")
@@ -49,7 +85,7 @@ func TestParseExternalSpec_DefaultFormat(t *testing.T) {
 }
 
 func TestParseExternalSpec_SupportedFormats(t *testing.T) {
-	for _, fmt := range []string{"parquet", "lance-table", "vortex", "iceberg-table", "milvus-table"} {
+	for _, fmt := range []string{"parquet", "lance-table", "vortex", "iceberg-table", "paimon-table", "milvus-table"} {
 		spec, err := ParseExternalSpec(`{"format":"` + fmt + `"}`)
 		require.NoError(t, err, "format %s should be supported", fmt)
 		assert.Equal(t, fmt, spec.Format)
@@ -687,22 +723,24 @@ func TestRedactCollectionSchemaForLog(t *testing.T) {
 }
 
 func TestExternalSpecMarshalJSON(t *testing.T) {
-	t.Run("snapshot_id_marshaled_as_string", func(t *testing.T) {
-		snapshotID := int64(5320540205222981137)
-		out, err := json.Marshal(ExternalSpec{
-			Format:     FormatIcebergTable,
-			Columns:    []string{"id", "vec"},
-			Extfs:      map[string]string{"cloud_provider": "aws"},
-			SnapshotID: &snapshotID,
-		})
-		require.NoError(t, err)
-		assert.Contains(t, string(out), `"snapshot_id":"5320540205222981137"`)
+	for _, format := range []string{FormatIcebergTable, FormatPaimonTable} {
+		t.Run(format+"_snapshot_id_marshaled_as_string", func(t *testing.T) {
+			snapshotID := int64(5320540205222981137)
+			out, err := json.Marshal(ExternalSpec{
+				Format:     format,
+				Columns:    []string{"id", "vec"},
+				Extfs:      map[string]string{"cloud_provider": "aws"},
+				SnapshotID: &snapshotID,
+			})
+			require.NoError(t, err)
+			assert.Contains(t, string(out), `"snapshot_id":"5320540205222981137"`)
 
-		var got map[string]any
-		require.NoError(t, json.Unmarshal(out, &got))
-		assert.Equal(t, FormatIcebergTable, got["format"])
-		assert.Equal(t, "5320540205222981137", got["snapshot_id"])
-	})
+			var got map[string]any
+			require.NoError(t, json.Unmarshal(out, &got))
+			assert.Equal(t, format, got["format"])
+			assert.Equal(t, "5320540205222981137", got["snapshot_id"])
+		})
+	}
 
 	t.Run("nil_snapshot_id_omitted", func(t *testing.T) {
 		out, err := json.Marshal(ExternalSpec{Format: FormatParquet})
@@ -710,6 +748,96 @@ func TestExternalSpecMarshalJSON(t *testing.T) {
 		assert.NotContains(t, string(out), "snapshot_id")
 		assert.Contains(t, string(out), `"format":"parquet"`)
 	})
+}
+
+func TestExplicitBucketMatchesExternalSource(t *testing.T) {
+	for _, tc := range []struct{ provider, source, bucket string }{
+		{"aws", "s3://events.prod/dir/file", "events.prod"},
+		{"aws", "s3://s3.us-west-2.amazonaws.com/events/dir/file", "events"},
+		{"aws", "s3://S3.US-WEST-2.AMAZONAWS.COM:443/events/dir/file", "events"},
+		{"aws", "aws://s3.cn-north-1.amazonaws.com.cn:8443/events/dir/file", "events"},
+		{"aliyun", "oss://events/dir/file", "events"},
+		{"aliyun", "oss://oss-cn-hangzhou-internal.aliyuncs.com/events/dir/file", "events"},
+		{"aliyun", "oss://oss-cn-hangzhou-internal.aliyuncs.com:443/events/dir/file", "events"},
+		{"tencent", "cos://events-1250000000/dir/file", "events-1250000000"},
+		{"tencent", "cos://cos.ap-guangzhou.myqcloud.com/events-1250000000/dir/file", "events-1250000000"},
+		{"tencent", "cos://cos.ap-guangzhou.myqcloud.com:8443/events-1250000000/dir/file", "events-1250000000"},
+		{"huawei", "obs://events/dir/file", "events"},
+		{"huawei", "obs://obs.cn-north-4.myhuaweicloud.com/events/dir/file", "events"},
+		{"gcp", "gs://events.prod/dir/file", "events.prod"},
+		{"gcp", "gcs://STORAGE.GOOGLEAPIS.COM:443/events%2Fdir/file", "events"},
+		{"gcp", "gs://storage.googleapis.com/%65vents/file", "events"},
+		{"azure", "azure://events/dir/file", "events"},
+		{"azure", "azure://core.chinacloudapi.cn/events/dir/file", "events"},
+		{"minio", "s3://custom.example:9000/events/dir/file", "events"},
+		{"", "minio://custom.example:9000/events/dir/file", "events"},
+	} {
+		t.Run(tc.source, func(t *testing.T) {
+			extfs := map[string]string{
+				ExtfsKeyAccessKeyID: "account", ExtfsKeyAccessKeyValue: "secret",
+				ExtfsKeyRegion: "us-west-2", ExtfsKeyBucketName: tc.bucket,
+			}
+			if tc.provider != "" {
+				extfs[ExtfsKeyCloudProvider] = tc.provider
+			}
+			require.NoError(t, ValidateSourceAndSpec(tc.source, marshalBrokerSpec(t, FormatParquet, extfs)))
+			extfs[ExtfsKeyBucketName] = "other"
+			err := ValidateSourceAndSpec(tc.source, marshalBrokerSpec(t, FormatParquet, extfs))
+			require.ErrorIs(t, err, merr.ErrParameterInvalid)
+			require.ErrorContains(t, err, "extfs.bucket_name must match the bucket in external_source")
+			require.NotContains(t, err.Error(), tc.source)
+		})
+	}
+}
+
+func TestS3ProviderEndpointBucketRoot(t *testing.T) {
+	for _, tc := range []struct{ provider, scheme, host string }{
+		{"aws", "s3", "s3.us-west-2.amazonaws.com"},
+		{"aliyun", "oss", "oss-cn-hangzhou-internal.aliyuncs.com"},
+		{"tencent", "cos", "cos.ap-guangzhou.myqcloud.com"},
+	} {
+		t.Run(tc.provider, func(t *testing.T) {
+			extfs := map[string]string{
+				ExtfsKeyCloudProvider: tc.provider, ExtfsKeyRegion: "us-west-2",
+				ExtfsKeyAccessKeyID: "account", ExtfsKeyAccessKeyValue: "secret",
+			}
+			for _, bucket := range []string{"", "events"} {
+				if bucket != "" {
+					extfs[ExtfsKeyBucketName] = bucket
+				}
+				spec := marshalBrokerSpec(t, FormatParquet, extfs)
+				require.NoError(t, ValidateSourceAndSpec(tc.scheme+"://events", spec))
+				for _, port := range []string{"", ":443"} {
+					root := tc.scheme + "://" + tc.host + port + "/events"
+					require.ErrorContains(t, ValidateSourceAndSpec(root, spec), "trailing slash")
+					require.NoError(t, ValidateSourceAndSpec(root+"/", spec))
+					require.NoError(t, ValidateSourceAndSpec(root+"%2F", spec))
+				}
+			}
+		})
+	}
+}
+
+func TestS3ProviderEndpointPort(t *testing.T) {
+	for _, tc := range []struct{ provider, endpoint string }{
+		{"aws", "s3://s3.us-west-2.amazonaws.com"},
+		{"aliyun", "oss://oss-cn-hangzhou-internal.aliyuncs.com"},
+		{"tencent", "cos://cos.ap-guangzhou.myqcloud.com"},
+	} {
+		t.Run(tc.provider, func(t *testing.T) {
+			spec := marshalBrokerSpec(t, FormatParquet, map[string]string{
+				ExtfsKeyCloudProvider: tc.provider, ExtfsKeyRegion: "us-west-2",
+				ExtfsKeyAccessKeyID: "account", ExtfsKeyAccessKeyValue: "secret",
+			})
+			for _, port := range []string{"443", "65535"} {
+				require.NoError(t, ValidateSourceAndSpec(tc.endpoint+":"+port+"/events/file", spec))
+			}
+			for _, port := range []string{"", "0", "65536", "abc"} {
+				err := ValidateSourceAndSpec(tc.endpoint+":"+port+"/events/file", spec)
+				require.ErrorIs(t, err, merr.ErrParameterInvalid, "port %q", port)
+			}
+		})
+	}
 }
 
 func TestIsCloudEndpointHost(t *testing.T) {
@@ -731,6 +859,8 @@ func TestIsCloudEndpointHost(t *testing.T) {
 
 	for _, host := range []string{
 		"localhost:9000",
+		"s3.us-west-2.amazonaws.com:443",
+		"storage.googleapis.com:443",
 		"bucket",
 		"amazonaws.com",
 	} {
@@ -759,7 +889,8 @@ func TestDeriveEndpoint(t *testing.T) {
 		{"azure_china", CloudProviderAzure, "china", "core.chinacloudapi.cn"},
 		{"azure_usgov", CloudProviderAzure, "usgov", "core.usgovcloudapi.net"},
 		{"azure_usdod", CloudProviderAzure, "usdod", "core.usgovcloudapi.net"},
-		{"azure_germany", CloudProviderAzure, "germany", "core.cloudapi.de"},
+		{"azure_germany_west_central", CloudProviderAzure, "germanywestcentral", "core.windows.net"},
+		{"azure_germany_north", CloudProviderAzure, "germanynorth", "core.windows.net"},
 		{"azure_public", CloudProviderAzure, "public", "core.windows.net"},
 		{"case_insensitive_provider", "AWS", "us-east-1", "https://s3.us-east-1.amazonaws.com"},
 		{"unknown_provider", "minio", "us-east-1", ""},
@@ -915,7 +1046,7 @@ func TestValidateExtfsComplete_Azure(t *testing.T) {
 			value string
 		}{
 			{name: "account_key", key: "access_key_value", value: "base64key"},
-			{name: "workload_identity", key: "use_iam", value: "true"},
+			{name: "broker_iam_with_target_fields", key: "use_iam", value: "true"},
 			{name: "role_arn", key: "role_arn", value: "arn:aws:iam::1:role/r"},
 			{name: "gcp_impersonation", key: "gcp_target_service_account", value: "sa@proj.iam.gserviceaccount.com"},
 			{name: "anonymous", key: "anonymous", value: "true"},
@@ -926,7 +1057,8 @@ func TestValidateExtfsComplete_Azure(t *testing.T) {
 				extfs[test.key] = test.value
 				err := ValidateExtfsComplete("azure://core.windows.net/container/path", extfs)
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), "credential modes are mutually exclusive")
+				require.ErrorIs(t, err, merr.ErrParameterInvalid)
+				assert.Contains(t, err.Error(), "conflicts with Azure credential broker")
 			})
 		}
 	})
@@ -942,6 +1074,7 @@ func TestValidateExtfsComplete_Azure(t *testing.T) {
 
 	t.Run("azure_workload_identity", func(t *testing.T) {
 		err := ValidateExtfsComplete("azure://core.windows.net/container/path", map[string]string{
+			"access_key_id":  "mystorageacct",
 			"use_iam":        "true",
 			"cloud_provider": "azure",
 		})
@@ -984,40 +1117,296 @@ func TestValidateExtfsComplete_Azure(t *testing.T) {
 			"cloud_provider":             "azure",
 		})
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "only valid for GCP")
+		assert.Contains(t, err.Error(), "requires cloud_provider=gcp")
 	})
+}
+
+func TestValidateSourceAndSpec_AzureWorkloadIdentity(t *testing.T) {
+	for _, format := range []string{FormatParquet, FormatIcebergTable} {
+		t.Run(format, func(t *testing.T) {
+			for _, source := range []string{
+				"azure://core.windows.net/container/path",
+				"azure://container/path",
+			} {
+				t.Run(source, func(t *testing.T) {
+					spec := `{"format":"` + format + `","extfs":{"cloud_provider":"azure","region":"public","use_iam":"true","access_key_id":"mystorageacct"}}`
+					require.NoError(t, ValidateSourceAndSpec(source, spec))
+				})
+			}
+		})
+	}
+
+	tests := []struct {
+		name   string
+		extfs  map[string]string
+		errMsg string
+	}{
+		{
+			name:   "missing_account_name",
+			extfs:  map[string]string{"cloud_provider": "azure", "use_iam": "true"},
+			errMsg: "extfs.access_key_id is required as the storage account name for Azure workload identity",
+		},
+		{
+			name:   "key_without_account_name",
+			extfs:  map[string]string{"cloud_provider": "azure", "use_iam": "true", "access_key_value": "key"},
+			errMsg: "extfs.access_key_id is required as the storage account name for Azure workload identity",
+		},
+		{
+			name:   "shared_key_conflicts_with_workload_identity",
+			extfs:  map[string]string{"cloud_provider": "azure", "use_iam": "true", "access_key_id": "mystorageacct", "access_key_value": "key"},
+			errMsg: "credential modes are mutually exclusive",
+		},
+		{
+			name:   "anonymous_conflicts_with_workload_identity",
+			extfs:  map[string]string{"cloud_provider": "azure", "use_iam": "true", "access_key_id": "mystorageacct", "anonymous": "true"},
+			errMsg: "credential modes are mutually exclusive",
+		},
+		{
+			name:   "account_name_without_iam",
+			extfs:  map[string]string{"cloud_provider": "azure", "access_key_id": "mystorageacct"},
+			errMsg: "must be set together",
+		},
+		{
+			name:   "account_name_with_iam_disabled",
+			extfs:  map[string]string{"cloud_provider": "azure", "use_iam": "false", "access_key_id": "mystorageacct"},
+			errMsg: "must be set together",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(ExternalSpec{Format: FormatParquet, Extfs: tt.extfs})
+			require.NoError(t, err)
+			require.ErrorContains(t, ValidateSourceAndSpec("azure://core.windows.net/container/path", string(data)), tt.errMsg)
+		})
+	}
+
+	// Account names become part of the Blob/DFS host, so URL delimiters and
+	// encoded or non-ASCII variants must be rejected before native I/O.
+	for _, account := range []string{
+		"ab", strings.Repeat("a", 25), "Storageaccount", "evil.example.com/",
+		"account?query", "account#fragment", "user@account", "account:443",
+		"account name", "account.name", "account-name", "account_name",
+		"account%2fpath", "account\\path", "account\n", "account\x00", "accöunt",
+	} {
+		t.Run("invalid_account/"+account, func(t *testing.T) {
+			for _, format := range []string{FormatParquet, FormatIcebergTable} {
+				for _, source := range []string{"azure://core.windows.net/container/path", "azure://container/path"} {
+					data, err := json.Marshal(ExternalSpec{Format: format, Extfs: map[string]string{
+						"cloud_provider": "azure", "region": "public", "use_iam": "true", "access_key_id": account,
+					}})
+					require.NoError(t, err)
+					err = ValidateSourceAndSpec(source, string(data))
+					require.ErrorIs(t, err, merr.ErrParameterInvalid)
+					require.ErrorContains(t, err, "3-24 lowercase letters or digits")
+				}
+			}
+		})
+	}
+
+	// Other providers still require paired access keys even with IAM enabled.
+	for _, provider := range []string{CloudProviderAWS, CloudProviderGCP, CloudProviderAliyun, CloudProviderTencent, CloudProviderHuawei, CloudProviderMinIO} {
+		t.Run(provider, func(t *testing.T) {
+			spec := `{"format":"parquet","extfs":{"cloud_provider":"` + provider + `","region":"us-east-1","use_iam":"true","access_key_id":"account"}}`
+			require.ErrorContains(t, ValidateSourceAndSpec("s3://bucket/path", spec), "must be set together")
+		})
+	}
+}
+
+func TestValidateExtfsComplete_AzureAccountName(t *testing.T) {
+	for mode, credentials := range map[string]map[string]string{
+		"iam":        {"use_iam": "true"},
+		"shared_key": {"access_key_value": "key"},
+		"broker": { //nolint:gosec // synthetic test values, not credentials
+			"azure_client_id": "client", "azure_tenant_id": "tenant",
+			"credential_endpoint": "https://broker.example.com/v1/credentials/sas",
+		},
+	} {
+		t.Run(mode, func(t *testing.T) {
+			extfs := map[string]string{"cloud_provider": "azure", "region": "public"}
+			for key, value := range credentials {
+				extfs[key] = value
+			}
+			for _, account := range []string{"abc", "123", "storage123", strings.Repeat("a", 24)} {
+				extfs["access_key_id"] = account
+				require.NoError(t, ValidateExtfsComplete("azure://core.windows.net/container/path", extfs), account)
+			}
+			for _, account := range []string{"ab", strings.Repeat("a", 25), "Storageaccount", "evil.example.com/"} {
+				extfs["access_key_id"] = account
+				err := ValidateExtfsComplete("azure://core.windows.net/container/path", extfs)
+				require.ErrorIs(t, err, merr.ErrParameterInvalid, account)
+				require.ErrorContains(t, err, "3-24 lowercase letters or digits")
+			}
+		})
+	}
+
+	// The Azure naming rule must not restrict access key IDs for other providers.
+	require.NoError(t, ValidateExtfsComplete("s3://bucket/path", map[string]string{
+		"cloud_provider": "aws", "region": "us-east-1",
+		"access_key_id": "AKIA_EXAMPLE", "access_key_value": "key",
+	}))
 }
 
 func TestParseExternalSpec_SnapshotID(t *testing.T) {
-	t.Run("string_form_accepted", func(t *testing.T) {
-		spec, err := ParseExternalSpec(`{"format":"iceberg-table","snapshot_id":"5320540205222981137"}`)
-		require.NoError(t, err)
-		require.NotNil(t, spec.SnapshotID)
-		assert.Equal(t, int64(5320540205222981137), *spec.SnapshotID)
-	})
+	for _, format := range []string{FormatIcebergTable, FormatPaimonTable} {
+		t.Run(format, func(t *testing.T) {
+			t.Run("string_form_accepted", func(t *testing.T) {
+				spec, err := ParseExternalSpec(fmt.Sprintf(`{"format":%q,"snapshot_id":"5320540205222981137"}`, format))
+				require.NoError(t, err)
+				require.NotNil(t, spec.SnapshotID)
+				assert.Equal(t, int64(5320540205222981137), *spec.SnapshotID)
+			})
 
-	t.Run("bare_number_accepted", func(t *testing.T) {
-		spec, err := ParseExternalSpec(`{"format":"iceberg-table","snapshot_id":5320540205222981137}`)
-		require.NoError(t, err)
-		require.NotNil(t, spec.SnapshotID)
-		assert.Equal(t, int64(5320540205222981137), *spec.SnapshotID)
-	})
+			t.Run("bare_number_accepted", func(t *testing.T) {
+				spec, err := ParseExternalSpec(fmt.Sprintf(`{"format":%q,"snapshot_id":5320540205222981137}`, format))
+				require.NoError(t, err)
+				require.NotNil(t, spec.SnapshotID)
+				assert.Equal(t, int64(5320540205222981137), *spec.SnapshotID)
+			})
 
-	t.Run("non_numeric_string_rejected", func(t *testing.T) {
-		_, err := ParseExternalSpec(`{"format":"iceberg-table","snapshot_id":"abc"}`)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid external spec JSON")
-	})
+			t.Run("non_numeric_string_rejected", func(t *testing.T) {
+				_, err := ParseExternalSpec(fmt.Sprintf(`{"format":%q,"snapshot_id":"abc"}`, format))
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "invalid external spec JSON")
+			})
 
-	t.Run("omitted_yields_nil", func(t *testing.T) {
-		spec, err := ParseExternalSpec(`{"format":"iceberg-table"}`)
-		require.NoError(t, err)
-		assert.Nil(t, spec.SnapshotID)
-	})
+			t.Run("omitted_yields_nil", func(t *testing.T) {
+				spec, err := ParseExternalSpec(fmt.Sprintf(`{"format":%q}`, format))
+				require.NoError(t, err)
+				assert.Nil(t, spec.SnapshotID)
+			})
+		})
+	}
 }
 
 func TestRedactExternalSpec_SnapshotIDNumber(t *testing.T) {
-	redacted := RedactExternalSpec(`{"format":"iceberg-table","snapshot_id":5320540205222981137}`)
-	assert.Contains(t, redacted, `"snapshot_id":"5320540205222981137"`)
-	assert.NotEqual(t, "<invalid spec>", redacted)
+	for _, format := range []string{FormatIcebergTable, FormatPaimonTable} {
+		redacted := RedactExternalSpec(fmt.Sprintf(`{"format":%q,"snapshot_id":5320540205222981137}`, format))
+		assert.Contains(t, redacted, `"snapshot_id":"5320540205222981137"`)
+		assert.NotEqual(t, "<invalid spec>", redacted)
+	}
+}
+
+func TestCredentialBrokerModesAndPolicy(t *testing.T) {
+	const endpoint = "https://broker.example.com/v1/credentials/assume-role"
+	policy, err := specutil.NewBrokerPolicy([]string{endpoint})
+	require.NoError(t, err)
+	for _, iam := range []string{"true", "false"} {
+		missingProvider := map[string]string{
+			"endpoint_url": "https://s3.us-west-2.amazonaws.com", "region": "us-west-2",
+			"credential_endpoint": endpoint, "use_iam": iam,
+		}
+		if iam == "false" {
+			missingProvider["role_arn"] = "role"
+		}
+		require.ErrorContains(t, ValidateExtfsComplete("s3://bucket/key", missingProvider), "cloud_provider is required for credential broker")
+	}
+
+	for _, cloud := range []string{"aws", "aliyun", "tencent"} {
+		t.Run(cloud, func(t *testing.T) {
+			extfs := map[string]string{"cloud_provider": cloud, "region": "test-region", "credential_endpoint": endpoint, "use_iam": "true"}
+			for _, iam := range []bool{true, false} {
+				extfs["use_iam"] = strconv.FormatBool(iam)
+				if !iam {
+					extfs["role_arn"] = "role"
+				} else {
+					delete(extfs, "role_arn")
+				}
+				data, err := json.Marshal(ExternalSpec{Format: FormatParquet, Extfs: extfs})
+				require.NoError(t, err)
+				require.NoError(t, ValidateSourceAndSpec("s3://bucket/key", string(data), policy))
+				require.Error(t, ValidateSourceAndSpec("s3://bucket/key", string(data)))
+			}
+			extfs["use_iam"] = "true"
+			delete(extfs, "role_arn")
+			for _, key := range []string{"role_arn", "external_id", "session_name", "access_key_id", "access_key_value", "gcp_target_service_account", "azure_client_id", "azure_tenant_id"} {
+				extfs[key] = "unused"
+				require.Error(t, ValidateExtfsComplete("s3://bucket/key", extfs), key)
+				delete(extfs, key)
+			}
+			extfs["anonymous"] = "true"
+			require.Error(t, ValidateExtfsComplete("s3://bucket/key", extfs))
+			delete(extfs, "anonymous")
+			for _, duration := range []string{"899", "3601", "bad", "2147483648"} {
+				extfs["load_frequency"] = duration
+				require.Error(t, ValidateExtfsComplete("s3://bucket/key", extfs))
+			}
+			for _, duration := range []string{"900", "3600", ""} {
+				extfs["load_frequency"] = duration
+				require.NoError(t, ValidateExtfsComplete("s3://bucket/key", extfs))
+			}
+			delete(extfs, "region")
+			require.Error(t, ValidateExtfsComplete("s3://bucket/key", extfs))
+			extfs["region"] = "region"
+			extfs["use_iam"] = "false"
+			require.Error(t, ValidateExtfsComplete("s3://bucket/key", extfs))
+		})
+	}
+	for _, cloud := range []string{"huawei", "minio"} {
+		require.Error(t, ValidateExtfsComplete("s3://bucket/key", map[string]string{"cloud_provider": cloud, "region": "r", "use_iam": "true", "credential_endpoint": endpoint}))
+	}
+	extfs := map[string]string{"cloud_provider": "azure", "access_key_id": "account", "region": "westus3", "azure_client_id": "client", "azure_tenant_id": "tenant", "azure_credential_endpoint": endpoint}
+	for _, legacy := range []bool{true, false} {
+		if !legacy {
+			delete(extfs, "azure_credential_endpoint")
+			extfs["credential_endpoint"] = endpoint
+		}
+		data, err := json.Marshal(ExternalSpec{Format: FormatParquet, Extfs: extfs})
+		require.NoError(t, err)
+		require.NoError(t, ValidateSourceAndSpec("azure://core.windows.net/container/path", string(data), policy))
+		require.Error(t, ValidateSourceAndSpec("azure://core.windows.net/container/path", string(data)))
+	}
+}
+
+func TestMilvusTableCredentialBroker(t *testing.T) {
+	const endpoint = "https://broker.example.com/token?scope=a,b&next=https://other.example.com/token"
+	policy, err := specutil.NewBrokerPolicy([]string{endpoint})
+	require.NoError(t, err)
+	for _, cloud := range []string{"aws", "aliyun", "tencent"} {
+		for _, iam := range []bool{true, false} {
+			t.Run(cloud+"/"+strconv.FormatBool(iam), func(t *testing.T) {
+				extfs := map[string]string{"cloud_provider": cloud, "region": "test-region", "use_iam": strconv.FormatBool(iam), "credential_endpoint": endpoint}
+				if !iam {
+					extfs["role_arn"] = "target-role"
+				}
+				data, err := json.Marshal(ExternalSpec{Format: FormatMilvusTable, Extfs: extfs})
+				require.NoError(t, err)
+				require.NoError(t, ValidateSourceAndSpec("s3://bucket/snapshot.json", string(data), policy))
+				require.Error(t, ValidateSourceAndSpec("s3://bucket/snapshot.json", string(data)))
+				extfs["credential_endpoint"] = endpoint + "&extra=1"
+				data, err = json.Marshal(ExternalSpec{Format: FormatMilvusTable, Extfs: extfs})
+				require.NoError(t, err)
+				require.Error(t, ValidateSourceAndSpec("s3://bucket/snapshot.json", string(data), policy))
+			})
+		}
+	}
+}
+
+func TestAzureLegacyBrokerQuery(t *testing.T) {
+	endpoint := "https://broker.example.com/token?api-version=1&scope=a%2Fb+x"
+	policy, err := specutil.NewBrokerPolicy([]string{endpoint})
+	require.NoError(t, err)
+	extfs := map[string]string{"cloud_provider": "azure", "access_key_id": "account", "region": "westus3", "azure_client_id": "client", "azure_tenant_id": "tenant", "azure_credential_endpoint": endpoint}
+	validate := func() error {
+		data, err := json.Marshal(ExternalSpec{Format: FormatParquet, Extfs: extfs})
+		require.NoError(t, err)
+		return ValidateSourceAndSpec("azure://core.windows.net/container/path", string(data), policy)
+	}
+	require.NoError(t, validate())
+	require.Equal(t, endpoint, extfs["azure_credential_endpoint"])
+	extfs["credential_endpoint"] = endpoint
+	require.NoError(t, validate())
+	delete(extfs, "credential_endpoint")
+	for _, denied := range []string{
+		"https://broker.example.com/token",
+		endpoint + "&extra=1",
+		"https://broker.example.com/token?api-version=2&scope=a%2Fb+x",
+		"https://broker.example.com/token?scope=a%2Fb+x&api-version=1",
+		"https://broker.example.com/token?api-version=1&scope=a%2fb+x",
+	} {
+		extfs["azure_credential_endpoint"] = denied
+		require.Error(t, validate(), denied)
+	}
+	extfs["azure_credential_endpoint"] = endpoint
+	extfs["credential_endpoint"] = endpoint + "&extra=1"
+	require.Error(t, validate())
 }

@@ -287,7 +287,7 @@ message StreamingNodeAssignment {
 message DeliverPolicy {
     oneof policy {
         google.protobuf.Empty all    = 1;  // deliver all messages.
-        google.protobuf.Empty latest = 2;  // deliver the latest message.
+        google.protobuf.Empty latest = 2 [deprecated = true]; // Unsupported; use all, start_from or start_after.
         common.MessageID start_from =
             3;  // deliver message from this message id. [startFrom, ...]
         common.MessageID start_after =
@@ -343,6 +343,7 @@ enum StreamingCode {
     STREAMING_CODE_SCHEMA_VERSION_MISMATCH = 15; // wrong schema version
     STREAMING_CODE_RATE_LIMIT_REJECTED    = 16; // rate limit rejected
     STREAMING_CODE_PARTIAL_UPDATE_RETRYABLE = 17; // Proxy must re-query, merge, and retry.
+    STREAMING_CODE_TRANSACTION_NOT_FOUND = 18; // Transaction history is unavailable; does not authorize replay.
     STREAMING_CODE_UNKNOWN                   = 999;  // unknown error
 }
 
@@ -381,6 +382,9 @@ service StreamingNodeHandlerService {
     // Closing one subscription leaves the others active; closing the stream
     // releases all subscriptions. Reconnection and resubscription are client-owned.
     rpc SubscribeTransform(stream TransformRequest) returns (stream TransformResponse) {};
+
+    // Latest replica snapshots, multiplexed on one validated PChannel owner.
+    rpc SubscribeReplicas(stream ReplicaWatchRequest) returns (stream ReplicaWatchResponse) {};
 
     // RunAnalyzer analyzes text using inline parameters on any ready StreamingNode
     // or a collection field's current analyzer on its PChannel owner. Neither mode
@@ -857,9 +861,11 @@ message VChannelMeta {
     VChannelState state = 2; // vchannel state.
     CollectionInfoOfVChannel collection_info = 3; // if the channel is belong to a collection, the collection info will be setup.
     uint64 checkpoint_time_tick = 4; // The timetick of checkpoint, the meta already see the message at this timetick.
+    uint64 transform_materialized_time_tick = 5; // The L0 materialization frontier of the transform consumer. Delete entries through this timetick have been emitted as L0 output.
     // Oldest DataVersion reconstructible after segment recovery metadata cleanup.
     view.DataVersion segment_data_version_summary = 6;
-    uint64 transform_materialized_time_tick = 5; // The L0 materialization frontier of the transform consumer. Delete entries through this timetick have been emitted as L0 output.
+    // Immutable per-VChannel collection creation TimeTick.
+    uint64 create_collection_time_tick = 7;
 }
 
 // CollectionInfoOfVChannel is the collection info in vchannel.
@@ -979,7 +985,7 @@ message WALCheckpoint {
     // cover a newer prefix than the global replay position.
     common.ReplicateConfiguration replicate_config = 4;
     common.ReplicateCheckpoint replicate_checkpoint = 5;
-    AlterWALState alter_wal_state = 6;
+    AlterWALState alter_wal_state = 6 [deprecated = true];
     // Term of the publisher that last advanced this checkpoint. A publisher of
     // an older term must never advance it past a newer takeover: WAL
     // truncation follows the checkpoint, and the records it would remove are
@@ -997,16 +1003,20 @@ message PChannelRecoveryControlMeta {
     uint64 checkpoint_time_tick = 1; // Complete applied control effects through this timetick.
     common.ReplicateConfiguration replicate_config = 2;
     common.ReplicateCheckpoint replicate_checkpoint = 3;
-    AlterWALState alter_wal_state = 4;
+    AlterWALState alter_wal_state = 4 [deprecated = true];
 }
 
+// Deprecated: WAL switches are recovered from durable log links, not stages.
 enum AlterWALStage{
+    option deprecated = true;
     NONE = 0;
     FLUSHING = 1;
     ADVANCE_CHECKPOINT = 2;
 }
 
+// Deprecated: retained only for decoding old metadata. Finish legacy switches before upgrade.
 message AlterWALState {
+    option deprecated = true;
     common.WALName  target_wal_name = 1;
     uint64 time_tick = 2;
     map<string, string> configs = 3;
@@ -1032,12 +1042,22 @@ message ReplicatePChannelMeta {
 // native gRPC errors; analyzer failures are carried by the response Status.
 message StreamingNodeRunAnalyzerRequest {
     repeated bytes placeholder = 1;
-    bool with_detail = 2;
-    bool with_hash = 3;
     oneof source {
-        StreamingInlineAnalyzer inline_analyzer = 4;
-        StreamingFieldAnalyzer field_analyzer = 5;
+        StreamingInlineAnalyzer inline_analyzer = 2;
+        StreamingFieldAnalyzer field_analyzer = 3;
     }
+    oneof operation {
+        TokenizeOptions tokenize = 4;
+        PhraseMatchOptions phrase_match = 5;
+        HighlightOptions highlight = 6;
+    }
+}
+message TokenizeOptions {
+    bool with_detail = 1;
+    bool with_hash = 2;
+}
+message PhraseMatchOptions {
+    string query_text = 1;
 }
 message StreamingInlineAnalyzer {
     string analyzer_params = 1;
@@ -1046,14 +1066,26 @@ message StreamingFieldAnalyzer {
     int64 collection_id = 1;
     string vchannel = 2;
     int64 field_id = 3;
-    reserved 4;
-    reserved "schema_version";
+    // Internal rendering binds the search schema, including version zero.
+    // Omitted for standalone analyzer requests, which use the WAL write schema.
+    optional int32 read_schema_version = 4;
     repeated string analyzer_names = 5;
     PChannelInfo pchannel = 6;
 }
 message StreamingNodeRunAnalyzerResponse {
-    repeated milvus.AnalyzerResult results = 1;
+    oneof result {
+        TokenizeResult tokenize = 1;
+        PhraseMatchResult phrase_match = 3;
+        HighlightResult highlight = 4;
+    }
     common.Status status = 2;
+}
+message TokenizeResult {
+    repeated milvus.AnalyzerResult results = 1;
+}
+message PhraseMatchResult {
+    repeated bool is_match = 1;
+    repeated int64 slops = 2;
 }
 
 message CreateTransformStreamRequest {
@@ -1069,13 +1101,13 @@ message TransformRequest {
 }
 
 message CreateTransformSubscriptionRequest {
-    uint64 end_time_tick = 4;
     int64 subscription_id = 1;
     string vchannel = 2;
 
     // Exclusive. Server sends TransformLog entries with time_tick >
     // start_after_time_tick.
     uint64 start_after_time_tick = 3;
+    uint64 end_time_tick = 4;
 }
 
 message CloseTransformSubscriptionRequest {
@@ -1102,13 +1134,13 @@ message TransformResponse {
 message CreateTransformStreamResponse {}
 
 message CreateTransformSubscriptionResponse {
-    uint64 end_time_tick = 5;
     int64 subscription_id = 1;
     string vchannel = 2;
     uint64 start_after_time_tick = 3;
 
     // Current SN TransformLog truncation cursor.
     uint64 truncate_time_tick = 4;
+    uint64 end_time_tick = 5;
 }
 
 message CloseTransformSubscriptionResponse {
@@ -1158,9 +1190,6 @@ message StreamingNodeGetCollectionSchemaRequest {
 
 message StreamingNodeGetCollectionSchemaResponse {
     schema.CollectionSchema schema = 1;
-    // Zero means the exact effective boundary is unknown for a legacy schema
-    // baseline, not proof that the channel has crossed a schema boundary.
-    uint64 effective_time_tick = 2;
 }
 
 // Analyzer validation is collection-independent. Business failures use Status;
@@ -1178,4 +1207,90 @@ message StreamingNodeValidateAnalyzerRequest {
 message StreamingNodeValidateAnalyzerResponse {
     repeated int64 resource_ids = 1;
     common.Status status = 2;
+}
+
+// Sent in creation metadata, before any subscription request.
+message CreateReplicaWatchStreamRequest {
+    PChannelInfo pchannel = 1;
+}
+
+message ReplicaWatchRequest {
+    oneof request {
+        CreateReplicaWatchSubscriptionRequest create = 1;
+        CloseReplicaWatchSubscriptionRequest close_subscription = 2;
+        CloseReplicaWatchStreamRequest close_stream = 3;
+    }
+}
+
+message CreateReplicaWatchSubscriptionRequest {
+    int64 subscription_id = 1;
+    string vchannel = 2;
+}
+
+message CloseReplicaWatchSubscriptionRequest {
+    int64 subscription_id = 1;
+}
+
+message CloseReplicaWatchStreamRequest {}
+
+message ReplicaWatchResponse {
+    oneof response {
+        CreateReplicaWatchSubscriptionResponse create = 1;
+        ReplicaWatchSnapshot snapshot = 2;
+        ReplicaWatchSubscriptionError subscription_error = 3;
+        CloseReplicaWatchSubscriptionResponse close_subscription = 4;
+        CloseReplicaWatchStreamResponse close_stream = 5;
+        // Acknowledges owner validation before subscription requests are read.
+        CreateReplicaWatchStreamResponse create_stream = 6;
+    }
+}
+
+message CreateReplicaWatchStreamResponse {}
+
+message CreateReplicaWatchSubscriptionResponse {
+    int64 subscription_id = 1;
+    string vchannel = 2;
+}
+
+message ReplicaWatchSnapshot {
+    int64 subscription_id = 1;
+    view.VChannelReplicas snapshot = 2;
+}
+
+message ReplicaWatchSubscriptionError {
+    int64 subscription_id = 1;
+    string vchannel = 2;
+    StreamingError error = 3;
+}
+
+message CloseReplicaWatchSubscriptionResponse {
+    int64 subscription_id = 1;
+    string vchannel = 2;
+}
+
+message CloseReplicaWatchStreamResponse {}
+
+// Texts are in placeholder order: search texts, query texts, then corpus texts.
+// Analyzer selection belongs to source, including per-text analyzer names.
+message HighlightOptions {
+    int64 search_text_num = 1;
+    int64 corpus_text_num = 2;
+    // All extra query texts currently use lexical token matching.
+    int64 query_text_num = 3;
+    int64 fragment_size = 4;
+    int64 fragment_offset = 5;
+    int64 num_of_fragments = 6;
+    repeated int64 topks = 7;
+}
+message HighlightFragment {
+    // Rune offsets in the original corpus text, not byte offsets.
+    int64 start_offset = 1;
+    int64 end_offset = 2;
+    repeated int64 offsets = 3;
+}
+message HighlightRowResult {
+    repeated HighlightFragment fragments = 1;
+}
+message HighlightResult {
+    repeated HighlightRowResult results = 1;
 }

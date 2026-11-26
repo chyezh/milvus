@@ -113,6 +113,24 @@ type component interface {
 	Stop() error
 }
 
+// stopOnceComponent runs the wrapped component's Stop at most once. A component
+// can be stopped by the /management/stop API (e.g. the coordinator hand-off of a
+// rolling upgrade) and again by the shutdown sequence when the process receives
+// SIGTERM; component Stop implementations are not idempotent. A concurrent
+// second caller blocks until the first Stop returns and gets the same error.
+type stopOnceComponent struct {
+	component
+	once sync.Once
+	err  error
+}
+
+func (c *stopOnceComponent) Stop() error {
+	c.once.Do(func() {
+		c.err = c.component.Stop()
+	})
+	return c.err
+}
+
 func cleanLocalDir(path string) {
 	_, statErr := os.Stat(path)
 	// path exist, but stat error
@@ -292,7 +310,7 @@ func (mr *MilvusRoles) waitForAllComponentsReady(cancel context.CancelFunc, comp
 				mlog.Warn(context.TODO(), "component is not ready before closing", mlog.String("role", role), mlog.Err(err))
 				return nil, err
 			} else {
-				componentMap[role] = component
+				componentMap[role] = &stopOnceComponent{component: component}
 				mlog.Info(context.TODO(), "component is ready", mlog.String("role", role))
 			}
 		}
@@ -477,6 +495,9 @@ func (mr *MilvusRoles) Run() {
 		paramtable.Init()
 		paramtable.SetRole(mr.ServerType)
 	}
+	metrics.SetCollectionLevelMetricsMode(paramtable.Get().CommonCfg.CollectionLevelMetricsMode.GetValue())
+	mlog.Info(context.TODO(), "configured collection and VChannel metrics",
+		mlog.String("mode", metrics.CollectionLevelMetricsMode()))
 
 	// Persist immutable configurations at startup, such as mqType paramItem
 	if (mr.EnableRootCoord && mr.EnableDataCoord && mr.EnableQueryCoord) || mr.EnableMixCoord {

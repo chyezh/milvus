@@ -1,578 +1,246 @@
 package loadmgr
 
 import (
-	"context"
-	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
-	"github.com/bytedance/mockey"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
-	catalogkv "github.com/milvus-io/milvus/internal/metastore/kv/querycoord"
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
-// expectCatalogCalls patches only persistence boundaries and verifies their use.
-func expectCatalogCalls(t *testing.T, builder *mockey.MockBuilder, calls int) {
+func newTestStore(t *testing.T) (*LoadConfigStore, *versionedTestHooks) {
 	t.Helper()
-	patch := builder.Build()
-	t.Cleanup(func() { assert.Equal(t, calls, patch.Times()); patch.UnPatch() })
-}
+	hooks := new(versionedTestHooks)
+	deps := versionedTestDependencies(t, hooks)
 
-func newTestStore(t *testing.T) (*LoadConfigStore, catalogkv.Catalog) {
-	t.Helper()
-	catalog := catalogkv.NewCatalog(nil)
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.GetCollections).Return(nil, nil), 1)
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.GetPartitions).Return(map[int64][]*querypb.PartitionLoadInfo{}, nil), 1)
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.GetReplicas).Return(nil, nil), 1)
-
-	store, err := RecoverLoadConfigStore(context.Background(), catalog)
+	store, err := RecoverLoadConfigStore(t.Context(), deps)
 	require.NoError(t, err)
-	return store, catalog
-}
-
-func TestLoadConfigGetPreservesConfigVersionDuringPut(t *testing.T) {
-	store, _ := newTestStore(t)
-	const updates = 200
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.SaveCollection).Return(nil), updates+1)
-	put := func(revision int64) error {
-		return store.Put(context.Background(), &LoadConfig{
-			CollectionID: 1,
-			LoadFields:   []*messagespb.LoadFieldConfig{{FieldId: 100 + revision}},
-		})
-	}
-	require.NoError(t, put(1))
-	// Expose a write between individual getters even with a single test CPU.
-	// Get must read the config and version together, rather than combine getters.
-	var getConfig func(*LoadConfigStore, int64) *LoadConfig
-	getter := mockey.Mock((*LoadConfigStore).GetConfig).Origin(&getConfig).To(func(s *LoadConfigStore, id int64) *LoadConfig {
-		config := getConfig(s, id)
-		runtime.Gosched()
-		return config
-	}).Build()
-	defer getter.UnPatch()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	initialVersion := store.Get(1).ConfigVersion
-	start := make(chan struct{})
-	done := make(chan struct{})
-	var writeErr error
-	go func() {
-		defer close(done)
-		<-start
-		for revision := int64(2); revision <= updates+1; revision++ {
-			if writeErr = ctx.Err(); writeErr != nil {
-				return
-			}
-			if writeErr = put(revision); writeErr != nil {
-				return
-			}
-			runtime.Gosched()
-		}
-	}()
-	close(start)
-	defer func() { cancel(); <-done }()
-
-reading:
-	for {
-		entry := store.Get(1)
-		assert.Equal(t, loadInfoVersion(entry.Config), entry.ConfigVersion)
-		select {
-		case <-done:
-			require.NoError(t, writeErr)
-			break reading
-		case <-ctx.Done():
-			t.Fatal("concurrent config updates did not finish")
-		default:
-			runtime.Gosched()
-		}
-	}
-	final := store.Get(1)
-	require.NotEqual(t, initialVersion, final.ConfigVersion)
-	require.EqualValues(t, 100+updates+1, final.Config.LoadFields[0].FieldId)
-	require.Equal(t, loadInfoVersion(final.Config), final.ConfigVersion)
-
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.ReleaseReplicas).To(func(_ context.Context, collection int64) error {
-		require.EqualValues(t, 1, collection)
-		return nil
-	}), 1)
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.ReleaseCollection).To(func(_ context.Context, collection int64) error {
-		require.EqualValues(t, 1, collection)
-		return nil
-	}), 1)
-	require.NoError(t, store.Remove(context.Background(), 1))
-	entry := store.Get(1)
-	assert.Nil(t, entry.Config)
-	assert.Zero(t, entry.ConfigVersion)
+	return store, hooks
 }
 
 func sampleConfig() *LoadConfig {
 	return &LoadConfig{
-		DbID:         1,
-		CollectionID: 100,
-		PartitionIDs: []int64{10, 20},
-		LoadFields: []*messagespb.LoadFieldConfig{
-			{FieldId: 200, IndexId: 300},
-		},
-		Replicas: []*ReplicaAssignment{
-			{ReplicaID: 1000, ResourceGroup: "rg1", Priority: commonpb.LoadPriority_HIGH},
-			{ReplicaID: 1001, ResourceGroup: "rg1", Priority: commonpb.LoadPriority_HIGH},
-		},
+		DbID: 1, CollectionID: 100, PartitionIDs: []int64{10, 20},
+		RequiredFields: []*viewpb.LoadFieldConfig{{FieldId: 200}},
+		LoadFields:     []*viewpb.LoadFieldConfig{{FieldId: 200}},
+		Replicas:       []*ReplicaAssignment{{ReplicaID: 1000, ResourceGroup: "rg1", Priority: commonpb.LoadPriority_HIGH}},
 	}
 }
 
-// expectFullSave sets expectations for a Put that writes the whole config.
-// Call counts preserve the persistence assertions independently of the store.
-func expectFullSave(t *testing.T, catalog catalogkv.Catalog, times int) {
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.SaveCollection).Return(nil), times)
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.SaveReplica).Return(nil), times)
-}
-
-func TestPut_NewCollection(t *testing.T) {
-	store, catalog := newTestStore(t)
+func TestLoadConfigImmutablePublicationAndRecovery(t *testing.T) {
+	deps := versionedTestDependencies(t)
+	store, err := RecoverLoadConfigStore(t.Context(), deps)
+	require.NoError(t, err)
 	cfg := sampleConfig()
-	before := store.Snapshot()
-
-	expectFullSave(t, catalog, 1)
-
-	require.NoError(t, store.Put(context.Background(), cfg))
-	after := store.Snapshot()
-	require.NotSame(t, before, after)
-
-	got := after.ConfigsMap()[cfg.CollectionID]
-	require.NotNil(t, got)
-	assert.Equal(t, cfg.CollectionID, got.CollectionID)
-	assert.ElementsMatch(t, cfg.PartitionIDs, got.PartitionIDs)
-	assert.Len(t, got.Replicas, 2)
+	require.NoError(t, store.Put(t.Context(), cfg))
+	entry := store.Get(100)
+	require.Equal(t, entry.Config.Version, entry.ConfigVersion)
+	require.NotZero(t, entry.ConfigVersion)
+	cfg.PartitionIDs[0] = 999
+	cfg.Replicas[0].ResourceGroup = "mutation"
+	require.Equal(t, []int64{10, 20}, entry.Config.PartitionIDs)
+	require.Equal(t, "rg1", entry.Config.Replicas[0].ResourceGroup)
+	recovered, err := RecoverLoadConfigStore(t.Context(), deps)
+	require.NoError(t, err)
+	require.Equal(t, entry, recovered.Get(100))
+	record := entry.Config.toCollectionLoadConfigProto()
+	require.Len(t, record.Replicas, len(cfg.Replicas))
+	require.Equal(t, commonpb.LoadPriority_HIGH, record.Replicas[0].Priority)
 }
 
-func TestPut_PersistsReplicaNumberFromReplicaAssignments(t *testing.T) {
+func TestLoadConfigSnapshotOwnershipAndWithdrawal(t *testing.T) {
 	store, _ := newTestStore(t)
 	cfg := sampleConfig()
-
-	var savedReplicaNumber int32
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.SaveCollection).To(func(_ context.Context, collection *querypb.CollectionLoadInfo, _ ...*querypb.PartitionLoadInfo) error {
-		savedReplicaNumber = collection.GetReplicaNumber()
-		return nil
-	}), 1)
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.SaveReplica).Return(nil), 1)
-
-	require.NoError(t, store.Put(context.Background(), cfg))
-	assert.Equal(t, int32(len(cfg.Replicas)), savedReplicaNumber)
-}
-
-func TestLoadConfigPersistedStatusIsLoaded(t *testing.T) {
-	cfg := sampleConfig()
-
-	collection := cfg.toCollectionLoadInfoProto()
-	assert.Equal(t, querypb.LoadStatus_Loaded, collection.GetStatus())
-
-	partitions := cfg.toPartitionLoadInfoProtos()
-	require.Len(t, partitions, len(cfg.PartitionIDs))
-	for _, partition := range partitions {
-		assert.Equal(t, querypb.LoadStatus_Loaded, partition.GetStatus())
-	}
-}
-
-func TestPut_UpdateExistingWritesFullConfig(t *testing.T) {
-	store, catalog := newTestStore(t)
-
-	// First Put writes full config.
-	expectFullSave(t, catalog, 2)
-	require.NoError(t, store.Put(context.Background(), sampleConfig()))
-
-	// Second Put with the same config still writes everything (no dedup).
-	require.NoError(t, store.Put(context.Background(), sampleConfig()))
-}
-
-func TestPut_PartitionRemovedDeletesOrphans(t *testing.T) {
-	store, catalog := newTestStore(t)
-	cfg := sampleConfig() // partitions {10, 20}
-
-	expectFullSave(t, catalog, 2)
-	require.NoError(t, store.Put(context.Background(), cfg))
-
-	// Remove partition 10, add partition 30.
-	next := cfg.Clone()
-	next.PartitionIDs = []int64{20, 30}
-
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.ReleasePartition).To(func(_ context.Context, collection int64, ids ...int64) error {
-		require.EqualValues(t, 100, collection)
-		require.Equal(t, []int64{10}, ids)
-		return nil
-	}), 1)
-	require.NoError(t, store.Put(context.Background(), next))
-
-	got := store.Snapshot().ConfigsMap()[cfg.CollectionID]
-	assert.ElementsMatch(t, []int64{20, 30}, got.PartitionIDs)
-}
-
-func TestPut_ReplicaRemovedDeletesOrphans(t *testing.T) {
-	store, catalog := newTestStore(t)
-	cfg := sampleConfig()
-
-	expectFullSave(t, catalog, 2)
-	require.NoError(t, store.Put(context.Background(), cfg))
-
-	// Drop replica 1001, change replica 1000, add replica 1002.
-	next := cfg.Clone()
-	next.Replicas = []*ReplicaAssignment{
-		{ReplicaID: 1000, ResourceGroup: "rg1", Priority: commonpb.LoadPriority_HIGH},
-		{ReplicaID: 1002, ResourceGroup: "rg1", Priority: commonpb.LoadPriority_HIGH},
-	}
-
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.ReleaseReplica).To(func(_ context.Context, collection int64, ids ...int64) error {
-		require.EqualValues(t, 100, collection)
-		require.Equal(t, []int64{1001}, ids)
-		return nil
-	}), 1)
-	require.NoError(t, store.Put(context.Background(), next))
-
-	snapshot := store.Snapshot()
-	assert.NotContains(t, snapshot.ReplicaToConfigMap(), int64(1001))
-	assert.Contains(t, snapshot.ReplicaToConfigMap(), int64(1000))
-	assert.Contains(t, snapshot.ReplicaToConfigMap(), int64(1002))
-}
-
-func TestPut_EmptyReplicasSkipsSaveReplica(t *testing.T) {
-	store, _ := newTestStore(t)
-	cfg := sampleConfig()
-	cfg.Replicas = nil
-
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.SaveCollection).Return(nil), 1)
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.SaveReplica).Return(nil), 0)
-	// No SaveReplica expected when Replicas is empty.
-	require.NoError(t, store.Put(context.Background(), cfg))
-}
-
-func TestPut_DifferentCollectionsPersistConcurrently(t *testing.T) {
-	store, _ := newTestStore(t)
-	cfg1 := sampleConfig()
-	cfg1.Replicas = nil
-	cfg2 := sampleConfig()
-	cfg2.CollectionID = 101
-	cfg2.Replicas = nil
-
-	entered := make(chan int64, 2)
-	release := make(chan struct{})
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.SaveCollection).To(func(_ context.Context, collection *querypb.CollectionLoadInfo, _ ...*querypb.PartitionLoadInfo) error {
-		entered <- collection.GetCollectionID()
-		<-release
-		return nil
-	}), 2)
-	errs := make(chan error, 2)
-	go func() { errs <- store.Put(context.Background(), cfg1) }()
-	go func() { errs <- store.Put(context.Background(), cfg2) }()
-
-	seen := make(map[int64]struct{}, 2)
-	timer := time.NewTimer(time.Second)
-	for len(seen) < 2 {
-		select {
-		case collectionID := <-entered:
-			seen[collectionID] = struct{}{}
-		case <-timer.C:
-			close(release)
-			require.FailNow(t, "different collections did not persist concurrently")
-		}
-	}
-	if !timer.Stop() {
-		<-timer.C
-	}
-	close(release)
-
-	require.NoError(t, <-errs)
-	require.NoError(t, <-errs)
-	assert.Contains(t, store.Snapshot().ConfigsMap(), cfg1.CollectionID)
-	assert.Contains(t, store.Snapshot().ConfigsMap(), cfg2.CollectionID)
-}
-
-func TestPut_SameCollectionPersistsSerially(t *testing.T) {
-	store, _ := newTestStore(t)
-	cfg := sampleConfig()
-	cfg.Replicas = nil
-	firstEntered := make(chan struct{})
-	secondEntered := make(chan struct{})
-	releaseFirst := make(chan struct{})
-	var calls atomic.Int32
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.SaveCollection).To(func(context.Context, *querypb.CollectionLoadInfo, ...*querypb.PartitionLoadInfo) error {
-		switch calls.Add(1) {
-		case 1:
-			close(firstEntered)
-			<-releaseFirst
-		case 2:
-			close(secondEntered)
-		}
-		return nil
-	}), 2)
-	errs := make(chan error, 2)
-	go func() { errs <- store.Put(context.Background(), cfg) }()
-	<-firstEntered
-
-	secondStarted := make(chan struct{})
-	go func() {
-		close(secondStarted)
-		errs <- store.Put(context.Background(), cfg.Clone())
-	}()
-	<-secondStarted
-
-	select {
-	case <-secondEntered:
-		close(releaseFirst)
-		require.FailNow(t, "same collection persisted concurrently")
-	case <-time.After(100 * time.Millisecond):
-	}
-	close(releaseFirst)
-
-	require.NoError(t, <-errs)
-	require.NoError(t, <-errs)
-	select {
-	case <-secondEntered:
-	case <-time.After(time.Second):
-		require.FailNow(t, "second put did not continue after the first completed")
-	}
-}
-
-func TestSnapshot_DoesNotWaitForCollectionPersistence(t *testing.T) {
-	store, _ := newTestStore(t)
-	cfg := sampleConfig()
-	cfg.Replicas = nil
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.SaveCollection).To(func(context.Context, *querypb.CollectionLoadInfo, ...*querypb.PartitionLoadInfo) error {
-		close(entered)
-		<-release
-		return nil
-	}), 1)
-	putDone := make(chan error, 1)
-	go func() { putDone <- store.Put(context.Background(), cfg) }()
-	<-entered
-
-	snapshotDone := make(chan *LoadConfigSnapshot, 1)
-	go func() { snapshotDone <- store.Snapshot() }()
-	select {
-	case snapshot := <-snapshotDone:
-		assert.NotContains(t, snapshot.ConfigsMap(), int64(100))
-	case <-time.After(time.Second):
-		close(release)
-		require.FailNow(t, "snapshot waited for collection persistence")
-	}
-
-	close(release)
-	require.NoError(t, <-putDone)
-	assert.Contains(t, store.Snapshot().ConfigsMap(), int64(100))
-}
-
-func TestRemove(t *testing.T) {
-	store, catalog := newTestStore(t)
-	cfg := sampleConfig()
-
-	expectFullSave(t, catalog, 1)
-	require.NoError(t, store.Put(context.Background(), cfg))
-
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.ReleaseReplicas).To(func(_ context.Context, collection int64) error {
-		require.EqualValues(t, 100, collection)
-		return nil
-	}), 1)
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.ReleaseCollection).To(func(_ context.Context, collection int64) error {
-		require.EqualValues(t, 100, collection)
-		return nil
-	}), 1)
-
-	require.NoError(t, store.Remove(context.Background(), 100))
-
-	snapshot := store.Snapshot()
-	assert.NotContains(t, snapshot.ConfigsMap(), int64(100))
-	assert.NotContains(t, snapshot.ReplicaToConfigMap(), int64(1000))
-	assert.NotContains(t, snapshot.ReplicaToConfigMap(), int64(1001))
-}
-
-func TestRemove_NonExistent(t *testing.T) {
-	store, _ := newTestStore(t)
-	require.NoError(t, store.Remove(context.Background(), 999))
-}
-
-func TestContainsDoesNotRefreshSnapshot(t *testing.T) {
-	store, catalog := newTestStore(t)
-	resident := store.Snapshot()
-
-	expectFullSave(t, catalog, 1)
-	require.NoError(t, store.Put(context.Background(), sampleConfig()))
-	require.Same(t, resident, store.snapshot)
-	assert.True(t, store.Contains(100))
-	assert.False(t, store.Contains(999))
-	require.Same(t, resident, store.snapshot)
-
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.ReleaseReplicas).To(func(_ context.Context, collection int64) error {
-		require.EqualValues(t, 100, collection)
-		return nil
-	}), 1)
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.ReleaseCollection).To(func(_ context.Context, collection int64) error {
-		require.EqualValues(t, 100, collection)
-		return nil
-	}), 1)
-	require.NoError(t, store.Remove(context.Background(), 100))
-	assert.False(t, store.Contains(100))
-	require.Same(t, resident, store.snapshot)
-}
-
-func TestSnapshot_ReturnsAllConfigs(t *testing.T) {
-	store, catalog := newTestStore(t)
-	expectFullSave(t, catalog, 2)
-
-	cfg1 := sampleConfig()
-	cfg2 := sampleConfig()
-	cfg2.CollectionID = 101
-	cfg2.Replicas = []*ReplicaAssignment{
-		{ReplicaID: 2000, ResourceGroup: "rg2"},
-	}
-
-	require.NoError(t, store.Put(context.Background(), cfg1))
-	require.NoError(t, store.Put(context.Background(), cfg2))
-
-	assert.Len(t, store.Snapshot().ConfigsMap(), 2)
-}
-
-func TestSnapshot_LazilyRefreshesResidentSnapshot(t *testing.T) {
-	store, catalog := newTestStore(t)
-
-	s1 := store.Snapshot()
-	s2 := store.Snapshot()
-	require.Same(t, s1, s2)
-
-	expectFullSave(t, catalog, 1)
-	require.NoError(t, store.Put(context.Background(), sampleConfig()))
-	require.Same(t, s1, store.snapshot, "Put should only advance version and keep the cached snapshot stale")
-
-	s3 := store.Snapshot()
-	require.NotSame(t, s1, s3)
-	require.Same(t, s3, store.Snapshot())
-	assert.Equal(t, uint64(2), s3.Version())
-	assert.Contains(t, s3.ConfigsMap(), int64(100))
-}
-
-func TestSnapshot_CoalescesMultipleMutations(t *testing.T) {
-	store, catalog := newTestStore(t)
-	s1 := store.Snapshot()
-
-	expectFullSave(t, catalog, 2)
-	require.NoError(t, store.Put(context.Background(), sampleConfig()))
-
-	next := sampleConfig()
-	next.CollectionID = 101
-	next.Replicas = []*ReplicaAssignment{
-		{ReplicaID: 2000, ResourceGroup: "rg2"},
-	}
-	require.NoError(t, store.Put(context.Background(), next))
-
-	require.Same(t, s1, store.snapshot)
-	s2 := store.Snapshot()
-	require.NotSame(t, s1, s2)
-	assert.Equal(t, uint64(3), s2.Version())
-	assert.Contains(t, s2.ConfigsMap(), int64(100))
-	assert.Contains(t, s2.ConfigsMap(), int64(101))
-	require.Same(t, s2, store.Snapshot())
-}
-
-func TestSnapshot_TracksLoadInfoVersionPerCollection(t *testing.T) {
-	store, catalog := newTestStore(t)
-
-	expectFullSave(t, catalog, 2)
-	cfg1 := sampleConfig()
-	cfg2 := sampleConfig()
-	cfg2.CollectionID = 101
-	cfg2.Replicas = []*ReplicaAssignment{
-		{ReplicaID: 2000, ResourceGroup: "rg2"},
-	}
-
-	require.NoError(t, store.Put(context.Background(), cfg1))
+	require.NoError(t, store.Put(t.Context(), cfg))
 	first := store.Snapshot()
-	assert.Equal(t, loadInfoVersion(cfg1), first.ConfigVersion(cfg1.CollectionID))
-
-	require.NoError(t, store.Put(context.Background(), cfg2))
+	require.Same(t, first, store.Snapshot())
+	cfg.PartitionIDs = []int64{20}
+	require.NoError(t, store.Put(t.Context(), cfg))
+	require.True(t, store.Contains(100))
+	require.Same(t, first, store.snapshot, "hot getters do not rebuild the snapshot")
 	second := store.Snapshot()
-	assert.Equal(t, loadInfoVersion(cfg1), second.ConfigVersion(cfg1.CollectionID))
-	assert.Equal(t, loadInfoVersion(cfg2), second.ConfigVersion(cfg2.CollectionID))
+	require.NotSame(t, first, second)
+	require.Equal(t, []int64{10, 20}, first.ConfigsMap()[100].PartitionIDs)
+	require.Equal(t, []int64{20}, second.ConfigsMap()[100].PartitionIDs)
+	require.Same(t, second.ConfigsMap()[100], second.ReplicaToConfigMap()[1000])
+	store.StopPlanning(100)
+	require.False(t, store.Contains(100))
+	require.Empty(t, store.Snapshot().ConfigsMap())
+	require.NoError(t, store.Remove(t.Context(), 100))
+	require.NoError(t, store.Remove(t.Context(), 100))
+	require.Equal(t, []int64{20}, second.ConfigsMap()[100].PartitionIDs)
 }
 
-func TestRecoverLoadConfigStore_EmptyState(t *testing.T) {
-	catalog := catalogkv.NewCatalog(nil)
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.GetCollections).Return(nil, nil), 1)
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.GetPartitions).Return(map[int64][]*querypb.PartitionLoadInfo{}, nil), 1)
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.GetReplicas).Return(nil, nil), 1)
-
-	store, err := RecoverLoadConfigStore(context.Background(), catalog)
-	require.NoError(t, err)
-	assert.Empty(t, store.Snapshot().ConfigsMap())
+func TestLoadConfigPersistenceDoesNotBlockReadsOrOtherCollections(t *testing.T) {
+	store, hooks := newTestStore(t)
+	blocked, proceed := make(chan struct{}), make(chan struct{})
+	hooks.beforeSave = func(info *viewpb.CollectionLoadConfig) error {
+		if info.CollectionID == 100 {
+			close(blocked)
+			<-proceed
+		}
+		return nil
+	}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	var firstError error
+	go func() { defer wg.Done(); firstError = store.Put(t.Context(), sampleConfig()) }()
+	<-blocked
+	require.Nil(t, store.GetConfig(100))
+	require.Empty(t, store.Snapshot().ConfigsMap())
+	cfg := sampleConfig()
+	cfg.CollectionID = 200
+	require.NoError(t, store.Put(t.Context(), cfg))
+	close(proceed)
+	wg.Wait()
+	require.NoError(t, firstError)
 }
 
-func TestRecoverLoadConfigStore_WithPersistedData(t *testing.T) {
-	catalog := catalogkv.NewCatalog(nil)
-
-	collections := []*querypb.CollectionLoadInfo{
-		{
-			CollectionID:             100,
-			DbID:                     1,
-			LoadFields:               []int64{200},
-			FieldIndexID:             map[int64]int64{200: 300},
-			UserSpecifiedReplicaMode: true,
-		},
+func TestLoadConfigSerializesSameCollectionAndConfigVersion(t *testing.T) {
+	store, hooks := newTestStore(t)
+	var inside atomic.Int32
+	hooks.beforeSave = func(*viewpb.CollectionLoadConfig) error {
+		require.EqualValues(t, 1, inside.Add(1))
+		inside.Add(-1)
+		return nil
 	}
-	partitions := map[int64][]*querypb.PartitionLoadInfo{
-		100: {
-			{CollectionID: 100, PartitionID: 10},
-			{CollectionID: 100, PartitionID: 20},
-		},
+	var wg sync.WaitGroup
+	for i := int64(0); i < 10; i++ {
+		wg.Add(1)
+		go func(id int64) {
+			defer wg.Done()
+			cfg := sampleConfig()
+			cfg.PartitionIDs = []int64{id}
+			require.NoError(t, store.Put(t.Context(), cfg))
+			entry := store.Get(100)
+			require.Equal(t, entry.Config.Version, entry.ConfigVersion)
+		}(i)
 	}
-	replicas := []*querypb.Replica{
-		{ID: 1000, CollectionID: 100, ResourceGroup: "rg1"},
-		{ID: 1001, CollectionID: 100, ResourceGroup: "rg1"},
-	}
-
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.GetCollections).Return(collections, nil), 1)
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.GetPartitions).Return(partitions, nil), 1)
-	expectCatalogCalls(t, mockey.Mock(catalogkv.Catalog.GetReplicas).Return(replicas, nil), 1)
-
-	store, err := RecoverLoadConfigStore(context.Background(), catalog)
-	require.NoError(t, err)
-
-	snapshot := store.Snapshot()
-	cfg := snapshot.ConfigsMap()[100]
-	require.NotNil(t, cfg)
-	assert.Equal(t, int64(1), cfg.DbID)
-	assert.True(t, cfg.UserSpecifiedReplicaMode)
-	assert.ElementsMatch(t, []int64{10, 20}, cfg.PartitionIDs)
-	require.Len(t, cfg.LoadFields, 1)
-	assert.Equal(t, int64(200), cfg.LoadFields[0].FieldId)
-	assert.Equal(t, int64(300), cfg.LoadFields[0].IndexId)
-	require.Len(t, cfg.Replicas, 2)
-
-	assert.NotNil(t, snapshot.ReplicaToConfigMap()[1000])
-	assert.NotNil(t, snapshot.ReplicaToConfigMap()[1001])
+	wg.Wait()
 }
 
 func TestFromAlterLoadConfigMessage(t *testing.T) {
-	msg := &messagespb.AlterLoadConfigMessageHeader{
-		DbId:                     1,
-		CollectionId:             100,
-		PartitionIds:             []int64{10, 20},
-		LoadFields:               []*messagespb.LoadFieldConfig{{FieldId: 200, IndexId: 300}},
-		UserSpecifiedReplicaMode: true,
-		Replicas: []*messagespb.LoadReplicaConfig{
-			{ReplicaId: 1000, ResourceGroupName: "rg1", Priority: commonpb.LoadPriority_HIGH},
-		},
+	header := &messagespb.AlterLoadConfigMessageHeader{
+		DbId: 1, CollectionId: 100,
+		PartitionIds: []int64{10}, LoadFields: []*messagespb.LoadFieldConfig{{FieldId: 200, IndexId: 300}},
+		RequiredFields: []*messagespb.LoadFieldConfig{{FieldId: 200}}, UserSpecifiedReplicaMode: true,
+		Replicas: []*messagespb.LoadReplicaConfig{{ReplicaId: 1000, ResourceGroupName: "rg1", Priority: commonpb.LoadPriority_LOW}},
 	}
+	cfg := FromAlterLoadConfigMessage(header)
+	header.PartitionIds[0] = 20
+	header.LoadFields[0].FieldId = 999
+	require.Equal(t, []int64{10}, cfg.PartitionIDs)
+	require.EqualValues(t, 200, cfg.LoadFields[0].FieldId)
+	require.Equal(t, []int64{300}, cfg.LoadFields[0].IndexIds)
+	cfg.LoadFields[0].IndexIds[0] = 301
+	require.EqualValues(t, 300, header.LoadFields[0].IndexId, "conversion must not retain message-owned storage")
+	require.Equal(t, commonpb.LoadPriority_LOW, cfg.Replicas[0].Priority)
+}
 
-	cfg := FromAlterLoadConfigMessage(msg)
-	assert.Equal(t, int64(1), cfg.DbID)
-	assert.Equal(t, int64(100), cfg.CollectionID)
-	assert.ElementsMatch(t, []int64{10, 20}, cfg.PartitionIDs)
-	assert.True(t, cfg.UserSpecifiedReplicaMode)
-	require.Len(t, cfg.Replicas, 1)
-	assert.Equal(t, int64(1000), cfg.Replicas[0].ReplicaID)
-	assert.Equal(t, "rg1", cfg.Replicas[0].ResourceGroup)
+func TestAutoLoadIntentPersistsAcrossPublicationAndRecovery(t *testing.T) {
+	deps := versionedTestDependencies(t)
+	store, err := RecoverLoadConfigStore(t.Context(), deps)
+	require.NoError(t, err)
+	manager := NewCollectionLoadManager(store, nil, nil)
+	header := &messagespb.AlterLoadConfigMessageHeader{
+		CollectionId: 100, AutoLoad: true, PartitionIds: []int64{10},
+		Replicas: []*messagespb.LoadReplicaConfig{{ReplicaId: 1000, ResourceGroupName: "rg1"}},
+	}
+	require.NoError(t, manager.ApplyLoadConfig(t.Context(), header))
+	initial := store.GetConfig(100)
+	require.True(t, initial.AutoLoad)
+	require.True(t, initial.Clone().AutoLoad)
+	require.True(t, initial.toCollectionLoadConfigProto().GetAutoLoad())
+	require.NoError(t, manager.AddPartition(t.Context(), 100, 20))
+	require.True(t, store.GetConfig(100).AutoLoad, "derived load revisions preserve their source")
+
+	recovered, err := RecoverLoadConfigStore(t.Context(), deps)
+	require.NoError(t, err)
+	require.True(t, recovered.GetConfig(100).AutoLoad)
+	require.Equal(t, []int64{10, 20}, recovered.GetConfig(100).PartitionIDs)
+
+	// A manual load replaces the intent, without mutating a published snapshot.
+	header.AutoLoad = false
+	require.NoError(t, manager.ApplyLoadConfig(t.Context(), header))
+	require.False(t, store.GetConfig(100).AutoLoad)
+	require.True(t, initial.AutoLoad)
+	version := store.GetConfigVersion(100)
+	require.NoError(t, manager.ApplyLoadConfig(t.Context(), header))
+	require.Equal(t, version, store.GetConfigVersion(100), "broadcast replay is idempotent")
+	recovered, err = RecoverLoadConfigStore(t.Context(), deps)
+	require.NoError(t, err)
+	require.False(t, recovered.GetConfig(100).AutoLoad)
+
+	store.StopPlanning(100)
+	require.NoError(t, store.Remove(t.Context(), 100))
+	recovered, err = RecoverLoadConfigStore(t.Context(), deps)
+	require.NoError(t, err)
+	require.Nil(t, recovered.GetConfig(100), "release removes the marker with the load intent")
+}
+
+func TestAutoLoadSourceUpdatePreservesRequirementsIdentity(t *testing.T) {
+	hooks := new(versionedTestHooks)
+	deps := versionedTestDependencies(t, hooks)
+	store, err := RecoverLoadConfigStore(t.Context(), deps)
+	require.NoError(t, err)
+	cfg := sampleConfig()
+	cfg.AutoLoad = true
+	require.NoError(t, store.Put(t.Context(), cfg))
+	original := store.GetConfig(100)
+	snapshot := store.Snapshot()
+	before, err := store.GetLoadInfo(t.Context(), 100, original.Version)
+	require.NoError(t, err)
+	release, err := store.AcquireLoadInfo(t.Context(), 100, original.Version)
+	require.NoError(t, err)
+	defer release()
+	store.EnableGC()
+	var published []*LoadConfig
+	stop := store.RegisterLoadConfigListener(func(_ int64, cfg *LoadConfig, version uint64) {
+		require.Equal(t, original.Version, version)
+		published = append(published, cfg)
+	})
+	defer stop()
+	cfg.AutoLoad = false
+	hooks.beforeSave = func(*viewpb.CollectionLoadConfig) error { return merr.ErrServiceUnavailable }
+	require.ErrorIs(t, store.Put(t.Context(), cfg), merr.ErrServiceUnavailable)
+	require.Same(t, original, store.GetConfig(100), "failed writes must not publish")
+	require.Len(t, published, 1)
+	hooks.beforeSave = nil
+	require.NoError(t, store.Put(t.Context(), cfg))
+	current := store.GetConfig(100)
+	require.Equal(t, original.Version, current.Version)
+	require.NotSame(t, original, current)
+	require.False(t, current.AutoLoad)
+	require.True(t, original.AutoLoad)
+	require.True(t, snapshot.ConfigsMap()[100].AutoLoad, "old readers retain their snapshot")
+	require.False(t, store.Snapshot().ConfigsMap()[100].AutoLoad)
+	require.Len(t, published, 2)
+	require.Same(t, current, published[1])
+	require.Same(t, current, store.history[100][current.Version])
+	after, err := store.GetLoadInfo(t.Context(), 100, original.Version)
+	require.NoError(t, err)
+	require.Equal(t, before, after, "QN/SN requirements do not change")
+	require.NoError(t, store.CollectLoadInfo(t.Context()))
+	require.Equal(t, 1, store.references[loadInfoKey{100, original.Version}])
+	require.NoError(t, store.Put(t.Context(), cfg))
+	require.Same(t, current, store.GetConfig(100), "callback replay is a no-op")
+	require.Len(t, published, 2)
+	recovered, err := RecoverLoadConfigStore(t.Context(), deps)
+	require.NoError(t, err)
+	require.Equal(t, current, recovered.GetConfig(100))
+	stop()
+	cfg.PartitionIDs = append(cfg.PartitionIDs, 30)
+	require.NoError(t, store.Put(t.Context(), cfg))
+	require.Greater(t, store.GetConfigVersion(100), original.Version, "real requirements still advance identity")
+	require.Len(t, store.history[100], 2)
+	require.NoError(t, store.CollectLoadInfo(t.Context()))
+	require.Len(t, store.history[100], 2, "referenced requirements survive GC")
+	release()
+	require.NoError(t, store.CollectLoadInfo(t.Context()))
+	require.Len(t, store.history[100], 1)
 }

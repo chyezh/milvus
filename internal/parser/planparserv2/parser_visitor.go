@@ -316,7 +316,39 @@ func checkDirectComparisonBinaryField(columnInfo *planpb.ColumnInfo) error {
 	if typeutil.IsArrayType(columnInfo.GetDataType()) && len(columnInfo.GetNestedPath()) == 0 && !columnInfo.GetIsElementLevel() {
 		return merr.WrapErrQueryPlanMsg("can not comparisons array fields directly")
 	}
+	if isNestedArrayElement(columnInfo) {
+		return errScalarOpOnNestedArrayElement()
+	}
 	return nil
+}
+
+// isNestedArrayElement reports whether columnInfo addresses one element of a
+// nested Array column, such as struct_array[0][sub] or $[sub] on an Array<T>
+// struct sub-field. That element is an Array<T>, not a scalar.
+func isNestedArrayElement(columnInfo *planpb.ColumnInfo) bool {
+	return typeutil.IsArrayType(columnInfo.GetDataType()) &&
+		columnInfo.GetElementType() == schemapb.DataType_Array &&
+		(len(columnInfo.GetNestedPath()) != 0 || columnInfo.GetIsElementLevel())
+}
+
+func errScalarOpOnNestedArrayElement() error {
+	return merr.WrapErrQueryPlanMsg(
+		"scalar operations are not supported on an element of a nested array field because the element is itself an array")
+}
+
+// isScalarArrayElement reports whether columnInfo addresses one element of a
+// single-level Array column, such as ArrayField[0] or struct_array[0][sub] on
+// a scalar struct sub-field. That element is a scalar, not an array.
+func isScalarArrayElement(columnInfo *planpb.ColumnInfo) bool {
+	return typeutil.IsArrayType(columnInfo.GetDataType()) &&
+		columnInfo.GetElementType() != schemapb.DataType_Array &&
+		len(columnInfo.GetNestedPath()) != 0 && !columnInfo.GetIsElementLevel()
+}
+
+func errArrayFuncOnScalarArrayElement(funcName, operand string) error {
+	return merr.WrapErrQueryPlanMsg(
+		"%s requires an array operand, but %s is a single array element, not an array",
+		funcName, operand)
 }
 
 // contextualizeEmptyArrayLiteral assigns the element type of a whole ARRAY
@@ -494,7 +526,8 @@ func (v *ParserVisitor) VisitMulDivMod(ctx *parser.MulDivModContext) interface{}
 			return merr.WrapErrParameterInvalidMsg("'%s' %s", arithNameMap[ctx.GetOp().GetTokenType()], err.Error())
 		}
 
-		if err = checkValidModArith(arithExprMap[ctx.GetOp().GetTokenType()], leftExpr.dataType, getArrayElementType(leftExpr), rightExpr.dataType, getArrayElementType(rightExpr)); err != nil {
+		if err = checkValidModArith(arithExprMap[ctx.GetOp().GetTokenType()], leftExpr.dataType, getArrayElementType(leftExpr), rightExpr.dataType, getArrayElementType(rightExpr),
+			columnDisplayName(v.schema, leftExpr), columnDisplayName(v.schema, rightExpr)); err != nil {
 			return err
 		}
 
@@ -535,6 +568,9 @@ func (v *ParserVisitor) VisitEquality(ctx *parser.EqualityContext) interface{} {
 	}
 
 	leftExpr, rightExpr := getExpr(left), getExpr(right)
+	if ret, handled := v.visitNestedArrayEquality(ctx, leftExpr, rightExpr); handled {
+		return ret
+	}
 	contextualizeEmptyArrayLiteral(leftExpr, rightExpr)
 	contextualizeEmptyArrayLiteral(rightExpr, leftExpr)
 
@@ -568,6 +604,70 @@ func (v *ParserVisitor) VisitEquality(ctx *parser.EqualityContext) interface{} {
 		expr:     expr,
 		dataType: schemapb.DataType_Bool,
 	}
+}
+
+// visitNestedArrayEquality handles ==/!= on a nested Array column. An element
+// struct_array[i][sub] of an Array<T> struct sub-field is an Array<T> value and
+// compares with an array literal like a single-level Array field. A whole
+// nested Array column cannot be compared. Other operands are not handled.
+func (v *ParserVisitor) visitNestedArrayEquality(ctx *parser.EqualityContext, leftExpr, rightExpr *ExprWithType) (interface{}, bool) {
+	if leftExpr == nil || rightExpr == nil {
+		return nil, false
+	}
+	columnExpr, otherExpr := leftExpr, rightExpr
+	if columnInfo := toColumnInfo(columnExpr); columnInfo == nil || columnInfo.GetElementType() != schemapb.DataType_Array {
+		columnExpr, otherExpr = rightExpr, leftExpr
+	}
+	columnInfo := toColumnInfo(columnExpr)
+	if columnInfo == nil || !typeutil.IsArrayType(columnInfo.GetDataType()) ||
+		columnInfo.GetElementType() != schemapb.DataType_Array || columnInfo.GetIsElementLevel() {
+		return nil, false
+	}
+	if len(columnInfo.GetNestedPath()) == 0 {
+		return merr.WrapErrQueryPlanMsg(
+			"== and != are not supported on nested array field, only single-level array fields can be compared with an array literal: %s",
+			ctx.GetText()), true
+	}
+
+	leafType, ok, err := v.structIndexArrayLeafType(columnInfo)
+	if err != nil {
+		return err, true
+	}
+	if !ok {
+		return nil, false
+	}
+	valueExpr := otherExpr.expr.GetValueExpr()
+	if isTemplateExpr(valueExpr) {
+		return merr.WrapErrQueryPlanMsg(
+			"template values are not supported when comparing an element of a nested array struct sub-field, use an array literal: %s",
+			ctx.GetText()), true
+	}
+	if valueExpr == nil || !IsArray(valueExpr.GetValue()) {
+		return merr.WrapErrQueryPlanMsg(
+			"an element of a nested array struct sub-field can only be compared with an array literal: %s",
+			ctx.GetText()), true
+	}
+
+	columnInfo.ElementType = leafType
+	if array := valueExpr.GetValue().GetArrayVal(); len(array.GetArray()) == 0 && array.GetElementType() == schemapb.DataType_None {
+		array.ElementType = leafType
+	}
+	if !canBeCompared(columnExpr, otherExpr) {
+		return merr.WrapErrQueryPlanMsg("comparisons between %s and %s are not supported",
+			getDataType(columnExpr), getDataType(otherExpr)), true
+	}
+	return &ExprWithType{
+		expr: &planpb.Expr{
+			Expr: &planpb.Expr_UnaryRangeExpr{
+				UnaryRangeExpr: &planpb.UnaryRangeExpr{
+					ColumnInfo: columnInfo,
+					Op:         cmpOpMap[ctx.GetOp().GetTokenType()],
+					Value:      valueExpr.GetValue(),
+				},
+			},
+		},
+		dataType: schemapb.DataType_Bool,
+	}, true
 }
 
 // VisitRelational translates expr to range/compare plan.
@@ -1192,6 +1292,9 @@ func (v *ParserVisitor) VisitTerm(ctx *parser.TermContext) interface{} {
 		return merr.WrapErrParameterInvalidMsg("'term' can only be used on single field, but got: %s", ctx.Expr(0).GetText())
 	}
 
+	if isNestedArrayElement(columnInfo) {
+		return errScalarOpOnNestedArrayElement()
+	}
 	dataType := columnInfo.GetDataType()
 	// Use element type for IN operation in two cases:
 	// 1. Array with nested path (e.g., arr[0] IN [1, 2, 3])
@@ -1267,78 +1370,113 @@ func isValidStructSubField(tokenText string) bool {
 	return len(tokenText) >= 4 && tokenText[:2] == "$[" && tokenText[len(tokenText)-1] == ']'
 }
 
-func validateMatchColumnInfo(columnInfo *planpb.ColumnInfo) (bool, error) {
+// elementPredicateScope names the construct whose predicate is validated by
+// validateElementLevelPredicate, so a rejection names what the user wrote.
+type elementPredicateScope struct {
+	// name is used in the generic rejections, e.g. "MATCH predicate".
+	name string
+	// rowLevel is the rejection of a field that is not an element of the
+	// current struct.
+	rowLevel string
+	// rawColumn is the rejection of a bare element column used as a value.
+	rawColumn string
+}
+
+var matchPredicateScope = elementPredicateScope{
+	name:      "MATCH predicate",
+	rowLevel:  "MATCH predicate can only use element-level fields",
+	rawColumn: "raw element columns are not supported inside MATCH predicate",
+}
+
+func elementFilterPredicateScope(structName string) elementPredicateScope {
+	return elementPredicateScope{
+		name: "element_filter predicate",
+		rowLevel: fmt.Sprintf("element_filter predicate can only use $[sub_field] of struct %[1]s; "+
+			"row-level fields (top-level fields, %[1]s[i][sub_field], fields of another struct) must be filtered outside element_filter "+
+			"and combined with AND, e.g. top_level_field > 5 && element_filter(%[1]s, $[sub_field] > 1)", structName),
+		rawColumn: "raw element columns are not supported inside element_filter predicate",
+	}
+}
+
+func validateElementPredicateColumn(columnInfo *planpb.ColumnInfo, scope elementPredicateScope) (bool, error) {
 	if columnInfo == nil {
-		return false, merr.WrapErrParameterInvalidMsg("MATCH predicate column info is missing")
+		return false, merr.WrapErrParameterInvalidMsg("%s column info is missing", scope.name)
 	}
 	if !columnInfo.GetIsElementLevel() {
-		return false, merr.WrapErrParameterInvalidMsg("MATCH predicate can only use element-level fields")
+		return false, merr.WrapErrParameterInvalidMsg("%s", scope.rowLevel)
 	}
 	return true, nil
 }
 
-func validateMatchPredicateElementLevel(expr *planpb.Expr) (bool, error) {
+// validateElementLevelPredicate checks that the predicate of MATCH_* or
+// element_filter only uses expressions segcore evaluates per element of the
+// current struct. It reports whether every leaf references an element-level
+// field; constant leaves such as true make it false without an error.
+func validateElementLevelPredicate(expr *planpb.Expr, scope elementPredicateScope) (bool, error) {
 	if expr == nil {
-		return false, merr.WrapErrParameterInvalidMsg("MATCH predicate is missing")
+		return false, merr.WrapErrParameterInvalidMsg("%s is missing", scope.name)
 	}
 
 	switch realExpr := expr.GetExpr().(type) {
 	case *planpb.Expr_ColumnExpr:
-		return false, merr.WrapErrParameterInvalidMsg("raw element columns are not supported inside MATCH predicate")
+		if !realExpr.ColumnExpr.GetInfo().GetIsElementLevel() {
+			return false, merr.WrapErrParameterInvalidMsg("%s", scope.rowLevel)
+		}
+		return false, merr.WrapErrParameterInvalidMsg("%s", scope.rawColumn)
 	case *planpb.Expr_TermExpr:
-		return validateMatchColumnInfo(realExpr.TermExpr.GetColumnInfo())
+		return validateElementPredicateColumn(realExpr.TermExpr.GetColumnInfo(), scope)
 	case *planpb.Expr_UnaryRangeExpr:
-		return validateMatchColumnInfo(realExpr.UnaryRangeExpr.GetColumnInfo())
+		return validateElementPredicateColumn(realExpr.UnaryRangeExpr.GetColumnInfo(), scope)
 	case *planpb.Expr_BinaryRangeExpr:
-		return validateMatchColumnInfo(realExpr.BinaryRangeExpr.GetColumnInfo())
+		return validateElementPredicateColumn(realExpr.BinaryRangeExpr.GetColumnInfo(), scope)
 	case *planpb.Expr_BinaryArithOpEvalRangeExpr:
-		return validateMatchColumnInfo(realExpr.BinaryArithOpEvalRangeExpr.GetColumnInfo())
+		return validateElementPredicateColumn(realExpr.BinaryArithOpEvalRangeExpr.GetColumnInfo(), scope)
 	case *planpb.Expr_CompareExpr:
-		return false, merr.WrapErrParameterInvalidMsg("column-to-column comparison is not supported inside MATCH predicate")
+		return false, merr.WrapErrParameterInvalidMsg("column-to-column comparison is not supported inside %s", scope.name)
 	case *planpb.Expr_JsonContainsExpr:
-		return validateMatchColumnInfo(realExpr.JsonContainsExpr.GetColumnInfo())
+		return validateElementPredicateColumn(realExpr.JsonContainsExpr.GetColumnInfo(), scope)
 	case *planpb.Expr_NullExpr:
-		return validateMatchColumnInfo(realExpr.NullExpr.GetColumnInfo())
+		return validateElementPredicateColumn(realExpr.NullExpr.GetColumnInfo(), scope)
 	case *planpb.Expr_ExistsExpr:
-		return validateMatchColumnInfo(realExpr.ExistsExpr.GetInfo())
+		return validateElementPredicateColumn(realExpr.ExistsExpr.GetInfo(), scope)
 	case *planpb.Expr_GisfunctionFilterExpr:
-		return validateMatchColumnInfo(realExpr.GisfunctionFilterExpr.GetColumnInfo())
+		return validateElementPredicateColumn(realExpr.GisfunctionFilterExpr.GetColumnInfo(), scope)
 	case *planpb.Expr_TimestamptzArithCompareExpr:
-		return validateMatchColumnInfo(realExpr.TimestamptzArithCompareExpr.GetTimestamptzColumn())
+		return validateElementPredicateColumn(realExpr.TimestamptzArithCompareExpr.GetTimestamptzColumn(), scope)
 	case *planpb.Expr_UnaryExpr:
-		return validateMatchPredicateElementLevel(realExpr.UnaryExpr.GetChild())
+		return validateElementLevelPredicate(realExpr.UnaryExpr.GetChild(), scope)
 	case *planpb.Expr_BinaryExpr:
-		leftElementLevel, err := validateMatchPredicateElementLevel(realExpr.BinaryExpr.GetLeft())
+		leftElementLevel, err := validateElementLevelPredicate(realExpr.BinaryExpr.GetLeft(), scope)
 		if err != nil {
 			return false, err
 		}
-		rightElementLevel, err := validateMatchPredicateElementLevel(realExpr.BinaryExpr.GetRight())
+		rightElementLevel, err := validateElementLevelPredicate(realExpr.BinaryExpr.GetRight(), scope)
 		if err != nil {
 			return false, err
 		}
 		return leftElementLevel && rightElementLevel, nil
 	case *planpb.Expr_BinaryArithExpr:
-		leftElementLevel, err := validateMatchPredicateElementLevel(realExpr.BinaryArithExpr.GetLeft())
+		leftElementLevel, err := validateElementLevelPredicate(realExpr.BinaryArithExpr.GetLeft(), scope)
 		if err != nil {
 			return false, err
 		}
-		rightElementLevel, err := validateMatchPredicateElementLevel(realExpr.BinaryArithExpr.GetRight())
+		rightElementLevel, err := validateElementLevelPredicate(realExpr.BinaryArithExpr.GetRight(), scope)
 		if err != nil {
 			return false, err
 		}
 		return leftElementLevel && rightElementLevel, nil
 	case *planpb.Expr_CallExpr:
-		return false, merr.WrapErrParameterInvalidMsg("function calls are not supported inside MATCH predicate")
+		return false, merr.WrapErrParameterInvalidMsg("function calls are not supported inside %s", scope.name)
 	case *planpb.Expr_ValueExpr, *planpb.Expr_AlwaysTrueExpr:
 		return false, nil
 	case *planpb.Expr_ElementFilterExpr:
-		return false, merr.WrapErrParameterInvalidMsg("element_filter is not supported inside MATCH predicate")
+		return false, merr.WrapErrParameterInvalidMsg("element_filter is not supported inside %s", scope.name)
 	case *planpb.Expr_MatchExpr:
-		return false, merr.WrapErrParameterInvalidMsg("nested MATCH predicate is not supported")
+		return false, merr.WrapErrParameterInvalidMsg("MATCH_* is not supported inside %s", scope.name)
 	case *planpb.Expr_RandomSampleExpr:
-		return false, merr.WrapErrParameterInvalidMsg("random sample is not supported inside MATCH predicate")
+		return false, merr.WrapErrParameterInvalidMsg("random sample is not supported inside %s", scope.name)
 	default:
-		return false, merr.WrapErrParameterInvalidMsg("unsupported MATCH predicate expression")
+		return false, merr.WrapErrParameterInvalidMsg("unsupported %s expression", scope.name)
 	}
 }
 
@@ -1351,7 +1489,7 @@ func (v *ParserVisitor) getColumnInfoFromStructSubField(tokenText string) (*plan
 
 	// Check if we're inside an ElementFilter context
 	if v.currentStructArrayField == "" {
-		return nil, merr.WrapErrParameterInvalidMsg("$[%s] syntax can only be used inside ElementFilter", fieldName)
+		return nil, merr.WrapErrParameterInvalidMsg("$[%s] syntax can only be used inside ElementFilter or MATCH_*", fieldName)
 	}
 
 	// Construct full field name for struct array field
@@ -1365,11 +1503,6 @@ func (v *ParserVisitor) getColumnInfoFromStructSubField(tokenText string) (*plan
 	// In element-level context, data_type should be the element type
 	elementType := field.GetElementType()
 
-	nullable := field.GetNullable()
-	if structField := v.schema.GetStructArrayFieldFromName(v.currentStructArrayField); structField != nil {
-		nullable = nullable || structField.GetNullable()
-	}
-
 	return &planpb.ColumnInfo{
 		FieldId:         field.FieldID,
 		DataType:        elementType, // Use element type, not storage type
@@ -1378,9 +1511,23 @@ func (v *ParserVisitor) getColumnInfoFromStructSubField(tokenText string) (*plan
 		IsPartitionKey:  field.IsPartitionKey,
 		IsClusteringKey: field.IsClusteringKey,
 		ElementType:     elementType,
-		Nullable:        nullable,
+		Nullable:        v.structSubFieldElementNullable(field),
 		IsElementLevel:  true, // Mark as element-level access
 	}, nil
+}
+
+// structSubFieldElementNullable reports whether an element-level ColumnInfo on
+// the struct sub-field field must keep null semantics: one element of an
+// element_nullable sub-field can be null, and a nullable struct marks its
+// sub-fields nullable. The rewriter folds predicates to constants only on
+// non-nullable columns, and segcore skips the validity data of a non-nullable
+// column in IS NULL.
+func (v *ParserVisitor) structSubFieldElementNullable(field *schemapb.FieldSchema) bool {
+	nullable := field.GetNullable() || field.GetElementNullable()
+	if structField := v.schema.GetStructArrayFieldFromName(v.currentStructArrayField); structField != nil {
+		nullable = nullable || structField.GetNullable()
+	}
+	return nullable
 }
 
 func (v *ParserVisitor) getColumnInfoFromStructIndexField(identifier string) (*planpb.ColumnInfo, error) {
@@ -1412,6 +1559,32 @@ func (v *ParserVisitor) getColumnInfoFromStructIndexField(identifier string) (*p
 		ElementType: field.GetElementType(),
 		Nullable:    nullable,
 	}, nil
+}
+
+// structIndexArrayLeafType returns the leaf type T when columnInfo is
+// struct_array[i][sub] on an Array<T> struct sub-field (stored as
+// Array<Array<T>>). That element is used as an Array<T> value.
+func (v *ParserVisitor) structIndexArrayLeafType(columnInfo *planpb.ColumnInfo) (schemapb.DataType, bool, error) {
+	if columnInfo == nil || columnInfo.GetIsElementLevel() ||
+		!typeutil.IsArrayType(columnInfo.GetDataType()) || len(columnInfo.GetNestedPath()) != 1 {
+		return schemapb.DataType_None, false, nil
+	}
+	field, err := v.schema.GetFieldFromID(columnInfo.GetFieldId())
+	if err != nil {
+		return schemapb.DataType_None, false, err
+	}
+	if !typeutil.IsStructSubField(field.GetName()) || !typeutil.IsNestedArrayTypeSchema(field.GetTypeSchema()) {
+		return schemapb.DataType_None, false, nil
+	}
+	leafType, _, depth, err := typeutil.GetArrayLeaf(field.GetTypeSchema())
+	if err != nil {
+		return schemapb.DataType_None, false, err
+	}
+	if depth != 2 || !typeutil.IsPrimitiveType(leafType) {
+		return schemapb.DataType_None, false, merr.WrapErrParameterInvalidMsg(
+			"only an element of an Array<scalar> struct sub-field can be used as an array, got: %s", field.GetName())
+	}
+	return leafType, true, nil
 }
 
 func (v *ParserVisitor) getChildColumnInfo(identifier parser.IFieldNameContext, child, structSubField, structIndexField antlr.TerminalNode) (*planpb.ColumnInfo, error) {
@@ -1850,7 +2023,8 @@ func (v *ParserVisitor) VisitUnary(ctx *parser.UnaryContext) interface{} {
 		if err := canArithmetic(childExpr.dataType, getArrayElementType(childExpr), minusOne.dataType, getArrayElementType(minusOne), false); err != nil {
 			return merr.WrapErrParameterInvalidMsg("'bitnot' %s", err.Error())
 		}
-		if err := checkValidModArith(planpb.ArithOpType_BitXor, childExpr.dataType, getArrayElementType(childExpr), minusOne.dataType, getArrayElementType(minusOne)); err != nil {
+		if err := checkValidModArith(planpb.ArithOpType_BitXor, childExpr.dataType, getArrayElementType(childExpr), minusOne.dataType, getArrayElementType(minusOne),
+			columnDisplayName(v.schema, childExpr), ""); err != nil {
 			return err
 		}
 		dataType, err := calcDataType(childExpr, minusOne, false)
@@ -2271,7 +2445,8 @@ func (v *ParserVisitor) visitBitwiseBinaryOp(leftCtx, rightCtx parser.IExprConte
 		if err = canArithmetic(leftExpr.dataType, getArrayElementType(leftExpr), rightExpr.dataType, getArrayElementType(rightExpr), reverse); err != nil {
 			return merr.WrapErrParameterInvalidMsg("'%s' %s", arithNameMap[tokenType], err.Error())
 		}
-		if err = checkValidModArith(arithExprMap[tokenType], leftExpr.dataType, getArrayElementType(leftExpr), rightExpr.dataType, getArrayElementType(rightExpr)); err != nil {
+		if err = checkValidModArith(arithExprMap[tokenType], leftExpr.dataType, getArrayElementType(leftExpr), rightExpr.dataType, getArrayElementType(rightExpr),
+			columnDisplayName(v.schema, leftExpr), columnDisplayName(v.schema, rightExpr)); err != nil {
 			return err
 		}
 		dataType, err = calcDataType(leftExpr, rightExpr, reverse)
@@ -2624,7 +2799,52 @@ func (v *ParserVisitor) VisitEmptyArray(ctx *parser.EmptyArrayContext) interface
 	}
 }
 
+// checkStructSubFieldNullExpr rejects IS NULL / IS NOT NULL on a struct
+// sub-field (struct_array[sub] or struct_array[i][sub]).
+func checkStructSubFieldNullExpr(structField, structIndexField antlr.TerminalNode) error {
+	var identifier string
+	switch {
+	case structField != nil:
+		identifier = structField.GetText()
+	case structIndexField != nil:
+		identifier = structIndexField.GetText()
+	default:
+		return nil
+	}
+	structName, _, _ := strings.Cut(identifier, "[")
+	return merr.WrapErrParameterInvalidMsg(
+		"IS NULL / IS NOT NULL is not supported on struct sub-field %s; it can only be applied to the struct array field %s",
+		identifier, structName)
+}
+
+// visitElementNullExpr builds the element-level NullExpr for $[sub] IS NULL /
+// IS NOT NULL inside MATCH_* or element_filter. It accepts scalar, vector and
+// Array<T> sub-fields; outside an element context $[sub] is rejected.
+func (v *ParserVisitor) visitElementNullExpr(structSubField antlr.TerminalNode, op planpb.NullExpr_NullOp) interface{} {
+	column, err := v.getColumnInfoFromStructSubField(structSubField.GetText())
+	if err != nil {
+		return err
+	}
+	return &ExprWithType{
+		expr: &planpb.Expr{
+			Expr: &planpb.Expr_NullExpr{
+				NullExpr: &planpb.NullExpr{
+					ColumnInfo: column,
+					Op:         op,
+				},
+			},
+		},
+		dataType: schemapb.DataType_Bool,
+	}
+}
+
 func (v *ParserVisitor) VisitIsNotNull(ctx *parser.IsNotNullContext) interface{} {
+	if err := checkStructSubFieldNullExpr(ctx.StructFieldIdentifier(), ctx.StructIndexFieldIdentifier()); err != nil {
+		return err
+	}
+	if structSubField := ctx.StructSubFieldIdentifier(); structSubField != nil {
+		return v.visitElementNullExpr(structSubField, planpb.NullExpr_IsNotNull)
+	}
 	column, err := v.getNullExprColumnInfo(ctx.FieldName(), ctx.JSONIdentifier())
 	if err != nil {
 		return err
@@ -2668,6 +2888,12 @@ func (v *ParserVisitor) VisitIsNotNull(ctx *parser.IsNotNullContext) interface{}
 }
 
 func (v *ParserVisitor) VisitIsNull(ctx *parser.IsNullContext) interface{} {
+	if err := checkStructSubFieldNullExpr(ctx.StructFieldIdentifier(), ctx.StructIndexFieldIdentifier()); err != nil {
+		return err
+	}
+	if structSubField := ctx.StructSubFieldIdentifier(); structSubField != nil {
+		return v.visitElementNullExpr(structSubField, planpb.NullExpr_IsNull)
+	}
 	column, err := v.getNullExprColumnInfo(ctx.FieldName(), ctx.JSONIdentifier())
 	if err != nil {
 		return err
@@ -2718,6 +2944,8 @@ func (v *ParserVisitor) VisitIsNull(ctx *parser.IsNullContext) interface{} {
 
 func (v *ParserVisitor) resolveContainsField(
 	field *ExprWithType,
+	funcName string,
+	operand string,
 ) (*planpb.ColumnInfo, error) {
 	columnInfo := toColumnInfo(field)
 	if columnInfo == nil {
@@ -2727,14 +2955,32 @@ func (v *ParserVisitor) resolveContainsField(
 		if !typeutil.IsArrayType(columnInfo.GetDataType()) {
 			return columnInfo, nil
 		}
+		// struct_array[i][sub] on an Array<T> sub-field is one Array<T> value.
+		leafType, ok, err := v.structIndexArrayLeafType(columnInfo)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			columnInfo.ElementType = leafType
+			return columnInfo, nil
+		}
 		fieldSchema, err := v.schema.GetFieldFromID(columnInfo.GetFieldId())
 		if err != nil {
 			return nil, err
 		}
 		if typeutil.IsNestedArrayTypeSchema(fieldSchema.GetTypeSchema()) {
+			if structName, subField, isSub := strings.Cut(fieldSchema.GetName(), "["); isSub && len(columnInfo.GetNestedPath()) == 0 {
+				subField = strings.TrimSuffix(subField, "]")
+				return nil, merr.WrapErrQueryPlanMsg(
+					"%s is not supported on the whole nested array struct sub-field %s; rewrite it as MATCH_ANY(%s, %s($[%s], ...))",
+					funcName, fieldSchema.GetName(), structName, funcName, subField)
+			}
 			return nil, merr.WrapErrQueryPlanMsg(
 				"contains operation is not supported on nested array field: %s",
 				fieldSchema.GetName())
+		}
+		if isScalarArrayElement(columnInfo) {
+			return nil, errArrayFuncOnScalarArrayElement(funcName, operand)
 		}
 		return columnInfo, nil
 	}
@@ -2781,7 +3027,7 @@ func (v *ParserVisitor) VisitJSONContains(ctx *parser.JSONContainsContext) inter
 	}
 
 	fieldExpr := field.(*ExprWithType)
-	columnInfo, err := v.resolveContainsField(fieldExpr)
+	columnInfo, err := v.resolveContainsField(fieldExpr, ctx.GetStart().GetText(), ctx.Expr(0).GetText())
 	if err != nil {
 		return err
 	}
@@ -2836,7 +3082,7 @@ func (v *ParserVisitor) VisitJSONContainsAll(ctx *parser.JSONContainsAllContext)
 	}
 
 	fieldExpr := field.(*ExprWithType)
-	columnInfo, err := v.resolveContainsField(fieldExpr)
+	columnInfo, err := v.resolveContainsField(fieldExpr, ctx.GetStart().GetText(), ctx.Expr(0).GetText())
 	if err != nil {
 		return err
 	}
@@ -2893,7 +3139,7 @@ func (v *ParserVisitor) VisitJSONContainsAny(ctx *parser.JSONContainsAnyContext)
 	}
 
 	fieldExpr := field.(*ExprWithType)
-	columnInfo, err := v.resolveContainsField(fieldExpr)
+	columnInfo, err := v.resolveContainsField(fieldExpr, ctx.GetStart().GetText(), ctx.Expr(0).GetText())
 	if err != nil {
 		return err
 	}
@@ -2959,6 +3205,21 @@ func (v *ParserVisitor) VisitArrayLength(ctx *parser.ArrayLengthContext) interfa
 			ElementType: field.GetElementType(),
 			Nullable:    field.GetNullable(),
 		}
+	} else if ctx.StructIndexFieldIdentifier() != nil {
+		// struct_array[i][sub]: only an Array<T> element has a length.
+		columnInfo, err = v.getColumnInfoFromStructIndexField(ctx.StructIndexFieldIdentifier().GetText())
+		if err != nil {
+			return err
+		}
+		leafType, ok, leafErr := v.structIndexArrayLeafType(columnInfo)
+		if leafErr != nil {
+			return leafErr
+		}
+		if !ok {
+			return merr.WrapErrParameterInvalidMsg(
+				"array_length on struct_array[index][sub_field] requires an Array<scalar> struct sub-field, got: %s", ctx.GetText())
+		}
+		columnInfo.ElementType = leafType
 	} else {
 		if ctx.FieldName() != nil {
 			if parentColumnInfo, ok, parentErr := v.getStructArrayParentColumnInfo(ctx.FieldName().GetText()); ok || parentErr != nil {
@@ -2976,6 +3237,9 @@ func (v *ParserVisitor) VisitArrayLength(ctx *parser.ArrayLengthContext) interfa
 		}
 		if err != nil {
 			return err
+		}
+		if ctx.JSONIdentifier() != nil && isScalarArrayElement(columnInfo) {
+			return errArrayFuncOnScalarArrayElement(ctx.GetStart().GetText(), ctx.JSONIdentifier().GetText())
 		}
 	}
 	if columnInfo == nil ||
@@ -3414,6 +3678,28 @@ func (v *ParserVisitor) VisitElementFilter(ctx *parser.ElementFilterContext) int
 			"membership_match filters are not supported inside element_filter element expressions")
 	}
 
+	// segcore evaluates the element expression on batches of struct elements
+	// and combines the result as an element bitmap. A non-boolean expression
+	// fails the segcore type check, and a row-level field there is read with
+	// element offsets, so both are rejected here with the rules of MATCH_*.
+	// The check runs before template values are filled; filling replaces values
+	// only and cannot change which columns or node kinds the expression uses.
+	if column := exprWithType.expr.GetColumnExpr(); column != nil && column.GetInfo().GetIsElementLevel() &&
+		typeutil.IsBoolType(exprWithType.dataType) {
+		return merr.WrapErrParameterInvalidMsg(
+			"element_filter predicate %s is a bare Bool sub-field; write it as a comparison, e.g. %s == true",
+			ctx.Expr().GetText(), ctx.Expr().GetText())
+	}
+	if column := exprWithType.expr.GetColumnExpr(); (column == nil || column.GetInfo().GetIsElementLevel()) &&
+		!canBeExecuted(exprWithType) {
+		return merr.WrapErrParameterInvalidMsg(
+			"element_filter predicate must be a boolean expression, got %s of type %s",
+			ctx.Expr().GetText(), exprWithType.dataType.String())
+	}
+	if _, err := validateElementLevelPredicate(exprWithType.expr, elementFilterPredicateScope(arrayFieldName)); err != nil {
+		return err
+	}
+
 	// Build ElementFilterExpr proto
 	return &ExprWithType{
 		expr: &planpb.Expr{
@@ -3454,10 +3740,6 @@ func (v *ParserVisitor) VisitStructSubField(ctx *parser.StructSubFieldContext) i
 
 	// In element-level context, use Array as storage type, element type for operations
 	elementType := field.GetElementType()
-	nullable := field.GetNullable()
-	if structField := v.schema.GetStructArrayFieldFromName(v.currentStructArrayField); structField != nil {
-		nullable = nullable || structField.GetNullable()
-	}
 
 	return &ExprWithType{
 		expr: &planpb.Expr{
@@ -3471,7 +3753,7 @@ func (v *ParserVisitor) VisitStructSubField(ctx *parser.StructSubFieldContext) i
 						IsPartitionKey:  field.IsPartitionKey,
 						IsClusteringKey: field.IsClusteringKey,
 						ElementType:     elementType, // Element type for operations
-						Nullable:        nullable,
+						Nullable:        v.structSubFieldElementNullable(field),
 						IsElementLevel:  true, // Mark as element-level access
 					},
 				},
@@ -3505,7 +3787,7 @@ func (v *ParserVisitor) parseMatchExpr(structArrayFieldName string, exprCtx pars
 	if predicateExpr == nil {
 		return merr.WrapErrParameterInvalidMsg("invalid predicate expression in %s: %s", funcName, exprCtx.GetText())
 	}
-	isElementLevel, err := validateMatchPredicateElementLevel(predicateExpr.expr)
+	isElementLevel, err := validateElementLevelPredicate(predicateExpr.expr, matchPredicateScope)
 	if err != nil {
 		return merr.WrapErrParameterInvalidMsg("invalid predicate expression in %s: %s", funcName, err)
 	}

@@ -22,7 +22,13 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/apache/arrow/go/v17/arrow"
+	"github.com/apache/arrow/go/v17/arrow/array"
+
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/storagecommon"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
 type quantileEntry struct {
@@ -50,6 +56,8 @@ type quantileEntry struct {
 // Not safe for concurrent use — the metacache SegmentStats wrapper guards it.
 type StatisticsCollector struct {
 	numRows            int64
+	unmeasuredPrefix   bool // A recovered nonempty segment had no Statistics to seed its collector.
+	fieldLogicalSizes  *datapb.FieldLogicalSizes
 	insertBinlogSize   int64
 	insertBinlogCount  int64
 	statsBinlogSize    int64
@@ -61,9 +69,14 @@ type StatisticsCollector struct {
 	timestampFrom      uint64
 	timestampTo        uint64
 	nullCounts         map[int64]int64
-	quantileEntries    []quantileEntry
-	columnGroups       map[int64]*datapb.ColumnGroupStatistics
-	formats            map[string]struct{}
+	// validElementCounts holds the VectorArray fields whose every binlog so
+	// far carried a valid element count; validElementUnknown the fields that
+	// lost it (see digestValidElementCounts).
+	validElementCounts  map[int64]int64
+	validElementUnknown map[int64]struct{}
+	quantileEntries     []quantileEntry
+	columnGroups        map[int64]*datapb.ColumnGroupStatistics
+	formats             map[string]struct{}
 }
 
 // NewStatisticsCollector returns an empty collector.
@@ -78,14 +91,17 @@ func NewStatisticsCollector() *StatisticsCollector {
 // the segment's authoritative row count (Statistics omits the insert row
 // count). The persisted TimestampQuantiles are reconstructed as synthetic
 // per-bucket entries so post-restart quantiles round-trip and keep
-// accumulating as new syncs arrive. Returns an empty collector when stats is
-// nil.
+// accumulating as new syncs arrive. A nil stats envelope can cover a nonempty
+// historical prefix. In that case future batches cannot establish field totals,
+// and existing statistics such as quantiles still start with the first new batch.
 func NewStatisticsCollectorFromStats(stats *datapb.Statistics, numRows int64) *StatisticsCollector {
-	c := &StatisticsCollector{}
 	if stats == nil {
-		return c
+		return &StatisticsCollector{unmeasuredPrefix: numRows > 0}
 	}
-	c.numRows = numRows
+	c := &StatisticsCollector{numRows: numRows}
+	if sizes := stats.GetFieldLogicalSizes(); FieldLogicalSizesCover(sizes, numRows) {
+		c.fieldLogicalSizes = cloneFieldLogicalSizes(sizes)
+	}
 	c.insertBinlogSize = stats.GetInsertBinlogSize()
 	c.insertBinlogCount = stats.GetInsertBinlogCount()
 	c.statsBinlogSize = stats.GetStatsBinlogSize()
@@ -106,6 +122,12 @@ func NewStatisticsCollectorFromStats(stats *datapb.Statistics, numRows int64) *S
 		c.nullCounts = make(map[int64]int64, len(nc))
 		for f, n := range nc {
 			c.nullCounts[f] = n
+		}
+	}
+	if vc := stats.GetValidElementCounts(); len(vc) > 0 {
+		c.validElementCounts = make(map[int64]int64, len(vc))
+		for f, n := range vc {
+			c.validElementCounts[f] = n
 		}
 	}
 	if fmts := stats.GetFormats(); len(fmts) > 0 {
@@ -224,7 +246,20 @@ func (c *StatisticsCollector) Digest(
 	statsBlobSize, rows int64,
 	tsFrom, tsTo uint64,
 ) {
+	c.DigestWithFieldSizes(inserts, delta, statsBlobSize, rows, tsFrom, tsTo, nil)
+}
+
+// DigestWithFieldSizes records one sync. sizes describes the inserted rows of
+// this sync, before they become part of the segment's committed prefix.
+func (c *StatisticsCollector) DigestWithFieldSizes(
+	inserts map[int64]*datapb.FieldBinlog, delta *datapb.FieldBinlog,
+	statsBlobSize, rows int64, tsFrom, tsTo uint64, sizes *datapb.FieldLogicalSizes,
+) {
+	if !c.unmeasuredPrefix && (rows != 0 || c.fieldLogicalSizes == nil) {
+		c.fieldLogicalSizes = AppendFieldLogicalSizes(c.fieldLogicalSizes, c.numRows, sizes, rows)
+	}
 	c.numRows += rows
+	c.digestValidElementCounts(inserts)
 	for _, fb := range inserts {
 		if len(fb.GetBinlogs()) == 0 {
 			continue
@@ -283,11 +318,62 @@ func (c *StatisticsCollector) Digest(
 	}
 }
 
+// digestValidElementCounts folds one sync's FieldValidElementCounts into the
+// collector. It must run before Digest records the sync's fields in
+// nullCounts, which it uses to tell whether a field already has data. A
+// field keeps a count only while every binlog of it carried one: a field
+// with data from before counts were recorded, or a binlog without the
+// entry, makes the count unknown for good, so a partial sum is never
+// published.
+func (c *StatisticsCollector) digestValidElementCounts(inserts map[int64]*datapb.FieldBinlog) {
+	for _, fb := range inserts {
+		if len(fb.GetBinlogs()) == 0 {
+			continue
+		}
+		members := fb.GetChildFields()
+		if len(members) == 0 {
+			members = []int64{fb.GetFieldID()}
+		}
+		for _, f := range members {
+			if _, ok := c.validElementUnknown[f]; ok {
+				continue
+			}
+			counted, missing := int64(0), 0
+			for _, l := range fb.GetBinlogs() {
+				n, ok := l.GetFieldValidElementCounts()[f]
+				if !ok {
+					missing++
+					continue
+				}
+				counted += n
+			}
+			_, known := c.validElementCounts[f]
+			_, hadData := c.nullCounts[f]
+			switch {
+			case missing == len(fb.GetBinlogs()) && !known:
+				// Not a counted VectorArray field (or never counted).
+				continue
+			case missing > 0 || (!known && hadData):
+				if c.validElementUnknown == nil {
+					c.validElementUnknown = make(map[int64]struct{})
+				}
+				c.validElementUnknown[f] = struct{}{}
+				delete(c.validElementCounts, f)
+			default:
+				if c.validElementCounts == nil {
+					c.validElementCounts = make(map[int64]int64)
+				}
+				c.validElementCounts[f] += counted
+			}
+		}
+	}
+}
+
 // Publish returns the cumulative Statistics digested so far, or nil if nothing
 // has been digested. No scaling — the value reflects exactly what the collector
 // has seen.
 func (c *StatisticsCollector) Publish() *datapb.Statistics {
-	if c.numRows == 0 && c.deltaBinlogCount == 0 && c.statsBinlogSize == 0 && c.insertBinlogCount == 0 && c.columnGroups == nil {
+	if c.numRows == 0 && c.fieldLogicalSizes == nil && c.deltaBinlogCount == 0 && c.statsBinlogSize == 0 && c.insertBinlogCount == 0 && c.columnGroups == nil {
 		return nil
 	}
 	var nullCounts map[int64]int64
@@ -295,6 +381,13 @@ func (c *StatisticsCollector) Publish() *datapb.Statistics {
 		nullCounts = make(map[int64]int64, len(c.nullCounts))
 		for f, n := range c.nullCounts {
 			nullCounts[f] = n
+		}
+	}
+	var validElementCounts map[int64]int64
+	if len(c.validElementCounts) > 0 {
+		validElementCounts = make(map[int64]int64, len(c.validElementCounts))
+		for f, n := range c.validElementCounts {
+			validElementCounts[f] = n
 		}
 	}
 	var formats []string
@@ -317,6 +410,8 @@ func (c *StatisticsCollector) Publish() *datapb.Statistics {
 		TimestampFrom:      c.timestampFrom,
 		TimestampTo:        c.timestampTo,
 		NullCounts:         nullCounts,
+		ValidElementCounts: validElementCounts,
+		FieldLogicalSizes:  cloneFieldLogicalSizes(c.fieldLogicalSizes),
 		TimestampQuantiles: c.quantiles(),
 		Formats:            formats,
 	}
@@ -363,10 +458,23 @@ func (c *StatisticsCollector) quantiles() []int64 {
 // SegmentStats wrapper to share the accumulator by pointer across Clone().
 func (c *StatisticsCollector) Clone() *StatisticsCollector {
 	cp := *c
+	cp.fieldLogicalSizes = cloneFieldLogicalSizes(c.fieldLogicalSizes)
 	if c.nullCounts != nil {
 		cp.nullCounts = make(map[int64]int64, len(c.nullCounts))
 		for f, n := range c.nullCounts {
 			cp.nullCounts[f] = n
+		}
+	}
+	if c.validElementCounts != nil {
+		cp.validElementCounts = make(map[int64]int64, len(c.validElementCounts))
+		for f, n := range c.validElementCounts {
+			cp.validElementCounts[f] = n
+		}
+	}
+	if c.validElementUnknown != nil {
+		cp.validElementUnknown = make(map[int64]struct{}, len(c.validElementUnknown))
+		for f := range c.validElementUnknown {
+			cp.validElementUnknown[f] = struct{}{}
 		}
 	}
 	if c.quantileEntries != nil {
@@ -453,6 +561,7 @@ func BuildStatsFromFieldBinlogs(binlogs, statslogs, bm25logs, deltalogs []*datap
 	}
 	s.TimestampTo = tsTo
 	s.NullCounts = nullCounts
+	s.ValidElementCounts = buildValidElementCounts(binlogs)
 	if len(formatSet) > 0 {
 		formats := make([]string, 0, len(formatSet))
 		for f := range formatSet {
@@ -535,4 +644,127 @@ func BuildStatsFromFieldBinlogs(binlogs, statslogs, bm25logs, deltalogs []*datap
 	}
 
 	return s
+}
+
+// VectorArrayValidElementCount returns the number of valid elements of a
+// VectorArray (ArrayOfVector) column: the elements of its non-null rows,
+// without null elements of an element-nullable field. ok is false when col
+// is not the list layout VectorArray columns use.
+func VectorArrayValidElementCount(col arrow.Array) (int64, bool) {
+	list, ok := col.(*array.List)
+	if !ok {
+		return 0, false
+	}
+	values := list.ListValues()
+	hasNullElements := values.NullN() > 0
+	var count int64
+	for i := 0; i < list.Len(); i++ {
+		if list.IsNull(i) {
+			continue
+		}
+		start, end := list.ValueOffsets(i)
+		if !hasNullElements {
+			count += end - start
+			continue
+		}
+		for j := start; j < end; j++ {
+			if values.IsValid(int(j)) {
+				count++
+			}
+		}
+	}
+	return count, true
+}
+
+// CollectVectorArrayValidElements adds the valid element counts of the
+// VectorArray fields of schema found in r to counts. A field whose column
+// cannot be counted moves to unknown and is never counted again, so no
+// binlog reports a partial count. Both maps are created on demand and
+// returned.
+func CollectVectorArrayValidElements(schema *schemapb.CollectionSchema, r Record,
+	counts map[FieldID]int64, unknown map[FieldID]struct{},
+) (map[FieldID]int64, map[FieldID]struct{}) {
+	for _, field := range typeutil.GetAllFieldSchemas(schema) {
+		if !typeutil.IsVectorArrayType(field.GetDataType()) {
+			continue
+		}
+		fieldID := field.GetFieldID()
+		if _, ok := unknown[fieldID]; ok {
+			continue
+		}
+		col := r.Column(fieldID)
+		if col == nil {
+			continue
+		}
+		if counts == nil {
+			counts = make(map[FieldID]int64)
+		}
+		n, ok := VectorArrayValidElementCount(col)
+		if !ok {
+			if unknown == nil {
+				unknown = make(map[FieldID]struct{})
+			}
+			unknown[fieldID] = struct{}{}
+			delete(counts, fieldID)
+			continue
+		}
+		counts[fieldID] += n
+	}
+	return counts, unknown
+}
+
+// ColumnGroupValidElementCounts returns the entries of counts for the fields
+// of columnGroup, or nil when it has none.
+func ColumnGroupValidElementCounts(columnGroup storagecommon.ColumnGroup, counts map[FieldID]int64) map[int64]int64 {
+	var result map[int64]int64
+	for _, fieldID := range columnGroup.Fields {
+		if n, ok := counts[fieldID]; ok {
+			if result == nil {
+				result = make(map[int64]int64)
+			}
+			result[fieldID] = n
+		}
+	}
+	return result
+}
+
+// buildValidElementCounts sums FieldValidElementCounts over binlogs. A field
+// gets an entry only when every binlog of every FieldBinlog that holds it
+// carries one; otherwise its count is unknown and it is left out.
+func buildValidElementCounts(binlogs []*datapb.FieldBinlog) map[int64]int64 {
+	var counts map[int64]int64
+	for _, fb := range binlogs {
+		for _, l := range fb.GetBinlogs() {
+			for f, n := range l.GetFieldValidElementCounts() {
+				if counts == nil {
+					counts = make(map[int64]int64)
+				}
+				counts[f] += n
+			}
+		}
+	}
+	for _, fb := range binlogs {
+		if len(fb.GetBinlogs()) == 0 {
+			continue
+		}
+		members := fb.GetChildFields()
+		if len(members) == 0 {
+			members = []int64{fb.GetFieldID()}
+		}
+		for _, f := range members {
+			if _, ok := counts[f]; !ok {
+				continue
+			}
+			for _, l := range fb.GetBinlogs() {
+				if _, ok := l.GetFieldValidElementCounts()[f]; !ok {
+					delete(counts, f)
+					break
+				}
+			}
+		}
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+	return counts
 }

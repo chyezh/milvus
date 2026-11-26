@@ -146,6 +146,13 @@ SegcoreSetPreferFieldDataWhenIndexHasRawData(const bool value) {
 }
 
 extern "C" void
+SegcoreSetLazyIndexSlotEnabled(const bool value) {
+    milvus::segcore::SegcoreConfig& config =
+        milvus::segcore::SegcoreConfig::default_config();
+    config.set_lazy_index_slot_enabled(value);
+}
+
+extern "C" void
 SegcoreSetLazyColumnGroupEnabled(const bool value) {
     milvus::segcore::SegcoreConfig& config =
         milvus::segcore::SegcoreConfig::default_config();
@@ -390,12 +397,10 @@ ConfigureTieredStorage(const CacheWarmupPolicy scalarFieldCacheWarmupPolicy,
                        const float overloaded_memory_threshold_percentage,
                        const float loading_resource_factor,
                        const float max_disk_usage_percentage,
-                       const char* disk_path,
                        const int64_t loading_timeout_ms,
                        const int64_t warmup_loading_timeout_ms,
                        const bool reject_remote_vector_output,
                        const uint32_t prefetch_pool_threads) {
-    std::string disk_path_str(disk_path);
     milvus::cachinglayer::Manager::ConfigureTieredStorage(
         {scalarFieldCacheWarmupPolicy,
          vectorFieldCacheWarmupPolicy,
@@ -415,7 +420,6 @@ ConfigureTieredStorage(const CacheWarmupPolicy scalarFieldCacheWarmupPolicy,
          cache_cell_unaccessed_survival_time,
          overloaded_memory_threshold_percentage,
          max_disk_usage_percentage,
-         std::move(disk_path_str),
          loading_resource_factor},
         std::chrono::milliseconds(loading_timeout_ms),
         std::chrono::milliseconds(warmup_loading_timeout_ms),

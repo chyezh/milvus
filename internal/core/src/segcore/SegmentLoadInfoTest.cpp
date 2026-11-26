@@ -64,12 +64,49 @@ TEST(LoonManifestPathTest, IsSameLoonManifestPathComparesRevision) {
 TEST(LoonManifestPathTest, ParseLoonManifestPathRequiresBasePathAndVersion) {
     auto revision = ParseLoonManifestPath(R"({"base_path":"files/b","ver":3})");
     ASSERT_TRUE(revision.has_value());
-    EXPECT_EQ(revision->first, "files/b");
-    EXPECT_EQ(revision->second, 3);
+    EXPECT_EQ(revision->base_path, "files/b");
+    EXPECT_EQ(revision->version, 3);
+    EXPECT_EQ(revision->size, -1);
     EXPECT_FALSE(
         ParseLoonManifestPath(R"({"base_path":"files/b"})").has_value());
     EXPECT_FALSE(ParseLoonManifestPath(R"({"ver":3})").has_value());
     EXPECT_FALSE(ParseLoonManifestPath("/path/a").has_value());
+}
+
+TEST(LoonManifestPathTest, ParseLoonManifestPathReadsOptionalSize) {
+    auto sized =
+        ParseLoonManifestPath(R"({"ver":3,"base_path":"files/b","size":1024})");
+    ASSERT_TRUE(sized.has_value());
+    EXPECT_EQ(sized->size, 1024);
+    // A size that is not an integer is treated as unknown.
+    auto malformed = ParseLoonManifestPath(
+        R"({"ver":3,"base_path":"files/b","size":"1024"})");
+    ASSERT_TRUE(malformed.has_value());
+    EXPECT_EQ(malformed->size, -1);
+}
+
+namespace {
+SealedFieldLayoutPtr
+LoadFieldsFor(const SchemaPtr& schema) {
+    return std::make_shared<const SealedFieldLayout>(
+        schema, LoadScope::FromLegacySchema(*schema));
+}
+}  // namespace
+
+TEST(SealedFieldLayoutTest, SharedOwnerOutlivesCreatingBinding) {
+    auto schema = std::make_shared<Schema>();
+    const auto id = schema->AddDebugField("pk", DataType::INT64);
+    schema->set_primary_field_id(id);
+    const auto* field = &(*schema)[id];
+    std::weak_ptr<const Schema> owner = schema;
+    auto a = LoadFieldsFor(schema);
+    auto b = a;
+    schema.reset();
+    a.reset();
+    ASSERT_FALSE(owner.expired());
+    EXPECT_EQ(&(*b)[id], field);  // FieldMeta is referenced, not deep-copied.
+    b.reset();
+    EXPECT_TRUE(owner.expired());
 }
 
 class SegmentLoadInfoTest : public ::testing::Test {
@@ -308,7 +345,7 @@ TEST_F(SegmentLoadInfoTest,
 
     SegmentLoadInfo info(proto_, schema_);
     auto load_index_info = info.ConvertFieldIndexInfoToLoadIndexInfo(
-        index_info, proto_.segmentid());
+        index_info, proto_.segmentid(), LoadFieldsFor(schema_));
 
     EXPECT_EQ(load_index_info.index_store_path_version,
               proto::index::IndexStorePathVersion::
@@ -442,7 +479,7 @@ TEST_F(SegmentLoadInfoTest,
     EXPECT_FALSE(current_info.HasIndexInfo(FieldId(101)));
     EXPECT_TRUE(current_info.GetFieldIndexInfos(FieldId(101)).empty());
 
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
     EXPECT_EQ(diff.indexes_to_replace.size(), 1);
     ASSERT_TRUE(diff.indexes_to_replace.count(FieldId(101)) > 0);
     ASSERT_EQ(diff.indexes_to_replace[FieldId(101)].size(), 1);
@@ -480,7 +517,7 @@ TEST_F(SegmentLoadInfoTest,
 
     SegmentLoadInfo new_info(current_info);
     new_info.ReplaceSchemaForReopen(new_schema);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(new_schema));
 
     EXPECT_TRUE(diff.indexes_to_load.empty());
     EXPECT_TRUE(diff.indexes_to_replace.empty());
@@ -515,8 +552,9 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffComparesManifestRevision) {
     SegmentLoadInfo next_info(next_proto, schema_);
     next_info.SetColumnGroupsForTesting(column_groups);
 
-    EXPECT_FALSE(current_info.ComputeDiff(same_info).manifest_updated);
-    auto diff = current_info.ComputeDiff(next_info);
+    EXPECT_FALSE(current_info.ComputeDiff(same_info, LoadFieldsFor(schema_))
+                     .manifest_updated);
+    auto diff = current_info.ComputeDiff(next_info, LoadFieldsFor(schema_));
     EXPECT_TRUE(diff.manifest_updated);
     EXPECT_EQ(diff.new_manifest_path, next_proto.manifest_path());
 }
@@ -579,14 +617,15 @@ TEST_F(SegmentLoadInfoTest,
     EXPECT_FALSE(new_info.HasTextIndexCreated(FieldId(101)));
     EXPECT_TRUE(new_info.HasTextIndexCreated(FieldId(102)));
 
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(new_schema));
     EXPECT_TRUE(diff.indexes_to_load.empty());
     EXPECT_TRUE(diff.indexes_to_replace.empty());
     EXPECT_EQ(diff.indexes_to_drop, std::set<FieldId>({FieldId(101)}));
 
     SegmentLoadInfo next_info(new_info);
     next_info.ReplaceSchemaForReopen(new_schema);
-    auto second_diff = new_info.ComputeDiff(next_info);
+    auto second_diff =
+        new_info.ComputeDiff(next_info, LoadFieldsFor(new_schema));
     EXPECT_TRUE(second_diff.indexes_to_load.empty());
     EXPECT_TRUE(second_diff.indexes_to_replace.empty());
     EXPECT_TRUE(second_diff.indexes_to_drop.empty());
@@ -694,7 +733,7 @@ TEST_F(SegmentLoadInfoTest, UnderlyingProtoAccess) {
 
     auto* mutable_proto = info.MutableProto();
     mutable_proto->set_segmentid(99999);
-    info.RebuildCache();
+    info.RebuildCache(LoadFieldsFor(schema_));
 
     EXPECT_EQ(info.GetSegmentID(), 99999);
 }
@@ -752,7 +791,7 @@ TEST_F(SegmentLoadInfoTest, GetLoadDiffWithIndexesOnly) {
     index_param2->set_value(milvus::index::INVERTED_INDEX_TYPE);
 
     SegmentLoadInfo info(test_proto, schema_);
-    auto diff = info.GetLoadDiff();
+    auto diff = info.GetLoadDiff(LoadFieldsFor(schema_));
     std::cout << diff.ToString() << "\n";
 
     EXPECT_TRUE(diff.HasChanges());
@@ -785,7 +824,7 @@ TEST_F(SegmentLoadInfoTest, GetLoadDiffWithBinlogsOnly) {
     log->set_entries_num(500);
 
     SegmentLoadInfo info(test_proto, schema_);
-    auto diff = info.GetLoadDiff();
+    auto diff = info.GetLoadDiff(LoadFieldsFor(schema_));
     std::cout << diff.ToString() << "\n";
 
     EXPECT_TRUE(diff.HasChanges());
@@ -825,7 +864,7 @@ TEST_F(SegmentLoadInfoTest, GetLoadDiffWithIndexesAndBinlogs) {
     log->set_entries_num(500);
 
     SegmentLoadInfo info(test_proto, schema_);
-    auto diff = info.GetLoadDiff();
+    auto diff = info.GetLoadDiff(LoadFieldsFor(schema_));
     std::cout << diff.ToString() << "\n";
 
     EXPECT_TRUE(diff.HasChanges());
@@ -865,7 +904,7 @@ TEST_F(SegmentLoadInfoTest, GetLoadDiffIgnoresIndexesWithoutFiles) {
     // No index_file_paths added
 
     SegmentLoadInfo info(test_proto, schema_);
-    auto diff = info.GetLoadDiff();
+    auto diff = info.GetLoadDiff(LoadFieldsFor(schema_));
     std::cout << diff.ToString() << "\n";
 
     EXPECT_TRUE(diff.HasChanges());
@@ -899,7 +938,7 @@ TEST_F(SegmentLoadInfoTest, GetLoadDiffWithMultipleIndexesPerField) {
     index_param2->set_value(knowhere::IndexEnum::INDEX_FAISS_IVFSQ8);
 
     SegmentLoadInfo info(test_proto, schema_);
-    auto diff = info.GetLoadDiff();
+    auto diff = info.GetLoadDiff(LoadFieldsFor(schema_));
 
     EXPECT_TRUE(diff.HasChanges());
     // Both indexes should be in indexes_to_load for the same field
@@ -932,7 +971,7 @@ TEST_F(SegmentLoadInfoTest, GetLoadDiffWithMultipleBinlogGroups) {
     log2->set_entries_num(500);
 
     SegmentLoadInfo info(test_proto, schema_);
-    auto diff = info.GetLoadDiff();
+    auto diff = info.GetLoadDiff(LoadFieldsFor(schema_));
 
     EXPECT_TRUE(diff.HasChanges());
     // Both binlog groups should be in binlogs_to_load
@@ -962,7 +1001,7 @@ TEST_F(SegmentLoadInfoTest, GetLoadDiffWithBinlogsLegacyFormat) {
     log->set_entries_num(500);
 
     SegmentLoadInfo info(test_proto, schema_);
-    auto diff = info.GetLoadDiff();
+    auto diff = info.GetLoadDiff(LoadFieldsFor(schema_));
     std::cout << "Legacy format diff: " << diff.ToString() << "\n";
 
     EXPECT_TRUE(diff.HasChanges());
@@ -999,7 +1038,7 @@ TEST_F(SegmentLoadInfoTest, GetLoadDiffWithMultipleBinlogsLegacyFormat) {
     log2->set_entries_num(500);
 
     SegmentLoadInfo info(test_proto, schema_);
-    auto diff = info.GetLoadDiff();
+    auto diff = info.GetLoadDiff(LoadFieldsFor(schema_));
 
     EXPECT_TRUE(diff.HasChanges());
     EXPECT_EQ(diff.binlogs_to_load.size(), 2);
@@ -1040,7 +1079,7 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffWithBinlogsLegacyFormat) {
 
     SegmentLoadInfo current_info(current_proto, schema_);
     SegmentLoadInfo new_info(new_proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
     std::cout << "ComputeDiff legacy format: " << diff.ToString() << "\n";
 
     EXPECT_TRUE(diff.HasChanges());
@@ -1087,7 +1126,7 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffDropFieldLegacyFormat) {
 
     SegmentLoadInfo current_info(current_proto, schema_);
     SegmentLoadInfo new_info(new_proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     EXPECT_TRUE(diff.HasChanges());
     // No new binlogs to load or replace
@@ -1152,7 +1191,7 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffMixedFormats) {
 
     SegmentLoadInfo current_info(current_proto, schema_);
     SegmentLoadInfo new_info(new_proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
     std::cout << "Mixed format diff: " << diff.ToString() << "\n";
 
     EXPECT_TRUE(diff.HasChanges());
@@ -1187,12 +1226,12 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffNoChangesLegacyFormat) {
     log->set_entries_num(500);
 
     SegmentLoadInfo current_info(proto, schema_);
-    auto diff = current_info.GetLoadDiff();
+    auto diff = current_info.GetLoadDiff(LoadFieldsFor(schema_));
     for (const auto& field_id : diff.fields_to_fill_default) {
         current_info.SetFieldFilledWithDefault(field_id);
     }
     SegmentLoadInfo new_info(proto, schema_);
-    diff = current_info.ComputeDiff(new_info);
+    diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     EXPECT_FALSE(diff.HasChanges());
     EXPECT_TRUE(diff.binlogs_to_load.empty());
@@ -1221,7 +1260,7 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffDefaultFieldsBasic) {
                                schema_);
     SegmentLoadInfo new_info(proto, schema_);
 
-    auto diff = empty_info.ComputeDiff(new_info);
+    auto diff = empty_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     // Fields 101-110 should be in fields_to_fill_default (no data source)
     // Field 100 has binlog, so it should NOT be in fields_to_fill_default
@@ -1267,7 +1306,7 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffDefaultFieldsSkipsFunctionOutput) {
     SegmentLoadInfo empty_info(milvus::proto::segcore::SegmentLoadInfo(),
                                schema);
     SegmentLoadInfo new_info(proto, schema);
-    auto diff = empty_info.ComputeDiff(new_info);
+    auto diff = empty_info.ComputeDiff(new_info, LoadFieldsFor(schema));
 
     for (const auto& field_id : diff.fields_to_fill_default) {
         EXPECT_NE(field_id, sparse_field_id);
@@ -1296,7 +1335,8 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffDefaultFieldsSkipAlreadyFilled) {
     SegmentLoadInfo empty_info(milvus::proto::segcore::SegmentLoadInfo(),
                                schema_);
     SegmentLoadInfo first_new_info(proto, schema_);
-    auto first_diff = empty_info.ComputeDiff(first_new_info);
+    auto first_diff =
+        empty_info.ComputeDiff(first_new_info, LoadFieldsFor(schema_));
 
     // Verify fields were added to fields_to_fill_default
     EXPECT_FALSE(first_diff.fields_to_fill_default.empty());
@@ -1305,7 +1345,8 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffDefaultFieldsSkipAlreadyFilled) {
     }
 
     SegmentLoadInfo second_new_info(proto, schema_);
-    auto second_diff = first_new_info.ComputeDiff(second_new_info);
+    auto second_diff =
+        first_new_info.ComputeDiff(second_new_info, LoadFieldsFor(schema_));
 
     // All previously filled fields should be skipped
     EXPECT_TRUE(second_diff.fields_to_fill_default.empty());
@@ -1313,7 +1354,8 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffDefaultFieldsSkipAlreadyFilled) {
     second_new_info.SetFieldsFilledWithDefault(
         first_new_info.GetDefaultFilledFieldsForNewInfo(second_new_info));
     SegmentLoadInfo third_new_info(proto, schema_);
-    auto third_diff = second_new_info.ComputeDiff(third_new_info);
+    auto third_diff =
+        second_new_info.ComputeDiff(third_new_info, LoadFieldsFor(schema_));
     EXPECT_TRUE(third_diff.fields_to_fill_default.empty());
 }
 
@@ -1343,7 +1385,7 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffDefaultFieldsWithIndex) {
     SegmentLoadInfo empty_info(milvus::proto::segcore::SegmentLoadInfo(),
                                schema_);
     SegmentLoadInfo new_info(proto, schema_);
-    auto diff = empty_info.ComputeDiff(new_info);
+    auto diff = empty_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     // Field 101 should NOT be in fields_to_fill_default (has index with raw
     // data)
@@ -1389,7 +1431,7 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffDefaultFieldsNotInBinlogsToLoad) {
 
     SegmentLoadInfo current_info(current_proto, schema_);
     SegmentLoadInfo new_info(new_proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     // Field 101 should be in binlogs_to_load, NOT in fields_to_fill_default
     bool found_in_binlogs = false;
@@ -1429,7 +1471,7 @@ TEST_F(SegmentLoadInfoTest, GetLoadDiffDefaultFields) {
     log2->set_entries_num(1000);
 
     SegmentLoadInfo info(proto, schema_);
-    auto diff = info.GetLoadDiff();
+    auto diff = info.GetLoadDiff(LoadFieldsFor(schema_));
 
     // Fields 102-110 should be in fields_to_fill_default
     std::set<int64_t> expected_fields = {
@@ -1487,7 +1529,7 @@ TEST_F(SegmentLoadInfoTest, CopyPreservesDefaultFilledFields) {
     new_log->set_entries_num(1000);
 
     SegmentLoadInfo new_info(new_proto, schema_);
-    auto diff = copied.ComputeDiff(new_info);
+    auto diff = copied.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     bool found_replace = false;
     for (const auto& [field_ids, binlog] : diff.binlogs_to_replace) {
@@ -1517,8 +1559,8 @@ TEST_F(SegmentLoadInfoTest, MovePreservesRawDataIndexFieldsForDefaultDiff) {
     index_param->set_key("index_type");
     index_param->set_value(knowhere::IndexEnum::INDEX_FAISS_IDMAP);
 
-    auto assert_field_101_has_data = [](SegmentLoadInfo& info) {
-        auto diff = info.GetLoadDiff();
+    auto assert_field_101_has_data = [this](SegmentLoadInfo& info) {
+        auto diff = info.GetLoadDiff(LoadFieldsFor(schema_));
         EXPECT_TRUE(diff.indexes_to_load.count(FieldId(101)) > 0);
         for (const auto& field_id : diff.fields_to_fill_default) {
             EXPECT_NE(field_id, FieldId(101));
@@ -1558,7 +1600,7 @@ TEST_F(SegmentLoadInfoTest,
     field_log->set_entries_num(1000);
 
     SegmentLoadInfo new_info(new_proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     for (const auto& field_id : diff.fields_to_fill_default) {
         EXPECT_NE(field_id, FieldId(101));
@@ -1701,7 +1743,7 @@ TEST_F(SegmentLoadInfoTest, GetLoadDiffTextIndexesFromStats) {
     text_stats.add_files("/path/to/text_index_file2");
 
     SegmentLoadInfo info(proto, schema_);
-    auto diff = info.GetLoadDiff();
+    auto diff = info.GetLoadDiff(LoadFieldsFor(schema_));
 
     // The text index should be in text_indexes_to_load
     EXPECT_EQ(diff.text_indexes_to_load.size(), 1);
@@ -1741,7 +1783,7 @@ TEST_F(SegmentLoadInfoTest, GetLoadDiffTextIndexesToCreate) {
     // No text stats provided - the text_field (102) has enable_match
     // so it should be in text_indexes_to_create
     SegmentLoadInfo info(proto, text_schema);
-    auto diff = info.GetLoadDiff();
+    auto diff = info.GetLoadDiff(LoadFieldsFor(text_schema));
 
     // text_field (102) should be in text_indexes_to_create
     EXPECT_TRUE(diff.text_indexes_to_create.count(FieldId(102)) > 0);
@@ -1777,7 +1819,7 @@ TEST_F(SegmentLoadInfoTest, GetLoadDiffTextIndexesPreBuiltSkipsCreate) {
     text_stats.add_files("/path/to/text_index");
 
     SegmentLoadInfo info(proto, text_schema);
-    auto diff = info.GetLoadDiff();
+    auto diff = info.GetLoadDiff(LoadFieldsFor(text_schema));
 
     // Field 102 should be in text_indexes_to_load (pre-built)
     EXPECT_EQ(diff.text_indexes_to_load.size(), 1);
@@ -1810,7 +1852,7 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffTextIndexNewTextStats) {
 
     SegmentLoadInfo current_info(current_proto, text_schema);
     SegmentLoadInfo new_info(new_proto, text_schema);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(text_schema));
 
     // Field 102 should be in text_indexes_to_load
     EXPECT_EQ(diff.text_indexes_to_load.size(), 1);
@@ -1845,9 +1887,9 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffTextIndexAlreadyLoaded) {
 
     SegmentLoadInfo current_info(proto, text_schema);
     // Calculate first diff to populate default fields etc.
-    auto first_diff = current_info.GetLoadDiff();
+    auto first_diff = current_info.GetLoadDiff(LoadFieldsFor(text_schema));
     SegmentLoadInfo new_info(proto, text_schema);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(text_schema));
 
     // No text index changes - both have the same text stats
     EXPECT_TRUE(diff.text_indexes_to_load.empty());
@@ -1868,7 +1910,7 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffTextIndexCreatedFromRawData) {
     current_info.SetTextIndexCreated(FieldId(102));
 
     SegmentLoadInfo new_info(proto, text_schema);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(text_schema));
 
     // Field 102 should NOT be in text_indexes_to_create (already created)
     EXPECT_TRUE(diff.text_indexes_to_create.count(FieldId(102)) == 0);
@@ -1893,7 +1935,7 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffTextIndexCreateForUnindexed) {
 
     SegmentLoadInfo current_info(current_proto, text_schema);
     SegmentLoadInfo new_info(new_proto, text_schema);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(text_schema));
 
     // Field 102 (enable_match=true) should be in text_indexes_to_create
     EXPECT_TRUE(diff.text_indexes_to_create.count(FieldId(102)) > 0);
@@ -1915,7 +1957,7 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffExternalTextIndexCreateForUnindexed) {
 
     SegmentLoadInfo current_info(current_proto, text_schema);
     SegmentLoadInfo new_info(new_proto, text_schema);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(text_schema));
 
     // Match internal collection behavior: without persisted text index stats,
     // load can create a runtime text index from raw field data.
@@ -1943,8 +1985,8 @@ TEST_F(SegmentLoadInfoTest, ConvertTextIndexStatsToLoadTextIndexInfo) {
     text_stats.add_files("/path/to/file3");
 
     SegmentLoadInfo info(proto, schema_);
-    auto load_info =
-        info.ConvertTextIndexStatsToLoadTextIndexInfo(text_stats, FieldId(101));
+    auto load_info = info.ConvertTextIndexStatsToLoadTextIndexInfo(
+        text_stats, FieldId(101), LoadFieldsFor(schema_));
 
     EXPECT_NE(load_info, nullptr);
     EXPECT_EQ(load_info->fieldid(), 101);
@@ -2018,7 +2060,7 @@ TEST_F(SegmentLoadInfoTest, ConvertJsonKeyStatsToLoadJsonKeyIndexInfo) {
 
     SegmentLoadInfo info(proto, schema_);
     auto load_info = info.ConvertJsonKeyStatsToLoadJsonKeyIndexInfo(
-        json_stats, FieldId(102));
+        json_stats, FieldId(102), LoadFieldsFor(schema_));
 
     EXPECT_NE(load_info, nullptr);
     EXPECT_EQ(load_info->fieldid(), 102);
@@ -2094,7 +2136,7 @@ TEST_F(SegmentLoadInfoTest, GetLoadDiffJsonStatsFromStats) {
     json_stats.add_files("meta.json");
 
     SegmentLoadInfo info(proto, schema_);
-    auto diff = info.GetLoadDiff();
+    auto diff = info.GetLoadDiff(LoadFieldsFor(schema_));
 
     EXPECT_EQ(diff.json_stats_to_load.size(), 1);
     EXPECT_TRUE(diff.json_stats_to_load.count(FieldId(102)) > 0);
@@ -2121,7 +2163,8 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffJsonStatsNewSameReplaceDropAndSkip) {
     proto::segcore::SegmentLoadInfo new_proto = current_proto;
     SegmentLoadInfo current_info(current_proto, schema_);
     SegmentLoadInfo new_same_info(new_proto, schema_);
-    auto same_diff = current_info.ComputeDiff(new_same_info);
+    auto same_diff =
+        current_info.ComputeDiff(new_same_info, LoadFieldsFor(schema_));
     EXPECT_TRUE(same_diff.json_stats_to_load.empty());
     EXPECT_TRUE(same_diff.json_stats_to_replace.empty());
     EXPECT_TRUE(same_diff.json_stats_to_drop.empty());
@@ -2136,13 +2179,14 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffJsonStatsNewSameReplaceDropAndSkip) {
     new_stats.set_base_path("/path/to/new_json_stats");
     new_stats.add_files("meta.json");
     SegmentLoadInfo new_info(new_proto, schema_);
-    auto new_diff = current_info.ComputeDiff(new_info);
+    auto new_diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
     EXPECT_EQ(new_diff.json_stats_to_load.size(), 1);
     EXPECT_TRUE(new_diff.json_stats_to_load.count(FieldId(103)) > 0);
 
     (*new_proto.mutable_jsonkeystatslogs())[102].set_version(2);
     SegmentLoadInfo replace_info(new_proto, schema_);
-    auto replace_diff = current_info.ComputeDiff(replace_info);
+    auto replace_diff =
+        current_info.ComputeDiff(replace_info, LoadFieldsFor(schema_));
     EXPECT_EQ(replace_diff.json_stats_to_replace.size(), 1);
     EXPECT_TRUE(replace_diff.json_stats_to_replace.count(FieldId(102)) > 0);
 
@@ -2152,7 +2196,8 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffJsonStatsNewSameReplaceDropAndSkip) {
     drop_proto.set_partitionid(300);
     drop_proto.set_num_of_rows(1000);
     SegmentLoadInfo drop_info(drop_proto, schema_);
-    auto drop_diff = current_info.ComputeDiff(drop_info);
+    auto drop_diff =
+        current_info.ComputeDiff(drop_info, LoadFieldsFor(schema_));
     EXPECT_EQ(drop_diff.json_stats_to_drop.size(), 1);
     EXPECT_TRUE(drop_diff.json_stats_to_drop.count(FieldId(102)) > 0);
 
@@ -2165,7 +2210,8 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffJsonStatsNewSameReplaceDropAndSkip) {
     invalid_stats.CopyFrom(current_stats);
     invalid_stats.set_json_key_stats_data_format(current_format - 1);
     SegmentLoadInfo invalid_info(invalid_proto, schema_);
-    auto invalid_diff = current_info.ComputeDiff(invalid_info);
+    auto invalid_diff =
+        current_info.ComputeDiff(invalid_info, LoadFieldsFor(schema_));
     EXPECT_TRUE(invalid_diff.json_stats_to_load.empty());
     EXPECT_TRUE(invalid_diff.json_stats_to_replace.empty());
     EXPECT_EQ(invalid_diff.json_stats_to_drop.size(), 1);
@@ -2191,7 +2237,7 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffJsonStatsDisabled) {
 
     SegmentLoadInfo current_info(current_proto, schema_);
     SegmentLoadInfo new_info(new_proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     EXPECT_TRUE(diff.json_stats_to_load.empty());
     EXPECT_TRUE(diff.json_stats_to_replace.empty());
@@ -2231,7 +2277,7 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffTextIndexMultipleFields) {
 
     SegmentLoadInfo current_info(current_proto, schema_);
     SegmentLoadInfo new_info(new_proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     // Only field 102 should be in text_indexes_to_load (101 already exists)
     EXPECT_EQ(diff.text_indexes_to_load.size(), 1);
@@ -2273,7 +2319,7 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffIndexReplace) {
 
     SegmentLoadInfo current_info(current_proto, schema_);
     SegmentLoadInfo new_info(new_proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
     std::cout << "Index replace diff: " << diff.ToString() << "\n";
 
     EXPECT_TRUE(diff.HasChanges());
@@ -2346,7 +2392,7 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffIndexReplaceMixed) {
 
     SegmentLoadInfo current_info(current_proto, schema_);
     SegmentLoadInfo new_info(new_proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
     std::cout << "Index replace mixed diff: " << diff.ToString() << "\n";
 
     // Field 101: old index_id=1001 dropped, new index_id=2001 in replace
@@ -2399,7 +2445,7 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffIndexReplaceDropConflict) {
 
     SegmentLoadInfo current_info(current_proto, schema_);
     SegmentLoadInfo new_info(new_proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     // ComputeDiff should produce BOTH replace and drop for field 101
     EXPECT_TRUE(diff.indexes_to_replace.count(FieldId(101)) > 0);
@@ -2463,7 +2509,7 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffDropsJsonIndexByNestedPath) {
         std::make_shared<milvus_storage::api::ColumnGroups>());
     current_info.CompactRuntimeInfoForManifest();
     EXPECT_EQ(current_info.GetIndexInfoCount(), 0);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     ASSERT_EQ(diff.json_indexes_to_drop.count(FieldId(102)), 1);
     EXPECT_EQ(diff.json_indexes_to_drop.at(FieldId(102)).count("a"), 1);
@@ -2499,7 +2545,7 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffBinlogReplace) {
 
     SegmentLoadInfo current_info(current_proto, schema_);
     SegmentLoadInfo new_info(new_proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
     std::cout << "Binlog replace diff: " << diff.ToString() << "\n";
 
     EXPECT_TRUE(diff.HasChanges());
@@ -2531,13 +2577,13 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffBinlogNoReplace) {
     log->set_entries_num(500);
 
     SegmentLoadInfo current_info(proto, schema_);
-    auto first_diff = current_info.GetLoadDiff();
+    auto first_diff = current_info.GetLoadDiff(LoadFieldsFor(schema_));
     for (const auto& field_id : first_diff.fields_to_fill_default) {
         current_info.SetFieldFilledWithDefault(field_id);
     }
 
     SegmentLoadInfo new_info(proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     EXPECT_FALSE(diff.HasChanges());
     EXPECT_TRUE(diff.binlogs_to_load.empty());
@@ -2610,7 +2656,7 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffDefaultFilledFieldBecomesReplace) {
     log1->set_entries_num(1000);
 
     SegmentLoadInfo current_info(initial_proto, schema_);
-    auto initial_diff = current_info.GetLoadDiff();
+    auto initial_diff = current_info.GetLoadDiff(LoadFieldsFor(schema_));
     EXPECT_FALSE(initial_diff.fields_to_fill_default.empty());
     for (const auto& field_id : initial_diff.fields_to_fill_default) {
         current_info.SetFieldFilledWithDefault(field_id);
@@ -2633,7 +2679,7 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffDefaultFilledFieldBecomesReplace) {
     new_log2->set_entries_num(1000);
 
     SegmentLoadInfo new_info(new_proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
     std::cout << "Default-filled replace diff: " << diff.ToString() << "\n";
 
     // Field 101 was default-filled → should be in binlogs_to_replace
@@ -2705,9 +2751,9 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffNewIndexWithRawDataNoFieldDrop) {
 
     SegmentLoadInfo current_info(current_proto, schema_);
     // Initialize default fields
-    (void)current_info.GetLoadDiff();
+    (void)current_info.GetLoadDiff(LoadFieldsFor(schema_));
     SegmentLoadInfo new_info(new_proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
     std::cout << "New index with raw data diff: " << diff.ToString() << "\n";
 
     // Index should be in indexes_to_load
@@ -2758,9 +2804,9 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffReplaceIndexWithRawDataNoFieldDrop) {
     new_param->set_value(milvus::index::ASCENDING_SORT);
 
     SegmentLoadInfo current_info(current_proto, schema_);
-    (void)current_info.GetLoadDiff();
+    (void)current_info.GetLoadDiff(LoadFieldsFor(schema_));
     SegmentLoadInfo new_info(new_proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
     std::cout << "Replace index with raw data diff: " << diff.ToString()
               << "\n";
 
@@ -2803,9 +2849,9 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffNewIndexNoRawDataNoFieldDrop) {
     param->set_value(milvus::index::INVERTED_INDEX_TYPE);
 
     SegmentLoadInfo current_info(current_proto, schema_);
-    (void)current_info.GetLoadDiff();
+    (void)current_info.GetLoadDiff(LoadFieldsFor(schema_));
     SegmentLoadInfo new_info(new_proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
     std::cout << "New index no raw data diff: " << diff.ToString() << "\n";
 
     // Index should be in indexes_to_load
@@ -2836,9 +2882,9 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffUnchangedIndexNoFieldDrop) {
     param->set_value(milvus::index::ASCENDING_SORT);
 
     SegmentLoadInfo current_info(proto, schema_);
-    (void)current_info.GetLoadDiff();
+    (void)current_info.GetLoadDiff(LoadFieldsFor(schema_));
     SegmentLoadInfo new_info(proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     // No index changes
     EXPECT_TRUE(diff.indexes_to_load.empty());
@@ -2888,9 +2934,9 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffReloadFieldRawToNoRaw) {
     new_param->set_value(milvus::index::INVERTED_INDEX_TYPE);
 
     SegmentLoadInfo current_info(current_proto, schema_);
-    (void)current_info.GetLoadDiff();
+    (void)current_info.GetLoadDiff(LoadFieldsFor(schema_));
     SegmentLoadInfo new_info(new_proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
     std::cout << "Raw->NoRaw reload diff: " << diff.ToString() << "\n";
 
     // Index should be replaced
@@ -2944,9 +2990,9 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffReloadFieldIndexDropped) {
     new_log->set_entries_num(1000);
 
     SegmentLoadInfo current_info(current_proto, schema_);
-    (void)current_info.GetLoadDiff();
+    (void)current_info.GetLoadDiff(LoadFieldsFor(schema_));
     SegmentLoadInfo new_info(new_proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
     std::cout << "Index dropped reload diff: " << diff.ToString() << "\n";
 
     // Index should be dropped
@@ -2986,12 +3032,12 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffNoReloadWhenIndexStaysRaw) {
     param->set_value(milvus::index::ASCENDING_SORT);
 
     SegmentLoadInfo current_info(proto, schema_);
-    auto initial_diff = current_info.GetLoadDiff();
+    auto initial_diff = current_info.GetLoadDiff(LoadFieldsFor(schema_));
     for (const auto& field_id : initial_diff.fields_to_fill_default) {
         current_info.SetFieldFilledWithDefault(field_id);
     }
     SegmentLoadInfo new_info(proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     // No changes at all
     EXPECT_FALSE(diff.HasChanges());
@@ -3028,7 +3074,7 @@ TEST_F(SegmentLoadInfoTest,
 
     SegmentLoadInfo current_info(current_proto, schema_);
     SegmentLoadInfo new_info(new_proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     EXPECT_TRUE(diff.HasChanges());
     ASSERT_EQ(diff.binlogs_to_replace.size(), 1);
@@ -3059,7 +3105,7 @@ TEST_F(SegmentLoadInfoTest,
 
     SegmentLoadInfo current_info(current_proto, schema_);
     SegmentLoadInfo new_info(new_proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     ASSERT_EQ(diff.binlogs_to_replace.size(), 1);
     ASSERT_EQ(diff.binlogs_to_replace[0].first.size(), 1);
@@ -3082,9 +3128,9 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffBinlogSameGroupIdenticalFilesNoDiff) {
     log2->set_entries_num(500);
 
     SegmentLoadInfo current_info(proto, schema_);
-    (void)current_info.GetLoadDiff();
+    (void)current_info.GetLoadDiff(LoadFieldsFor(schema_));
     SegmentLoadInfo new_info(proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     EXPECT_TRUE(diff.binlogs_to_load.empty());
     EXPECT_TRUE(diff.binlogs_to_replace.empty());
@@ -3110,7 +3156,7 @@ TEST_F(SegmentLoadInfoTest,
 
     SegmentLoadInfo current_info(proto, schema_);
     SegmentLoadInfo new_info(proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     EXPECT_TRUE(diff.binlogs_to_load.empty());
     EXPECT_TRUE(diff.binlogs_to_replace.empty());
@@ -3139,7 +3185,7 @@ TEST_F(SegmentLoadInfoTest,
 
     SegmentLoadInfo current_info(current_proto, schema_);
     SegmentLoadInfo new_info(new_proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     ASSERT_EQ(diff.binlogs_to_replace.size(), 1);
     std::set<int64_t> replaced;
@@ -3179,7 +3225,7 @@ TEST_F(SegmentLoadInfoTest,
 
     SegmentLoadInfo current_info(current_proto, schema_);
     SegmentLoadInfo new_info(new_proto, schema_);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     ASSERT_EQ(diff.binlogs_to_replace.size(), 1);
     ASSERT_EQ(diff.binlogs_to_replace[0].first.size(), 1);
@@ -3271,6 +3317,183 @@ MakeSchemaWithFieldIds(std::initializer_list<int64_t> field_ids) {
 
 }  // namespace
 
+TEST(SealedFieldLayoutTest, ManifestBindingIsIndependentOfLogicalAndOldViews) {
+    auto schema = MakeSchemaWithFieldIds({101, 103});
+    schema->set_external_source("s3://bucket/snapshot");
+    schema->set_external_spec(R"({"format":"milvus-table"})");
+    auto logical = LoadFieldsFor(schema);
+    auto groups =
+        MakeExternalColumnGroups({{{"101", "103"}, {"file.parquet"}}});
+    groups->front()->files.front().properties["milvus_table.field_id_mapping"] =
+        R"({"101":"103","103":"101"})";
+    SegmentLoadInfo first(
+        MakeManifestProto(R"({"base_path":"target","ver":1})"), logical);
+    first.SetColumnGroupsForTesting(groups);
+    auto bound = first.BindManifestFields(logical);
+    EXPECT_EQ(bound->get_storage_column_name(FieldId(101)), "103");
+    EXPECT_EQ(bound->ResolveColumnFieldIds("101"),
+              (std::vector<FieldId>{FieldId(103)}));
+    EXPECT_EQ(
+        bound->WithIndexMeta(nullptr)->get_storage_column_name(FieldId(103)),
+        "101");
+    EXPECT_EQ(logical->get_storage_column_name(FieldId(101)), "101");
+
+    SegmentLoadInfo recovered(first);
+    auto after_recovery = recovered.BindManifestFields(logical);
+    EXPECT_EQ(after_recovery->get_storage_column_name(FieldId(101)), "103");
+    auto next_groups =
+        MakeExternalColumnGroups({{{"101", "103"}, {"next.parquet"}}});
+    next_groups->front()
+        ->files.front()
+        .properties["milvus_table.field_id_mapping"] =
+        R"({"101":"101","103":"103"})";
+    SegmentLoadInfo next(MakeManifestProto(R"({"base_path":"target","ver":2})"),
+                         logical);
+    next.SetColumnGroupsForTesting(next_groups);
+    next.InheritCachedColumnGroupsFrom(first);
+    auto rebound = next.BindManifestFields(bound);
+    EXPECT_EQ(rebound->get_storage_column_name(FieldId(101)), "101");
+    EXPECT_EQ(bound->get_storage_column_name(FieldId(101)), "103");
+
+    auto expanded = MakeSchemaWithFieldIds({101, 103, 104});
+    expanded->set_external_source("s3://bucket/snapshot");
+    expanded->set_external_spec(R"({"format":"milvus-table"})");
+    auto before_refresh = first.BindManifestFields(LoadFieldsFor(expanded));
+    EXPECT_FALSE(before_refresh->has_field(FieldId(104)));
+    EXPECT_FALSE(before_refresh->ShouldPreload(FieldId(104)));
+    EXPECT_EQ(before_refresh->get_field_ids(), bound->get_field_ids());
+    EXPECT_THROW(before_refresh->get_storage_column_name(FieldId(104)),
+                 SegcoreError);
+    EXPECT_FALSE(recovered.BindManifestFields(LoadFieldsFor(expanded))
+                     ->has_field(FieldId(104)));
+
+    auto refreshed_groups =
+        MakeExternalColumnGroups({{{"101", "103", "105"}, {"next.parquet"}}});
+    refreshed_groups->front()
+        ->files.front()
+        .properties["milvus_table.field_id_mapping"] =
+        R"({"101":"103","103":"101","104":"105"})";
+    SegmentLoadInfo refreshed(
+        MakeManifestProto(R"({"base_path":"target","ver":3})"),
+        LoadFieldsFor(expanded));
+    refreshed.SetColumnGroupsForTesting(refreshed_groups);
+    auto after_refresh = refreshed.BindManifestFields(before_refresh);
+    EXPECT_TRUE(after_refresh->has_field(FieldId(104)));
+    EXPECT_TRUE(after_refresh->ShouldPreload(FieldId(104)));
+    EXPECT_EQ(after_refresh->get_storage_column_name(FieldId(104)), "105");
+    EXPECT_FALSE(before_refresh->has_field(FieldId(104)));
+    EXPECT_EQ(bound->get_storage_column_name(FieldId(101)), "103");
+}
+
+TEST(SealedFieldLayoutTest, LegacyManifestKeepsAddedFieldsUnavailable) {
+    auto schema = MakeSchemaWithFieldIds({101, 103, 104});
+    schema->set_external_source("s3://bucket/snapshot");
+    schema->set_external_spec(R"({"format":"milvus-table"})");
+    auto logical = LoadFieldsFor(schema);
+    SegmentLoadInfo info(MakeManifestProto(R"({"base_path":"target","ver":1})"),
+                         logical);
+    info.SetColumnGroupsForTesting(MakeExternalColumnGroups(
+        {{{"101", "103", "0", "9223372036854775807"}, {"legacy.parquet"}}}));
+    auto bound = info.BindManifestFields(logical);
+    EXPECT_EQ(bound->get_storage_column_name(FieldId(101)), "101");
+    EXPECT_TRUE(bound->has_field(FieldId(103)));
+    EXPECT_FALSE(bound->has_field(FieldId(104)));
+    EXPECT_FALSE(bound->ShouldPreload(FieldId(104)));
+    EXPECT_THROW(bound->get_storage_column_name(FieldId(104)), SegcoreError);
+    EXPECT_TRUE(logical->has_field(FieldId(104)));
+    for (const auto& invalid :
+         {"not-an-id", "01", "-1", "+101", "", "9223372036854775808"}) {
+        SegmentLoadInfo malformed(
+            MakeManifestProto(R"({"base_path":"target","ver":2})"), logical);
+        malformed.SetColumnGroupsForTesting(
+            MakeExternalColumnGroups({{{invalid}, {"legacy.parquet"}}}));
+        try {
+            (void)malformed.BindManifestFields(logical);
+            FAIL() << "accepted invalid legacy field ID " << invalid;
+        } catch (const SegcoreError& err) {
+            EXPECT_EQ(err.get_error_code(), DataFormatBroken);
+        }
+    }
+}
+
+TEST(SealedFieldLayoutTest, PrepareForLoadConvertsNewlyBoundFieldIndex) {
+    auto schema = MakeSchemaWithFieldIds({101, 104});
+    schema->set_external_source("s3://bucket/snapshot");
+    schema->set_external_spec(R"({"format":"milvus-table"})");
+    const FieldId added(104);
+    auto logical = LoadFieldsFor(schema);
+    SegmentLoadInfo previous(
+        MakeManifestProto(R"({"base_path":"target","ver":1})"), logical);
+    previous.SetColumnGroupsForTesting(
+        MakeExternalColumnGroups({{{"101"}, {"old.parquet"}}}));
+    auto previous_layout = previous.BindManifestFields(logical);
+    ASSERT_FALSE(previous_layout->has_field(added));
+
+    auto next_proto = MakeManifestProto(R"({"base_path":"target","ver":2})");
+    SegmentLoadInfo cached(next_proto, logical);
+    cached.SetColumnGroupsForTesting(
+        MakeExternalColumnGroups({{{"101", "104"}, {"new.parquet"}}}));
+    auto* index = next_proto.add_index_infos();
+    index->set_fieldid(added.get());
+    index->set_indexid(201);
+    index->add_index_file_paths("index/201");
+    auto* type = index->add_index_params();
+    type->set_key(milvus::index::INDEX_TYPE);
+    type->set_value(milvus::index::ASCENDING_SORT);
+
+    auto [prepared, fields] =
+        SegmentLoadInfo::PrepareForLoad(next_proto, previous_layout, cached);
+    EXPECT_TRUE(fields->has_field(added));
+    auto indexes = prepared.GetFieldIndexInfos(added);
+    ASSERT_EQ(indexes.size(), 1);
+    EXPECT_EQ(indexes.front().index_id, 201);
+}
+
+TEST(SealedFieldLayoutTest, NamedExternalColumnsDoNotUseLegacyIdentity) {
+    auto schema = MakeSchemaWithFieldIds({101});
+    schema->set_external_source("s3://bucket/data.parquet");
+    schema->set_external_spec(R"({"format":"parquet"})");
+    auto logical = LoadFieldsFor(schema);
+    SegmentLoadInfo info(MakeManifestProto(R"({"base_path":"target","ver":1})"),
+                         logical);
+    info.SetColumnGroupsForTesting(
+        MakeExternalColumnGroups({{{"named_column"}, {"data.parquet"}}}));
+    auto bound = info.BindManifestFields(logical);
+    EXPECT_EQ(bound->get_field_ids(), logical->get_field_ids());
+}
+
+TEST(SealedFieldLayoutTest, PartialScopePreservesColumnGroupLocalFormats) {
+    auto schema = std::make_shared<Schema>();
+    for (int64_t id : {101, 104}) {
+        schema->AddField(FieldMeta(FieldName("field_" + std::to_string(id)),
+                                   FieldId(id),
+                                   DataType::INT64,
+                                   false,
+                                   std::nullopt,
+                                   "",
+                                   LOCAL_FORMAT_VORTEX));
+    }
+    auto partial =
+        std::make_shared<const SealedFieldLayout>(schema, LoadScope({101}));
+    EXPECT_TRUE(partial->IsVortexColumn("104"));
+    EXPECT_FALSE(partial->has_field(FieldId(104)));
+    auto external = std::make_shared<Schema>(*schema);
+    external->set_external_source("s3://bucket/snapshot");
+    external->set_external_spec(R"({"format":"milvus-table"})");
+    auto external_partial =
+        std::make_shared<const SealedFieldLayout>(external, LoadScope({101}));
+    auto mapping = std::make_shared<MilvusTableFieldIdMapping>();
+    mapping->physical_columns = {{101, "103"}, {104, "105"}};
+    mapping->target_fields = {{"103", 101}, {"105", 104}};
+    auto bound = external_partial->WithManifestMapping(mapping);
+    EXPECT_TRUE(bound->IsVortexColumn("105"));
+    EXPECT_FALSE(bound->has_field(FieldId(104)));
+    auto projected = std::make_shared<MilvusTableFieldIdMapping>();
+    projected->physical_columns = {{101, "103"}};
+    projected->target_fields = {{"103", 101}};
+    EXPECT_NO_THROW(external_partial->WithManifestMapping(projected));
+}
+
 TEST_F(SegmentLoadInfoTest, ConstructSkipsIndexInfoForDroppedField) {
     proto::segcore::SegmentLoadInfo p;
     p.set_segmentid(100);
@@ -3306,7 +3529,8 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffSkipsNewBinlogForDroppedField) {
     auto latest_schema = MakeSchemaWithFieldIds({100, 101});
     SegmentLoadInfo current_info(current_proto, latest_schema);
     SegmentLoadInfo new_info(new_proto, latest_schema);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff =
+        current_info.ComputeDiff(new_info, LoadFieldsFor(latest_schema));
 
     EXPECT_TRUE(diff.binlogs_to_load.empty());
     EXPECT_TRUE(diff.binlogs_to_replace.empty());
@@ -3332,7 +3556,8 @@ TEST_F(SegmentLoadInfoTest,
     auto latest_schema = MakeSchemaWithFieldIds({100, 105});
     SegmentLoadInfo current_info(current_proto, latest_schema);
     SegmentLoadInfo new_info(new_proto, latest_schema);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff =
+        current_info.ComputeDiff(new_info, LoadFieldsFor(latest_schema));
 
     ASSERT_EQ(diff.binlogs_to_load.size(), 1);
     ASSERT_EQ(diff.binlogs_to_load[0].first.size(), 1);
@@ -3349,7 +3574,8 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffSkipsNewManifestColumnForDroppedField) {
     new_info.SetColumnGroupsForTesting(
         MakeColumnGroups({{{102}, {"/path/to/stale.parquet"}}}));
 
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff =
+        current_info.ComputeDiff(new_info, LoadFieldsFor(latest_schema));
 
     EXPECT_TRUE(diff.column_groups_to_load.empty());
     EXPECT_TRUE(diff.column_groups_to_replace.empty());
@@ -3368,7 +3594,8 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffDropsManifestFieldRemovedFromSchema) {
     new_info.SetColumnGroupsForTesting(
         MakeColumnGroups({{{102}, {"/path/to/stale.parquet"}}}));
 
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff =
+        current_info.ComputeDiff(new_info, LoadFieldsFor(latest_schema));
 
     EXPECT_TRUE(diff.field_data_to_drop.count(FieldId(102)) > 0);
     EXPECT_TRUE(diff.column_groups_to_load.empty());
@@ -3396,7 +3623,8 @@ TEST_F(SegmentLoadInfoTest, SchemaReopenLoadsNewFieldWithBinlog) {
 
     SegmentLoadInfo current_info(current_proto, MakeSchemaWithFieldIds({100}));
     SegmentLoadInfo new_info(new_proto, MakeSchemaWithFieldIds({100, 101}));
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(
+        new_info, LoadFieldsFor(MakeSchemaWithFieldIds({100, 101})));
 
     bool found_load = false;
     for (const auto& [field_ids, binlog] : diff.binlogs_to_load) {
@@ -3425,7 +3653,8 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffDefaultFieldsUsesNewSchema) {
 
     SegmentLoadInfo current_info(current_proto, MakeSchemaWithFieldIds({100}));
     SegmentLoadInfo new_info(new_proto, MakeSchemaWithFieldIds({100, 101}));
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(
+        new_info, LoadFieldsFor(MakeSchemaWithFieldIds({100, 101})));
 
     EXPECT_EQ(diff.fields_to_fill_default.size(), 1);
     EXPECT_EQ(diff.fields_to_fill_default[0].get(), 101);
@@ -3453,7 +3682,8 @@ TEST_F(SegmentLoadInfoTest,
     SegmentLoadInfo current_info(current_proto,
                                  MakeSchemaWithFieldIds({100, 102}));
     SegmentLoadInfo new_info(new_proto, MakeSchemaWithFieldIds({100}));
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(
+        new_info, LoadFieldsFor(MakeSchemaWithFieldIds({100})));
 
     EXPECT_TRUE(diff.indexes_to_drop.count(FieldId(102)) > 0);
     EXPECT_TRUE(diff.field_data_to_drop.count(FieldId(102)) > 0);
@@ -3488,7 +3718,8 @@ TEST_F(SegmentLoadInfoTest,
     new_info.SetColumnGroupsForTesting(cgs);
 
     LoadDiff diff;
-    EXPECT_NO_THROW({ diff = current_info.ComputeDiff(new_info); });
+    EXPECT_NO_THROW(
+        { diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_)); });
     ASSERT_EQ(diff.indexes_to_load.size(), 1);
     EXPECT_TRUE(diff.indexes_to_load.count(FieldId(101)) > 0);
     EXPECT_FALSE(diff.load_external_manifest);
@@ -3547,7 +3778,8 @@ TEST_F(SegmentLoadInfoTest,
     new_info.SetColumnGroupsForTesting(new_cgs);
 
     LoadDiff diff;
-    EXPECT_NO_THROW({ diff = current_info.ComputeDiff(new_info); });
+    EXPECT_NO_THROW(
+        { diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_)); });
     EXPECT_TRUE(diff.manifest_updated);
     EXPECT_EQ(diff.new_manifest_path, "/manifest/v2");
     EXPECT_TRUE(diff.load_external_manifest);
@@ -3580,7 +3812,7 @@ TEST_F(SegmentLoadInfoTest,
     SegmentLoadInfo new_info(MakeManifestProto("/manifest/new"), schema_);
     new_info.SetColumnGroupsForTesting(new_cgs);
 
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     EXPECT_TRUE(diff.manifest_updated);
     // User fields (105, 106) at the unchanged index 1 must be replaced
@@ -3614,7 +3846,7 @@ TEST_F(SegmentLoadInfoTest,
     SegmentLoadInfo new_info(MakeManifestProto("/manifest/v1"), schema_);
     new_info.SetColumnGroupsForTesting(cgs);
 
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     EXPECT_FALSE(diff.manifest_updated);
     EXPECT_TRUE(diff.column_groups_to_load.empty());
@@ -3636,7 +3868,7 @@ TEST_F(SegmentLoadInfoTest,
     SegmentLoadInfo new_info(MakeManifestProto("/manifest/new"), schema_);
     new_info.SetColumnGroupsForTesting(new_cgs);
 
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     bool saw_user_group = false;
     for (const auto& [idx, fields] : diff.column_groups_to_replace) {
@@ -3670,7 +3902,7 @@ TEST_F(SegmentLoadInfoTest,
     SegmentLoadInfo new_info(MakeManifestProto("/manifest/new"), schema_);
     new_info.SetColumnGroupsForTesting(new_cgs);
 
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     int emissions_for_106 = 0;
     for (const auto& [idx, fields] : diff.column_groups_to_replace) {
@@ -3735,7 +3967,7 @@ TEST_F(SegmentLoadInfoTest,
     SegmentLoadInfo new_info(MakeManifestProto("/manifest/new"), schema_);
     new_info.SetColumnGroupsForTesting(new_cgs);
 
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     bool saw_user_group = false;
     for (const auto& [idx, fields] : diff.column_groups_to_replace) {
@@ -3801,7 +4033,7 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffDefaultFieldsDroppedField) {
 
     SegmentLoadInfo current_info(current_proto, schema_);  // old schema has 110
     SegmentLoadInfo new_info(new_proto, new_schema);       // new schema no 110
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(new_schema));
 
     // Field 110 is dropped — it should NOT be in fields_to_fill_default
     for (const auto& fid : diff.fields_to_fill_default) {
@@ -3841,7 +4073,7 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffTextIndexesDroppedField) {
 
     SegmentLoadInfo current_info(current_proto, old_schema);
     SegmentLoadInfo new_info(new_proto, new_schema);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(new_schema));
 
     // Field 102 is dropped — it should NOT be in text_indexes_to_create
     EXPECT_TRUE(diff.text_indexes_to_create.count(FieldId(102)) == 0)
@@ -3895,7 +4127,7 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffBinlogsDroppedField) {
 
     SegmentLoadInfo current_info(current_proto, schema_);
     SegmentLoadInfo new_info(new_proto, new_schema);
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(new_schema));
 
     // Field 102 is dropped — should NOT appear in binlogs_to_load
     for (const auto& [field_ids, binlog] : diff.binlogs_to_load) {
@@ -3977,7 +4209,7 @@ TEST_F(SegmentLoadInfoTest,
     new_info.SetColumnGroupsForTesting(
         MakeColumnGroups({{{108}, {"/cg/108.parquet"}}}));
 
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     bool loaded = ColumnGroupFieldPresent(diff.column_groups_to_load, 108) ||
                   ColumnGroupFieldPresent(diff.column_groups_to_lazyload, 108);
@@ -4001,7 +4233,7 @@ TEST_F(SegmentLoadInfoTest, ComputeDiffColumnGroupNeverSkipsPrimaryKey) {
     new_info.SetColumnGroupsForTesting(
         MakeColumnGroups({{{100}, {"/cg/100.parquet"}}}));
 
-    auto diff = current_info.ComputeDiff(new_info);
+    auto diff = current_info.ComputeDiff(new_info, LoadFieldsFor(schema_));
 
     // pk must NOT be skipped: it lands in a load list (lazy, since its index
     // reports raw data, but still resident).
@@ -4036,4 +4268,172 @@ TEST(IndexFactoryRawDataTest,
         milvus::index::CanUseIndexRawDataForField(DataType::INT64, false));
     EXPECT_FALSE(
         milvus::index::CanUseIndexRawDataForField(DataType::JSON, false));
+}
+
+TEST(SegmentLoadInfoLifetimeTest, SelectionSurvivesSchemaRetirement) {
+    auto schema = std::make_shared<Schema>();
+    auto id = schema->AddDebugField("value", DataType::INT64);
+    schema->set_primary_field_id(id);
+    std::weak_ptr<Schema> weak = schema;
+    proto::segcore::SegmentLoadInfo info;
+    SegmentLoadInfo load(info, schema, LoadScope({id.get()}));
+    schema.reset();
+    EXPECT_TRUE(weak.expired());
+    EXPECT_TRUE(load.HasFieldInSchema(id));
+    EXPECT_FALSE(load.HasFieldInSchema(FieldId(id.get() + 1)));
+    auto retained = load;
+    EXPECT_TRUE(retained.HasFieldInSchema(id));
+}
+
+TEST(SealedFieldLayoutTest, ExplicitEmptyScopeDoesNotLoadAllFields) {
+    auto schema = std::make_shared<Schema>();
+    auto id = schema->AddDebugField("value", DataType::INT64);
+    SealedFieldLayout empty(schema, LoadScope({}));
+    SealedFieldLayout selected(schema, LoadScope({id.get()}, {id.get()}));
+    EXPECT_FALSE(empty.IsFieldInLoadScope(id));
+    EXPECT_FALSE(empty.ShouldLoadField(id));
+    EXPECT_TRUE(selected.IsFieldInLoadScope(id));
+    EXPECT_TRUE(selected.ShouldLoadField(id));
+    EXPECT_TRUE(schema->IsFieldInLoadScope(id));
+}
+
+TEST(SealedFieldLayoutTest, CopiedFieldDescriptionsOutliveSchemaAndLayouts) {
+    auto schema = std::make_shared<Schema>();
+    const auto a = schema->AddDebugField("a", DataType::INT64);
+    const auto b = schema->AddDebugField("b", DataType::INT64);
+    schema->set_schema_version(1);
+    auto first =
+        std::make_unique<SealedFieldLayout>(schema, LoadScope({a.get()}));
+    auto second = std::make_unique<SealedFieldLayout>(
+        schema, LoadScope({a.get(), b.get()}));
+    auto group_fields = second->get_field_metas({a});
+    auto column_field = group_fields.at(a);
+    const auto* name = &(*schema)[a].get_name();
+
+    EXPECT_EQ(&(*first)[a].get_name(), name);
+    EXPECT_EQ(&(*second)[a].get_name(), name);
+    EXPECT_EQ(&group_fields.at(a).get_name(), name);
+    EXPECT_EQ(&column_field.get_name(), name);
+    EXPECT_FALSE(first->has_field(b));
+    EXPECT_TRUE(second->has_field(b));
+
+    std::weak_ptr<Schema> weak_schema = schema;
+    schema.reset();
+    EXPECT_FALSE(weak_schema.expired());
+    EXPECT_EQ((*first)[a].get_data_type(), DataType::INT64);
+    EXPECT_EQ((*second)[b].get_name().get(), "b");
+    first.reset();
+    second.reset();
+    EXPECT_TRUE(weak_schema.expired());
+    EXPECT_EQ(column_field.get_name().get(), "a");
+}
+
+TEST(SealedFieldLayoutTest, LatePreparationUsesItsExactSchemaDescription) {
+    proto::schema::CollectionSchema schema_proto;
+    schema_proto.set_version(1);
+    auto* pk = schema_proto.add_fields();
+    pk->set_fieldid(100);
+    pk->set_name("pk");
+    pk->set_data_type(proto::schema::DataType::Int64);
+    pk->set_is_primary_key(true);
+    auto* field = schema_proto.add_fields();
+    field->set_fieldid(101);
+    field->set_name("b");
+    field->set_data_type(proto::schema::DataType::Int64);
+    field->mutable_default_value()->set_long_data(1);
+    auto old_schema = Schema::ParseFrom(schema_proto);
+    const FieldId b(101);
+    SealedFieldLayout old_layout(old_schema, LoadScope({b.get()}));
+
+    schema_proto.set_version(2);
+    field->mutable_default_value()->set_long_data(2);
+    auto* added = schema_proto.add_fields();
+    added->set_fieldid(102);
+    added->set_name("c");
+    added->set_data_type(proto::schema::DataType::Int64);
+    auto new_schema = Schema::ParseFrom(schema_proto);
+    const FieldId c(102);
+    SealedFieldLayout early(new_schema, LoadScope({b.get(), c.get()}));
+    old_schema.reset();
+    SealedFieldLayout late(new_schema, LoadScope({b.get(), c.get()}));
+
+    EXPECT_NE(&old_layout[b].get_name(), &early[b].get_name());
+    EXPECT_EQ(&early[b].get_name(), &late[b].get_name());
+    EXPECT_EQ(&(*new_schema)[b].get_name(), &late[b].get_name());
+    EXPECT_FALSE(old_layout.has_field(c));
+    EXPECT_TRUE(early.has_field(c));
+    EXPECT_TRUE(late.has_field(c));
+    new_schema.reset();
+    EXPECT_EQ(old_layout[b].default_value()->long_data(), 1);
+    EXPECT_EQ(early[b].default_value()->long_data(), 2);
+    EXPECT_EQ(late[b].default_value()->long_data(), 2);
+}
+
+TEST(SealedFieldLayoutTest, ExplicitScopeIsIndependentOfLegacySchemaScope) {
+    auto schema = std::make_shared<Schema>();
+    auto a = schema->AddDebugField("a", DataType::INT64);
+    auto b = schema->AddDebugField("b", DataType::INT64);
+    schema->UpdateLoadFields({a.get()});
+    SealedFieldLayout selected(schema, LoadScope({b.get()}, {b.get()}));
+    EXPECT_FALSE(selected.IsFieldInLoadScope(a));
+    EXPECT_FALSE(selected.has_field(a));
+    EXPECT_EQ(selected.get_field_ids().size(), 1);
+    EXPECT_TRUE(selected.ShouldLoadField(b));
+    EXPECT_FALSE(schema->IsFieldInLoadScope(b));
+}
+
+TEST(SealedFieldLayoutTest, PhysicalDependenciesDoNotExpandExplicitScope) {
+    auto schema = std::make_shared<Schema>();
+    auto pk = schema->AddDebugField("pk", DataType::INT64);
+    auto ttl = schema->AddDebugField("expires", DataType::INT64);
+    auto value = schema->AddDebugField("value", DataType::INT64);
+    schema->set_primary_field_id(pk);
+    schema->set_ttl_field_id(ttl);
+    auto scope =
+        LoadScope({value.get()}, {value.get()}).WithDependencies(*schema);
+    EXPECT_FALSE(scope.Contains(pk));
+    EXPECT_FALSE(scope.Contains(ttl));
+    EXPECT_FALSE(scope.Requires(pk));
+    EXPECT_FALSE(scope.Requires(ttl));
+    SealedFieldLayout layout(schema, scope);
+    EXPECT_FALSE(layout.ShouldLoadField(pk));
+    EXPECT_FALSE(layout.ShouldLoadField(ttl));
+    EXPECT_TRUE(layout.ShouldLoadField(value));
+}
+
+TEST_F(SegmentLoadInfoTest, PreparedInfoDoesNotRetainFieldLayout) {
+    auto old_layout = LoadFieldsFor(schema_);
+    std::weak_ptr<const SealedFieldLayout> weak_layout = old_layout;
+    SegmentLoadInfo current_info(proto_, old_layout);
+    SegmentLoadInfo copied(current_info);
+    old_layout.reset();
+    ASSERT_TRUE(weak_layout.expired());
+
+    // Retained metadata can still answer physical membership after the
+    // preparation context has been destroyed. Diff borrows a fresh context.
+    EXPECT_TRUE(copied.HasFieldInSchema(FieldId(101)));
+    EXPECT_TRUE(copied.HasIndexInfo(FieldId(101)));
+    auto target_layout = LoadFieldsFor(schema_);
+    std::weak_ptr<const SealedFieldLayout> weak_target = target_layout;
+    SegmentLoadInfo target(proto_, target_layout);
+    auto groups = std::make_shared<milvus_storage::api::ColumnGroups>();
+    copied.SetColumnGroupsForTesting(groups);
+    target.SetColumnGroupsForTesting(groups);
+    auto diff = copied.ComputeDiff(target, target_layout);
+    target_layout.reset();
+    EXPECT_TRUE(weak_target.expired());
+    EXPECT_TRUE(target.HasFieldInSchema(FieldId(101)));
+    EXPECT_TRUE(diff.indexes_to_load.empty());
+    EXPECT_TRUE(diff.indexes_to_drop.empty());
+}
+
+TEST(SealedFieldLayoutTest, EmptyPreloadsKeepSelectedFieldsOnDemand) {
+    auto schema = std::make_shared<Schema>();
+    auto id = schema->AddDebugField("value", DataType::INT64);
+    SealedFieldLayout lazy(schema, LoadScope({id.get()}, {}));
+    EXPECT_TRUE(lazy.IsFieldInLoadScope(id));
+    EXPECT_FALSE(lazy.ShouldLoadField(id));
+    EXPECT_EQ(lazy.WarmupPolicy(id, false, false).second, "disable");
+    SealedFieldLayout legacy(schema, LoadScope::FromLegacySchema(*schema));
+    EXPECT_TRUE(legacy.ShouldLoadField(id));
 }

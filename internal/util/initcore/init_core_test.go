@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bytedance/mockey"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -236,6 +237,15 @@ func TestOtlpHang(t *testing.T) {
 func TestSetupCoreConfigChangeCallback(t *testing.T) {
 	paramtable.Init()
 	pt := paramtable.Get()
+	previousFanout := pt.QueryNodeCfg.SearchFanoutPoolSizeRatio.GetValue()
+	t.Cleanup(func() {
+		assert.NoError(t, pt.Save(pt.QueryNodeCfg.SearchFanoutPoolSizeRatio.Key, previousFanout))
+	})
+	var fanoutCoefficient float64
+	patch := mockey.Mock(UpdateSearchFanoutThreadCoreCoefficient).To(func(value float64) {
+		fanoutCoefficient = value
+	}).Build()
+	defer patch.UnPatch()
 
 	assert.NotPanics(t, func() { SetupCoreConfigChangelCallback() })
 
@@ -249,18 +259,62 @@ func TestSetupCoreConfigChangeCallback(t *testing.T) {
 	assert.NoError(t, pt.Save(pt.CommonCfg.LowPriorityThreadCoreCoefficient.Key, "2"))
 	assert.Equal(t, "2", pt.CommonCfg.LowPriorityThreadCoreCoefficient.GetValue())
 
+	assert.NoError(t, pt.Save(pt.QueryNodeCfg.SearchFanoutPoolSizeRatio.Key, "3.5"))
+	assert.Equal(t, 3.5, fanoutCoefficient)
+
 	assert.NoError(t, pt.Save(pt.CommonCfg.ThreadPoolMaxThreadsSize.Key, "32"))
 	assert.Equal(t, "32", pt.CommonCfg.ThreadPoolMaxThreadsSize.GetValue())
+	assert.Equal(t, 3.5, fanoutCoefficient)
 
-	previousReadWindow := getStorageV2AsyncLoadReadWindowSizeBytes()
-	t.Cleanup(func() {
-		pt.Reset(pt.QueryNodeCfg.StorageV2AsyncLoadReadWindowSizeBytes.Key)
-		updateStorageV2AsyncLoadReadWindowSizeBytes(previousReadWindow)
+	// Management updates publish the value before sending a separator-free key.
+	manager := paramtable.GetBaseTable().Manager()
+	fanoutKey := config.FormatKey(pt.QueryNodeCfg.SearchFanoutPoolSizeRatio.Key)
+	for _, change := range []struct {
+		eventType, value string
+		want             float64
+	}{
+		{config.CreateType, "4.5", 4.5},
+		{config.UpdateType, "NaN", float64(paramtable.DefaultSearchFanoutPoolSizeRatio)},
+		{config.UpdateType, "+Inf", float64(paramtable.DefaultSearchFanoutPoolSizeRatio)},
+		{config.UpdateType, "1e100", float64(paramtable.DefaultSearchFanoutPoolSizeRatio)},
+		{config.UpdateType, "2147483647", float64(paramtable.DefaultSearchFanoutPoolSizeRatio)},
+		{config.UpdateType, "0.1", 0.1},
+	} {
+		manager.SetConfig(fanoutKey, change.value)
+		manager.EvictCachedValue(fanoutKey)
+		manager.OnEvent(&config.Event{
+			EventSource: "EtcdSource",
+			EventType:   change.eventType,
+			Key:         fanoutKey,
+			Value:       change.value,
+			HasUpdated:  true,
+		})
+		assert.Equal(t, change.want, pt.QueryNodeCfg.SearchFanoutPoolSizeRatio.GetAsFloat())
+		assert.Equal(t, change.want, fanoutCoefficient)
+	}
+	manager.ResetConfig(fanoutKey)
+	manager.EvictCachedValue(fanoutKey)
+	fallbackRatio := pt.QueryNodeCfg.SearchFanoutPoolSizeRatio.GetAsFloat()
+	require.NotEqual(t, 0.1, fallbackRatio)
+	// A delete event carries the removed value, not the current fallback.
+	manager.OnEvent(&config.Event{
+		EventSource: "EtcdSource",
+		EventType:   config.DeleteType,
+		Key:         fanoutKey,
+		Value:       "0.1",
+		HasUpdated:  true,
 	})
-	assert.NoError(t, pt.Save(pt.QueryNodeCfg.StorageV2AsyncLoadReadWindowSizeBytes.Key, "0"))
-	assert.EqualValues(t, paramtable.DefaultStorageV2AsyncLoadReadWindowSizeBytes, getStorageV2AsyncLoadReadWindowSizeBytes())
-	assert.NoError(t, pt.Save(pt.QueryNodeCfg.StorageV2AsyncLoadReadWindowSizeBytes.Key, "1048576"))
-	assert.EqualValues(t, 1048576, getStorageV2AsyncLoadReadWindowSizeBytes())
+	assert.Equal(t, fallbackRatio, fanoutCoefficient)
+
+	previousReadWindow := getLoadFieldDataReadWindowSizeBytes()
+	t.Cleanup(func() {
+		pt.Reset(pt.QueryNodeCfg.LoadFieldDataReadWindowSizeBytes.Key)
+		updateLoadFieldDataReadWindowSizeBytes(previousReadWindow)
+	})
+	assert.NoError(t, pt.Save(pt.QueryNodeCfg.LoadFieldDataReadWindowSizeBytes.Key, "0"))
+	assert.EqualValues(t, paramtable.DefaultLoadFieldDataReadWindowSizeBytes, getLoadFieldDataReadWindowSizeBytes())
+	assert.NoError(t, pt.Save(pt.QueryNodeCfg.LoadFieldDataReadWindowSizeBytes.Key, "1048576"))
+	assert.EqualValues(t, 1048576, getLoadFieldDataReadWindowSizeBytes())
 }
 
 func TestRegisterConfigWatcherWithCatchUpSerializesInitialSyncAndUpdates(t *testing.T) {
@@ -321,43 +375,43 @@ func TestRegisterConfigWatcherWithCatchUpSerializesInitialSyncAndUpdates(t *test
 	assert.True(t, applied.Load(), "the concurrent update must be applied after the stale catch-up")
 }
 
-func TestRegisterStorageV2AsyncLoadReadWindowConfigCatchesUp(t *testing.T) {
+func TestRegisterLoadFieldDataReadWindowConfigCatchesUp(t *testing.T) {
 	pt := &paramtable.ComponentParam{}
 	pt.Init(paramtable.NewBaseTable(paramtable.SkipRemote(true), paramtable.SkipEnv(true), paramtable.Files(nil)))
-	item := &pt.QueryNodeCfg.StorageV2AsyncLoadReadWindowSizeBytes
-	previous := getStorageV2AsyncLoadReadWindowSizeBytes()
+	item := &pt.QueryNodeCfg.LoadFieldDataReadWindowSizeBytes
+	previous := getLoadFieldDataReadWindowSizeBytes()
 	t.Cleanup(func() {
-		updateStorageV2AsyncLoadReadWindowSizeBytes(previous)
+		updateLoadFieldDataReadWindowSizeBytes(previous)
 	})
 
 	assert.NoError(t, pt.Save(item.Key, "1048576"))
-	updateStorageV2AsyncLoadReadWindowSizeBytes(32 * 1024 * 1024)
-	registerStorageV2AsyncLoadReadWindowConfig(pt)
+	updateLoadFieldDataReadWindowSizeBytes(32 * 1024 * 1024)
+	registerLoadFieldDataReadWindowConfig(pt)
 
-	assert.EqualValues(t, 1048576, getStorageV2AsyncLoadReadWindowSizeBytes())
+	assert.EqualValues(t, 1048576, getLoadFieldDataReadWindowSizeBytes())
 }
 
-func TestRegisterStorageV2AsyncLoadReadWindowConfigHandlesDelete(t *testing.T) {
+func TestRegisterLoadFieldDataReadWindowConfigHandlesDelete(t *testing.T) {
 	pt := &paramtable.ComponentParam{}
 	pt.Init(paramtable.NewBaseTable(paramtable.SkipRemote(true), paramtable.SkipEnv(true), paramtable.Files(nil)))
-	item := &pt.QueryNodeCfg.StorageV2AsyncLoadReadWindowSizeBytes
-	previous := getStorageV2AsyncLoadReadWindowSizeBytes()
+	item := &pt.QueryNodeCfg.LoadFieldDataReadWindowSizeBytes
+	previous := getLoadFieldDataReadWindowSizeBytes()
 	t.Cleanup(func() {
-		updateStorageV2AsyncLoadReadWindowSizeBytes(previous)
+		updateLoadFieldDataReadWindowSizeBytes(previous)
 	})
 
 	assert.NoError(t, pt.Save(item.Key, "1048576"))
-	registerStorageV2AsyncLoadReadWindowConfig(pt)
-	assert.EqualValues(t, 1048576, getStorageV2AsyncLoadReadWindowSizeBytes())
+	registerLoadFieldDataReadWindowConfig(pt)
+	assert.EqualValues(t, 1048576, getLoadFieldDataReadWindowSizeBytes())
 
 	assert.NoError(t, pt.Remove(item.Key))
-	assert.EqualValues(t, paramtable.DefaultStorageV2AsyncLoadReadWindowSizeBytes, getStorageV2AsyncLoadReadWindowSizeBytes())
+	assert.EqualValues(t, paramtable.DefaultLoadFieldDataReadWindowSizeBytes, getLoadFieldDataReadWindowSizeBytes())
 }
 
 func TestRegisterQueryNodeLoadConfigCatchesUp(t *testing.T) {
 	pt := &paramtable.ComponentParam{}
 	pt.Init(paramtable.NewBaseTable(paramtable.SkipRemote(true), paramtable.SkipEnv(true), paramtable.Files(nil)))
-	item := &pt.QueryNodeCfg.StorageV2EnableAsyncLoad
+	item := &pt.QueryNodeCfg.LoadAsyncReadEnabled
 	assert.NoError(t, pt.Save(item.Key, "true"))
 
 	var applied atomic.Bool
@@ -389,6 +443,21 @@ func TestLazyColumnGroupHotUpdate(t *testing.T) {
 	for _, value := range []string{"false", "true", "false"} {
 		assert.NoError(t, pt.Save(key, value))
 		assert.Equal(t, value == "true", getLazyColumnGroupEnabled())
+	}
+}
+
+func TestTieredLazyIndexSlotUpdate(t *testing.T) {
+	paramtable.Init()
+	params := paramtable.Get()
+	item := &params.QueryNodeCfg.TieredLazyIndexSlotEnabled
+	previous := item.GetValue()
+	t.Cleanup(func() {
+		assert.NoError(t, params.Save(item.Key, previous))
+		assert.NoError(t, UpdateTieredStorageConfig(params))
+	})
+	for _, value := range []string{"true", "false"} {
+		assert.NoError(t, params.Save(item.Key, value))
+		assert.NoError(t, UpdateTieredStorageConfig(params))
 	}
 }
 
@@ -491,8 +560,9 @@ func TestInitLoonReaderConfig(t *testing.T) {
 	defer pt.Reset(pt.CommonCfg.StorageReaderThreadPoolSize.Key)
 	defer pt.Reset(pt.CommonCfg.IndexBuildReadWindowBytes.Key)
 
-	// Defaults (0/0) keep the pre-existing sequential behavior and must not
-	// create the pool: GetParallelism() reports 1 when no pool exists.
+	// Defaults (both auto) keep the pre-existing sequential behavior
+	// outside a DataNode and must not create the pool: GetParallelism()
+	// reports 1 when no pool exists.
 	assert.NoError(t, InitLoonReaderConfig(pt))
 	assert.LessOrEqual(t, EffectiveLoonReaderThreadPoolSize(), int32(1))
 
@@ -501,7 +571,7 @@ func TestInitLoonReaderConfig(t *testing.T) {
 
 	// Out-of-range pool sizes are rejected instead of being narrowed to
 	// int32: 4294967296 would wrap to 0 and silently disable the pool.
-	for _, invalid := range []string{"-1", "4294967296", "1025"} {
+	for _, invalid := range []string{"-2", "4294967296", "1025"} {
 		assert.NoError(t, pt.Save(pt.CommonCfg.StorageReaderThreadPoolSize.Key, invalid))
 		err := InitLoonReaderConfig(pt)
 		assert.Error(t, err, "pool size %s must be rejected", invalid)
@@ -591,7 +661,9 @@ func TestInitLoonReaderConfigConcurrent(t *testing.T) {
 // under both loon reader keys and that the handler survives a rejected update.
 func TestRegisterLoonReaderConfigWatchers(t *testing.T) {
 	paramtable.Init()
-	pt := paramtable.Get()
+	// The registered watchers outlive the test; on the global table a later
+	// test's pool write would fire them and create the non-destroyable pool.
+	pt := newIsolatedParams()
 	defer pt.Reset(pt.CommonCfg.StorageReaderThreadPoolSize.Key)
 	defer pt.Reset(pt.CommonCfg.IndexBuildReadWindowBytes.Key)
 
@@ -640,28 +712,46 @@ func TestUpdateLoadAdmissionSlots(t *testing.T) {
 	})
 }
 
-func TestUpdateStorageV2AsyncLoadReadWindowSizeBytes(t *testing.T) {
-	previous := getStorageV2AsyncLoadReadWindowSizeBytes()
+func TestUpdateLoadFieldDataReadWindowSizeBytes(t *testing.T) {
+	previous := getLoadFieldDataReadWindowSizeBytes()
 	t.Cleanup(func() {
-		updateStorageV2AsyncLoadReadWindowSizeBytes(previous)
+		updateLoadFieldDataReadWindowSizeBytes(previous)
 	})
 
-	updateStorageV2AsyncLoadReadWindowSizeBytes(0)
-	assert.EqualValues(t, paramtable.DefaultStorageV2AsyncLoadReadWindowSizeBytes, getStorageV2AsyncLoadReadWindowSizeBytes())
-	updateStorageV2AsyncLoadReadWindowSizeBytes(16 * 1024 * 1024)
-	assert.EqualValues(t, 16*1024*1024, getStorageV2AsyncLoadReadWindowSizeBytes())
+	updateLoadFieldDataReadWindowSizeBytes(0)
+	assert.EqualValues(t, paramtable.DefaultLoadFieldDataReadWindowSizeBytes, getLoadFieldDataReadWindowSizeBytes())
+	updateLoadFieldDataReadWindowSizeBytes(16 * 1024 * 1024)
+	assert.EqualValues(t, 16*1024*1024, getLoadFieldDataReadWindowSizeBytes())
 }
 
 func TestInitStorageV2FileSystemUsesProvidedLocalConfig(t *testing.T) {
-	params := &paramtable.ComponentParam{}
-	params.Init(paramtable.NewBaseTable(paramtable.SkipRemote(true), paramtable.SkipEnv(true), paramtable.Files(nil)))
-	assert.NoError(t, params.Save(params.CommonCfg.StorageType.Key, "local"))
-	assert.NoError(t, params.Save(params.CommonCfg.StorageTalonMode.Key, "3"))
-	// Invalid values supplied by the caller must be rejected, even when the
-	// global configuration has a valid default. This fails before entering C++.
-	assert.PanicsWithValue(t, `invalid common.storage.talon.mode: "3"`, func() {
-		_ = InitStorageV2FileSystem(params)
-	})
+	for _, tc := range []struct {
+		key   string
+		value string
+	}{
+		{key: "common.storage.talon.mode", value: "3"},
+		{key: "common.storage.talon.enabledStages", value: "unknown"},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			params := &paramtable.ComponentParam{}
+			params.Init(paramtable.NewBaseTable(paramtable.SkipRemote(true), paramtable.SkipEnv(true), paramtable.Files(nil)))
+			assert.NoError(t, params.Save(params.CommonCfg.StorageType.Key, "local"))
+			assert.NoError(t, params.Save(params.CommonCfg.StorageTalonMode.Key, "1"))
+			assert.NoError(t, params.Save(tc.key, tc.value))
+			// Invalid values supplied by the caller must be rejected, even when the
+			// global configuration has a valid default. This fails before entering C++.
+			want := "invalid " + tc.key + ": " + strconv.Quote(tc.value)
+			assert.PanicsWithValue(t, want, func() {
+				_ = InitStorageV2FileSystem(params)
+			})
+			assert.PanicsWithValue(t, want, func() {
+				_ = InitRemoteArrowFileSystem(params)
+			})
+			assert.PanicsWithValue(t, want, func() {
+				_ = InitRemoteChunkManager(params)
+			})
+		})
+	}
 }
 
 func TestInitStorageV2FileSystem(t *testing.T) {

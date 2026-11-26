@@ -26,6 +26,16 @@ Explore is a separate layout: local temporary manifests live under
 
 - Writers use shared layout helpers: `storage.SegmentManifestBasePath`,
   `SegmentPartitionBasePath`, and the binlog/index helpers in `metautil`.
+- Primary key index objects live under
+  `minio.rootPath/pk_index/<collectionID>/<vchannel>/`: manifest bodies in
+  `manifest/<version>-<uuid>.pb` and SSTs in `sst/<id>.sst`. All writers, the
+  manifest service and its GC build these keys with
+  `internal/pkindex/objpath.go`. `pk_index` is `common.PKIndexPath` and is
+  listed in `InternalStorageRootSegments`. The manifest pointers are meta kv
+  keys under `pkindex-meta/manifest/`, built by
+  `internal/datacoord/pkindex/manifest`. A flush also reads the streaming
+  coordinator key `streamingcoord-meta/pchannel/<pchannel>`, built by
+  `BuildPChannelInfoPath` in `internal/metastore/kv/streamingcoord`.
 - Readers consume the complete key recorded in metadata or the manifest.
   They must not prepend another root.
 - Some API fields describe relative file names rather than complete keys.
@@ -34,6 +44,29 @@ Explore is a separate layout: local temporary manifests live under
   consuming boundary.
 - Cleanup uses the same layout as the producer. Preserve remote keys exactly:
   `.`, `..`, and repeated separators are literal object-key components.
+
+## Ordinary import source overrides
+
+Ordinary imports with `storage.*` options use an independent S3-compatible
+source bucket and credentials. Their file paths are complete bucket-relative
+keys: no scheme or leading slash, and no root prefix or path normalization.
+The cluster's internal-layout denylist applies only to imports using cluster
+storage; explicitly authenticated external sources use their own object
+permissions. All output writes retain the cluster chunk manager and layout.
+See [source storage design](../../design-docs/design_docs/20261110-external-import-storage.md).
+
+## Delegator BM25 local cache
+
+The legacy delegator IDF oracle creates a unique directory per sealed-statistics
+entry under its channel-local BM25 root. Readers use the entry's `localDir`;
+cleanup must delete that exact directory, never reconstruct it from segment ID.
+These directories are downloaded caches, not recovery metadata.
+Reopen downloads missing fields into a separate unique directory under the same
+root, then installs complete field directories under the oracle and entry locks.
+Only after installation succeeds are fields, aggregate statistics and disk
+accounting published. An obsolete entry can be detached under the oracle lock
+and physically removed after unlocking without waiting for a replacement's
+remote download. The sync still waits for that entry's local readers and removal.
 
 ## Manifest index artifacts
 
@@ -51,6 +84,31 @@ Resolving v2 index files requires the owning segment's manifest base; load and
 snapshot consumers report missing or invalid metadata instead of guessing the
 canonical base. Snapshot generation uses its selected segment metadata.
 See [design and compatibility](../../design-docs/design_docs/20261019-segment-rooted-index-artifacts.md).
+
+## Expression cache files
+
+Sealed expression caches are disposable local files under
+`<localStorage.path>/cache/<nodeID>/expr_cache/seg_<segment_id>_<generation>.cache`.
+The process-local generation belongs to a published sealed snapshot. Retirement
+uses the file object's original path and unlinks after publication/cache locks
+are released; it must never reconstruct a path from only the segment ID.
+Generation-zero backend/legacy entries retain `seg_<segment_id>.cache`.
+The cache manager removes `.cache` files on rebuild and does not restore them
+across restarts. These files are not manifests or DataCoord GC objects.
+
+## New-cluster index summary mode
+
+`dataCoord.index.segmentIndexSummariesEnabled` selects an immutable mode at
+initial startup of an empty cluster. Completed vector/scalar index inventory
+lives in `SegmentInfo.index_summaries`; file lists remain in segment manifests
+and are read on demand. Active and pending-cleanup tasks retain catalog rows.
+Manifest publication updates the pointer and summary and retires the task in
+one catalog transaction. An artifact-free completion retains a summary without
+creating a manifest index entry. GC must consult the current manifest after an
+active-task lookup misses; absence from the task table does not prove orphanhood.
+Historical migration, rollback, incompatible snapshot restore and direct manifest
+version adoption are unsupported in this mode. See the
+[index summary design](../../design-docs/design_docs/20261110-segment-index-summary.md).
 
 ## Local upgrade compatibility
 
@@ -97,6 +155,29 @@ directory from the output manifest base.
 
 ## Necessary checks, at clear boundaries
 
+Snapshot restore fingerprints include segment path spelling. When a self-contained
+snapshot moves between storage identities with the same key prefix, the snapshot
+reader rewrites only URIs that still identify the original storage. References
+already pointing to the destination retain their spelling so persisted restore
+jobs can resume. This is a compatibility exception for persisted path spelling,
+not a general storage-routing rule. A prefix change retains the existing prefix
+replacement behavior. Restore admission still validates storage identity.
+
+For V2 data references in a self-contained snapshot Avro, DataNode reads object
+keys from the actual import storage; a bucket in an embedded URI does not select
+another storage.
+Root confinement still applies. Referenced snapshots retain source identity
+validation. Worker-side conversion to object keys does not define the restore
+fingerprint.
+
+Snapshot-source import without `external_spec` also accepts a bucket-relative
+metadata object key (`[prefix/]snapshots/<collection_id>/metadata/<snapshot_id>.json`)
+resolved against the active instance's configured bucket. Same-prefix
+self-contained bundles normalize origin-matching URIs to bare object keys during
+import preparation, while any remaining scheme-bearing internal reference is
+rejected by `ValidateSnapshotImportPaths`. Restore retains its URI-preserving
+behavior.
+
 - Configuration initialization requires an absolute local root and freezes it
   against runtime configuration updates.
 - Metadata loading resolves recognized legacy paths and checks their identity.
@@ -127,6 +208,12 @@ directory from the output manifest base.
   covers them; malformed objects without a segment row can remain orphaned.
 - Therefore an uncommitted stats file inside a live V3 segment is not guaranteed
   to be reclaimed by DataCoord's orphan scan.
+- Primary key index: only the GC in `internal/datacoord/pkindex/gc` deletes
+  under `pk_index/`. It finds a vchannel only through its manifest pointer,
+  and keeps the manifest bodies of the retention and the SSTs that they
+  reference. The other orphan scans do not enter `pk_index/`. Nothing deletes
+  a `pk_index/<collectionID>/` prefix after a collection drop, or the objects
+  of a vchannel whose first manifest commit never succeeded.
 - Legacy `R/M/insert_log` orphan/LOB layouts and old Explore temporary paths
   have separate cleanup gaps. Do not claim this PR repairs all such leftovers.
   Startup cannot recover indexes hidden with an old container's CWD.
@@ -140,6 +227,26 @@ directory from the output manifest base.
 - Compatibility: `internal/datacoord/meta_local_manifest*.go` and
   `snapshot_local_manifest_test.go`.
 - Cleanup: `internal/datacoord/garbage_collector*.go` and `task_stats*.go`.
+- Primary key index: `internal/pkindex/objpath.go`,
+  `internal/datacoord/pkindex/manifest/metakey.go`,
+  `internal/datacoord/pkindex/gc`.
 
 Source review and unit tests do not replace a real version-to-version upgrade
 test. Report which versions, layouts, and failure cases were actually exercised.
+
+## Historical index migration
+
+Backfill copies the explicit index files from path version 0/1 into the existing
+segment manifest base's `_index/<build>/<version>` and atomically publishes path
+version 2 with catalog-row retirement. Rollback copies v2 files to the
+collection-rooted `index_v1` namespace before restoring a path-version-1 catalog
+row and retracting the manifest entry. Existing v0/v1 rollback records keep their
+layout. Build IDs and file keys are unchanged.
+
+Copies use object-storage server-side Copy operations, concurrently with a shared
+bounded budget; no download/upload or local migration fallback is permitted.
+Copy failure/cancellation leaves visible metadata at the source. Source files
+and all three layout aliases of a retained V3 build's recorded keys/version stay
+protected from orphan scans until build retirement, subject to snapshot guards.
+This also protects partial destinations across failed attempts and restarts.
+See the [migration design](../../design-docs/design_docs/20260901-storagev3-manifest-index-backfill.md).

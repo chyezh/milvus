@@ -681,8 +681,8 @@ class TestMilvusClientQueryInvalidShared(TestMilvusClientV2Base):
         expected: raise invalid-limit error
         """
         client = self._client()
-        error = {ct.err_code: 1, ct.err_msg: f"limit [{limit}] is invalid"}
-        self.query(
+        error = {ct.err_code: 1, ct.err_msg: "limit ["}
+        res, _ = self.query(
             client,
             INVALID_SHARED_COLLECTION,
             filter=default_search_exp,
@@ -691,6 +691,9 @@ class TestMilvusClientQueryInvalidShared(TestMilvusClientV2Base):
             check_task=CheckTasks.err_res,
             check_items=error,
         )
+        # Older redact versions trim the space; newer versions preserve it.
+        displayed_values = (limit, "") if limit == " " else (limit,)
+        assert any(f"limit [{value}] is invalid" in res.message for value in displayed_values), res.message
 
     @pytest.mark.tags(CaseLabel.L2)
     @pytest.mark.parametrize("limit", [-1, 67890])
@@ -729,8 +732,8 @@ class TestMilvusClientQueryInvalidShared(TestMilvusClientV2Base):
         expected: raise invalid-offset error
         """
         client = self._client()
-        error = {ct.err_code: 1, ct.err_msg: f"offset [{offset}] is invalid"}
-        self.query(
+        error = {ct.err_code: 1, ct.err_msg: "offset ["}
+        res, _ = self.query(
             client,
             INVALID_SHARED_COLLECTION,
             filter=default_search_exp,
@@ -739,6 +742,9 @@ class TestMilvusClientQueryInvalidShared(TestMilvusClientV2Base):
             check_task=CheckTasks.err_res,
             check_items=error,
         )
+        # Older redact versions trim the space; newer versions preserve it.
+        displayed_values = (offset, "") if offset == " " else (offset,)
+        assert any(f"offset [{value}] is invalid" in res.message for value in displayed_values), res.message
 
 
 class TestMilvusClientQueryValid(TestMilvusClientV2Base):
@@ -3150,7 +3156,7 @@ class TestMilvusClientQueryValid(TestMilvusClientV2Base):
         # 4. insert data again
         new_rows = cf.gen_row_data_by_schema(nb=default_nb, schema=schema, start=10000)
         self.insert(client, collection_name, new_rows)
-        self.flush(client, collection_name)
+        # Keep this batch growing: a flushed batch may already be handed off.
         # 5. query with param ignore_growing
         ignore_growings = [True, False]
         for ignore_growing in ignore_growings:
@@ -3197,7 +3203,8 @@ class TestMilvusClientQueryValid(TestMilvusClientV2Base):
         # 4. upsert data (which creates growing segment data)
         upsert_data = cf.gen_row_data_by_schema(nb=default_nb, schema=schema)
         self.upsert(client, collection_name, upsert_data)
-        self.flush(client, collection_name)
+        # Keep the replacement rows growing. Flush may hand them off to sealed
+        # segments before the query, where ignore_growing no longer excludes them.
         # 5. query with param ignore_growing
         if ignore_growing:
             exp_len = 0

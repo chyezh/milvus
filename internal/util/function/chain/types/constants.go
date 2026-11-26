@@ -23,6 +23,7 @@ package types
 // =============================================================================
 
 const (
+	OpTypeGrep    = "grep"
 	OpTypeMap     = "map"
 	OpTypeFilter  = "filter"
 	OpTypeSort    = "sort"
@@ -76,9 +77,13 @@ const (
 	IDFieldName        = "$id"
 	ScoreFieldName     = "$score"
 	SegOffsetFieldName = "$seg_offset"
+	TimestampFieldName = "$timestamp"
 	GroupByFieldName   = "$group_by"
 	// ElementIndicesFieldName stores one Int32 element index per result row.
 	ElementIndicesFieldName = "$element_indices"
+	// QueryElementIndicesFieldName stores one List<Int32> of selected element
+	// positions per document in QueryScan, including typed zero-row results.
+	QueryElementIndicesFieldName = "$query_element_indices"
 )
 
 // Function Chain framework parameter keys.

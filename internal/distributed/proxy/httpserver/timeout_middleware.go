@@ -34,6 +34,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v3/util/requestutil"
 )
 
 // BufferPool represents a pool of buffers.
@@ -221,6 +222,11 @@ var timeoutContextKeysToPropagate = []string{
 	HTTPReturnMessage,
 	ContextRequest,
 	ContextResponse,
+	// Without it the access log, which reads the original context, falls
+	// back to the default classification of the code and loses the marks
+	// made at the proxy boundary (for example a not-found name is an input
+	// error there, a system error by default).
+	ContextErrorType,
 	"traceID",
 }
 
@@ -255,6 +261,15 @@ func requestTimeout(gCtx *gin.Context) (time.Duration, bool) {
 	return timeout, true
 }
 
+func upsertTimeoutMiddleware(handler gin.HandlerFunc) gin.HandlerFunc {
+	next := timeoutMiddleware(handler)
+	return func(c *gin.Context) {
+		ctx, _ := requestutil.WithConditionalWriteState(c.Request.Context())
+		c.Request = c.Request.WithContext(ctx)
+		next(c)
+	}
+}
+
 func timeoutMiddleware(handler gin.HandlerFunc) gin.HandlerFunc {
 	timeoutHandler := &Timeout{
 		handler: handler,
@@ -267,6 +282,7 @@ func timeoutMiddleware(handler gin.HandlerFunc) gin.HandlerFunc {
 		}
 		topCtx, cancel := context.WithTimeout(gCtx.Request.Context(), timeout)
 		defer cancel()
+		writeState := requestutil.ConditionalWriteStateFromContext(topCtx)
 		req := gCtx.Request.WithContext(topCtx)
 		gCtx.Request = req
 
@@ -318,9 +334,17 @@ func timeoutMiddleware(handler gin.HandlerFunc) gin.HandlerFunc {
 
 		case <-timer.C:
 			cancel()
+			err := context.DeadlineExceeded
+			if writeState != nil {
+				err = writeState.Cancel(err)
+			}
+			code, reason := merr.Code(err), "request timeout"
+			if code != merr.TimeoutCode {
+				reason = err.Error()
+			}
 			gCtx.Abort()
-			gCtx.Set(HTTPReturnCode, merr.TimeoutCode)
-			gCtx.Set(HTTPReturnMessage, "request timeout")
+			gCtx.Set(HTTPReturnCode, code)
+			gCtx.Set(HTTPReturnMessage, reason)
 			recorder.CloseForTimeout()
 			bufPool.Put(buffer)
 
@@ -329,7 +353,7 @@ func timeoutMiddleware(handler gin.HandlerFunc) gin.HandlerFunc {
 				setTraceIDHeaderTo(realWriter.Header(), traceID)
 			}
 			realWriter.WriteHeader(http.StatusRequestTimeout)
-			body, _ := json.Marshal(gin.H{HTTPReturnCode: merr.TimeoutCode, HTTPReturnMessage: "request timeout"})
+			body, _ := json.Marshal(gin.H{HTTPReturnCode: code, HTTPReturnMessage: reason})
 			realWriter.Write(body)
 		}
 	}

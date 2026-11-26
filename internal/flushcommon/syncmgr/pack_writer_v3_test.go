@@ -22,11 +22,13 @@ import (
 	"math"
 	"path"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/bytedance/mockey"
 	"github.com/cockroachdb/errors"
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 
@@ -177,10 +179,61 @@ func (s *PackWriterV3Suite) TestPackWriterV3_Write() {
 	s.NoError(err)
 	s.Equal(gotInserts[0].Binlogs[0].GetEntriesNum(), int64(rows))
 	s.Equal("parquet", gotInserts[0].GetFormat())
+	assertVectorArrayValidElementCounts(s.T(), pack, gotInserts, 103)
 	writtenBasePath, revision, err := packed.UnmarshalManifestPath(writtenManifestPath)
 	s.NoError(err)
 	s.Equal(basePath, writtenBasePath)
 	s.Greater(revision, int64(0))
+}
+
+func (s *PackWriterV3Suite) TestTextFieldLogicalSizesAcrossSegmentSplits() {
+	const collectionID, partitionID, pk, name, body int64 = 12, 34, 100, 104, 105
+	schema := &schemapb.CollectionSchema{Fields: []*schemapb.FieldSchema{
+		{FieldID: common.RowIDField, Name: common.RowIDFieldName, DataType: schemapb.DataType_Int64},
+		{FieldID: common.TimeStampField, Name: common.TimeStampFieldName, DataType: schemapb.DataType_Int64},
+		{FieldID: pk, Name: "pk", DataType: schemapb.DataType_Int64, IsPrimaryKey: true},
+		{FieldID: name, Name: "name", DataType: schemapb.DataType_VarChar, Nullable: true},
+		{FieldID: body, Name: "body", DataType: schemapb.DataType_Text},
+	}}
+	names := []any{"猫", "", nil, "ab"}
+	bodies := []string{"x", strings.Repeat("y", 65536), strings.Repeat("z", 90000), "expired"}
+	groups := []storagecommon.ColumnGroup{{GroupID: 0, Columns: []int{0, 1, 2, 3, 4}, Fields: []int64{common.RowIDField, common.TimeStampField, pk, name, body}, Format: "parquet"}}
+	flush := func(segmentID int64, start, end int) *datapb.FieldLogicalSizes {
+		data, err := storage.NewInsertData(schema)
+		s.Require().NoError(err)
+		for i := start; i < end; i++ {
+			id := int64(i + 1)
+			s.Require().NoError(data.Append(map[int64]any{common.RowIDField: id, common.TimeStampField: id, pk: id, name: names[i], body: bodies[i]}))
+		}
+		manifest := packed.MarshalManifestPath(storage.SegmentManifestBasePath(s.rootPath, collectionID, partitionID, segmentID), packed.ManifestEarliest)
+		segment := &datapb.SegmentInfo{ID: segmentID, CollectionID: collectionID, PartitionID: partitionID, StorageVersion: storage.StorageV3, Level: datapb.SegmentLevel_L1, ManifestPath: manifest}
+		cache := metacache.NewMetaCache(&datapb.ChannelWatchInfo{
+			Schema: schema,
+			Vchan:  &datapb.VchannelInfo{CollectionID: collectionID, ChannelName: "v1", UnflushedSegments: []*datapb.SegmentInfo{segment}},
+		}, func(*datapb.SegmentInfo) pkoracle.PkStat { return pkoracle.NewBloomFilterSet() }, metacache.NewBM25StatsFactory)
+		pack := new(SyncPack).WithCollectionID(collectionID).WithPartitionID(partitionID).WithSegmentID(segmentID).
+			WithChannelName("v1").WithInsertData([]*storage.InsertData{data}).WithBatchRows(int64(end-start)).
+			WithTimeRange(uint64(start+1), uint64(end)).WithLevel(datapb.SegmentLevel_L1)
+		w := NewBulkPackWriterV3(cache, schema, s.cm, s.logIDAlloc, packed.DefaultWriteBufferSize, 0, s.storageConfig, groups, manifest)
+		_, _, _, _, committed, _, stats, err := w.Write(s.ctx, pack)
+		s.Require().NoError(err)
+		s.Require().NotEqual(manifest, committed)
+		sizes := stats.GetFieldLogicalSizes()
+		s.Require().True(storage.FieldLogicalSizesCover(sizes, int64(end-start)))
+		return sizes
+	}
+
+	whole := flush(1000, 0, 4)
+	s.Require().Equal(&datapb.FieldLogicalSize{PayloadBytes: 5, ValidityBits: 4}, whole.Fields[name])
+	s.Require().Equal(&datapb.FieldLogicalSize{PayloadBytes: 155544}, whole.Fields[body])
+	first, second := flush(2000, 0, 1), flush(2001, 1, 4)
+	for _, field := range schema.GetFields() {
+		id := field.GetFieldID()
+		s.Require().NotNil(first.Fields[id])
+		s.Require().NotNil(second.Fields[id])
+		s.Equal(whole.Fields[id].PayloadBytes, first.Fields[id].PayloadBytes+second.Fields[id].PayloadBytes)
+		s.Equal(whole.Fields[id].ValidityBits, first.Fields[id].ValidityBits+second.Fields[id].ValidityBits)
+	}
 }
 
 func (s *PackWriterV3Suite) TestPackWriterV3_UsesManifestFormatAfterConfigSwitch() {
@@ -887,4 +940,151 @@ func (s *PackWriterV3Suite) TestWrite_RetryDoesNotLeakVersionBumps() {
 	s.Require().NoError(err)
 	s.Equal(baseVer+1, newVer, "retry must not produce extra version bumps")
 	s.Equal(int32(2), atomic.LoadInt32(&calls), "exactly one retry expected")
+}
+
+// An element-nullable VectorArray sub-field of a nullable struct: every sync
+// records the rows, the null rows and the valid elements of the field on its
+// binlog, and the segment's collector publishes the sum over the syncs.
+func (s *PackWriterV3Suite) TestWriteRecordsElementNullableValidElementCountsAcrossSyncs() {
+	const (
+		collectionID = int64(123)
+		partitionID  = int64(456)
+		segmentID    = int64(10011) // unique ID to avoid manifest collision with other tests
+		fieldID      = int64(203)
+	)
+	channelName := fmt.Sprintf("by-dev-rootcoord-dml_0_%dv0", collectionID)
+	schema := &schemapb.CollectionSchema{
+		Name: "element_nullable_valid_element_counts",
+		Fields: []*schemapb.FieldSchema{
+			{FieldID: common.RowIDField, DataType: schemapb.DataType_Int64},
+			{FieldID: common.TimeStampField, DataType: schemapb.DataType_Int64},
+			{FieldID: 100, Name: "pk", DataType: schemapb.DataType_Int64, IsPrimaryKey: true},
+		},
+		StructArrayFields: []*schemapb.StructArrayFieldSchema{{
+			FieldID:  202,
+			Name:     "s",
+			Nullable: true,
+			Fields: []*schemapb.FieldSchema{{
+				FieldID:         fieldID,
+				Name:            "s[vec]",
+				DataType:        schemapb.DataType_ArrayOfVector,
+				ElementType:     schemapb.DataType_FloatVector,
+				Nullable:        true,
+				ElementNullable: true,
+				TypeParams:      []*commonpb.KeyValuePair{{Key: common.DimKey, Value: "2"}},
+			}},
+		}},
+	}
+	split := storagecommon.FillColumnGroupFormats(storagecommon.SplitColumns(typeutil.GetAllFieldSchemas(schema),
+		map[int64]storagecommon.ColumnStats{}, storagecommon.NewSelectedDataTypePolicy(), storagecommon.NewRemanentShortPolicy(-1)), "parquet")
+
+	bfs := pkoracle.NewBloomFilterSet()
+	k := metautil.JoinIDPath(collectionID, partitionID, segmentID)
+	manifestPath := packed.MarshalManifestPath(path.Join(s.rootPath, common.SegmentInsertLogPath, k), packed.ManifestEarliest)
+	seg := metacache.NewSegmentInfo(&datapb.SegmentInfo{ManifestPath: manifestPath}, bfs, nil, metacache.NewEmptySegmentStats())
+	mc := metacache.NewMockMetaCache(s.T())
+	mc.EXPECT().Collection().Return(collectionID).Maybe()
+	mc.EXPECT().GetSchema(mock.Anything).Return(schema).Maybe()
+	mc.EXPECT().GetSegmentByID(segmentID).Return(seg, true).Maybe()
+	mc.EXPECT().GetSegmentsBy(mock.Anything, mock.Anything).Return([]*metacache.SegmentInfo{seg}).Maybe()
+	mc.EXPECT().UpdateSegments(mock.Anything, mock.Anything).Run(func(action metacache.SegmentAction, filters ...metacache.SegmentFilter) {
+		action(seg)
+	}).Return().Maybe()
+
+	vec := func(valid []bool, data ...float32) *schemapb.VectorField {
+		return &schemapb.VectorField{
+			Dim: 2, ValidData: valid,
+			Data: &schemapb.VectorField_FloatVector{FloatVector: &schemapb.FloatArray{Data: data}},
+		}
+	}
+	type syncCase struct {
+		rows          []*schemapb.VectorField // nil is a null row
+		nullRows      int64
+		validElements int64
+	}
+	syncs := []syncCase{
+		{
+			rows: []*schemapb.VectorField{
+				nil,                       // null row
+				vec(nil),                  // empty array
+				vec([]bool{false, false}), // all elements null
+				vec([]bool{true, false, true}, 1, 2, 3, 4), // partly null
+				vec([]bool{true, true}, 5, 6, 7, 8),        // normal
+			},
+			nullRows:      1,
+			validElements: 4,
+		},
+		{
+			rows: []*schemapb.VectorField{
+				vec([]bool{true, true, true}, 1, 2, 3, 4, 5, 6),   // normal
+				vec([]bool{false, true, true, false}, 1, 2, 3, 4), // partly null
+				nil,                              // null row
+				vec([]bool{false, false, false}), // all elements null
+				vec(nil),                         // empty array
+			},
+			nullRows:      1,
+			validElements: 5,
+		},
+	}
+
+	bw := NewBulkPackWriterV3(mc, schema, s.cm, s.logIDAlloc, packed.DefaultWriteBufferSize, 0, s.storageConfig, split, manifestPath)
+	var wantNulls, wantValidElements int64
+	for i, sc := range syncs {
+		buf, err := storage.NewInsertData(schema)
+		s.Require().NoError(err)
+		for j, row := range sc.rows {
+			id := int64(i*len(sc.rows) + j + 1)
+			var value any
+			if row != nil {
+				value = row
+			}
+			s.Require().NoError(buf.Append(map[storage.FieldID]any{
+				common.RowIDField: id, common.TimeStampField: id, 100: id, fieldID: value,
+			}))
+		}
+		rows := int64(len(sc.rows))
+		pack := new(SyncPack).WithCollectionID(collectionID).WithPartitionID(partitionID).
+			WithSegmentID(segmentID).WithChannelName(channelName).
+			WithInsertData([]*storage.InsertData{buf}).
+			WithTimeRange(uint64(i*10+1), uint64(i*10+5)).
+			WithBatchRows(rows)
+
+		inserts, _, _, _, _, _, segStats, err := bw.Write(context.Background(), pack)
+		s.Require().NoError(err)
+
+		var seen bool
+		for _, fieldBinlog := range inserts {
+			if !lo.Contains(fieldBinlog.GetChildFields(), fieldID) {
+				continue
+			}
+			s.Require().Len(fieldBinlog.GetBinlogs(), 1)
+			binlog := fieldBinlog.GetBinlogs()[0]
+			s.Equal(rows, binlog.GetEntriesNum())
+			s.Equal(sc.nullRows, binlog.GetFieldNullCounts()[fieldID])
+			s.Equal(map[int64]int64{fieldID: sc.validElements}, binlog.GetFieldValidElementCounts())
+			seen = true
+		}
+		s.Require().True(seen)
+
+		wantNulls += sc.nullRows
+		wantValidElements += sc.validElements
+		s.Equal(wantNulls, segStats.GetNullCounts()[fieldID])
+		s.Equal(map[int64]int64{fieldID: wantValidElements}, segStats.GetValidElementCounts())
+
+		// SyncTask.Run installs the prepared stats after the DataCoord ack;
+		// the next sync accumulates on top of them.
+		metacache.SetStatistics(bw.PreparedStats())(seg)
+	}
+
+	published := seg.Statistics().Publish()
+	s.Require().NotNil(published)
+	s.Equal(int64(2), wantNulls)
+	s.Equal(int64(9), wantValidElements)
+	s.Equal(wantNulls, published.GetNullCounts()[fieldID])
+	s.Equal(map[int64]int64{fieldID: wantValidElements}, published.GetValidElementCounts())
+	sizes := published.GetFieldLogicalSizes()
+	s.EqualValues(10, sizes.GetRowCount())
+	s.EqualValues(72, sizes.GetFields()[fieldID].GetPayloadBytes()) // nine 2D float vectors
+	s.EqualValues(17, sizes.GetFields()[fieldID].GetValidityBits()) // seven then ten element positions
+	s.EqualValues(10, sizes.GetFields()[202].GetValidityBits())     // one shared parent bit per row
 }

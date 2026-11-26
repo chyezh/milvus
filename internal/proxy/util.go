@@ -45,7 +45,6 @@ import (
 	"github.com/milvus-io/milvus/internal/util/segcore"
 	typeutil2 "github.com/milvus-io/milvus/internal/util/typeutil"
 	"github.com/milvus-io/milvus/pkg/v3/common"
-	"github.com/milvus-io/milvus/pkg/v3/metrics"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
@@ -667,7 +666,7 @@ func validateLoadFieldsList(schema *schemapb.CollectionSchema) error {
 		}
 	}
 
-	if vectorCnt == 0 {
+	if vectorCnt == 0 && typeutil.HasVectorField(schema) {
 		return merr.WrapErrParameterInvalidMsg("cannot config all vector field(s) skip loading")
 	}
 
@@ -1123,10 +1122,10 @@ func passwordVerify(ctx context.Context, username, rawPwd string, privilegeCache
 	}
 
 	// Miss cache: verify against the encrypted password from etcd. Shared with
-	// the management-plane verifier rather than calling bcrypt here, so the
+	// the management-plane verifier rather than hashing here, so the
 	// stored-credential format, the cost parameter and the "wrong password"
 	// versus "unusable hash" split cannot drift between the two.
-	if err := crypto.VerifyStoredPassword(credInfo.EncryptedPassword, rawPwd); err != nil {
+	if err := crypto.VerifyStoredPassword(ctx, credInfo.EncryptedPassword, rawPwd); err != nil {
 		mlog.Error(ctx, "Verify password failed", mlog.Err(err))
 		return false
 	}
@@ -1675,6 +1674,10 @@ func checkAndFlattenStructFieldData(schema *schemapb.CollectionSchema, insertMsg
 				Field:     subField.Field,
 				IsDynamic: subField.IsDynamic,
 			}
+			// The copy shares Field, so this rewrites the same wrapper with the
+			// same value; it also sets the legacy location on the copy, which is
+			// what older components read from the WAL.
+			typeutil.SetFieldDataValidData(subFieldCopy, validData)
 
 			flattenedFields = append(flattenedFields, subFieldCopy)
 		}
@@ -2038,7 +2041,7 @@ func namespaceShardingEnabled(schema *schemapb.CollectionSchema) bool {
 }
 
 func namespacePartitionKeyMode(schema *schemapb.CollectionSchema) bool {
-	return schema != nil && schema.GetEnableNamespace() && common.IsNamespaceModePartitionKey(schema.GetProperties()...)
+	return common.UsesNamespacePartitionKey(schema)
 }
 
 func namespacePartitionKeyModeEnabled(schema *schemapb.CollectionSchema) bool {
@@ -2302,6 +2305,21 @@ func GetStorageCost(status *commonpb.Status) (int64, int64, float64, bool) {
 	return scannedRemoteBytes, scannedTotalBytes, cacheHitRatio, true
 }
 
+// searchRequestNq returns the number of query rows of a search request as it
+// arrives, whether or not the request declares nq.
+func searchRequestNq(req *milvuspb.SearchRequest) int64 {
+	return requestutil.SearchRequestNq(req)
+}
+
+// hybridSearchRequestNq is searchRequestNq summed over the sub-requests.
+func hybridSearchRequestNq(req *milvuspb.HybridSearchRequest) int64 {
+	var nq int64
+	for _, sub := range req.GetRequests() {
+		nq += searchRequestNq(sub)
+	}
+	return nq
+}
+
 // GetRequestInfo returns the quota scope, rate type, and tokens needed by a request.
 // Zero tokens bypass rate limiting and its metrics; the rate type is unused in that case.
 func GetRequestInfo(ctx context.Context, metaCache Cache, req proto.Message) (int64, map[int64][]int64, internalpb.RateType, int, error) {
@@ -2323,14 +2341,10 @@ func GetRequestInfo(ctx context.Context, metaCache Cache, req proto.Message) (in
 		return dbID, collToPartIDs, internalpb.RateType_DMLBulkLoad, proto.Size(r), err
 	case *milvuspb.SearchRequest:
 		dbID, collToPartIDs, err := getCollectionAndPartitionIDs(ctx, metaCache, req.(reqPartNames))
-		return dbID, collToPartIDs, internalpb.RateType_DQLSearch, int(r.GetNq()), err
+		return dbID, collToPartIDs, internalpb.RateType_DQLSearch, int(searchRequestNq(r)), err
 	case *milvuspb.HybridSearchRequest:
 		dbID, collToPartIDs, err := getCollectionAndPartitionIDs(ctx, metaCache, req.(reqPartNames))
-		nq := 0
-		for _, subReq := range r.GetRequests() {
-			nq += int(subReq.GetNq())
-		}
-		return dbID, collToPartIDs, internalpb.RateType_DQLSearch, nq, err
+		return dbID, collToPartIDs, internalpb.RateType_DQLSearch, int(hybridSearchRequestNq(r)), err
 	case *milvuspb.QueryRequest:
 		dbID, collToPartIDs, err := getCollectionAndPartitionIDs(ctx, metaCache, req.(reqPartNames))
 		return dbID, collToPartIDs, internalpb.RateType_DQLQuery, 1, err // think of the query request's nq as 1
@@ -2546,21 +2560,4 @@ func getBM25FunctionOfAnnsField(fieldID int64, functions []*schemapb.FunctionSch
 	return lo.Find(functions, func(function *schemapb.FunctionSchema) bool {
 		return function.GetType() == schemapb.FunctionType_BM25 && function.OutputFieldIds[0] == fieldID
 	})
-}
-
-// failMetricLabel classifies a request failure for the ProxyFunctionCall
-// metric, returning the same (status, cause) pair that
-// requestutil.ParseMetricLabel emits at the gRPC interceptor. The status stays
-// the coarse "fail" so that a query written against it counts every hard
-// failure regardless of who caused it.
-func failMetricLabel(err error) (status string, cause string) {
-	// Client cancellation is neither party's failure; cause is what lets a
-	// consumer exclude it (parity with ParseMetricLabel).
-	if errors.Is(err, context.Canceled) {
-		return metrics.FailLabel, metrics.CauseCancel
-	}
-	if merr.GetErrorType(err) == merr.InputError {
-		return metrics.FailLabel, metrics.CauseUser
-	}
-	return metrics.FailLabel, metrics.CauseSystem
 }

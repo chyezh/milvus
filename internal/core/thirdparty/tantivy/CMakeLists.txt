@@ -1,18 +1,24 @@
 set(TANTIVY_FEATURES_LIST "" CACHE STRING "List of Cargo features to enable")
 string(REPLACE ";" "," TANTIVY_FEATURES "${TANTIVY_FEATURES_LIST}")
+option(TANTIVY_ANALYZER_REMOTE_TLS "Enable Lindera HTTPS dictionary fetch and gRPC tokenizer TLS (rustls/ring). Disable for FIPS builds." ON)
 
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
-    set(CARGO_CMD cargo +1.89 build --verbose)
+    set(CARGO_CMD cargo +1.89 build --locked --verbose)
     set(TARGET_DIR "debug")
 else ()
-    set(CARGO_CMD cargo +1.89 build --release --verbose)
+    set(CARGO_CMD cargo +1.89 build --release --locked --verbose)
     set(TARGET_DIR "release")
+endif ()
+
+if (NOT TANTIVY_ANALYZER_REMOTE_TLS)
+    set(CARGO_CMD ${CARGO_CMD} --no-default-features)
 endif ()
 
 if (TANTIVY_FEATURES)
     set(CARGO_CMD ${CARGO_CMD} --features ${TANTIVY_FEATURES})
 endif ()
 message("Cargo command: ${CARGO_CMD}")
+message(STATUS "TANTIVY_ANALYZER_REMOTE_TLS=${TANTIVY_ANALYZER_REMOTE_TLS}")
 
 set(TOKENIZER_PROTO ${CMAKE_BINARY_DIR}/thirdparty/milvus-proto/proto/tokenizer.proto)
 
@@ -28,6 +34,7 @@ elseif (NOT TANTIVY_CARGO_TARGET_DIR)
 endif ()
 set(LIB_FILE "${TANTIVY_CARGO_TARGET_DIR}/${TARGET_DIR}/${TANTIVY_NAME}")
 set(LIB_HEADER_FOLDER "${CMAKE_CURRENT_SOURCE_DIR}/tantivy-binding/include")
+set(GREP_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/../grep/include/milvus_grep.h")
 
 # In fact, cargo was already installed on our builder environment.
 # Below settings are used to suit for first local development.
@@ -47,21 +54,28 @@ add_custom_target(tantivy_build
                 "CARGO_TARGET_DIR=${TANTIVY_CARGO_TARGET_DIR}"
                 ${CARGO_CMD}
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tantivy-binding
-        BYPRODUCTS ${LIB_FILE}
+        BYPRODUCTS ${LIB_FILE} ${GREP_HEADER}
         VERBATIM
 )
 
-# Set the installed library path
-set(INSTALLED_LIB_FILE "${TANTIVY_LIB_DIR}/${TANTIVY_NAME}")
+# Only C++ targets link the static library, so keep the linked copy in the
+# build tree instead of ${TANTIVY_LIB_DIR}. That directory is the libdir of the
+# pkg-config files cgo uses, and since Go 1.26.11 cgo rejects any library under
+# it that carries LLVM bitcode (.llvmbc on ELF, __LLVM on Mach-O), which this
+# Rust static library does.
+set(LINKED_LIB_FILE "${CMAKE_CURRENT_BINARY_DIR}/${TANTIVY_NAME}")
+# Earlier builds installed the library into ${TANTIVY_LIB_DIR}; remove it.
+set(LEGACY_INSTALLED_LIB_FILE "${TANTIVY_LIB_DIR}/${TANTIVY_NAME}")
 
-# Install tantivy library and headers to output directory. copy_if_different
-# keeps downstream C++ targets fresh when Cargo has no work to do.
+# Install tantivy headers to output directory. copy_if_different keeps
+# downstream C++ targets fresh when Cargo has no work to do.
 add_custom_target(install_tantivy_target
-        COMMENT "Installing tantivy binding to ${TANTIVY_LIB_DIR}"
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${TANTIVY_LIB_DIR}
+        COMMENT "Installing tantivy binding"
         COMMAND ${CMAKE_COMMAND} -E make_directory ${TANTIVY_INCLUDE_DIR}
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${LIB_FILE} ${TANTIVY_LIB_DIR}/
+        COMMAND ${CMAKE_COMMAND} -E rm -f ${LEGACY_INSTALLED_LIB_FILE}
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${LIB_FILE} ${LINKED_LIB_FILE}
         COMMAND ${CMAKE_COMMAND} -E copy_if_different ${LIB_HEADER_FOLDER}/tantivy-binding.h ${TANTIVY_INCLUDE_DIR}/
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${GREP_HEADER} ${TANTIVY_INCLUDE_DIR}/
         COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/tantivy-wrapper.h ${TANTIVY_INCLUDE_DIR}/
         COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/rust-binding.h ${TANTIVY_INCLUDE_DIR}/
         COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/rust-array.h ${TANTIVY_INCLUDE_DIR}/
@@ -71,7 +85,7 @@ add_custom_target(install_tantivy_target
         COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/phrase_match.h ${TANTIVY_INCLUDE_DIR}/
         COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/time_recorder.h ${TANTIVY_INCLUDE_DIR}/
         DEPENDS tantivy_build
-        BYPRODUCTS ${INSTALLED_LIB_FILE}
+        BYPRODUCTS ${LINKED_LIB_FILE} ${TANTIVY_INCLUDE_DIR}/milvus_grep.h
         VERBATIM
 )
 
@@ -83,13 +97,8 @@ add_dependencies(tantivy_binding
 set_target_properties(tantivy_binding
         PROPERTIES
         IMPORTED_GLOBAL TRUE
-        IMPORTED_LOCATION "${TANTIVY_LIB_DIR}/${TANTIVY_NAME}"
+        IMPORTED_LOCATION "${LINKED_LIB_FILE}"
         INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_INSTALL_PREFIX}/include")
-
-if (CMAKE_BUILD_TYPE STREQUAL "Debug")
-        add_compile_options(-fno-stack-protector -fno-omit-frame-pointer -fno-var-tracking -fsanitize=address)
-        add_link_options(-fno-stack-protector -fno-omit-frame-pointer -fno-var-tracking -fsanitize=address)
-endif()
 
 # TODO: move these below tests to ut.
 

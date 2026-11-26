@@ -73,6 +73,11 @@ const (
 	RoleConfigDBName     = "db_name"
 	RoleConfigPrivilege  = "privilege"
 
+	// PreserveFieldIdsKey is a CreateCollection request-only directive (introduced
+	// in v3.0.0 via #44361) instructing RootCoord to retain the source field IDs
+	// from the request schema. It is stripped before WAL/metadata persistence and
+	// filtered on DescribeCollection for pre-existing v3.0.0–v3.0.6 collections;
+	// see stripCreateOnlyProperties in internal/rootcoord/preserve_field_ids.go.
 	PreserveFieldIdsKey = "preserve_field_ids"
 
 	// PrivilegeExpr is deprecated: the /expr endpoint it guarded has been removed.
@@ -180,6 +185,8 @@ var (
 			MetaStore2API(commonpb.ObjectPrivilege_PrivilegeGroupCollectionReadWrite.String()),
 			MetaStore2API(commonpb.ObjectPrivilege_PrivilegeGroupCollectionAdmin.String()),
 			MetaStore2API(commonpb.ObjectPrivilege_PrivilegeUpdateReplicateConfiguration.String()),
+			MetaStore2API(commonpb.ObjectPrivilege_PrivilegeListRunningRequests.String()),
+			MetaStore2API(commonpb.ObjectPrivilege_PrivilegeCancelRequests.String()),
 
 			MetaStore2API(PrivilegeExpr),
 		},
@@ -409,6 +416,8 @@ var (
 		commonpb.ObjectPrivilege_PrivilegeListPrivilegeGroups.String(),
 		commonpb.ObjectPrivilege_PrivilegeGetReplicateConfiguration.String(),
 		commonpb.ObjectPrivilege_PrivilegeListFileResources.String(),
+		// Observing what the cluster is doing right now is a read.
+		commonpb.ObjectPrivilege_PrivilegeListRunningRequests.String(),
 	})
 
 	ClusterReadWritePrivileges = append(ClusterReadOnlyPrivileges,
@@ -421,6 +430,12 @@ var (
 			commonpb.ObjectPrivilege_PrivilegeRemoveFileResource.String(),
 			commonpb.ObjectPrivilege_PrivilegePinSnapshotData.String(),
 			commonpb.ObjectPrivilege_PrivilegeUnpinSnapshotData.String(),
+			// Stopping a running request changes what the cluster is doing,
+			// but it destroys no data and grants no access: read-write, not
+			// admin. It reaches ClusterAdminPrivileges through the append
+			// below, which is what makes GetPrivilegeLevel treat it as
+			// cluster-scoped.
+			commonpb.ObjectPrivilege_PrivilegeCancelRequests.String(),
 		})...,
 	)
 

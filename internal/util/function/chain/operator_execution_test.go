@@ -66,7 +66,8 @@ func selectionTestFrame(t *testing.T, pool memory.Allocator) *DataFrame {
 	require.NoError(t, b.addColumn("keep", selectionTestColumn(t, pool, arrow.FixedWidthTypes.Boolean, "[true,null,false,true]", "[]", "[false,true]")))
 	require.NoError(t, b.addColumn("detail", selectionTestColumn(t, pool, arrow.BinaryTypes.String,
 		`["a",null,"","d"]`, `[]`, `["e","f"]`)))
-	b.SetFieldType("$id", schemapb.DataType_Int64).SetFieldID("$id", 100)
+	require.NoError(t, b.SetFieldType("$id", schemapb.DataType_Int64))
+	b.SetFieldID("$id", 100)
 	b.SetFieldNullable("keep", true).SetFieldNullable("detail", true)
 	df := b.Build()
 	fields := df.schema.Fields()
@@ -153,7 +154,9 @@ func TestSelectionSequentialOperators(t *testing.T) {
 			require.True(t, schema.Metadata().Equal(out.schema.Metadata()))
 			require.True(t, schema.Field(3).Equal(out.schema.Field(out.nameIndex["detail"])))
 			require.Equal(t, "test", out.metadata["query"])
-			require.Equal(t, int64(100), out.fieldIDs["$id"])
+			id, ok := out.FieldID("$id")
+			require.True(t, ok)
+			require.Equal(t, int64(100), id)
 			require.False(t, out.HasColumn("$row_id"))
 			out.Release()
 		})
@@ -354,8 +357,10 @@ func TestSelectionReplacementMetadataAndEmptySelection(t *testing.T) {
 	require.NoError(t, err)
 	r.Release()
 	require.Equal(t, input.ColumnNames(), output.ColumnNames())
-	require.Equal(t, schemapb.DataType_VarChar, output.fieldTypes["$id"])
-	_, hasID := output.fieldIDs["$id"]
+	typ, ok := output.FieldType("$id")
+	require.True(t, ok)
+	require.Equal(t, schemapb.DataType_VarChar, typ)
+	_, hasID := output.FieldID("$id")
 	require.False(t, hasID)
 	require.True(t, metadata.Equal(output.schema.Field(0).Metadata))
 	empty := &OperatorResult{Selection: &RowSelection{Chunks: []ChunkSelection{RowIndices(nil), RowIndices(nil), RowIndices(nil)}}}
@@ -519,7 +524,6 @@ func TestSelectionUnsupportedTypesAndCleanup(t *testing.T) {
 		dt     arrow.DataType
 		values string
 	}{
-		{"binary", arrow.BinaryTypes.Binary, `["YQ==","Yg=="]`},
 		{"list", arrow.ListOf(arrow.PrimitiveTypes.Int64), `[[1],[2]]`},
 		{"struct", arrow.StructOf(arrow.Field{Name: "value", Type: arrow.BinaryTypes.String}), `[{"value":"a"},{"value":"b"}]`},
 	} {
@@ -631,5 +635,59 @@ func BenchmarkSelectionStringUUID(b *testing.B) {
 			b.StopTimer()
 			b.ReportMetric(float64(allocator.bytes)/float64(b.N), "arrow-B/op")
 		})
+	}
+}
+
+// The companion list follows document selection and survives pruning/source release.
+func TestQueryElementIndicesSelection(t *testing.T) {
+	pool := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	defer pool.AssertSize(t, 0)
+	dt := arrow.ListOf(arrow.PrimitiveTypes.Int32)
+	b := NewDataFrameBuilder().SetChunkSizes([]int64{4, 0, 2})
+	defer b.Release()
+	lists := selectionTestColumn(t, pool, dt, `[[99],[1,null,3],[],null,[8,9]]`, `[]`, `[[0],[2,4]]`)
+	// A nonzero parent offset must not change child indexing.
+	sliced := array.NewSlice(lists.Chunk(0), 1, 5)
+	require.NoError(t, b.AddColumnFromChunks(types.QueryElementIndicesFieldName,
+		[]arrow.Array{sliced, array.NewSlice(lists.Chunk(1), 0, 0), array.NewSlice(lists.Chunk(2), 0, 2)}))
+	lists.Release()
+	require.NoError(t, b.addColumn(types.SegOffsetFieldName, selectionTestColumn(t, pool, arrow.PrimitiveTypes.Int64, `[10,20,30,40]`, `[]`, `[50,60]`)))
+	require.NoError(t, b.addColumn("unused", selectionTestColumn(t, pool, arrow.PrimitiveTypes.Int64, `[1,2,3,4]`, `[]`, `[5,6]`)))
+	input := b.Build()
+	selection := &RowSelection{Chunks: []ChunkSelection{RowIndices([]int{3, 0, 0, 2, 1}), RowIndices(nil), RowRange(1, 2)}}
+	out, err := assembleOperatorResult(types.NewFuncContext(pool), input, nil, &OperatorResult{Selection: selection})
+	require.NoError(t, err)
+	input.Release()
+	pruned, err := PruneDataFrame(out, nil, SystemColumnPolicy{KeepAllSystemColumns: true})
+	require.NoError(t, err)
+	require.NotSame(t, out, pruned)
+	out.Release()
+	defer pruned.Release()
+	require.False(t, pruned.HasColumn("unused"))
+	require.True(t, IsFunctionChainSystemName(types.QueryElementIndicesFieldName))
+	want := selectionTestColumn(t, pool, dt, `[[8,9],[1,null,3],[1,null,3],null,[]]`, `[]`, `[[2,4]]`)
+	defer want.Release()
+	require.True(t, arrow.TypeEqual(dt, pruned.Column(types.QueryElementIndicesFieldName).DataType()))
+	for i := range want.Chunks() {
+		require.True(t, array.Equal(want.Chunk(i), pruned.Column(types.QueryElementIndicesFieldName).Chunk(i)))
+	}
+	require.Equal(t, []int64{40, 10, 10, 30, 20}, pruned.Column(types.SegOffsetFieldName).Chunk(0).(*array.Int64).Int64Values())
+}
+
+func TestPickInt32ListsEmptyAndInvalidSelection(t *testing.T) {
+	pool := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	defer pool.AssertSize(t, 0)
+	col := selectionTestColumn(t, pool, arrow.ListOf(arrow.PrimitiveTypes.Int32), `[[1,2],null,[]]`)
+	defer col.Release()
+	empty, err := dispatchPickByIndices(pool, col.Chunk(0), nil)
+	require.NoError(t, err)
+	require.Zero(t, empty.Len())
+	require.True(t, arrow.TypeEqual(col.DataType(), empty.DataType()))
+	empty.Release()
+	for _, indices := range [][]int{{0, -1}, {0, 3}} {
+		out, err := dispatchPickByIndices(pool, col.Chunk(0), indices)
+		require.Nil(t, out)
+		require.ErrorIs(t, err, merr.ErrServiceInternal)
+		require.Equal(t, merr.SystemError, merr.GetErrorType(err))
 	}
 }

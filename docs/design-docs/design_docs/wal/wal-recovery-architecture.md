@@ -20,14 +20,16 @@ are split by responsibility:
 - [VChannel Recovery Module](vchannel_view_module.md)
 - [Segment View Component](segment_view_module.md)
 - [L0 Materializer](l0_materializer.md)
-- [TransformLog Subscription Adaptor](transform_log.md) (future integration)
+- [TransformLog Subscription Adaptor](transform_log.md)
 - [WALSummary](summary.md)
 - [Broadcast Ack Module](broadcast_ack_module.md)
 - [StreamingNode VChannel WAL Input View](streamingnode_vchannel_wal_view.md)
 
 **Current runtime:** [WAL L0 Materializer](l0_materializer.md) retains Delete
 handles for legacy query recovery. The [Summary consumer](summary_l0_materializer.md)
-is retained for future QueryView wiring; the two implementations are not run together.
+is retained as an unwired alternative; QueryView resource preparation and
+execution already use the summary-backed subscription adaptor independently of
+L0 materialization. The two L0 implementations are not run together.
 
 ## 1. Goals
 
@@ -65,7 +67,19 @@ Asynchronous recovery tasks share the process-level NodeScheduler, which owns
 execution concurrency and delayed retries. Each RecoveryStorage keeps a scoped
 task tracker only to cancel and wait for its own tasks during shutdown; it has
 no per-PChannel concurrency limit or separate pending queue. Scheduling fairness
-between PChannels is future work in NodeScheduler.
+between PChannels is future work in NodeScheduler. The scoped tracker forwards
+submission priority and `PriorityTaskHandle.SetPriority` to the shared executor;
+this does not interrupt running work or advance delayed retries. NodeScheduler
+provides task-level starvation protection within cumulative worker limits,
+not PChannel shares. ACK uses priority 20, QueryView release 5, build/ready the immutable View priority
+(default 0; shared build uses the maximum pending dependency priority),
+and ordinary data work -5 (promoted to 5 under recovery-tail pressure).
+ACK tasks yield with ErrDelay when Broadcast.Ack
+fails or reaches its 100ms timeout. The preceding legacy import completion RPC has no
+additional timeout, but remains cancelable during shutdown. Standalone QueryView
+notifications use independent goroutines.
+See the
+[NodeScheduler contract](../../../../pkg/util/nodescheduler/README.md).
 
 ## 3. One Global Checkpoint
 
@@ -99,9 +113,9 @@ The checkpoint is the only:
 
 There is no Meta checkpoint, Data checkpoint, DataBarrier, or recovery mode.
 `Metrics().RecoveryTimeTick` currently reports Tracker completion, which can be
-ahead of Summary confirmation and published progress. The compatibility
-DataCoord VChannel checkpoint updater reports flush progress, not a second WAL
-recovery cursor.
+ahead of Summary confirmation and published progress. There is no periodic
+DataCoord VChannel checkpoint reporter. Streaming Flush completes through
+consuming-side acknowledgements, independently of global checkpoint publication.
 
 ## 4. Component Snapshot Checkpoints
 
@@ -125,12 +139,15 @@ work for 101 is incomplete, even if the work for 102 completed first.
 RW startup is one logical replay:
 
 ```text
-append RecoveryBarrier to fence the old writer
+open the checkpoint physical WAL and append RecoveryBarrier
   -> load and claim checkpoint with the assignment term
   -> load component snapshots and restore Summary plus L0 materialization cursors
-  -> open one scanner from the checkpoint
+  -> open the first physical scanner from the checkpoint
   -> observe messages with complete semantics
-  -> reach this open's RecoveryBarrier and capture the write-path snapshot
+  -> on AlterWAL, RecoveryStorage opens the target writer, writes a new barrier,
+     and continues the same recovery after the target anchor
+  -> reach the current leg's RecoveryBarrier and capture the write-path snapshot
+  -> construct autowalimpls from the recovered writers and initialize WAB
   -> pause raw input while initializing the write path
   -> resume the same scanner through WriteAheadBuffer
 ```
@@ -138,8 +155,10 @@ append RecoveryBarrier to fence the old writer
 RecoveryBarrier is a writer fence and startup catch-up marker. It never
 switches component observation behavior. Recovery and ordinary reads share the
 same scanner constructor, ordering, transaction assembly, source switching, and
-shutdown paths. Recovery supplies an optional startup boundary and the WAB
-created by the opener; it does not create a separate kind of scanner.
+shutdown paths. Recovery supplies an optional startup boundary and pauses at cross-backend
+AlterWAL records. Physical scanner legs change only after that ordered boundary;
+RecoveryStorage retains all component state and pending completion handles.
+The final leg receives its WAB only after bounded recovery succeeds.
 
 The startup boundary matches the exact RecoveryBarrier MessageID and TimeTick.
 Earlier barriers and TimeTicks cannot trigger the handoff. Before delivering the
@@ -150,10 +169,20 @@ before the barrier can therefore be completed by CommitTxn or RollbackTxn after
 it; live transaction assembly cannot mutate the write-path startup snapshot.
 
 After write-path initialization, the scanner reads WAB exclusively after the
-barrier TimeTick. The WAB is seeded by that exact barrier, so this also works
+barrier TimeTick. The WAB is created after bounded recovery and seeded by that exact final barrier, so this also works
 when it contains no later messages: creating the reader needs no additional
 persisted TimeTick. Startup does not wait for TimeTickInspector registration.
-The barrier is delivered once, and no second logical scanner is opened.
+The final barrier is delivered once; live handoff reuses the final scanner.
+
+The sync operator publishes QueryMVCC from the complete ACK prefix before
+appending its confirmation to WAL and WAB. The acknowledged data is already
+durable; queries still wait for runtime consumption to reach their granted
+Growing/Transform targets. Consequently WAL and WAB consumers cannot dispatch a
+Flush and expose its new DataView/QueryView before the corresponding query
+frontiers are published. RecoveryStorage adds no per-message publication wait.
+MVCCManager remains owned by WAL initialization. After bounded recovery, the
+opener registers recovered live channels at the opening fence before append
+admission and live replay resume.
 
 WAB protects the live suffix from construction onward. RecoveryStorage marks
 only the complete prefix it has observed and dispatched as evictable, after each
@@ -173,8 +202,9 @@ durable data still require WAL replay. The scanner still
 supports durable catchup from the last consumed message's safe physical
 LastConfirmedMessageID, filtering already consumed TimeTicks and preserving its
 transaction and ordering state. Cancellation releases the scanner while reading durable WAL,
-paused at the startup boundary, or waiting on an empty WAB. Open failure,
-AlterWAL early return, and normal close all release the retained stream.
+paused at the startup boundary, or waiting on an empty WAB. Open failure and
+normal close release the retained stream. The legacy AlterWAL stage/reopen path
+is deprecated; linked switches preserve the live stream.
 
 The current RO opener only constructs the read-only adaptor and does not run
 RecoveryStorage initialization. Recovery against a stable readable WAL frontier
@@ -195,7 +225,7 @@ raw WAL message M
        -> PChannel/VChannel metadata
        -> affected SegmentViews and L1 materialization bound
        -> WALMaterializer.ObserveMessage retains Delete/explicit Flush handles
-       -> QueryRuntime plain immutable event (future integration)
+       -> QueryRuntime ordered immutable live event
   -> D.Release()
   -> BroadcastAck.Accept(O)
   -> all retained work and Coordinator Ack succeed without poison
@@ -262,4 +292,4 @@ feature branch receives a reader, writer, migration path, or fallback.
 12. Summary installs readable records before VChannel observation; this does not
     require Summary persistence.
 13. The current L0 consumer rebuilds unfinished Delete handles from WAL replay.
-    Only the future Summary consumer needs a barrier to expose pre-checkpoint Deletes.
+    The alternative Summary L0 consumer needs a barrier to expose pre-checkpoint Deletes.

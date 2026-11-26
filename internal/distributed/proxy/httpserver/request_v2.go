@@ -18,18 +18,21 @@ package httpserver
 
 import (
 	"context"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/json"
 	"github.com/milvus-io/milvus/internal/util/importutilv2"
 	"github.com/milvus-io/milvus/pkg/v3/common"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
 type EmptyReq struct{}
@@ -492,7 +495,44 @@ type CollectionFilterReq struct {
 func (req *CollectionFilterReq) GetDbName() string         { return req.DbName }
 func (req *CollectionFilterReq) GetCollectionName() string { return req.CollectionName }
 
+type WriteConditionReq struct {
+	Field     string `json:"field"`
+	Op        string `json:"op"`
+	OnMissing string `json:"onMissing"`
+}
+
+func (condition *WriteConditionReq) toProto() (*milvuspb.WriteCondition, error) {
+	if condition == nil {
+		return nil, nil
+	}
+	op, ok := milvuspb.WriteCondition_Op_value[strings.ToUpper(condition.Op)]
+	if !ok || op == 0 {
+		return nil, merr.WrapErrParameterInvalidMsg("writeCondition.op must be gt or gte")
+	}
+	missing := strings.ToUpper(condition.OnMissing)
+	if missing == "" {
+		missing = "INSERT"
+	}
+	policy, ok := milvuspb.WriteCondition_MissingRowPolicy_value[missing+"_IF_MISSING"]
+	if !ok {
+		return nil, merr.WrapErrParameterInvalidMsg("writeCondition.onMissing must be insert, skip or error")
+	}
+	return &milvuspb.WriteCondition{Field: condition.Field, Op: milvuspb.WriteCondition_Op(op), OnMissing: milvuspb.WriteCondition_MissingRowPolicy(policy)}, nil
+}
+
+func conditionalUpsertData(condition *milvuspb.WriteCondition, data gin.H, result *milvuspb.MutationResult) gin.H {
+	if condition != nil {
+		indexes := result.GetSuccIndex()
+		if indexes == nil {
+			indexes = []uint32{}
+		}
+		data["succIndex"] = indexes
+	}
+	return data
+}
+
 type CollectionDataReq struct {
+	WriteCondition *WriteConditionReq        `json:"writeCondition,omitempty"`
 	DbName         string                    `json:"dbName"`
 	CollectionName string                    `json:"collectionName" binding:"required"`
 	PartitionName  string                    `json:"partitionName"`
@@ -867,6 +907,66 @@ type FieldSchema struct {
 	Fields            []FieldSchema          `json:"fields"`
 	Nullable          bool                   `json:"nullable"`
 	DefaultValue      interface{}            `json:"defaultValue"`
+	// ElementNullable lets an element of an Array / ArrayOfVector struct
+	// sub-field be null. For an Array<Array<T>> sub-field it is the nullability
+	// of an inner array.
+	ElementNullable bool `json:"elementNullable"`
+	// TypeSchema describes an Array<Array<T>> struct sub-field, which is
+	// declared with dataType Array and elementDataType Array.
+	TypeSchema *TypeSchemaReq `json:"typeSchema"`
+}
+
+// TypeSchemaReq is the RESTful form of schemapb.TypeSchema. A node is either an
+// Array, whose element is described by ArrayElement, or a leaf of type
+// LeafType. Nullable is a pointer so that a struct sub-field can leave the
+// inner array's nullability to its elementNullable.
+type TypeSchemaReq struct {
+	LeafType     string                 `json:"leafType,omitempty"`
+	ArrayElement *TypeSchemaReq         `json:"arrayElement,omitempty"`
+	TypeParams   map[string]interface{} `json:"typeParams,omitempty"`
+	Nullable     *bool                  `json:"nullable,omitempty"`
+}
+
+// GetProto converts the node and its descendants. The checks a node's
+// combination of kinds and params needs are left to the server, which owns
+// them for every client; only what cannot be expressed in the proto is
+// rejected here.
+func (ts *TypeSchemaReq) GetProto(fieldName string) (*schemapb.TypeSchema, error) {
+	if (ts.LeafType == "") == (ts.ArrayElement == nil) {
+		return nil, merr.WrapErrParameterInvalidMsg(
+			"typeSchema of field %s must set exactly one of leafType and arrayElement on every node", fieldName)
+	}
+	proto := &schemapb.TypeSchema{
+		TypeParams: make([]*commonpb.KeyValuePair, 0, len(ts.TypeParams)),
+		Nullable:   ts.Nullable != nil && *ts.Nullable,
+	}
+	keys := make([]string, 0, len(ts.TypeParams))
+	for key := range ts.TypeParams {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		value, err := getElementTypeParams(ts.TypeParams[key])
+		if err != nil {
+			return nil, err
+		}
+		proto.TypeParams = append(proto.TypeParams, &commonpb.KeyValuePair{Key: key, Value: value})
+	}
+	if ts.ArrayElement != nil {
+		element, err := ts.ArrayElement.GetProto(fieldName)
+		if err != nil {
+			return nil, err
+		}
+		proto.Kind = &schemapb.TypeSchema_ArrayElement{ArrayElement: element}
+		return proto, nil
+	}
+	leafType, ok := schemapb.DataType_value[ts.LeafType]
+	if !ok {
+		return nil, merr.WrapErrParameterInvalidMsg(
+			"typeSchema leaf type %s of field %s is invalid(case sensitive)", ts.LeafType, fieldName)
+	}
+	proto.Kind = &schemapb.TypeSchema_LeafType{LeafType: schemapb.DataType(leafType)}
+	return proto, nil
 }
 
 func (field *FieldSchema) GetProto(ctx context.Context) (*schemapb.FieldSchema, error) {
@@ -886,6 +986,7 @@ func (field *FieldSchema) GetProto(ctx context.Context) (*schemapb.FieldSchema, 
 		TypeParams:      []*commonpb.KeyValuePair{},
 		Nullable:        field.Nullable,
 		ExternalField:   field.ExternalField,
+		ElementNullable: field.ElementNullable,
 	}
 
 	var err error
@@ -907,6 +1008,12 @@ func (field *FieldSchema) GetProto(ctx context.Context) (*schemapb.FieldSchema, 
 			return nil, err
 		}
 		fieldSchema.TypeParams = append(fieldSchema.TypeParams, &commonpb.KeyValuePair{Key: key, Value: value})
+	}
+	if field.TypeSchema != nil {
+		fieldSchema.TypeSchema, err = field.TypeSchema.GetProto(field.FieldName)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return fieldSchema, nil
 }
@@ -947,6 +1054,8 @@ func (field *FieldSchema) GetStructArrayProto(ctx context.Context) (*schemapb.St
 // StructArrayFieldSchema describes a struct array field in RESTful v2 API.
 // Each struct array field contains multiple sub-fields; every sub-field must
 // be declared as either Array (scalar element) or ArrayOfVector (vector element).
+// An Array<Array<T>> sub-field is an Array with elementDataType Array and a
+// typeSchema.
 type StructArrayFieldSchema struct {
 	FieldName   string                 `json:"fieldName" binding:"required"`
 	Description string                 `json:"description"`
@@ -993,11 +1102,6 @@ func (sf *StructArrayFieldSchema) GetProto(ctx context.Context) (*schemapb.Struc
 				"sub-field %s of struct %s cannot be primary / partition / clustering key",
 				sub.FieldName, sf.FieldName)
 		}
-		if subProto.Nullable {
-			return nil, merr.WrapErrParameterInvalidMsg(
-				"sub-field %s of struct %s cannot be nullable",
-				sub.FieldName, sf.FieldName)
-		}
 		if subProto.DefaultValue != nil {
 			return nil, merr.WrapErrParameterInvalidMsg(
 				"sub-field %s of struct %s cannot set defaultValue",
@@ -1008,12 +1112,37 @@ func (sf *StructArrayFieldSchema) GetProto(ctx context.Context) (*schemapb.Struc
 				"duplicated sub-field name %s in struct %s", subProto.Name, sf.FieldName)
 		}
 		subNames[subProto.Name] = struct{}{}
-		if maxCapacity, ok := parentTypeParams[common.MaxCapacityKey]; ok && !hasTypeParam(subProto.TypeParams, common.MaxCapacityKey) {
+		if typeutil.IsNestedArrayTypeSchema(subProto.GetTypeSchema()) {
+			if err := completeNestedSubFieldTypeSchema(sf.FieldName, &sub, subProto, parentTypeParams); err != nil {
+				return nil, err
+			}
+		} else if maxCapacity, ok := parentTypeParams[common.MaxCapacityKey]; ok && !hasTypeParam(subProto.TypeParams, common.MaxCapacityKey) {
 			subProto.TypeParams = append(subProto.TypeParams, &commonpb.KeyValuePair{Key: common.MaxCapacityKey, Value: maxCapacity})
 		}
 		proto.Fields = append(proto.Fields, subProto)
 	}
 	return proto, nil
+}
+
+// completeNestedSubFieldTypeSchema fills what an Array<Array<T>> sub-field's
+// typeSchema may leave to the struct: the root node's max_capacity is the
+// struct's (the root is the outer array, one entry per struct element), and
+// the inner array's nullable is the sub-field's elementNullable. The struct's
+// max_capacity goes to the root rather than to the sub-field's typeParams,
+// where the server reads it as a mirror of the root.
+func completeNestedSubFieldTypeSchema(structName string, sub *FieldSchema, subProto *schemapb.FieldSchema, parentTypeParams map[string]string) error {
+	root := subProto.GetTypeSchema()
+	if maxCapacity, ok := parentTypeParams[common.MaxCapacityKey]; ok && !hasTypeParam(root.GetTypeParams(), common.MaxCapacityKey) {
+		root.TypeParams = append(root.TypeParams, &commonpb.KeyValuePair{Key: common.MaxCapacityKey, Value: maxCapacity})
+	}
+	inner := root.GetArrayElement()
+	if requested := sub.TypeSchema.ArrayElement.Nullable; requested != nil && *requested != sub.ElementNullable {
+		return merr.WrapErrParameterInvalidMsg(
+			"sub-field %s of struct %s: typeSchema inner array nullable=%t must match elementNullable=%t",
+			sub.FieldName, structName, *requested, sub.ElementNullable)
+	}
+	inner.Nullable = sub.ElementNullable
+	return nil
 }
 
 func hasTypeParam(typeParams []*commonpb.KeyValuePair, key string) bool {
@@ -1299,6 +1428,23 @@ func (req *GetSegmentsInfoReq) GetCollectionID() int64 {
 
 func (req *GetSegmentsInfoReq) GetSegmentIDs() []int64 {
 	return req.SegmentIDs
+}
+
+type ListRunningRequestsReq struct {
+	DbName         string `json:"dbName"`
+	CollectionName string `json:"collectionName"`
+	User           string `json:"user"`
+	MinElapsedMs   int64  `json:"minElapsedMs"`
+}
+
+func (req *ListRunningRequestsReq) GetDbName() string { return req.DbName }
+
+type CancelRequestsReq struct {
+	// Ids exactly as listRunningRequests returned them. They are strings so
+	// that a client decoding JSON numbers as doubles cannot round them.
+	RequestIDs []string `json:"requestIds" binding:"required"`
+	Reason     string   `json:"reason"`
+	User       string   `json:"user"`
 }
 
 type GetQuotaMetricsReq struct{}

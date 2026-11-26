@@ -130,6 +130,8 @@ TEST(TextMatchCacheTest, ExprResCacheFilterBitsDoesNotDuplicateTextMatchEntry) {
         auto plan_fragment = plan::PlanFragment(expr);
         auto query_context = std::make_shared<milvus::exec::QueryContext>(
             DEAFULT_QUERY_ID, seg.get(), N, MAX_TIMESTAMP);
+        query_context->set_read_snapshot(
+            query_context->get_segment()->CaptureReadSnapshot());
         query_context->set_enable_expr_cache(true);
         query_context->set_enable_sub_expr_cache_write(false);
 
@@ -138,14 +140,20 @@ TEST(TextMatchCacheTest, ExprResCacheFilterBitsDoesNotDuplicateTextMatchEntry) {
         ASSERT_NE(row, nullptr);
         ASSERT_EQ(mgr.GetEntryCount(), 1);
 
-        ExprResCacheManager::Key filter_key{seg->get_segment_id(),
-                                            expr->ToString()};
+        ExprResCacheManager::Key filter_key{
+            seg->get_segment_id(),
+            expr->ToString(),
+            seg->CaptureReadSnapshot()->GetExprCacheGeneration()};
         ExprResCacheManager::Value filter_value;
         filter_value.active_count = N;
         ASSERT_TRUE(mgr.Get(filter_key, filter_value));
 
-        ExprResCacheManager::Key text_match_key{seg->get_segment_id(),
-                                                expr->filter()->ToString()};
+        ExprResCacheManager::Key text_match_key{
+            seg->get_segment_id(),
+            expr->filter()->ToString(),
+            seg->type() == SegmentType::Sealed
+                ? seg->CaptureReadSnapshot()->GetExprCacheGeneration()
+                : nullptr};
         ExprResCacheManager::Value text_match_value;
         text_match_value.active_count = N;
         ASSERT_FALSE(mgr.Get(text_match_key, text_match_value));
@@ -160,7 +168,8 @@ ExecuteFilterBitsWithFullCache(
     const segcore::SegmentInternalInterface* segment,
     int64_t active_count,
     Timestamp timestamp,
-    int64_t entity_ttl_physical_time_us) {
+    int64_t entity_ttl_physical_time_us,
+    SchemaPtr read_schema) {
     auto plan_fragment = plan::PlanFragment(filter_plan);
     auto query_context = std::make_shared<milvus::exec::QueryContext>(
         DEAFULT_QUERY_ID,
@@ -175,6 +184,9 @@ ExecuteFilterBitsWithFullCache(
         std::unordered_map<std::string,
                            std::shared_ptr<milvus::exec::BaseConfig>>(),
         entity_ttl_physical_time_us);
+    query_context->set_read_schema(std::move(read_schema));
+    query_context->set_read_snapshot(
+        query_context->get_segment()->CaptureReadSnapshot());
     query_context->set_enable_expr_cache(true);
     query_context->set_enable_sub_expr_cache_write(false);
 
@@ -223,12 +235,12 @@ TEST(TextMatchCacheTest, ExprResCacheFilterBitsUsesCurrentFilterNodeKey) {
         auto swimming = GetMatchExpr(schema, "swimming", OpType::TextMatch);
 
         auto football_result = ExecuteFilterBitsWithFullCache(
-            football, seg.get(), N, MAX_TIMESTAMP, 0);
+            football, seg.get(), N, MAX_TIMESTAMP, 0, schema);
         ASSERT_TRUE(football_result[0]);
         ASSERT_TRUE(football_result[1]);
 
         auto swimming_result = ExecuteFilterBitsWithFullCache(
-            swimming, seg.get(), N, MAX_TIMESTAMP, 0);
+            swimming, seg.get(), N, MAX_TIMESTAMP, 0, schema);
         ASSERT_FALSE(swimming_result[0]);
         ASSERT_TRUE(swimming_result[1]);
     });
@@ -268,12 +280,12 @@ TEST(TextMatchCacheTest, ExprResCacheFilterBitsIncludesEntityTTLPhysicalTime) {
                                                            always_true_expr);
 
         auto before_expire = ExecuteFilterBitsWithFullCache(
-            plan, seg.get(), N, MAX_TIMESTAMP, 100);
+            plan, seg.get(), N, MAX_TIMESTAMP, 100, schema);
         ASSERT_TRUE(before_expire[0]);
         ASSERT_TRUE(before_expire[1]);
 
         auto after_expire = ExecuteFilterBitsWithFullCache(
-            plan, seg.get(), N, MAX_TIMESTAMP, 200);
+            plan, seg.get(), N, MAX_TIMESTAMP, 200, schema);
         ASSERT_FALSE(after_expire[0]);
         ASSERT_TRUE(after_expire[1]);
     });
@@ -313,7 +325,7 @@ TEST(TextMatchCacheTest, ExprResCacheGrowingTextBypassesReadAndWrite) {
                     raw_data.row_ids_.data(),
                     raw_data.timestamps_.data(),
                     raw_data.owner);
-        auto pin = seg->PinGrowingIndex(FieldId(101));
+        auto pin = seg->PinGrowingIndex(nullptr, FieldId(101));
         ASSERT_TRUE(pin);
         ASSERT_EQ(TextReader(pin.Reader()).MatchQuery("football", 1).count(),
                   N);
@@ -329,8 +341,12 @@ TEST(TextMatchCacheTest, ExprResCacheGrowingTextBypassesReadAndWrite) {
 
             // Simulate a result cached before the index became visible, with the
             // same active_count. Explicit commit/reload above avoids a timed race.
-            ExprResCacheManager::Key key{seg->get_segment_id(),
-                                         expr->filter()->ToString()};
+            ExprResCacheManager::Key key{
+                seg->get_segment_id(),
+                expr->filter()->ToString(),
+                seg->type() == SegmentType::Sealed
+                    ? seg->CaptureReadSnapshot()->GetExprCacheGeneration()
+                    : nullptr};
             ExprResCacheManager::Value stale;
             stale.result = std::make_shared<TargetBitmap>(N);
             stale.valid_result = std::make_shared<TargetBitmap>(N, true);

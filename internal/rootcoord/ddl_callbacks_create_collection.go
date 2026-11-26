@@ -36,11 +36,14 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util"
 	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
-	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
 type collectionDataViewCreator interface {
 	CreateCollectionDataView(ctx context.Context, collectionID int64, vchannels []string) error
+}
+
+type collectionDataViewTransformCreator interface {
+	CreateCollectionDataViewWithTransformStarts(ctx context.Context, result message.BroadcastResultCreateCollectionMessageV1) error
 }
 
 func (c *Core) broadcastCreateCollectionV1(ctx context.Context, req *milvuspb.CreateCollectionRequest) error {
@@ -51,7 +54,12 @@ func (c *Core) broadcastCreateCollectionV1(ctx context.Context, req *milvuspb.Cr
 	if req.GetShardsNum() <= 0 {
 		req.ShardsNum = common.DefaultShardsNum
 	}
-	if _, err := typeutil.GetPartitionKeyFieldSchema(schema); err == nil {
+	preserveFieldID, exist := funcutil.TryGetAttrByKeyFromRepeatedKV(util.PreserveFieldIdsKey, req.GetProperties())
+	if !exist {
+		preserveFieldID = "false"
+	}
+	preserveFieldIDs := preserveFieldID == "true"
+	if hasCreateCollectionPartitionKey(schema, req.GetProperties(), preserveFieldIDs) {
 		if req.GetNumPartitions() <= 0 {
 			req.NumPartitions = common.DefaultPartitionsWithPartitionKey
 		}
@@ -67,10 +75,6 @@ func (c *Core) broadcastCreateCollectionV1(ctx context.Context, req *milvuspb.Cr
 	defer broadcaster.Close()
 
 	// prepare and validate the creation collection message.
-	preserveFieldID, exist := funcutil.TryGetAttrByKeyFromRepeatedKV(util.PreserveFieldIdsKey, req.GetProperties())
-	if !exist {
-		preserveFieldID = "false"
-	}
 	createCollectionTask := createCollectionTask{
 		Core:   c,
 		Req:    req,
@@ -80,7 +84,7 @@ func (c *Core) broadcastCreateCollectionV1(ctx context.Context, req *milvuspb.Cr
 			CollectionName:   req.GetCollectionName(),
 			CollectionSchema: schema,
 		},
-		preserveFieldID: preserveFieldID == "true",
+		preserveFieldID: preserveFieldIDs,
 	}
 	if err := createCollectionTask.Prepare(ctx); err != nil {
 		createCollectionTask.releaseFileResources()
@@ -109,6 +113,10 @@ func (c *Core) broadcastCreateCollectionV1(ctx context.Context, req *milvuspb.Cr
 }
 
 func (c *DDLCallback) createCollectionV1AckCallback(ctx context.Context, result message.BroadcastResultCreateCollectionMessageV1) error {
+	return c.applyCollectionCreation(ctx, result, etcdpb.CollectionState_CollectionCreated)
+}
+
+func (c *DDLCallback) applyCollectionCreation(ctx context.Context, result message.BroadcastResultCreateCollectionMessageV1, state etcdpb.CollectionState) error {
 	msg := result.Message
 	header := msg.Header()
 	body := msg.MustBody()
@@ -121,13 +129,18 @@ func (c *DDLCallback) createCollectionV1AckCallback(ctx context.Context, result 
 		}
 	}
 	creator, ok := c.mixCoord.(collectionDataViewCreator)
-	if !ok {
+	if transformCreator, supportsTransform := c.mixCoord.(collectionDataViewTransformCreator); supportsTransform {
+		if err := transformCreator.CreateCollectionDataViewWithTransformStarts(ctx, result); err != nil {
+			return merr.Wrap(err, "failed to create collection data view")
+		}
+	} else if !ok {
 		mlog.Warn(ctx, "MixCoord does not support DataView collection creation",
 			mlog.FieldCollectionID(header.CollectionId))
 	} else if err := creator.CreateCollectionDataView(ctx, header.CollectionId, body.VirtualChannelNames); err != nil {
 		return merr.Wrap(err, "failed to create collection data view")
 	}
 	newCollInfo := newCollectionModelWithMessage(header, body, result)
+	newCollInfo.State = state
 	if err := c.meta.AddCollection(ctx, newCollInfo); err != nil {
 		return merr.Wrap(err, "failed to add collection to meta table")
 	}
@@ -212,7 +225,7 @@ func newCollectionModel(header *message.CreateCollectionMessageHeader, body *mes
 		DBName:               body.DbName,
 		Description:          body.CollectionSchema.Description,
 		AutoID:               body.CollectionSchema.AutoID,
-		Fields:               model.UnmarshalFieldModels(body.CollectionSchema.Fields),
+		Fields:               model.CloneFields(body.CollectionSchema.Fields),
 		StructArrayFields:    model.UnmarshalStructArrayFieldModels(body.CollectionSchema.StructArrayFields),
 		Functions:            model.UnmarshalFunctionModels(body.CollectionSchema.Functions),
 		VirtualChannelNames:  body.VirtualChannelNames,
@@ -226,7 +239,7 @@ func newCollectionModel(header *message.CreateCollectionMessageHeader, body *mes
 		EnableDynamicField:   body.CollectionSchema.EnableDynamicField,
 		EnableNamespace:      body.CollectionSchema.EnableNamespace,
 		UpdateTimestamp:      ts,
-		SchemaVersion:        0,
+		SchemaVersion:        body.CollectionSchema.GetVersion(),
 		ShardInfos:           shardInfos,
 		FileResourceIds:      body.CollectionSchema.GetFileResourceIds(),
 		ExternalSource:       body.CollectionSchema.ExternalSource,

@@ -24,6 +24,7 @@
 #include "cachinglayer/Utils.h"
 #include "common/ChunkTarget.h"
 #include "milvus-storage/common/metadata.h"
+#include "milvus-storage/filesystem/fs.h"
 #include "mmap/Types.h"
 #include "common/Types.h"
 #include "common/GroupChunk.h"
@@ -40,6 +41,7 @@ class GroupChunkTranslator
         GroupChunkType group_chunk_type,
         const std::unordered_map<FieldId, FieldMeta>& field_metas,
         FieldDataInfo column_group_info,
+        milvus_storage::ArrowFileSystemPtr fs,
         std::vector<std::string> insert_files,
         std::vector<milvus_storage::RowGroupMetadataVector>&&
             row_group_meta_list,
@@ -64,9 +66,9 @@ class GroupChunkTranslator
     milvus::cachinglayer::cid_t
     cell_id_of(milvus::cachinglayer::uid_t uid) const override;
 
-    std::pair<milvus::cachinglayer::ResourceUsage,
-              milvus::cachinglayer::ResourceUsage>
-    estimated_byte_size_of_cell(milvus::cachinglayer::cid_t cid) const override;
+    milvus::cachinglayer::LoadingResourceUsage
+    estimated_loading_usage(
+        const std::vector<milvus::cachinglayer::cid_t>& cids) const override;
 
     const std::string&
     key() const override;
@@ -75,6 +77,14 @@ class GroupChunkTranslator
                           std::unique_ptr<milvus::GroupChunk>>>
     get_cells(milvus::OpContext* ctx,
               const std::vector<milvus::cachinglayer::cid_t>& cids) override;
+
+    // Borrow ctx/cids through completion; synchronous V2 I/O runs on HIGH/LOW.
+    folly::coro::Task<
+        std::vector<std::pair<milvus::cachinglayer::cid_t,
+                              std::unique_ptr<milvus::GroupChunk>>>>
+    get_cells_async(
+        milvus::OpContext* ctx,
+        const std::vector<milvus::cachinglayer::cid_t>& cids) override;
 
     std::pair<size_t, size_t>
     get_file_and_row_group_offset(size_t global_row_group_idx) const;
@@ -103,7 +113,8 @@ class GroupChunkTranslator
     // Load a single cell which may contain multiple row groups
     std::unique_ptr<milvus::GroupChunk>
     load_group_chunk(const std::vector<std::shared_ptr<arrow::Table>>& tables,
-                     const milvus::cachinglayer::cid_t cid);
+                     const milvus::cachinglayer::cid_t cid,
+                     milvus::proto::common::LoadPriority priority);
 
     int64_t
     loading_overhead_bytes(int64_t cell_size) const;
@@ -113,10 +124,12 @@ class GroupChunkTranslator
     std::string key_;
     std::unordered_map<FieldId, FieldMeta> field_metas_;
     FieldDataInfo column_group_info_;
+    // Full footers are prepared only for the files requested by get_cells and
+    // released with that operation. Keep only the layout across calls.
+    milvus_storage::ArrowFileSystemPtr fs_;
     std::vector<std::string> insert_files_;
     std::vector<milvus_storage::RowGroupMetadataVector> row_group_meta_list_;
     std::vector<size_t> file_row_group_prefix_sum_;
-    SchemaPtr schema_;
     std::unique_ptr<milvus::segcore::InsertRecord<true>> ir_;
     GroupCTMeta meta_;
     bool use_mmap_;

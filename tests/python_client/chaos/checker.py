@@ -23,7 +23,6 @@ from chaos import constants
 from common import common_func as cf
 from common import common_type as ct
 from common.common_type import CheckTasks
-from common.milvus_sys import MilvusSys
 from faker import Faker
 from minio import Minio
 from prettytable import PrettyTable
@@ -574,7 +573,6 @@ class Checker:
         p_name = partition_name if partition_name is not None else "_default"
         self.p_name = p_name
         self.p_names = [self.p_name] if partition_name is not None else None
-        self.ms = MilvusSys()
         self.bucket_name = cf.param_info.param_bucket_name
 
         # Initialize MilvusClient - prioritize uri and token
@@ -593,9 +591,9 @@ class Checker:
             token = f"{cf.param_info.param_user}:{cf.param_info.param_password}"
         self.milvus_client = MilvusClient(uri=uri, token=token)
 
-        # Also create a connection for low-level APIs that MilvusClient doesn't support
-        self.alias = cf.gen_unique_str("checker_alias_")
-        connections.connect(alias=self.alias, uri=uri, token=token)
+        # Legacy workloads open an ORM connection only when they access alias.
+        self._legacy_alias = None
+        self._legacy_connection = {"uri": uri, "token": token}
 
         # Get or create schema
         collection_exists = self.milvus_client.has_collection(c_name)
@@ -835,6 +833,14 @@ class Checker:
         self.operation_interval_seconds = interval_seconds
         self.initial_jitter_seconds = initial_jitter_seconds
 
+    @property
+    def alias(self):
+        if self._legacy_alias is None:
+            alias = cf.gen_unique_str("checker_alias_")
+            connections.connect(alias=alias, **self._legacy_connection)
+            self._legacy_alias = alias
+        return self._legacy_alias
+
     def get_schema(self):
         collection_info = self.milvus_client.describe_collection(self.c_name)
         return collection_info
@@ -877,7 +883,7 @@ class Checker:
             )
             return res, True
         except Exception as e:
-            return str(e), False
+            return e, False
 
     def total(self):
         return self._succ + self._fail
@@ -1942,12 +1948,19 @@ class AddFieldChecker(Checker):
             )
             log.debug(f"add field {new_field_name} to collection {self.c_name}")
             time.sleep(1)
-            _, result = self.insert_data()
+            res, result = self.insert_data()
+            if not result and isinstance(res, SchemaMismatchRetryableException):
+                # Refresh the active database's schema and retry only the insert, not the DDL.
+                context = self.milvus_client._generate_call_context()
+                self.milvus_client._get_connection()._invalidate_schema(self.c_name, db_name=context.get_db_name())
+                res, result = self.insert_data()
+            if not result:
+                return str(res), False
             _ = self.milvus_client.query(
                 collection_name=self.c_name, filter=f"{new_field_name} >= 0", output_fields=[new_field_name]
             )
             log.debug(f"query with field {new_field_name} success")
-            return None, result
+            return None, True
         except Exception as e:
             log.error(e)
             return str(e), False
@@ -2160,27 +2173,29 @@ class UpsertChecker(Checker):
 
     @trace()
     def upsert_entities(self):
-        try:
-            res = self.milvus_client.upsert(collection_name=self.c_name, data=self.data, timeout=timeout)
-            return res, True
-        except SchemaMismatchRetryableException:
-            # Schema changed concurrently (AddVectorFieldChecker). Invalidate the SDK schema cache
-            # so the next upsert_rows() fetches the new schema_timestamp, then retry once.
-            log.debug("[UpsertChecker] schema_timestamp stale, invalidating cache and retrying")
+        deadline = time.monotonic() + timeout
+        for attempt in range(3):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return "upsert schema retry deadline exceeded", False
             try:
-                self.milvus_client._get_connection()._invalidate_schema(self.c_name)
-            except Exception:
-                pass
-            self.data = cf.gen_row_data_by_schema(nb=constants.DELTA_PER_INS, schema=self.get_schema())
-            try:
-                res = self.milvus_client.upsert(collection_name=self.c_name, data=self.data, timeout=timeout)
+                res = self.milvus_client.upsert(collection_name=self.c_name, data=self.data, timeout=remaining)
                 return res, True
+            except SchemaMismatchRetryableException as e:
+                if attempt == 2:
+                    return str(e), False
+                # Concurrent scalar/vector additions can invalidate two successive schema versions.
+                # These rejections have not written data. Keep the original PKs and payload;
+                # newly added fields are nullable, so regenerating rows is unnecessary.
+                log.debug(f"[UpsertChecker] refreshing stale schema after attempt {attempt + 1}")
+                try:
+                    context = self.milvus_client._generate_call_context()
+                    self.milvus_client._get_connection()._invalidate_schema(self.c_name, db_name=context.get_db_name())
+                except Exception as refresh_error:
+                    return str(refresh_error), False
             except Exception as e:
-                log.info(f"upsert failed (retry): {e}")
+                log.info(f"upsert failed: {e}")
                 return str(e), False
-        except Exception as e:
-            log.info(f"upsert failed: {e}")
-            return str(e), False
 
     @exception_handler()
     def run_task(self):

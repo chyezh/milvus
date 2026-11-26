@@ -360,8 +360,9 @@ const (
 
 func newAutoscalePrecheckTestRequest() *job.AlterLoadConfigRequest {
 	return &job.AlterLoadConfigRequest{
-		CollectionInfo: &milvuspb.DescribeCollectionResponse{
-			CollectionID: autoscalePrecheckTestCollectionID,
+		CollectionInfo: &metacache.CollectionInfo{
+			ID:         autoscalePrecheckTestCollectionID,
+			Partitions: []int64{autoscalePrecheckTestPartitionID},
 			Schema: &schemapb.CollectionSchema{
 				Fields: []*schemapb.FieldSchema{{FieldID: 100, Name: "field_100", DataType: schemapb.DataType_Int64}},
 			},
@@ -490,7 +491,9 @@ func newAutoscalePrecheckTestServer(t *testing.T, cluster session.Cluster) *Serv
 		SaveResourceGroup(mock.Anything, mock.Anything).
 		Return(nil).
 		Once()
-	metaManager := meta.NewMeta(nil, catalog, nodeManager, metacache.NewMetaStore(nil))
+	store := metacache.NewMetaStore(nil)
+	store.PutCollection(newAutoscalePrecheckTestRequest().CollectionInfo)
+	metaManager := meta.NewMeta(nil, catalog, nodeManager, store)
 	metaManager.HandleNodeUp(context.Background(), 1)
 	return &Server{
 		meta:    metaManager,

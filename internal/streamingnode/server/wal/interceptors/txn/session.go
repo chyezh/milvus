@@ -30,25 +30,25 @@ func newTxnSession(
 		inFlightCount: 0,
 		state:         message.TxnStateInFlight,
 		doneWait:      nil,
-		rollback:      false,
 		metricsGuard:  metricsGuard,
 	}
 }
 
 // TxnSession is a session for a transaction.
 type TxnSession struct {
-	mu               sync.Mutex
-	vchannel         string                       // The vchannel of the session.
-	lastTimetick     uint64                       // session last timetick.
-	expired          bool                         // The flag indicates the transaction has trigger expired once.
-	txnContext       message.TxnContext           // transaction id of the session
-	inFlightCount    int                          // The message is in flight count of the session.
-	bodyCount        uint64                       // Successfully appended logical bodies, excluding backend retries.
-	state            message.TxnState             // The state of the session.
-	doneWait         chan struct{}                // The channel for waiting the transaction committed.
-	rollback         bool                         // The flag indicates the transaction is rollbacked.
-	cleanupCallbacks []func()                     // The cleanup callbacks function for the session.
-	metricsGuard     *metricsutil.TxnMetricsGuard // The metrics guard for the session.
+	mu                     sync.Mutex
+	vchannel               string                       // The vchannel of the session.
+	lastTimetick           uint64                       // session last timetick.
+	expired                bool                         // The flag indicates the transaction has trigger expired once.
+	txnContext             message.TxnContext           // transaction id of the session
+	inFlightCount          int                          // The message is in flight count of the session.
+	bodyCount              uint64                       // Successfully appended logical bodies, excluding backend retries.
+	state                  message.TxnState             // The state of the session.
+	doneWait               chan struct{}                // The channel for waiting the transaction committed.
+	definitelyNotCommitted bool                         // The rollback is known not to have committed; fencing an unresolved Commit does not establish this.
+	cleanupCallbacks       []func()                     // The cleanup callbacks function for the session.
+	hasNonInsert           bool                         // A successful body requires Transform consumption.
+	metricsGuard           *metricsutil.TxnMetricsGuard // The metrics guard for the session.
 }
 
 // VChannel returns the vchannel of the session.
@@ -66,13 +66,14 @@ func (s *TxnSession) AddNewMessage(ctx context.Context, timetick uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// if the txn is expired, return error.
-	if err := s.checkIfExpired(timetick); err != nil {
-		return err
+	if s.state == message.TxnStateRollbacked && s.definitelyNotCommitted {
+		return status.NewTransactionExpired("txn %d rolled back before commit", s.txnContext.TxnID)
 	}
-
 	if s.state != message.TxnStateInFlight {
 		return status.NewInvalidTransactionState("AddNewMessage", message.TxnStateInFlight, s.state)
+	}
+	if err := s.checkIfExpired(timetick); err != nil {
+		return err
 	}
 	s.inFlightCount++
 	return nil
@@ -80,9 +81,12 @@ func (s *TxnSession) AddNewMessage(ctx context.Context, timetick uint64) error {
 
 // AddNewMessageDoneAndKeepalive decreases the in flight count of the session and keepalive the session.
 // notify the committedWait channel if the in flight count is 0 and committed waited.
-func (s *TxnSession) AddNewMessageDoneAndKeepalive(timetick uint64) {
+func (s *TxnSession) AddNewMessageDoneAndKeepalive(timetick uint64, typ message.MessageType) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if typ != message.MessageTypeInsert {
+		s.hasNonInsert = true
+	}
 
 	// make a refresh lease here.
 	if s.lastTimetick < timetick {
@@ -93,6 +97,14 @@ func (s *TxnSession) AddNewMessageDoneAndKeepalive(timetick uint64) {
 	if s.doneWait != nil && s.inFlightCount == 0 {
 		close(s.doneWait)
 	}
+}
+
+// IsInsertOnly is stable after RequestCommitAndWait succeeds. Record successful
+// body types before releasing their in-flight slots, including recovered bodies.
+func (s *TxnSession) IsInsertOnly() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bodyCount > 0 && !s.hasNonInsert
 }
 
 // AddNewMessageFail decreases the in flight count of the session but not refresh the lease.
@@ -124,10 +136,13 @@ func (s *TxnSession) State() message.TxnState {
 
 // isExpiredOrDone checks if the session is expired or done.
 func (s *TxnSession) isExpiredOrDone(ts uint64) bool {
-	// A timeout txn or rollbacked/committed txn should be cleared.
-	// OnCommit and OnRollback session should not be cleared before timeout to
-	// avoid session clear callback to be called too early.
-	return s.expiredTimeTick() <= ts || s.state == message.TxnStateRollbacked || s.state == message.TxnStateCommitted
+	// Expiration rejects new requests immediately, but accepted bodies still
+	// need to register cleanup and finish using their segment/write-set refs.
+	// They also retain the transaction's LCMID pin until completion.
+	if s.inFlightCount != 0 {
+		return false
+	}
+	return s.expired || s.expiredTimeTick() <= ts || s.state == message.TxnStateRollbacked || s.state == message.TxnStateCommitted
 }
 
 // expiredTimeTick returns the expired time tick of the session.
@@ -155,8 +170,16 @@ func (s *TxnSession) RequestCommitAndWait(ctx context.Context, timetick uint64, 
 			// No Commit has reached WAL. End this attempt and release references;
 			// the producer retries the entire transaction with a fresh TxnID.
 			s.state = message.TxnStateRollbacked
+			s.definitelyNotCommitted = true
 			s.cleanup()
 			return status.NewTransactionExpired("txn %d body count mismatch: expected %d, appended %d", s.txnContext.TxnID, bodyCnt, s.bodyCount)
+		}
+		// Classify only after all admitted appends finish: an in-flight body
+		// may still succeed, and a failed append does not make a transaction nonempty.
+		if s.bodyCount == 0 {
+			s.state = message.TxnStateRollbacked
+			s.cleanup()
+			return status.NewInvalidArgument("cannot commit an empty transaction")
 		}
 		return nil
 	}
@@ -185,6 +208,7 @@ func (s *TxnSession) RejectCommit() {
 		panic("invalid state for commit rejection")
 	}
 	s.state = message.TxnStateRollbacked
+	s.definitelyNotCommitted = true
 	s.cleanup()
 }
 
@@ -213,6 +237,7 @@ func (s *TxnSession) RollbackDone() {
 		panic("invalid state for rollback done")
 	}
 	s.state = message.TxnStateRollbacked
+	s.definitelyNotCommitted = true
 	s.cleanup()
 }
 
@@ -240,14 +265,36 @@ func (s *TxnSession) Cleanup() {
 
 // abort terminates a session under the exclusive WAL lock. Marking the outcome
 // lets LastConfirmedMessageID advance without waiting for the session's lease.
-func (s *TxnSession) abort() {
+func (s *TxnSession) abort() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Never infer a failed Commit from an unresolved admitted state.
+	retryable := s.state == message.TxnStateInFlight || s.state == message.TxnStateOnRollback || s.state == message.TxnStateRollbacked
 	if s.state != message.TxnStateCommitted {
 		s.state = message.TxnStateRollbacked
+		s.definitelyNotCommitted = retryable
 	}
 	s.cleanup()
+	return retryable
+}
+
+// cleanupIfExpiredOrDone atomically retires a session and captures whether it
+// definitely did not commit. A caller may already hold this session pointer;
+// marking expiration under the same mutex as commit admission prevents that
+// caller from committing after we publish a retryable terminal result.
+func (s *TxnSession) cleanupIfExpiredOrDone(ts uint64) (cleaned, retryable bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.isExpiredOrDone(ts) {
+		return false, false
+	}
+	if s.state == message.TxnStateInFlight {
+		s.expired = true
+	}
+	retryable = s.state == message.TxnStateInFlight || s.state == message.TxnStateOnRollback || s.state == message.TxnStateRollbacked
+	s.cleanup()
+	return true, retryable
 }
 
 // cleanup calls the cleanup functions.
@@ -265,12 +312,16 @@ func (s *TxnSession) getDoneChan(timetick uint64, state message.TxnState) (<-cha
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err := s.checkIfExpired(timetick); err != nil {
-		return nil, err
+	if s.state == message.TxnStateRollbacked && s.definitelyNotCommitted {
+		return nil, status.NewTransactionExpired("txn %d rolled back before commit", s.txnContext.TxnID)
 	}
-
+	// An admitted/committed transaction must never become a retryable expiry
+	// merely because its lease elapsed. Resolve its state before checking TTL.
 	if s.state != message.TxnStateInFlight {
 		return nil, status.NewInvalidTransactionState("GetWaitChan", message.TxnStateInFlight, s.state)
+	}
+	if err := s.checkIfExpired(timetick); err != nil {
+		return nil, err
 	}
 	s.state = state
 

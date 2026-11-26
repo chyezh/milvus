@@ -8,6 +8,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/views/qviews"
+	qvobserve "github.com/milvus-io/milvus/internal/views/qviews/observe"
 	"github.com/milvus-io/milvus/internal/views/viewerror"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
@@ -25,6 +26,10 @@ func (h *SNQueryViewHandler) acquireUpView(ctx context.Context, shardID qviews.S
 	default:
 	}
 	h.mu.Lock()
+	if h.queriesStopped {
+		h.mu.Unlock()
+		return nil, viewerror.NewOnShutdownError("query view handler is shutting down")
+	}
 	shard := h.shards[shardID]
 	h.mu.Unlock()
 	if shard == nil {
@@ -33,24 +38,62 @@ func (h *SNQueryViewHandler) acquireUpView(ctx context.Context, shardID qviews.S
 	return shard.acquireUpView(ctx, version, withTopology)
 }
 
-func (s *snShardView) acquireUpView(ctx context.Context, version qviews.QueryViewVersion, withTopology bool) (*QueryViewLease, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
+// StopQueryAcquisition wakes recovery waiters without releasing resources used
+// by in-flight queries. WAL shutdown must call this before waiting for queries
+// to finish; CloseForHandoff performs resource cleanup after that wait.
+func (h *SNQueryViewHandler) StopQueryAcquisition() {
+	h.mu.Lock()
+	if h.queriesStopped {
+		h.mu.Unlock()
+		return
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	h.queriesStopped = true
+	shards := make([]*snShardView, 0, len(h.shards))
+	for _, shard := range h.shards {
+		shards = append(shards, shard)
+	}
+	h.mu.Unlock()
+	// Never nest shard locks under h.mu: onEmpty takes h.mu under a shard lock.
+	for _, shard := range shards {
+		shard.stopQueryAcquisition()
+	}
+}
 
-	entry, exists := s.views[version]
-	if !exists {
-		return nil, viewerror.NewViewNotFound("query view %s is not found", version.String())
+func (s *snShardView) acquireUpView(ctx context.Context, version qviews.QueryViewVersion, withTopology bool) (*QueryViewLease, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		s.mu.Lock()
+		if s.queriesStopped {
+			s.mu.Unlock()
+			return nil, viewerror.NewOnShutdownError("query view %s is shutting down", s.shardID.String())
+		}
+		entry, exists := s.views[version]
+		if !exists {
+			s.mu.Unlock()
+			return nil, viewerror.NewViewNotFound("query view %s is not found", version.String())
+		}
+		s.advancePendingDownLocked(version, entry)
+		if entry.sm.IsRecovering() {
+			changed := s.recoveryChangedLocked()
+			s.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-changed:
+			}
+			continue
+		}
+		if entry.leaseDisabled || entry.sm.State() != qviews.QueryViewStateUp {
+			state := entry.sm.State()
+			s.mu.Unlock()
+			return nil, viewerror.NewViewInvalidated("query view %s is not up, current state is %s", version.String(), state.String())
+		}
+		lease := s.newQueryViewLeaseLocked(version, entry, withTopology)
+		s.mu.Unlock()
+		return lease, nil
 	}
-	s.advancePendingDownLocked(version, entry)
-	if entry.sm.State() != qviews.QueryViewStateUp {
-		return nil, viewerror.NewViewInvalidated("query view %s is not up, current state is %s", version.String(), entry.sm.State().String())
-	}
-	return s.newQueryViewLeaseLocked(version, entry, withTopology), nil
 }
 
 // Caller holds the shard mutex.
@@ -90,7 +133,7 @@ func (s *snShardView) newQueryViewLeaseLocked(version qviews.QueryViewVersion, e
 
 // Caller holds the shard mutex. Timers are only needed after a Down request.
 func (s *snShardView) renewServingLeaseLocked(entry *snViewEntry) {
-	if s.leaseDuration > 0 {
+	if !entry.leaseDisabled && s.leaseDuration > 0 {
 		deadline := time.Now().Add(s.leaseDuration)
 		if deadline.After(entry.leaseExpireAt) {
 			entry.leaseExpireAt = deadline
@@ -122,12 +165,26 @@ func (s *snShardView) advancePendingDownLocked(version qviews.QueryViewVersion, 
 		return
 	}
 	entry.cancelPendingDown()
+	before := entry.sm.State()
 	entry.sm.OnCoordStateDelivered(qviews.QueryViewStateDown)
+	qvobserve.Observe(s.ctx, qvobserve.StreamingNodeApplyCoordViewEvent{ViewStateTransition: qvobserve.ViewStateTransition{CollectionID: collectionIDForEntry(entry), View: entry.View.QueryViewKey(), From: before, To: entry.sm.State()}})
 	s.consumeReportPersistAndCleanup(version, entry)
 }
 
 func (entry *snViewEntry) cancelPendingDown() {
 	entry.pendingDown = false
+	if entry.downTimer != nil {
+		entry.downTimer.Stop()
+		entry.downTimer = nil
+	}
+}
+
+// disableServingLease closes time-based retention for this View. Existing call
+// references still gate Down through advancePendingDownLocked.
+// Caller holds the shard mutex.
+func (entry *snViewEntry) disableServingLease() {
+	entry.leaseDisabled = true
+	entry.leaseExpireAt = time.Time{}
 	if entry.downTimer != nil {
 		entry.downTimer.Stop()
 		entry.downTimer = nil

@@ -51,7 +51,7 @@ using TextLobReaderFactory = std::function<
         std::shared_ptr<arrow::fs::FileSystem>,
         const milvus_storage::lob_column::LobColumnConfig&)>;
 
-// LobColumnReader is not thread-safe; serialize calls per cached instance.
+// Native LobColumnReader supports concurrent reads and retains in-flight resources.
 struct CachedTextLobReader {
     explicit CachedTextLobReader(
         std::shared_ptr<milvus_storage::lob_column::LobColumnReader> reader)
@@ -59,7 +59,6 @@ struct CachedTextLobReader {
     }
 
     std::shared_ptr<milvus_storage::lob_column::LobColumnReader> reader;
-    std::mutex mutex;
 };
 
 // TextColumnCache provides caching for TEXT column reading
@@ -95,14 +94,17 @@ class TextColumnCache {
     //
     // Returns: Shared pointer to the cached reader holder.
     std::shared_ptr<CachedTextLobReader>
-    GetOrCreateReader(const std::string& lob_base_path,
-                      std::shared_ptr<arrow::fs::FileSystem> fs,
-                      const milvus_storage::api::Properties& properties);
+    GetOrCreateReader(
+        const std::string& lob_base_path,
+        std::shared_ptr<arrow::fs::FileSystem> fs,
+        const std::shared_ptr<const milvus_storage::api::Properties>&
+            properties);
 
     std::vector<std::string>
     ReadBatch(const std::string& lob_base_path,
               std::shared_ptr<arrow::fs::FileSystem> fs,
-              const milvus_storage::api::Properties& properties,
+              const std::shared_ptr<const milvus_storage::api::Properties>&
+                  properties,
               const std::vector<milvus_storage::lob_column::EncodedRef>&
                   encoded_refs);
 
@@ -117,7 +119,8 @@ class TextColumnCache {
     ReadBatchInto(
         const std::string& lob_base_path,
         std::shared_ptr<arrow::fs::FileSystem> fs,
-        const milvus_storage::api::Properties& properties,
+        const std::shared_ptr<const milvus_storage::api::Properties>&
+            properties,
         const std::vector<milvus_storage::lob_column::EncodedRef>& encoded_refs,
         google::protobuf::RepeatedPtrField<std::string>* dst);
 

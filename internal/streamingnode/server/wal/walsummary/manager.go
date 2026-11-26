@@ -73,6 +73,7 @@ type Manager struct {
 	publishedVersion      uint64
 	manifestPublished     bool
 	manifestTask          *manifestWriteTask
+	pressureThrough       uint64
 	gcTask                *summaryGCTask
 	lastAcked             uint64
 	lastObserved          uint64
@@ -82,6 +83,7 @@ type Manager struct {
 	readableThrough       uint64
 	readableChanged       chan struct{}
 	transformNotifiers    map[string]*transformNotifier
+	transformSubscribers  map[string]map[*dispatchSubscription]struct{}
 	restoredTimeTick      uint64
 	terminalErr           error
 	gcFrontiers           map[string]uint64
@@ -130,7 +132,8 @@ func NewManager(config ManagerConfig) *Manager {
 }
 
 // ObserveMessage copies one ordered WAL message into the summary without
-// retaining its source handle. Size thresholds schedule asynchronous writes.
+// retaining its source handle. Size thresholds and AlterWAL barriers schedule
+// asynchronous writes.
 // DDL messages preserve the history of previously committed requests.
 func (m *Manager) ObserveMessage(ctx context.Context, msg message.ImmutableMessage) {
 	if msg == nil {
@@ -156,11 +159,17 @@ func (m *Manager) ObserveMessage(ctx context.Context, msg message.ImmutableMessa
 	if msg.TimeTick() > m.readableThrough {
 		m.advanceReadableLocked(msg.TimeTick())
 		m.notifyTransformMessageLocked(msg)
+		m.dispatchTransformMessageLocked(msg, entry)
 	}
 	m.refreshLastAckedLocked()
 	overThreshold := m.cfg.FlushMaxBytes > 0 && m.pendingBytes >= m.cfg.FlushMaxBytes
 	m.mu.Unlock()
-	if overThreshold {
+	if msg.MessageType() == message.MessageTypeAlterWAL {
+		// The old WAL is fenced during a switch, so no later traffic may
+		// trigger sealing. Include this payload-free barrier in the coverage
+		// without waiting for object storage on the observation path.
+		m.RequestFlushThrough(msg.TimeTick())
+	} else if overThreshold {
 		m.requestSeal()
 	}
 }
@@ -212,20 +221,14 @@ func insertSummaryOf(msg message.ImmutableMessage) (
 	*streamingpb.VChannelSummaryIdempotencyRecord,
 	*streamingpb.VChannelSummaryInsertRecord,
 ) {
-	result, hasInsert := insertResultOf(msg)
+	result, key, hasInsert := insertResultOf(msg)
 	if !hasInsert {
 		return nil, nil
 	}
-	key := idempotencyKeyOf(msg)
 	insert := &streamingpb.VChannelSummaryInsertRecord{
 		SourceMessageId:        messageIDProto(msg.MessageID()),
 		SourceTimetick:         msg.TimeTick(),
 		LastConfirmedMessageId: messageIDProto(msg.LastConfirmedMessageID()),
-	}
-	if result == nil && msg.MessageType() == message.MessageTypeTxn {
-		// Keep the write fact, but never restore a duplicate response from an
-		// incomplete transaction result.
-		key = ""
 	}
 	keys := &streamingpb.VChannelSummaryIdempotencyRecord{Key: key}
 	if result != nil {
@@ -235,55 +238,9 @@ func insertSummaryOf(msg message.ImmutableMessage) (
 	return keys, insert
 }
 
-// idempotencyKeyOf returns the client key a message was appended with, or ""
-// when the summary must not remember one for it.
-func idempotencyKeyOf(msg message.ImmutableMessage) string {
-	// A replicated message preserves the SOURCE cluster's properties, including
-	// its idempotency key. That key must never materialize a record here: the
-	// local key history is independent of the source's, and a poisoned record
-	// would drive replicated appends down the duplicate path after a restart.
-	// Replicated writes are treated as keyless, matching the interceptor bypass.
-	if msg.ReplicateHeader() != nil {
-		return ""
-	}
-	// Gated to the message types the append path deduplicates: the key property
-	// alone must not materialize a record for a type that is never deduped.
-	//
-	// A bare CommitTxn is deliberately NOT here. Every path into an observer
-	// goes through a scanner that assembles transactions (the live flusher and
-	// the recovery stream share one txn buffer), so a commit always arrives
-	// wrapped in MessageTypeTxn and a CommitTxn case could never fire. Worse
-	// than unreachable: insertResultOf has no CommitTxn case either,
-	// so if one ever did arrive it would stage a record with nil Ids and answer
-	// a later duplicate with no primary keys.
-	switch msg.MessageType() {
-	case message.MessageTypeInsert:
-		return string(message.IdempotencyKeyOf(msg))
-	case message.MessageTypeTxn:
-		// What reaches an observer is the ASSEMBLED txn, not the CommitTxn the
-		// interceptor deduplicated: the scanner's txn buffer packs begin + bodies
-		// + commit into one message, and the assembly copies only the trace
-		// context off the commit -- the idempotency key property stays on the
-		// commit sub-message. Reading it from there is what keeps a multi-message
-		// insert (a partition-key collection, or one split by maxMessageSize)
-		// in the durable window at all.
-		txnMsg := message.AsImmutableTxnMessage(msg)
-		if txnMsg == nil {
-			return ""
-		}
-		commit := txnMsg.Commit()
-		if commit == nil || commit.MessageType() != message.MessageTypeCommitTxn {
-			return ""
-		}
-		return string(message.IdempotencyKeyOf(commit))
-	default:
-		return ""
-	}
-}
-
-// insertResultOf reports whether the message contains committed inserts and
-// returns their optional header result. Replicated writes do not restore
-// source-cluster results; missing results do not erase the write fact.
+// insertResultOf returns the insert result, the key eligible for recovery,
+// and whether the message contains committed inserts. A replicated write restores the result
+// the source cluster stamped; missing results do not erase the write fact.
 //
 // For a transaction it is REBUILT from the insert bodies rather than read off
 // the commit: the interceptor merges the per-body results in memory and hands
@@ -293,23 +250,22 @@ func idempotencyKeyOf(msg message.ImmutableMessage) string {
 // through MergeIdempotentInsertResults over the bodies in append order), which
 // is what makes a post-restart duplicate answer with the same primary keys the
 // first attempt returned.
-func insertResultOf(msg message.ImmutableMessage) (*messagespb.IdempotentInsertResult, bool) {
-	replicated := msg.ReplicateHeader() != nil
+func insertResultOf(msg message.ImmutableMessage) (*messagespb.IdempotentInsertResult, string, bool) {
 	switch msg.MessageType() {
 	case message.MessageTypeInsert:
-		if replicated {
-			return nil, true
-		}
 		insertMsg, err := message.AsImmutableInsertMessageV1(msg)
 		if err != nil {
-			return nil, true
+			return nil, "", true
 		}
 		result, _ := message.IdempotentInsertResultFromInsertHeader(insertMsg.Header())
-		return result, true
+		if msg.ReplicateHeader() != nil && message.ValidateIdempotentInsertResult(result) != nil {
+			return nil, "", true
+		}
+		return result, string(message.IdempotencyKeyOf(msg)), true
 	case message.MessageTypeTxn:
 		txnMsg := message.AsImmutableTxnMessage(msg)
 		if txnMsg == nil {
-			return nil, false
+			return nil, "", false
 		}
 		var results []*messagespb.IdempotentInsertResult
 		hasInsert := false
@@ -318,9 +274,6 @@ func insertResultOf(msg message.ImmutableMessage) (*messagespb.IdempotentInsertR
 				return nil
 			}
 			hasInsert = true
-			if replicated {
-				return nil
-			}
 			insertMsg, err := message.AsImmutableInsertMessageV1(sub)
 			if err != nil {
 				return nil
@@ -330,13 +283,23 @@ func insertResultOf(msg message.ImmutableMessage) (*messagespb.IdempotentInsertR
 			}
 			return nil
 		})
-		merged, _, err := message.MergeIdempotentInsertResults(results...)
-		if err != nil {
-			return nil, hasInsert
+		commit := txnMsg.Commit()
+		key := string(message.IdempotencyKeyOf(commit))
+		// A pre-upgrade WAL may still carry a key that the live interceptor
+		// would strip today. Never restore partial primary keys for that write.
+		if key != "" && commit.ReplicateHeader() != nil {
+			bodyCnt := message.MustAsImmutableCommitTxnMessageV2(commit).Header().BodyCnt
+			if bodyCnt == 0 || uint64(len(results)) != bodyCnt || txnMsg.Size() != len(results) {
+				return nil, "", hasInsert
+			}
 		}
-		return merged, hasInsert
+		merged, _, err := message.MergeIdempotentInsertResults(results...)
+		if err != nil || merged == nil {
+			return nil, "", hasInsert
+		}
+		return merged, key, hasInsert
 	default:
-		return nil, false
+		return nil, "", false
 	}
 }
 
@@ -459,11 +422,10 @@ func (m *Manager) writeChunk(ctx context.Context, sc *SealedChunk) error {
 // IdempotencyVChannels returns every vchannel the summary holds idempotency
 // records for, durable or not.
 //
-// It is what recovery iterates, rather than the recovered write path: the write
-// path's vchannels are collections and segments, a different question from
-// which channels have a dedup history. A pchannel can hold records for a
-// vchannel the write path knows nothing about yet, and the window would then be
-// rebuilt empty.
+// Summary history can include channels absent from the current write path.
+// Callers enumerating that history must use Summary membership rather than
+// collection/segment membership. Bounded WAL-open restoration reads the keyed
+// history directly through ReadIdempotencySnapshots without this enumeration.
 func (m *Manager) IdempotencyVChannels() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -502,8 +464,8 @@ func (m *Manager) IdempotencyVChannels() []string {
 // ReadIdempotencyEntries returns everything the summary knows about one
 // vchannel with timetick in (from, to]: the retained chunks in generation
 // order, then what is sealed but not yet durable, then what is still staged.
-// It is the one-time recovery path -- the interceptor's window is empty after a
-// restart and is rebuilt from this.
+// This general range API is uncapped. WAL-open idempotency restoration uses
+// ReadIdempotencySnapshots to bound its selected history before materialization.
 //
 // The in-memory tail is not an optimization, it is required for correctness. A
 // chunk is sealed on a byte threshold, so a low-volume pchannel can run for a
@@ -541,7 +503,7 @@ func (m *Manager) ReadIdempotencyEntries(
 }
 
 // ReadIdempotencyEntriesOfVChannels answers the same question for several
-// vchannels at once, and is what recovery uses.
+// vchannels at once. Unlike ReadIdempotencySnapshots, it returns the full range.
 //
 // The chunk loop is the OUTER one on purpose: a chunk is a pchannel-wide object
 // with no range read, so reading vchannel by vchannel would download the same
@@ -566,17 +528,28 @@ func (m *Manager) ReadIdempotencyEntriesOfVChannels(
 	m.mu.Lock()
 	inMemory := make(map[string][][]*stagedRecord, len(vchannels))
 	for _, vchannel := range vchannels {
-		tails := make([][]*stagedRecord, 0, len(m.pendingSealed)+1)
-		for _, sc := range m.pendingSealed {
-			tails = append(tails, sc.RecordsByVChannel[vchannel])
-		}
-		staged := make([]*stagedRecord, 0, len(m.pending))
-		for i := range m.pending {
-			if m.pending[i].vchannel == vchannel {
-				staged = append(staged, &m.pending[i])
+		inMemory[vchannel] = nil
+	}
+	// Keep only actual sealed sections, in chunk order. Reserving a slot for
+	// every (vchannel, chunk) pair amplifies even a sparse tail during recovery.
+	for _, sc := range m.pendingSealed {
+		for vchannel, records := range sc.RecordsByVChannel {
+			if _, requested := inMemory[vchannel]; requested {
+				inMemory[vchannel] = append(inMemory[vchannel], records)
 			}
 		}
-		inMemory[vchannel] = append(tails, staged)
+	}
+	// Partition the pending span once. Each record contributes one pointer,
+	// rather than reserving the whole pchannel's pending capacity per vchannel.
+	staged := make(map[string][]*stagedRecord)
+	for i := range m.pending {
+		record := &m.pending[i]
+		if _, requested := inMemory[record.vchannel]; requested {
+			staged[record.vchannel] = append(staged[record.vchannel], record)
+		}
+	}
+	for vchannel, records := range staged {
+		inMemory[vchannel] = append(inMemory[vchannel], records)
 	}
 	chunks := m.chunkIndex.snapshot(from, to)
 	m.mu.Unlock()

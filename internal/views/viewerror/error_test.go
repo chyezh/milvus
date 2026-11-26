@@ -5,6 +5,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -32,6 +33,8 @@ func TestRetryClassificationSurvivesGRPCRoundTrip(t *testing.T) {
 			require.Same(t, tc.err, AsViewError(wrapped))
 			wire := NewGRPCStatusFromViewError(tc.err).Err()
 			require.Equal(t, tc.code, status.Code(wire))
+			require.Equal(t, tc.retry, AsViewError(wire).IsRetryable())
+			require.Equal(t, tc.retry, AsViewError(errors.Join(wire, errors.New("cleanup failed"))).IsRetryable())
 			client := ConvertViewError("SearchOnView", wire).(*ViewClientStatus)
 			decoded := AsViewError(client)
 			require.True(t, proto.Equal(tc.err.AsPBError(), decoded.AsPBError()))
@@ -58,4 +61,24 @@ func TestViewErrorPreservesTransportCancellation(t *testing.T) {
 	require.Contains(t, client.Error(), "transport unavailable")
 	require.False(t, AsViewError(client).IsRetryable())
 	require.Equal(t, plain.Error(), AsViewError(plain).Cause)
+}
+
+func TestBusinessErrorSurvivesQueryViewRPCHops(t *testing.T) {
+	for _, cause := range []error{
+		merr.WrapErrParameterInvalidMsg("function chain output must be numeric"),
+		merr.WrapErrServiceUnavailable("resource preparation is not ready"),
+	} {
+		original := merr.Status(cause)
+		decoded := cause
+		for range 2 { // Worker -> SN -> Proxy must preserve the same cause.
+			wire := NewGRPCStatusFromError(decoded).Err()
+			decoded = ConvertViewError("SearchOnView", wire)
+			actual := merr.Status(decoded)
+			require.Equal(t, original.GetCode(), actual.GetCode())
+			require.Equal(t, original.GetErrorCode(), actual.GetErrorCode())
+			require.Equal(t, original.GetExtraInfo(), actual.GetExtraInfo())
+			require.Contains(t, actual.GetReason(), cause.Error())
+			require.False(t, AsViewError(decoded).IsRetryable())
+		}
+	}
 }

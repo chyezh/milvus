@@ -18,6 +18,7 @@
 
 #include <assert.h>
 #include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <cstring>
 #include <limits>
@@ -188,6 +189,38 @@ ElementBitsetAnyReduce(const Starts& starts,
     }
 }
 
+// Scan the packed row bitmap by 64-bit words and merge adjacent selected
+// rows. Each run becomes one bulk bit-range fill (packed words plus masked
+// boundary words), so excluded rows never rewrite the zero-initialized output.
+template <typename Starts>
+TargetBitmap
+ExpandRowSelection(const TargetBitmapView& rows,
+                   int64_t row_start,
+                   const Starts& starts) {
+    const auto first_element = starts[row_start];
+    TargetBitmap result(starts[row_start + rows.size()] - first_element, false);
+    // Match ElementBitsetAnyReduce's packed-word traversal. Consume each
+    // input word once, even for heavily interleaved selections.
+    using word_t = TargetBitmapView::policy_type::data_type;
+    constexpr size_t kWordBits = 8 * sizeof(word_t);
+    for (size_t position = 0; position < rows.size(); position += kWordBits) {
+        const auto count = std::min(kWordBits, rows.size() - position);
+        word_t word = rows.read(position, count);
+        while (word != 0) {
+            const size_t first_bit = std::countr_zero(word);
+            const size_t last_bit =
+                first_bit + std::countr_one(word >> first_bit);
+            const auto first =
+                starts[row_start + position + first_bit] - first_element;
+            const auto last =
+                starts[row_start + position + last_bit] - first_element;
+            result.set(first, last - first, true);
+            word = last_bit == kWordBits ? 0 : word & (~word_t(0) << last_bit);
+        }
+    }
+    return result;
+}
+
 }  // namespace
 
 std::pair<int32_t, int32_t>
@@ -246,6 +279,14 @@ StructElementOffsetsSealed::CopyRowElementStarts(int64_t row_start,
                 sizeof(int32_t) * (row_count + 1));
 }
 
+TargetBitmap
+IStructElementOffsets::RowBitsetToElementBitset(const TargetBitmapView& rows,
+                                                int64_t row_start) const {
+    FixedVector<int32_t> starts(rows.size() + 1);
+    CopyRowElementStarts(row_start, rows.size(), starts.data());
+    return ExpandRowSelection(rows, 0, starts);
+}
+
 std::pair<TargetBitmap, TargetBitmap>
 StructElementOffsetsSealed::RowBitsetToElementBitset(
     const TargetBitmapView& row_bitset,
@@ -277,6 +318,20 @@ StructElementOffsetsSealed::RowBitsetToElementBitset(
     }
 
     return {std::move(element_bitset), std::move(valid_element_bitset)};
+}
+
+TargetBitmap
+StructElementOffsetsSealed::RowBitsetToElementBitset(
+    const TargetBitmapView& row_bitset, int64_t row_start) const {
+    int64_t row_count = row_bitset.size();
+    AssertInfo(row_start >= 0 && row_start + row_count <= GetRowCount(),
+               "row range out of bounds: row_start={}, row_count={}, "
+               "total_rows={}",
+               row_start,
+               row_count,
+               GetRowCount());
+
+    return ExpandRowSelection(row_bitset, row_start, row_to_element_start_);
 }
 
 FixedVector<int32_t>
@@ -385,6 +440,41 @@ StructElementOffsetsSealed::ElementBitsetToRowBitsetAny(
                            row_result);
 }
 
+namespace {
+
+// Number of elements in one native-list ARRAY row as produced by
+// ArrayValueView::output_data: scalar levels are dense (a null element keeps
+// its slot), and a null row has no payload.
+int32_t
+NativeListProtoRowLength(const ScalarFieldProto& row,
+                         const FieldMeta& field_meta) {
+    switch (row.data_case()) {
+        case ScalarFieldProto::DATA_NOT_SET:
+            return 0;
+        case ScalarFieldProto::kArrayData:
+            return row.array_data().data_size();
+        case ScalarFieldProto::kBoolData:
+            return row.bool_data().data_size();
+        case ScalarFieldProto::kIntData:
+            return row.int_data().data_size();
+        case ScalarFieldProto::kLongData:
+            return row.long_data().data_size();
+        case ScalarFieldProto::kFloatData:
+            return row.float_data().data_size();
+        case ScalarFieldProto::kDoubleData:
+            return row.double_data().data_size();
+        case ScalarFieldProto::kStringData:
+            return row.string_data().data_size();
+        default:
+            ThrowInfo(ErrorCode::DataFormatBroken,
+                      "unexpected proto case {} for native-list ARRAY field {}",
+                      static_cast<int>(row.data_case()),
+                      field_meta.get_name().get());
+    }
+}
+
+}  // namespace
+
 std::shared_ptr<StructElementOffsetsSealed>
 StructElementOffsetsSealed::BuildFromColumn(
     const ChunkedColumnInterface& column,
@@ -443,17 +533,48 @@ StructElementOffsetsSealed::BuildFromColumn(
             for (size_t i = 0; i < vector_array_views.size(); ++i) {
                 int32_t array_len = 0;
                 if (!valid_flags || valid_flags[i]) {
-                    array_len = vector_array_views[i].physical_length();
+                    array_len = vector_array_views[i].length();
                 }
 
                 append_array_length(array_len, !valid_flags || valid_flags[i]);
             }
         }
-    } else if (field_meta.is_nested_array()) {
-        // TODO(local-format): Recursive ARRAY offset construction still uses
-        // the Raw Chunk contract. Migrate this to ArrayValueViews or Scan/Take
-        // before declaring recursive ARRAY supported by Vortex local format;
-        // the initial integration intentionally leaves this capability gap.
+    } else if (field_meta.is_native_list_array() &&
+               column.GetLocalFormat() ==
+                   ChunkedColumnInterface::LocalFormat::Vortex) {
+        // VortexColumn has no Chunk access. Read the row lengths through the
+        // output path, which serves every native-list field, in bounded
+        // batches.
+        constexpr int64_t kBatchRows = 8192;
+        std::vector<int64_t> offsets;
+        std::vector<int32_t> lengths;
+        std::vector<uint8_t> valids;
+        for (int64_t start = 0; start < row_count; start += kBatchRows) {
+            CheckOffsetsCancellation(op_ctx);
+            const auto count = std::min(kBatchRows, row_count - start);
+            offsets.resize(count);
+            for (int64_t i = 0; i < count; ++i) {
+                offsets[i] = start + i;
+            }
+            lengths.assign(count, 0);
+            valids.assign(count, 1);
+            column.BulkIsValid(
+                op_ctx,
+                [&](bool is_valid, size_t i) { valids[i] = is_valid; },
+                offsets.data(),
+                count);
+            column.BulkArrayValueAt(
+                op_ctx,
+                [&](ScalarFieldProto&& row, size_t i) {
+                    lengths[i] = NativeListProtoRowLength(row, field_meta);
+                },
+                offsets.data(),
+                count);
+            for (int64_t i = 0; i < count; ++i) {
+                append_array_length(valids[i] ? lengths[i] : 0, valids[i] != 0);
+            }
+        }
+    } else if (field_meta.is_native_list_array()) {
         for (int64_t chunk_id = 0; chunk_id < num_chunks; ++chunk_id) {
             CheckOffsetsCancellation(op_ctx);
             auto pinned_chunk = column.GetChunk(op_ctx, chunk_id);
@@ -649,6 +770,24 @@ StructElementOffsetsGrowing::RowBitsetToElementBitset(
     }
 
     return {std::move(element_bitset), std::move(valid_element_bitset)};
+}
+
+TargetBitmap
+StructElementOffsetsGrowing::RowBitsetToElementBitset(
+    const TargetBitmapView& row_bitset, int64_t row_start) const {
+    const int64_t committed =
+        committed_row_count_.load(std::memory_order_acquire);
+
+    int64_t row_count = row_bitset.size();
+    AssertInfo(row_start >= 0 && row_start + row_count <= committed,
+               "row range out of bounds: row_start={}, row_count={}, "
+               "committed_rows={}",
+               row_start,
+               row_count,
+               committed);
+
+    ChunkedReader starts(starts_chunks_);
+    return ExpandRowSelection(row_bitset, row_start, starts);
 }
 
 FixedVector<int32_t>

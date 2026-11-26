@@ -14,6 +14,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "index/test_utils/IndexCacheTestUtils.h"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -471,11 +473,14 @@ RunVectorArtifactLifecycle(const VectorLifecycleProfile& profile,
     ASSERT_TRUE(static_cast<bool>(loader_entry));
     storage::LoadOptions options;
     options.params = adapted.params;
-    auto reader = loader_entry.Load(
-        {OpenedIndexSource{LegacyIndexSource{
-             std::shared_ptr<storage::FileSource>(&source, [](auto*) {}),
-             false}},
-         options});
+    auto reader = loader_entry
+                      .Load({OpenedIndexSource{LegacyIndexSource{
+                                 std::shared_ptr<storage::FileSource>(
+                                     &source, [](auto*) {}),
+                                 false}},
+                             options,
+                             milvus::index::test::TestIndexCacheConfig()})
+                      ->CreateReader(nullptr);
     ASSERT_NE(reader, nullptr);
     EXPECT_EQ(reader->CoordDomain(), Domain::Row);
     EXPECT_EQ(reader->ValueType(), physical_type);
@@ -731,8 +736,10 @@ TEST_F(VectorSideInputFixture,
     auto reader =
         LoaderRegistry::Instance()
             .Lookup(adapted.family)
-            .Load(
-                {OpenedIndexSource{LegacyIndexSource{source, false}}, options});
+            .Load({OpenedIndexSource{LegacyIndexSource{source, false}},
+                   options,
+                   milvus::index::test::TestIndexCacheConfig()})
+            ->CreateReader(nullptr);
     ASSERT_NE(reader, nullptr);
     ExpectReaderResults(*reader, knowhere::IndexEnum::INDEX_HNSW);
 }
@@ -795,10 +802,12 @@ TEST_F(VectorSideInputFixture,
     }
 
     // Serialize only after the raw file and scalar sidecar have been removed.
-    storage::StorageConfig config;
-    config.storage_type = "local";
-    config.root_path = root->Path() + "/objects/";
-    std::filesystem::create_directories(config.root_path);
+    auto config = std::make_shared<milvus_storage::api::Properties>();
+    (*config)[PROPERTY_FS_STORAGE_TYPE] = std::string("local");
+    (*config)[PROPERTY_FS_ROOT_PATH] = std::string(root->Path() + "/objects/");
+    std::filesystem::create_directories(
+        milvus::storage::GetStorageProperty<std::string>(
+            config, PROPERTY_FS_ROOT_PATH));
     storage::FileManagerContext context({1, 2, 3, 100},
                                         {3,
                                          100,
@@ -835,7 +844,9 @@ TEST_F(VectorSideInputFixture,
                               std::move(paths),
                               LegacyIndexStorageConfig{
                                   storage::V1SourceLayout::DiskFiles}},
-                   options});
+                   options,
+                   milvus::index::test::TestIndexCacheConfig()})
+            ->CreateReader(nullptr);
     ASSERT_NE(reader, nullptr);
     ExpectReaderResults(*reader, knowhere::IndexEnum::INDEX_DISKANN);
 #endif

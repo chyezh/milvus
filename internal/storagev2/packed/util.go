@@ -77,8 +77,10 @@ func GetCStorageConfig(storageConfig *indexpb.StorageConfig) C.CStorageConfig {
 		tls_min_version:                 C.CString(tlsMinVersionForStorage(storageConfig.GetSslTlsMinVersion())),
 		use_crc32c_checksum:             C.bool(storageConfig.GetUseCrc32CChecksum()),
 		talon_mode:                      C.uint32_t(storageConfig.GetTalonMode()),
+		talon_enabled_stages:            C.uint32_t(storageConfig.GetTalonEnabledStages()),
 		talon_small_read_threshold:      C.uint32_t(storageConfig.GetTalonSmallReadThreshold()),
 		talon_coordinator:               C.CString(storageConfig.GetTalonCoordinator()),
+		talon_namespace:                 C.CString(storageConfig.GetTalonNamespace()),
 		talon_block_size:                C.uint32_t(storageConfig.GetTalonBlockSize()),
 		talon_max_idle_per_addr:         C.uint32_t(storageConfig.GetTalonMaxIdlePerAddr()),
 		talon_enable_for_external_table: C.bool(storageConfig.GetTalonEnableForExternalTable()),
@@ -101,4 +103,5 @@ func DeleteCStorageConfig(cStorageConfig C.CStorageConfig) {
 	C.free(unsafe.Pointer(cStorageConfig.gcp_credential_json))
 	C.free(unsafe.Pointer(cStorageConfig.tls_min_version))
 	C.free(unsafe.Pointer(cStorageConfig.talon_coordinator))
+	C.free(unsafe.Pointer(cStorageConfig.talon_namespace))
 }

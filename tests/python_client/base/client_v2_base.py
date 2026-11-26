@@ -257,7 +257,7 @@ class TestMilvusClientV2Base(Base):
         **kwargs,
     ):
         timeout = TIMEOUT if timeout is None else timeout
-        # kwargs.update({"timeout": timeout})
+        kwargs.update({"timeout": timeout})
 
         func_name = sys._getframe().f_code.co_name
         res, check = api_request(
@@ -489,6 +489,10 @@ class TestMilvusClientV2Base(Base):
 
     @trace()
     def drop_collection(self, client, collection_name, check_task=None, check_items=None, **kwargs):
+        # Drops in test bodies do not use Base's collection-cleanup budget.
+        timeout = kwargs.get("timeout")
+        kwargs["timeout"] = TIMEOUT if timeout is None else timeout
+
         func_name = sys._getframe().f_code.co_name
         res, check = api_request([client.drop_collection, collection_name], **kwargs)
         check_result = ResponseChecker(
@@ -630,7 +634,16 @@ class TestMilvusClientV2Base(Base):
         return res, check_result
 
     def wait_for_compaction_eligible_segments(
-        self, client, collection_name, minimum_segment_count, timeout=30, poll_interval=2
+        self,
+        client,
+        collection_name,
+        minimum_segment_count,
+        timeout=30,
+        poll_interval=2,
+        index_name=None,
+        *,
+        index_names=(),
+        expected_rows=None,
     ):
         return wait_for_compaction_eligible_segments(
             client._get_connection(),
@@ -639,6 +652,9 @@ class TestMilvusClientV2Base(Base):
             timeout=timeout,
             poll_interval=poll_interval,
             context=client._generate_call_context(),
+            index_name=index_name,
+            index_names=index_names,
+            expected_rows=expected_rows,
         )
 
     @trace()

@@ -25,6 +25,7 @@
 #include "index/LoadResource.h"
 #include "index/Families.h"
 #include "index/Meta.h"
+#include "index/scalar/bitmap/BitmapIndexArtifact.h"
 #include "monitor/Monitor.h"
 #include "index/scalar/spatial/RTreeIndexReader.h"
 #include "storage/EntryStreamUtils.h"
@@ -36,8 +37,8 @@
 #include "storage/LocalChunkManager.h"
 #include "storage/PluginLoader.h"
 #include "storage/Util.h"
-#include "segcore/storagev2translator/StorageV2Config.h"
-#include "segcore/storagev1translator/SealedIndexTranslator.h"
+#include "storage/LoadConfig.h"
+#include "segcore/indexing/SealedIndexLoader.h"
 #include "segcore/Types.h"
 #include "segcore/SegmentLoadInfo.h"
 #include "test_utils/PlannerCipherPlugin.h"
@@ -54,9 +55,9 @@ struct ResourceFixture {
             "resource estimate test");
     storage::FileManagerContext context;
     ResourceFixture() {
-        storage::StorageConfig config;
-        config.storage_type = "local";
-        config.root_path = root->Path();
+        auto config = std::make_shared<milvus_storage::api::Properties>();
+        (*config)[PROPERTY_FS_STORAGE_TYPE] = std::string("local");
+        (*config)[PROPERTY_FS_ROOT_PATH] = std::string(root->Path());
         context =
             storage::FileManagerContext(storage::FieldDataMeta{1, 2, 3, 101},
                                         storage::IndexMeta{3, 101, 1000, 10000},
@@ -156,7 +157,14 @@ class MetadataChunkManager : public storage::LocalChunkManager {
     }
     uint64_t
     Read(const std::string& path, void* data, uint64_t bytes) override {
-        const auto count = LocalChunkManager::Read(path, 0, data, bytes);
+        return Read(path, 0, data, bytes);
+    }
+    uint64_t
+    Read(const std::string& path,
+         uint64_t offset,
+         void* data,
+         uint64_t bytes) override {
+        const auto count = LocalChunkManager::Read(path, offset, data, bytes);
         if (after_read)
             after_read();
         return count;
@@ -262,12 +270,11 @@ class IndexMetadataContextTest : public ::testing::Test {
         }
         Config config(info.index_params);
         config["load_priority"] = 1;
-        segcore::storagev1translator::SealedIndexTranslator translator(
-            &info,
-            tracer::TraceContext{},
-            fixture.context,
-            std::move(config),
-            &ctx);
+        segcore::SealedIndexLoader translator(&info,
+                                              tracer::TraceContext{},
+                                              fixture.context,
+                                              std::move(config),
+                                              &ctx);
     }
 
     ResourceFixture fixture;
@@ -492,21 +499,21 @@ TEST(LegacyLoadResourceTest, SegmentMetadataPreservesFileAwareEstimates) {
                                                        fixture.context)
                                .request;
             }
-            segcore::storagev1translator::SealedIndexTranslator translator(
-                &info,
-                tracer::TraceContext{},
-                fixture.context,
-                Config(info.index_params));
-            const auto [resident, transient] =
-                translator.estimated_byte_size_of_cell(0);
+            segcore::SealedIndexLoader translator(&info,
+                                                  tracer::TraceContext{},
+                                                  fixture.context,
+                                                  Config(info.index_params));
+            const auto [resident, private_overhead, shared_overhead] =
+                translator.EstimatedResources();
+            const auto transient = private_overhead + shared_overhead;
             EXPECT_EQ(resident,
-                      (cachinglayer::ResourceUsage{expected.final_memory_cost,
-                                                   expected.final_disk_cost}));
+                      (cachinglayer::ResourceUsage(expected.final_memory_cost,
+                                                   expected.final_disk_cost)));
             EXPECT_EQ(
                 transient,
-                (cachinglayer::ResourceUsage{
+                (cachinglayer::ResourceUsage(
                     expected.max_memory_cost - expected.final_memory_cost,
-                    2 * expected.max_disk_cost - expected.final_disk_cost}));
+                    2 * expected.max_disk_cost - expected.final_disk_cost)));
         }
     }
 }
@@ -617,6 +624,14 @@ TEST(LegacyHybridResourceEstimate, ResolvesPersistedChildType) {
                                                            child_params,
                                                            mmap,
                                                            rows);
+                        const auto high_tasks =
+                            monitor::
+                                internal_storage_pool_task_submitted_total_high
+                                    .Value();
+                        const auto low_tasks =
+                            monitor::
+                                internal_storage_pool_task_submitted_total_low
+                                    .Value();
                         resources = ScalarIndexFileLoadResource(DataType::INT64,
                                                                 index_size,
                                                                 params,
@@ -624,6 +639,16 @@ TEST(LegacyHybridResourceEstimate, ResolvesPersistedChildType) {
                                                                 rows,
                                                                 sync_files,
                                                                 ctx);
+                        EXPECT_EQ(
+                            monitor::
+                                internal_storage_pool_task_submitted_total_high
+                                    .Value(),
+                            high_tasks);
+                        EXPECT_EQ(
+                            monitor::
+                                internal_storage_pool_task_submitted_total_low
+                                    .Value(),
+                            low_tasks);
                     }
                     EXPECT_EQ(resources.request.final_memory_cost,
                               expected.final_memory_cost);
@@ -695,13 +720,11 @@ TEST(ScalarIndexV3ResourceTest,
     const auto size = fixture.Size(path);
     auto fs = std::make_shared<RecordingOpenFileSystem>(fixture.context.fs);
     fixture.context.fs = fs;
-    const auto old_enabled =
-        segcore::storagev2translator::StorageV2AsyncLoadEnabled();
-    auto restore = folly::makeGuard([&] {
-        segcore::storagev2translator::SetStorageV2AsyncLoadEnabled(old_enabled);
-    });
+    const auto old_enabled = milvus::storage::LoadAsyncReadEnabled();
+    auto restore = folly::makeGuard(
+        [&] { milvus::storage::SetLoadAsyncReadEnabled(old_enabled); });
     for (const bool enabled : {false, true}) {
-        segcore::storagev2translator::SetStorageV2AsyncLoadEnabled(enabled);
+        milvus::storage::SetLoadAsyncReadEnabled(enabled);
         for (const auto pinned : {std::optional<bool>{},
                                   std::optional<bool>{false},
                                   std::optional<bool>{true}}) {
@@ -765,13 +788,12 @@ TEST(ScalarIndexV3ResourceTest,
     const auto old_bytes = budget.CapacityBytes();
     const auto old_slots = budget.CapacitySlots();
     const auto old_workers = storage::GetAsyncLoadThreadPoolSize();
-    const auto old_enabled =
-        segcore::storagev2translator::StorageV2AsyncLoadEnabled();
+    const auto old_enabled = milvus::storage::LoadAsyncReadEnabled();
     auto restore = folly::makeGuard([&] {
         budget.SetCapacityBytes(old_bytes);
         budget.SetCapacitySlots(old_slots);
         storage::SetAsyncLoadThreadPoolSize(old_workers);
-        segcore::storagev2translator::SetStorageV2AsyncLoadEnabled(old_enabled);
+        milvus::storage::SetLoadAsyncReadEnabled(old_enabled);
     });
     constexpr size_t rows = 10001;
     for (const bool nullable : {false, true}) {
@@ -797,35 +819,32 @@ TEST(ScalarIndexV3ResourceTest,
                         fixture.context);
                 };
                 const auto baseline = estimate();
-                ASSERT_EQ(baseline.overhead.has_value(), !nullable);
-                if (baseline.overhead) {
-                    ASSERT_TRUE(baseline.overhead->memory.has_value());
-                    EXPECT_EQ(
-                        baseline.overhead->memory->group,
-                        storage::LoadMemoryOverheadController::GetInstance()
-                            .GetOrCreate());
-                    EXPECT_FALSE(baseline.overhead->file.has_value());
-                    if (async) {
-                        ASSERT_TRUE(baseline.overhead->memory->max_runtime_unit
-                                        .has_value());
-                        EXPECT_GT(*baseline.overhead->memory->max_runtime_unit,
-                                  0);
-                        EXPECT_LE(*baseline.overhead->memory->max_runtime_unit,
-                                  2 * storage::DefaultStreamSliceSize() +
-                                      2 * storage::FileWriter::ALIGNMENT_MASK);
-                    }
-                } else {
-                    EXPECT_GE(
-                        baseline.request.max_memory_cost,
-                        baseline.request.final_memory_cost + sizeof(size_t));
+                ASSERT_TRUE(baseline.overhead.has_value());
+                EXPECT_GT(baseline.shared_overhead.memory_bytes, 0);
+                EXPECT_GE(baseline.request.max_memory_cost -
+                              baseline.request.final_memory_cost -
+                              baseline.shared_overhead.memory_bytes,
+                          nullable ? sizeof(size_t) : 0);
+                ASSERT_TRUE(baseline.overhead->memory.has_value());
+                EXPECT_EQ(baseline.overhead->memory->group,
+                          storage::LoadMemoryOverheadController::GetInstance()
+                              .GetOrCreate());
+                EXPECT_FALSE(baseline.overhead->file.has_value());
+                if (async) {
+                    ASSERT_TRUE(baseline.overhead->memory->max_runtime_unit
+                                    .has_value());
+                    EXPECT_GT(*baseline.overhead->memory->max_runtime_unit, 0);
+                    EXPECT_LE(*baseline.overhead->memory->max_runtime_unit,
+                              2 * storage::DefaultStreamSliceSize() +
+                                  2 * storage::FileWriter::ALIGNMENT_MASK);
                 }
                 for (const size_t limit :
                      {size_t{1}, size_t{0}, size_t{1024 * 1024}}) {
                     budget.SetCapacityBytes(limit);
                     budget.SetCapacitySlots(limit == 0 ? 0 : 1);
                     for (const bool global_enabled : {false, true}) {
-                        segcore::storagev2translator::
-                            SetStorageV2AsyncLoadEnabled(global_enabled);
+                        milvus::storage::SetLoadAsyncReadEnabled(
+                            global_enabled);
                         for (const int workers : {1, 3}) {
                             storage::SetAsyncLoadThreadPoolSize(workers);
                             const auto changed = estimate();
@@ -837,6 +856,8 @@ TEST(ScalarIndexV3ResourceTest,
                                       baseline.request.final_disk_cost);
                             EXPECT_EQ(changed.request.max_disk_cost,
                                       baseline.request.max_disk_cost);
+                            EXPECT_EQ(changed.shared_overhead,
+                                      baseline.shared_overhead);
                             EXPECT_EQ(changed.overhead.has_value(),
                                       baseline.overhead.has_value());
                             if (changed.overhead && baseline.overhead) {
@@ -899,7 +920,11 @@ TEST(ScalarIndexV3ResourceTest, RTreeReservesHeapInsteadOfResidentFiles) {
                 EXPECT_GE(resources.request.max_disk_cost, size);
                 EXPECT_GT(resources.request.max_memory_cost,
                           resources.request.final_memory_cost);
-                EXPECT_FALSE(resources.overhead.has_value());
+                EXPECT_TRUE(resources.overhead.has_value());
+                EXPECT_GT(resources.shared_overhead.memory_bytes, 0);
+                EXPECT_GT(resources.request.max_memory_cost -
+                              resources.request.final_memory_cost,
+                          resources.shared_overhead.memory_bytes);
             }
         }
     }
@@ -952,8 +977,43 @@ TEST(ScalarIndexV3ResourceTest, BitmapFallbackReservesDenseState) {
                       resources.request.final_memory_cost + 128);
             EXPECT_EQ(resources.request.final_disk_cost, 0);
             EXPECT_FALSE(resources.request.has_raw_data);
-            EXPECT_FALSE(resources.overhead.has_value());
+            EXPECT_EQ(resources.overhead.has_value(), async);
+            EXPECT_EQ(resources.shared_overhead.memory_bytes > 0, async);
+            EXPECT_GE(resources.request.max_memory_cost -
+                          resources.request.final_memory_cost -
+                          resources.shared_overhead.memory_bytes,
+                      128);
         }
+    }
+}
+
+TEST(ScalarIndexV3ResourceTest, BitmapMmapConstructionRemainsPrivate) {
+    ResourceFixture fixture;
+    constexpr size_t rows = 100003;
+    const auto path = fixture.WritePacked(
+        {{BITMAP_INDEX_DATA, std::vector<uint8_t>(4096)}},
+        {{INDEX_TYPE, static_cast<uint8_t>(ScalarIndexType::BITMAP)},
+         {BITMAP_INDEX_LENGTH, DEFAULT_BITMAP_INDEX_BUILD_MODE_BOUND + 1},
+         {BITMAP_INDEX_NUM_ROWS, rows}});
+    for (const bool async : {false, true}) {
+        fixture.context.use_async_load = async;
+        const auto resources =
+            ScalarIndexFileLoadResource(DataType::INT32,
+                                        fixture.Size(path),
+                                        V3Params(HYBRID_INDEX_TYPE),
+                                        true,
+                                        rows,
+                                        {path},
+                                        fixture.context);
+        EXPECT_GT(resources.request.final_disk_cost, 0);
+        EXPECT_EQ(resources.overhead.has_value(), async);
+        EXPECT_EQ(resources.shared_overhead.memory_bytes > 0, async);
+        EXPECT_GE(
+            resources.request.max_memory_cost -
+                resources.request.final_memory_cost -
+                resources.shared_overhead.memory_bytes,
+            2 * kBitmapFrozenBatchBytes + storage::FileWriter::MAX_BUFFER_SIZE);
+        EXPECT_EQ(resources.shared_overhead.file_bytes, 0);
     }
 }
 
@@ -1071,7 +1131,7 @@ TEST(ScalarIndexV3ResourceTest, EncryptedEstimatesRetainFullScratch) {
             EXPECT_GE(resources.request.max_memory_cost,
                       resources.request.final_memory_cost + full_scratch);
             EXPECT_EQ(resources.overhead.has_value(),
-                      type == ScalarIndexType::INVERTED);
+                      type == ScalarIndexType::INVERTED || async);
             if (resources.overhead) {
                 EXPECT_GE(*resources.overhead->memory->max_runtime_unit,
                           max_slice);
@@ -1144,15 +1204,28 @@ TEST(ScalarIndexV3ResourceTest,
     auto check = [&] {
         fs->sync_opens = fs->async_opens = 0;
         // Construction inspects metadata and derives contracts, without engine initialization.
-        segcore::storagev1translator::SealedIndexTranslator translator(
-            &load_info,
-            tracer::TraceContext{},
-            fixture.context,
-            Config(load_info.index_params));
+        segcore::SealedIndexLoader translator(&load_info,
+                                              tracer::TraceContext{},
+                                              fixture.context,
+                                              Config(load_info.index_params));
         EXPECT_EQ(fs->sync_opens, 0);
         EXPECT_EQ(fs->async_opens, 1);
         EXPECT_EQ(translator.Family(), families::kInverted);
-        const auto& overhead = translator.meta()->loading_overhead_config;
+        const auto estimate = translator.EstimatedResources();
+        if (load_info.load_resource_request) {
+            EXPECT_FALSE(
+                translator.CacheMetadata().loading_overhead_config.has_value());
+            EXPECT_EQ(estimate.resident,
+                      (cachinglayer::ResourceUsage{1024, 128}));
+            EXPECT_EQ(estimate.private_overhead,
+                      (cachinglayer::ResourceUsage{1024, 896}));
+            EXPECT_EQ(estimate.shared_overhead, cachinglayer::ResourceUsage{});
+            return;
+        }
+        EXPECT_GT(estimate.shared_overhead.memory_bytes, 0);
+        EXPECT_EQ(estimate.private_overhead.memory_bytes, 0);
+        const auto& overhead =
+            translator.CacheMetadata().loading_overhead_config;
         ASSERT_TRUE(overhead.has_value());
         ASSERT_TRUE(overhead->memory.has_value());
         EXPECT_EQ(overhead->memory->group, group);
@@ -1169,11 +1242,9 @@ TEST(ScalarIndexV3ResourceTest,
             EXPECT_EQ(current, *max_task);
         max_task = current;
         EXPECT_FALSE(overhead->file.has_value());
-        const auto [loaded, transient] =
-            translator.estimated_byte_size_of_cell(0);
-        EXPECT_EQ(loaded, (cachinglayer::ResourceUsage{1024, 128}));
-        EXPECT_EQ(transient, (cachinglayer::ResourceUsage{1024, 896}));
     };
+    check();
+    load_info.load_resource_request.reset();
     budget.SetCapacityBytes(0);
     check();
     budget.SetCapacityBytes(storage::kTailMergeGrace);
@@ -1187,7 +1258,8 @@ TEST(ScalarIndexV3ResourceTest,
     check();
 }
 
-TEST(ScalarIndexV3ResourceTest, BitmapTranslatorKeepsRequestLocalOverhead) {
+TEST(ScalarIndexV3ResourceTest,
+     BitmapTranslatorSeparatesPrivateAndSharedOverhead) {
     ResourceFixture fixture;
     fixture.context.use_async_load = true;
     const auto path = fixture.WritePacked(
@@ -1214,17 +1286,19 @@ TEST(ScalarIndexV3ResourceTest, BitmapTranslatorKeepsRequestLocalOverhead) {
         SCOPED_TRACE(use_async);
         fixture.context.use_async_load = use_async;
         fs->sync_opens = fs->async_opens = 0;
-        segcore::storagev1translator::SealedIndexTranslator translator(
-            &load_info,
-            tracer::TraceContext{},
-            fixture.context,
-            Config(load_info.index_params));
+        segcore::SealedIndexLoader translator(&load_info,
+                                              tracer::TraceContext{},
+                                              fixture.context,
+                                              Config(load_info.index_params));
         EXPECT_EQ(translator.Family(), families::kBitmap);
-        EXPECT_FALSE(translator.meta()->loading_overhead_config.has_value());
-        const auto [loaded, transient] =
-            translator.estimated_byte_size_of_cell(0);
+        EXPECT_EQ(
+            translator.CacheMetadata().loading_overhead_config.has_value(),
+            use_async);
+        const auto [loaded, private_overhead, shared_overhead] =
+            translator.EstimatedResources();
         EXPECT_GT(loaded.memory_bytes, 0);
-        EXPECT_GT(transient.memory_bytes, 0);
+        EXPECT_GE(private_overhead.memory_bytes, 128);
+        EXPECT_EQ(shared_overhead.memory_bytes > 0, use_async);
         EXPECT_EQ(fs->sync_opens, use_async ? 0 : 1);
         EXPECT_EQ(fs->async_opens, use_async ? 1 : 0);
         ASSERT_NE(fs->input, nullptr);

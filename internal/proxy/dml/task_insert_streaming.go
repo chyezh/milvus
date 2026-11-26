@@ -79,7 +79,8 @@ func (it *InsertTask) Execute(ctx context.Context) error {
 	resp := streaming.WAL().AppendMessagesWithOptions(ctx, msgs, streaming.AppendOption{
 		IdempotencyKey: it.idempotencyKey,
 	})
-	if err := resp.UnwrapFirstError(); err != nil {
+	invalidateMismatchedWriteSchema(ctx, it.GetMetaCache(), collID, resp)
+	if err := unwrapStreamingMutationError(resp, msgs); err != nil {
 		mlog.Warn(ctx, "append messages to wal failed", mlog.Err(err))
 		if status.AsStreamingError(err).IsSchemaVersionMismatch() {
 			it.result.Status = merr.Status(merr.ErrCollectionSchemaMismatch)

@@ -18,6 +18,7 @@ package ddl
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/bytedance/mockey"
@@ -42,6 +43,36 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
+func TestImportTaskPreExecuteRejectsInvalidSourceOptions(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		options importutilv2.Options
+		want    error
+	}{
+		{"incomplete storage", importutilv2.Options{{Key: importutilv2.StorageBucket, Value: "source-bucket"}}, merr.ErrParameterInvalid},
+		{"invalid endpoint", importutilv2.Options{
+			{Key: importutilv2.StorageEndpoint, Value: "s3.amazonaws.com/path"},
+			{Key: importutilv2.StorageBucket, Value: "source-bucket"},
+			{Key: importutilv2.StorageAccessKeyID, Value: "ak"},
+			{Key: importutilv2.StorageSecretAccessKey, Value: "sk"},
+		}, merr.ErrParameterInvalid},
+		{"incompatible backup", importutilv2.Options{
+			{Key: importutilv2.BackupFlag, Value: "true"},
+			{Key: importutilv2.StorageEndpoint, Value: "s3.us-east-1.amazonaws.com"},
+			{Key: importutilv2.StorageBucket, Value: "source-bucket"},
+			{Key: importutilv2.StorageAccessKeyID, Value: "ak"},
+			{Key: importutilv2.StorageSecretAccessKey, Value: "sk"},
+		}, merr.ErrParameterInvalid},
+		{"reserved routing", importutilv2.Options{{Key: importutilv2.SnapshotSourceURI, Value: "s3://source/metadata.json"}}, merr.ErrImportFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// No metadata dependencies: reject invalid source options first.
+			task := &ImportTask{req: &internalpb.ImportRequest{Options: tc.options}}
+			require.ErrorIs(t, task.PreExecute(context.Background()), tc.want)
+		})
+	}
+}
+
 func TestImportTaskPreExecuteTargetPartitions(t *testing.T) {
 	paramtable.Init()
 	for _, tc := range []struct {
@@ -58,8 +89,12 @@ func TestImportTaskPreExecuteTargetPartitions(t *testing.T) {
 		loaded       bool
 		failAt       string
 		fileCount    int
+		external     bool
+		filePath     string
 	}{
 		{name: "snapshot_default", snapshot: true, backup: true, wantName: "_default", wantIDs: []int64{10}},
+		{name: "external_colon_key", external: true, filePath: "v1:2026/data.json", wantName: "_default", wantIDs: []int64{10}},
+		{name: "external_uri_rejected", external: true, filePath: "s3://source-bucket/data.json", wantErr: "relative object keys"},
 		{name: "snapshot_mapping", snapshot: true, backup: true, mapping: `{"A":"custom","B":"_default"}`, wantIDs: []int64{10, 20}},
 		{name: "snapshot_mapping_merge", snapshot: true, backup: true, mapping: `{"A":"custom","B":"custom"}`, wantIDs: []int64{20}},
 		{name: "snapshot_mapping_named", snapshot: true, backup: true, mapping: `{"A":"custom"}`, partition: "custom", wantErr: "cannot be combined"},
@@ -100,7 +135,7 @@ func TestImportTaskPreExecuteTargetPartitions(t *testing.T) {
 			if tc.failAt == "mapping" {
 				// Exercise propagation at the routing boundary independently of
 				// the earlier public-option validator, which has its own tests.
-				validation := mockey.Mock(importutilv2.ValidateSnapshotSourceRequest).Return(nil).Build()
+				validation := mockey.Mock(importutilv2.ValidateImportSourceRequest).Return(nil).Build()
 				defer validation.UnPatch()
 				mapping := mockey.Mock(importutilv2.GetPartitionMapping).Return(nil, errFor("mapping")).Build()
 				defer mapping.UnPatch()
@@ -154,6 +189,17 @@ func TestImportTaskPreExecuteTargetPartitions(t *testing.T) {
 			if tc.snapshot {
 				req.Options = append(req.Options, &commonpb.KeyValuePair{Key: "source_type", Value: "snapshot"})
 				req.Files[0].Paths = []string{"s3://source/root/snapshots/1/metadata/2.json"}
+			}
+			if tc.external {
+				req.Options = append(req.Options,
+					&commonpb.KeyValuePair{Key: importutilv2.StorageEndpoint, Value: "s3.us-east-1.amazonaws.com"},
+					&commonpb.KeyValuePair{Key: importutilv2.StorageBucket, Value: "source-bucket"},
+					&commonpb.KeyValuePair{Key: importutilv2.StorageAccessKeyID, Value: "ak"},
+					&commonpb.KeyValuePair{Key: importutilv2.StorageSecretAccessKey, Value: "sk"},
+				)
+			}
+			if tc.filePath != "" {
+				req.Files[0].Paths = []string{tc.filePath}
 			}
 			if tc.fileCount > 1 {
 				req.Files = append(req.Files, &internalpb.ImportFile{Paths: []string{"second.json"}})
@@ -603,21 +649,23 @@ func (s *ImportTaskSuite) TestExecute_PassesTheRequestContextToMixCoord() {
 // under test sit at both ends of PreExecute -- the duplicate-key rejection runs
 // before anything is resolved, the privilege gate runs after the schema and
 // vchannels are -- so the mocks must satisfy everything in between.
-func newImportTaskForPreExecute(t *testing.T, options []*commonpb.KeyValuePair) *ImportTask {
+func newImportTaskForPreExecute(t *testing.T, options []*commonpb.KeyValuePair, schemas ...*schemapb.CollectionSchema) *ImportTask {
+	collectionSchema := &schemapb.CollectionSchema{
+		Name: "test_collection",
+		Fields: []*schemapb.FieldSchema{
+			{FieldID: 100, Name: "pk", DataType: schemapb.DataType_Int64, IsPrimaryKey: true},
+		},
+	}
+	if len(schemas) > 0 {
+		collectionSchema = schemas[0]
+	}
 	mockCache := NewMockCache(t)
 	mockCache.EXPECT().GetCollectionID(mock.Anything, mock.Anything, mock.Anything).
 		Return(int64(100), nil).Maybe()
 	mockCache.EXPECT().GetCollectionInfo(mock.Anything, mock.Anything, mock.Anything, int64(100)).
 		Return(&collectionInfo{
 			CollID: int64(100),
-			Schema: &schemaInfo{
-				CollectionSchema: &schemapb.CollectionSchema{
-					Name: "test_collection",
-					Fields: []*schemapb.FieldSchema{
-						{FieldID: 100, Name: "pk", DataType: schemapb.DataType_Int64, IsPrimaryKey: true},
-					},
-				},
-			},
+			Schema: &schemaInfo{CollectionSchema: collectionSchema},
 		}, nil).Maybe()
 
 	// Only reached by the ordinary-import case, which runs past the gate into
@@ -711,4 +759,86 @@ func TestImportTask_PreExecuteRejectsDuplicateOptionKeys(t *testing.T) {
 
 	assert.ErrorIs(t, err, merr.ErrParameterInvalid)
 	assert.Contains(t, err.Error(), "duplicate import option key: backup")
+}
+
+func TestImportTask_PreExecuteRejectsNativeListArraySchema(t *testing.T) {
+	paramtable.Init()
+	backup := []*commonpb.KeyValuePair{{Key: "backup", Value: "true"}}
+	snapshot := []*commonpb.KeyValuePair{{Key: "backup", Value: "true"}, {Key: "source_type", Value: "snapshot"}}
+	for _, tc := range []struct {
+		name    string
+		paths   []string
+		options []*commonpb.KeyValuePair
+		// nativeListKind is the import kind named in the rejection of a
+		// native-list target; empty means file imports read native-list
+		// sub-fields.
+		nativeListKind string
+	}{
+		{name: "parquet", paths: []string{"staging/file.parquet"}},
+		{name: "json", paths: []string{"staging/file.json"}},
+		{name: "csv", paths: []string{"staging/file.csv"}},
+		// NumPy schema rules run in the datanode, so the proxy accepts the
+		// request and the job reports the rejection.
+		{name: "numpy", paths: []string{"staging/file.npy"}},
+		{name: "binlog", paths: []string{"insert", "delta"}, options: backup, nativeListKind: "binlog import (backup restore)"},
+		{name: "snapshot", paths: []string{"s3://source/root/snapshots/1/metadata/2.json"}, options: snapshot, nativeListKind: "snapshot-source import"},
+	} {
+		for _, elementNullable := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/element_nullable=%t", tc.name, elementNullable), func(t *testing.T) {
+				schema := &schemapb.CollectionSchema{
+					Name:   "test_collection",
+					Fields: []*schemapb.FieldSchema{{FieldID: 100, Name: "pk", DataType: schemapb.DataType_Int64, IsPrimaryKey: true}},
+					StructArrayFields: []*schemapb.StructArrayFieldSchema{{Name: "s", Fields: []*schemapb.FieldSchema{{
+						Name: "arr", DataType: schemapb.DataType_Array, ElementType: schemapb.DataType_Int64,
+						ElementNullable: elementNullable,
+					}}}},
+				}
+				it := newImportTaskForPreExecute(t, tc.options, schema)
+				it.req.Files = []*internalpb.ImportFile{{Id: 1, Paths: tc.paths}}
+				if tc.name == "binlog" {
+					it.req.PartitionName = "_default"
+				}
+				err := it.PreExecute(context.Background())
+				if elementNullable && tc.nativeListKind != "" {
+					require.ErrorIs(t, err, merr.ErrParameterInvalid)
+					require.Contains(t, err.Error(),
+						tc.nativeListKind+" into a collection with element-nullable or nested Array field s.arr is not supported")
+					return
+				}
+				require.NoError(t, err)
+			})
+		}
+	}
+
+	t.Run("numpy without struct fields", func(t *testing.T) {
+		it := newImportTaskForPreExecute(t, nil)
+		it.req.Files = []*internalpb.ImportFile{{Id: 1, Paths: []string{"staging/pk.npy"}}}
+		require.NoError(t, it.PreExecute(context.Background()))
+	})
+}
+
+// TestImportTask_PreExecuteSkipsNumpySchemaCheck pins that the NumPy schema
+// rules run in the datanode: a nullable struct is accepted, and a file named
+// after the struct or one of its sub-fields reaches the import job, which
+// reports the rejection.
+func TestImportTask_PreExecuteSkipsNumpySchemaCheck(t *testing.T) {
+	paramtable.Init()
+	schema := &schemapb.CollectionSchema{
+		Name:   "test_collection",
+		Fields: []*schemapb.FieldSchema{{FieldID: 100, Name: "pk", DataType: schemapb.DataType_Int64, IsPrimaryKey: true}},
+		StructArrayFields: []*schemapb.StructArrayFieldSchema{{FieldID: 101, Name: "s", Nullable: true, Fields: []*schemapb.FieldSchema{{
+			FieldID: 102, Name: "s[arr]", DataType: schemapb.DataType_Array, ElementType: schemapb.DataType_Int64,
+			Nullable: true, ElementNullable: true,
+		}}}},
+	}
+	run := func(paths ...string) error {
+		it := newImportTaskForPreExecute(t, nil, schema)
+		it.req.Files = []*internalpb.ImportFile{{Id: 1, Paths: paths}}
+		return it.PreExecute(context.Background())
+	}
+
+	require.NoError(t, run("staging/pk.npy"))
+	for _, name := range []string{"s", "s[arr]", "arr"} {
+		require.NoError(t, run("staging/pk.npy", "staging/"+name+".npy"), name)
+	}
 }

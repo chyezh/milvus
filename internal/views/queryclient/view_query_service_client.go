@@ -1,0 +1,99 @@
+package queryclient
+
+import (
+	"context"
+
+	queryreducestream "github.com/milvus-io/milvus/internal/util/queryutil/reduce_stream"
+	searchreducestream "github.com/milvus-io/milvus/internal/util/searchutil/reduce_stream"
+	"github.com/milvus-io/milvus/internal/views/qviews"
+	"github.com/milvus-io/milvus/internal/views/viewerror"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
+)
+
+type compositeViewQueryServiceClient struct {
+	streamingNode StreamingNodeViewQueryServiceClient
+	queryNode     QueryNodeViewQueryServiceClient
+}
+
+type StreamingNodeViewQueryServiceClient interface {
+	SearchOnView(ctx context.Context, pchannel types.PChannelInfo, req *viewpb.SearchOnViewRequest) (*viewpb.SearchOnViewResponse, error)
+	SearchOnViewStream(ctx context.Context, pchannel types.PChannelInfo, req *viewpb.SearchOnViewRequest) (searchreducestream.ReduceStream, error)
+	QueryOnView(ctx context.Context, pchannel types.PChannelInfo, req *viewpb.QueryOnViewRequest) (*viewpb.QueryOnViewResponse, error)
+	QueryOnViewStream(ctx context.Context, pchannel types.PChannelInfo, req *viewpb.QueryOnViewRequest) (queryreducestream.ReduceStream, error)
+}
+
+type QueryNodeViewQueryServiceClient interface {
+	StatisticsOnView(ctx context.Context, nodeID int64, req *viewpb.StatisticsOnViewRequest) (*viewpb.StatisticsOnViewResponse, error)
+
+	SearchOnView(ctx context.Context, nodeID int64, req *viewpb.SearchOnViewRequest) (*viewpb.SearchOnViewResponse, error)
+	SearchOnViewStream(ctx context.Context, nodeID int64, req *viewpb.SearchOnViewRequest) (searchreducestream.ReduceStream, error)
+	QueryOnView(ctx context.Context, nodeID int64, req *viewpb.QueryOnViewRequest) (*viewpb.QueryOnViewResponse, error)
+	QueryOnViewStream(ctx context.Context, nodeID int64, req *viewpb.QueryOnViewRequest) (queryreducestream.ReduceStream, error)
+}
+
+func NewCompositeViewQueryServiceClient(streamingNode StreamingNodeViewQueryServiceClient, queryNode QueryNodeViewQueryServiceClient) ViewQueryServiceClient {
+	return &compositeViewQueryServiceClient{
+		streamingNode: streamingNode,
+		queryNode:     queryNode,
+	}
+}
+
+func (c *compositeViewQueryServiceClient) SearchOnView(ctx context.Context, node qviews.WorkNode, req *viewpb.SearchOnViewRequest) (*viewpb.SearchOnViewResponse, error) {
+	switch typed := node.(type) {
+	case qviews.StreamingNode:
+		return c.streamingNode.SearchOnView(ctx, types.PChannelInfo{Name: typed.PChannel}, req)
+	case qviews.QueryNode:
+		return c.queryNode.SearchOnView(ctx, typed.ID, req)
+	default:
+		return nil, invalidWorkNodeError(node)
+	}
+}
+
+func (c *compositeViewQueryServiceClient) SearchOnViewStream(ctx context.Context, node qviews.WorkNode, req *viewpb.SearchOnViewRequest) (searchreducestream.ReduceStream, error) {
+	switch typed := node.(type) {
+	case qviews.StreamingNode:
+		return c.streamingNode.SearchOnViewStream(ctx, types.PChannelInfo{Name: typed.PChannel}, req)
+	case qviews.QueryNode:
+		return c.queryNode.SearchOnViewStream(ctx, typed.ID, req)
+	default:
+		return nil, invalidWorkNodeError(node)
+	}
+}
+
+func (c *compositeViewQueryServiceClient) QueryOnView(ctx context.Context, node qviews.WorkNode, req *viewpb.QueryOnViewRequest) (*viewpb.QueryOnViewResponse, error) {
+	switch typed := node.(type) {
+	case qviews.StreamingNode:
+		return c.streamingNode.QueryOnView(ctx, types.PChannelInfo{Name: typed.PChannel}, req)
+	case qviews.QueryNode:
+		return c.queryNode.QueryOnView(ctx, typed.ID, req)
+	default:
+		return nil, invalidWorkNodeError(node)
+	}
+}
+
+func (c *compositeViewQueryServiceClient) QueryOnViewStream(ctx context.Context, node qviews.WorkNode, req *viewpb.QueryOnViewRequest) (queryreducestream.ReduceStream, error) {
+	switch typed := node.(type) {
+	case qviews.StreamingNode:
+		return c.streamingNode.QueryOnViewStream(ctx, types.PChannelInfo{Name: typed.PChannel}, req)
+	case qviews.QueryNode:
+		return c.queryNode.QueryOnViewStream(ctx, typed.ID, req)
+	default:
+		return nil, invalidWorkNodeError(node)
+	}
+}
+
+func invalidWorkNodeError(node qviews.WorkNode) error {
+	if node == nil {
+		return viewerror.NewUnknownError("nil query view work node")
+	}
+	return viewerror.NewUnknownError("unknown query view work node %s", node.String())
+}
+
+func (c *compositeViewQueryServiceClient) StatisticsOnView(ctx context.Context, node qviews.WorkNode, req *viewpb.StatisticsOnViewRequest) (*viewpb.StatisticsOnViewResponse, error) {
+	qn, ok := node.(qviews.QueryNode)
+	if !ok {
+		return nil, invalidWorkNodeError(node)
+	}
+	return c.queryNode.StatisticsOnView(ctx, qn.ID, req)
+}

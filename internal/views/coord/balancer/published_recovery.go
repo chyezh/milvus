@@ -48,6 +48,11 @@ func newPublishedRecoveryBase(id qviews.ShardID, recovery *coordview.PublishedRe
 			}
 		}
 	}
+	for _, ref := range recovery.View.GetStreamingNode().GetPartitionStats() {
+		if partition := partitions[ref.GetPartitionId()]; partition != nil {
+			partition.PartitionStatsVersion = ref.GetVersion()
+		}
+	}
 	api.PrepareCollectionDataView(&CollectionDataView{Shards: []*ShardDataView{shard}})
 	return &publishedRecoveryBase{
 		collectionID: meta.GetCollectionId(), shardID: id,
@@ -66,8 +71,8 @@ func recoveryPlacementEligible(p *planningContext, id qviews.ShardID, view *view
 	return true
 }
 
-// A target preparing view must not starve a published schema whose QN was lost.
-// Each schema has its own preparation slot; publication retires the old slot.
+// Recover the latest published view while target data is not ready. Once a
+// newer view is registered, ordinary planning owns its preparation and recovery.
 func (b *DefaultBalancer) recoverPublishedSchemas(ctx context.Context, p *planningContext, dirty []qviews.ShardID) error {
 	var result error
 	for _, id := range dirty {
@@ -83,22 +88,20 @@ func (b *DefaultBalancer) recoverPublishedSchemas(ctx context.Context, p *planni
 		if recovery == nil {
 			continue
 		}
-		if recovery.View.GetMeta().GetState() == viewpb.QueryViewState_QueryViewStateUp && recoveryPlacementEligible(p, id, recovery.View) {
-			continue
-		}
-		if recovery.Preparing != nil && recoveryPlacementEligible(p, id, recovery.Preparing) {
+		if recovery.View.GetMeta().GetState() != viewpb.QueryViewState_QueryViewStateUnrecoverable && recoveryPlacementEligible(p, id, recovery.View) {
 			continue
 		}
 		retained := *p
 		retained.recovery = newPublishedRecoveryBase(id, recovery)
-		baseRows := withoutRows(initialProjectedRows(p.NodesMap()), currentShardRows(p, id))
+		baseRows := initialProjectedRows(p.NodesMap())
+		subtractRows(baseRows, currentShardRows(p, id))
 		allocation := allocate(&retained, id, baseRows, false)
 		var err error
 		if allocation == nil {
 			err = merr.WrapErrServiceUnavailableMsg("published schema placement for shard %s is not ready", id.String())
 		} else {
 			source := qviews.FromProtoQueryViewVersion(recovery.View.GetMeta().GetVersion())
-			err = manager.AddPublishedRecovery(ctx, allocation.builder, source)
+			err = manager.AddPublishedRecovery(ctx, allocation.materialize(&retained, id), source)
 		}
 		if err != nil {
 			result = errors.CombineErrors(result, err)

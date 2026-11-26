@@ -47,9 +47,12 @@ CreateSearchPlanByExpr(CCollection c_col,
             schema, serialized_expr_plan, size);
         auto col_index_meta = col->get_index_meta();
         auto field_id = milvus::query::GetFieldID(res.get());
-        AssertInfo(col_index_meta != nullptr, "index meta not exist");
-
-        if (!col_index_meta->HasField(milvus::FieldId(field_id))) {
+        // A collection loaded while it had no vector field and no index
+        // carries no index meta at all. Once a vector field is added to it,
+        // a search on that field is in the same state as a search on any
+        // vector field whose index is not loaded.
+        if (col_index_meta == nullptr ||
+            !col_index_meta->HasField(milvus::FieldId(field_id))) {
             auto status = CStatus();
             status.error_code = milvus::FieldNotLoaded;
             auto field_name =
@@ -253,9 +256,28 @@ SetRetrievePlanTakeForOutputAllowed(CRetrievePlan c_plan, bool allowed) {
     plan->take_for_output_allowed_ = allowed;
 }
 
+CStatus
+SetRetrievePlanMode(CRetrievePlan c_plan, CRetrieveMode mode) {
+    try {
+        AssertInfo(c_plan != nullptr, "retrieve plan is null");
+        AssertInfo(mode == RetrieveModeNormal || mode == RetrieveModeCandidates,
+                   "invalid retrieve mode: {}",
+                   static_cast<int>(mode));
+        auto* plan = static_cast<milvus::query::RetrievePlan*>(c_plan);
+        plan->mode_ = mode == RetrieveModeCandidates
+                          ? milvus::query::RetrieveMode::Candidates
+                          : milvus::query::RetrieveMode::Normal;
+        return CStatus{milvus::Success, ""};
+    }
+    CGO_CATCH_AND_RETURN_CSTATUS
+}
+
 bool
 ShouldIgnoreNonPk(CRetrievePlan c_plan) {
     auto plan = static_cast<milvus::query::RetrievePlan*>(c_plan);
+    if (plan->mode_ == milvus::query::RetrieveMode::Candidates) {
+        return true;
+    }
     // ORDER BY queries must not use two-phase retrieval: the pipeline
     // returns data in a positional layout [pk, orderby, remaining] that
     // the Go-side Remap depends on.  RetrieveByOffsets would re-fetch

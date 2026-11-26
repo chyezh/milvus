@@ -1,0 +1,530 @@
+package queryclient
+
+import (
+	"context"
+	"sync"
+
+	"golang.org/x/sync/errgroup"
+	"google.golang.org/protobuf/proto"
+
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	queryreducestream "github.com/milvus-io/milvus/internal/util/queryutil/reduce_stream"
+	searchreducestream "github.com/milvus-io/milvus/internal/util/searchutil/reduce_stream"
+	"github.com/milvus-io/milvus/internal/views/queryclient/resolver"
+	"github.com/milvus-io/milvus/internal/views/qviews"
+	"github.com/milvus-io/milvus/internal/views/viewquery"
+	"github.com/milvus-io/milvus/pkg/v3/mlog"
+	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
+)
+
+// Client exposes QueryView query client domains.
+type Client interface {
+	Close()
+	Legacy() LegacyClient
+}
+
+// LegacyClient returns batch results or the final ReduceStream.
+// Errors are business merr errors; ViewError and StreamingError remain internal.
+type LegacyClient interface {
+	// HasAvailableReplicas waits for replica discovery and checks that every VChannel has a candidate.
+	HasAvailableReplicas(ctx context.Context, vchannels []string) (bool, error)
+
+	// Statistics uses the outer BarrierMVCC; zero selects ordinary Strong sampling.
+	Statistics(ctx context.Context, collectionID int64, req *viewpb.StatisticsRequest, barrierMVCC uint64) (int64, error)
+
+	Search(ctx context.Context, req *LegacySearchRequest) (*LegacySearchResult, error)
+	Query(ctx context.Context, req *LegacyQueryRequest) (*LegacyQueryResult, error)
+	MaxRetries() int
+}
+
+type LegacySearchRequest struct {
+	Req *internalpb.SearchRequest
+	// MVCC, when supplied, overrides consistency-level sampling across retries.
+	MVCC *viewpb.QueryPlanMVCC
+	// BarrierMVCC fixes a scalar snapshot and actively establishes WAL coverage.
+	// Mutually exclusive with MVCC. Zero preserves ordinary consistency sampling.
+	BarrierMVCC uint64
+	// AllowStreaming is resolved by Proxy from server configuration.
+	AllowStreaming bool
+	// ReduceStreamChunkBytes is the server setting captured for this request.
+	ReduceStreamChunkBytes int
+	// RetryErrors retain failed workers from earlier whole-Proxy stream attempts.
+	RetryErrors []error
+}
+
+type LegacySearchResult struct {
+	Results []*internalpb.SearchResults
+	Stream  searchreducestream.ReduceStream
+	// SubStreams contains one final stream per Hybrid sub-search, in request order.
+	SubStreams  []searchreducestream.ReduceStream
+	Plans       []ShardPlan  // Initial plans; streaming consumers use GetPlans after Close.
+	streamPlans []*ShardPlan // Plans replaced by pre-output shard retries.
+}
+
+// GetPlans returns the successful plans. Streaming callers must close all result
+// streams first, joining receives and any shard replanning before reading them.
+func (r *LegacySearchResult) GetPlans() []ShardPlan {
+	if r.streamPlans == nil {
+		return r.Plans
+	}
+	plans := make([]ShardPlan, len(r.streamPlans))
+	for i, plan := range r.streamPlans {
+		plans[i] = *plan
+	}
+	return plans
+}
+
+type LegacyQueryRequest struct {
+	Req *internalpb.RetrieveRequest
+	// Schema is the immutable read schema used to build Req.
+	Schema *schemapb.CollectionSchema
+	// MVCC fixes the read boundary across replanning; nil samples by consistency.
+	MVCC *viewpb.QueryPlanMVCC
+	// BarrierMVCC fixes a scalar snapshot and actively establishes WAL coverage.
+	// Mutually exclusive with MVCC. Zero preserves ordinary consistency sampling.
+	BarrierMVCC uint64
+	// AllowStreaming is resolved by Proxy from server configuration for Queries without retained plans.
+	AllowStreaming bool
+	// ReduceStreamChunkBytes is the server setting captured for this request.
+	ReduceStreamChunkBytes int
+	// RetryErrors retain failed workers from earlier whole-Proxy stream attempts.
+	RetryErrors []error
+	// Plans binds an internal requery to the original Search attempt. Non-nil
+	// (including empty) never resolves a new schema, view or MVCC.
+	Plans []ShardPlan
+}
+
+type LegacyQueryResult struct {
+	Results     []*internalpb.RetrieveResults
+	Stream      queryreducestream.ReduceStream
+	Plans       []ShardPlan
+	streamPlans []*ShardPlan // Plans replaced by pre-output shard retries; read after Close.
+}
+
+// GetPlans returns the successful plans after the result stream has been closed.
+func (r *LegacyQueryResult) GetPlans() []ShardPlan {
+	if r.streamPlans == nil {
+		return r.Plans
+	}
+	plans := make([]ShardPlan, len(r.streamPlans))
+	for i, plan := range r.streamPlans {
+		plans[i] = *plan
+	}
+	return plans
+}
+
+type legacyOnlyClient struct {
+	legacy *legacyClient
+}
+
+func (c *legacyOnlyClient) Close() { c.legacy.shardClient.replicas.Close() }
+
+func (c *legacyOnlyClient) Legacy() LegacyClient {
+	return c.legacy
+}
+
+type legacyClient struct {
+	shardClient   *shardViewQueryClient
+	shardResolver resolver.ShardResolver
+}
+
+func (c *legacyClient) HasAvailableReplicas(ctx context.Context, vchannels []string) (bool, error) {
+	for _, channel := range vchannels {
+		route, err := c.shardClient.replicas.route(channel)
+		if err != nil {
+			return false, ToMilvusError(err)
+		}
+		available, err := route.hasAvailableReplica(ctx)
+		if err != nil || !available {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+func NewLegacyViewQueryClient(
+	cfg ViewQueryClientConfig,
+	queryPlanClient QueryPlanClient,
+	queryServiceClient ViewQueryServiceClient,
+	shardResolver resolver.ShardResolver,
+) Client {
+	return &legacyOnlyClient{
+		legacy: newLegacyClient(cfg, queryPlanClient, queryServiceClient, shardResolver),
+	}
+}
+
+func newLegacyClient(
+	cfg ViewQueryClientConfig,
+	queryPlanClient QueryPlanClient,
+	queryServiceClient ViewQueryServiceClient,
+	shardResolver resolver.ShardResolver,
+) *legacyClient {
+	if cfg.MaxRetries <= 0 {
+		cfg.MaxRetries = defaultMaxRetries
+	}
+	shardClient := newShardViewQueryClient(cfg.MaxRetries, queryPlanClient, queryServiceClient)
+	shardClient.queryHook = cfg.QueryHook
+	shardClient.loadChecks = newCollectionLoadChecks(cfg.LoadInfoClient)
+	return &legacyClient{
+		shardClient:   shardClient,
+		shardResolver: shardResolver,
+	}
+}
+
+func (c *legacyClient) MaxRetries() int {
+	return c.shardClient.maxRetries
+}
+
+func (c *legacyClient) Search(ctx context.Context, req *LegacySearchRequest) (result *LegacySearchResult, err error) {
+	defer func() { err = ToMilvusError(err) }()
+	if req.AllowStreaming {
+		return c.searchStream(ctx, req, req.ReduceStreamChunkBytes)
+	}
+
+	vchannels, err := c.shardResolver.ResolveVChannels(ctx, req.Req.CollectionID)
+	if err != nil {
+		return nil, err
+	}
+
+	collector := newLegacySearchCollector()
+	shardPlans := make([]ShardPlan, len(vchannels))
+	g, gCtx := errgroup.WithContext(ctx)
+	for i := range vchannels {
+		i := i
+		g.Go(func() error {
+			plan, err := c.shardClient.Search(gCtx, &ShardSearchRequest{
+				TotalChannelNum: int32(len(vchannels)),
+				VChannel:        vchannels[i],
+				Req:             req.Req,
+				MVCC:            req.MVCC,
+				BarrierMVCC:     req.BarrierMVCC,
+				Reducer:         collector,
+			})
+			if err != nil {
+				return err
+			}
+			shardPlans[i] = *plan
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	results, err := collector.Reduce(ctx, req.Req, shardPlans)
+	if err != nil {
+		return nil, err
+	}
+	return &LegacySearchResult{
+		Results: results,
+		Plans:   shardPlans,
+	}, nil
+}
+
+// openVchannelStreams coordinates cancellation only until all shard streams open.
+// The registered worker contexts outlive setup and are owned by their shard streams.
+func openVchannelStreams[T any](ctx context.Context, count int, open func(context.Context, func(context.CancelFunc), int) (T, *ShardPlan, error), closeStream func(T)) ([]T, []ShardPlan, []*ShardPlan, error) {
+	streams := make([]T, count)
+	plans := make([]ShardPlan, count)
+	streamPlans := make([]*ShardPlan, count)
+	// setupCtx cancels shard setup on failure; worker contexts must outlive it on success.
+	group, setupCtx := errgroup.WithContext(ctx)
+	var mu sync.Mutex                // Serializes failure with worker cancellation registration.
+	var firstErr error               // Preserves the initiating error instead of a sibling's cancellation.
+	var cancels []context.CancelFunc // Worker cancels retained only while vchannel setup is in progress.
+	// A worker registered after failure must be canceled immediately.
+	register := func(cancel context.CancelFunc) {
+		mu.Lock()
+		defer mu.Unlock()
+		if firstErr != nil {
+			cancel()
+		} else {
+			cancels = append(cancels, cancel)
+		}
+	}
+	for i := 0; i < count; i++ {
+		i := i
+		group.Go(func() error {
+			stream, plan, err := open(setupCtx, register, i)
+			if err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+					for _, cancel := range cancels {
+						cancel()
+					}
+				}
+				mu.Unlock()
+				return err
+			}
+			streams[i], plans[i], streamPlans[i] = stream, *plan, plan
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		for _, stream := range streams {
+			closeStream(stream)
+		}
+		return nil, nil, nil, firstErr
+	}
+	return streams, plans, streamPlans, nil
+}
+
+func (c *legacyClient) searchStream(ctx context.Context, req *LegacySearchRequest, chunkBytes int) (*LegacySearchResult, error) {
+	vchannels, err := c.shardResolver.ResolveVChannels(ctx, req.Req.GetCollectionID())
+	if err != nil {
+		return nil, err
+	}
+
+	requests := []*internalpb.SearchRequest{req.Req}
+	if req.Req.GetIsAdvanced() {
+		requests, err = viewquery.BuildSubSearchRequests(req.Req)
+		if err != nil {
+			return nil, err
+		}
+	}
+	vchannelStreams, shardPlans, streamPlans, err := openVchannelStreams(ctx, len(vchannels),
+		func(setupCtx context.Context, register func(context.CancelFunc), i int) ([]searchreducestream.ReduceStream, *ShardPlan, error) {
+			return c.shardClient.SearchStreams(ctx, &ShardSearchRequest{
+				TotalChannelNum: int32(len(vchannels)),
+				VChannel:        vchannels[i],
+				Req:             req.Req,
+				MVCC:            req.MVCC,
+				BarrierMVCC:     req.BarrierMVCC,
+				retryErrors:     req.RetryErrors,
+				setupCtx:        setupCtx,
+				registerCancel:  register,
+			}, chunkBytes)
+		}, func(streams []searchreducestream.ReduceStream) {
+			for _, stream := range streams {
+				if closeErr := stream.Close(); closeErr != nil {
+					mlog.Warn(ctx, "failed to close Search vchannel stream after setup failure", mlog.Err(closeErr))
+				}
+			}
+		})
+	if err != nil {
+		return nil, err
+	}
+
+	finalStreams := make([]searchreducestream.ReduceStream, len(requests))
+	for index, request := range requests {
+		children := make([]searchreducestream.ReduceStream, len(vchannels))
+		for i := range vchannels {
+			children[i] = vchannelStreams[i][index]
+		}
+		if req.Req.GetIsAdvanced() && (req.Req.GetGroupByFieldId() > 0 || len(req.Req.GetGroupByFieldIds()) > 0 || request.GetGroupByFieldId() > 0 || len(request.GetGroupByFieldIds()) > 0) {
+			finalStreams[index], err = searchreducestream.NewHybridGroupReduceStream(request, children, chunkBytes)
+		} else {
+			finalStreams[index], err = searchreducestream.NewReduceStream(request, children, chunkBytes)
+		}
+		if err != nil {
+			for _, streams := range vchannelStreams {
+				for _, stream := range streams {
+					if closeErr := stream.Close(); closeErr != nil {
+						mlog.Warn(ctx, "failed to close Search vchannel stream after reducer setup failure", mlog.Err(closeErr))
+					}
+				}
+			}
+			return nil, err
+		}
+	}
+	if req.Req.GetIsAdvanced() {
+		return &LegacySearchResult{SubStreams: finalStreams, Plans: shardPlans, streamPlans: streamPlans}, nil
+	}
+	return &LegacySearchResult{Stream: finalStreams[0], Plans: shardPlans, streamPlans: streamPlans}, nil
+}
+
+func (c *legacyClient) Query(ctx context.Context, req *LegacyQueryRequest) (result *LegacyQueryResult, err error) {
+	defer func() { err = ToMilvusError(err) }()
+	if req.Plans != nil {
+		return c.queryRetainedPlans(ctx, req)
+	}
+	if req.AllowStreaming {
+		return c.queryStream(ctx, req, req.ReduceStreamChunkBytes)
+	}
+	vchannels, err := c.shardResolver.ResolveVChannels(ctx, req.Req.CollectionID)
+	if err != nil {
+		return nil, err
+	}
+
+	collector := newLegacyQueryCollector()
+	shardPlans := make([]ShardPlan, len(vchannels))
+	g, gCtx := errgroup.WithContext(ctx)
+	for i := range vchannels {
+		i := i
+		g.Go(func() error {
+			plan, err := c.shardClient.Query(gCtx, &ShardQueryRequest{
+				VChannel:    vchannels[i],
+				Req:         req.Req,
+				Schema:      req.Schema,
+				MVCC:        req.MVCC,
+				BarrierMVCC: req.BarrierMVCC,
+				Reducer:     collector,
+			})
+			if err != nil {
+				return err
+			}
+			shardPlans[i] = *plan
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	results, err := collector.Reduce(ctx, req, shardPlans)
+	if err != nil {
+		return nil, err
+	}
+	return &LegacyQueryResult{
+		Results: results,
+		Plans:   shardPlans,
+	}, nil
+}
+
+func (c *legacyClient) queryStream(ctx context.Context, req *LegacyQueryRequest, chunkBytes int) (*LegacyQueryResult, error) {
+	vchannels, err := c.shardResolver.ResolveVChannels(ctx, req.Req.GetCollectionID())
+	if err != nil {
+		return nil, err
+	}
+
+	vchannelStreams, shardPlans, streamPlans, err := openVchannelStreams(ctx, len(vchannels),
+		func(setupCtx context.Context, register func(context.CancelFunc), i int) (queryreducestream.ReduceStream, *ShardPlan, error) {
+			return c.shardClient.QueryStream(ctx, &ShardQueryRequest{
+				VChannel:       vchannels[i],
+				Req:            req.Req,
+				Schema:         req.Schema,
+				MVCC:           req.MVCC,
+				BarrierMVCC:    req.BarrierMVCC,
+				retryErrors:    req.RetryErrors,
+				setupCtx:       setupCtx,
+				registerCancel: register,
+			}, chunkBytes)
+		}, func(stream queryreducestream.ReduceStream) {
+			if stream != nil {
+				if closeErr := stream.Close(); closeErr != nil {
+					mlog.Warn(ctx, "failed to close Query vchannel stream after setup failure", mlog.Err(closeErr))
+				}
+			}
+		})
+	if err != nil {
+		return nil, err
+	}
+
+	finalStream, err := queryreducestream.NewReduceStream(req.Req, req.Schema, vchannelStreams, chunkBytes)
+	if err != nil {
+		for _, stream := range vchannelStreams {
+			if closeErr := stream.Close(); closeErr != nil {
+				mlog.Warn(ctx, "failed to close Query vchannel stream after reducer setup failure", mlog.Err(closeErr))
+			}
+		}
+		return nil, err
+	}
+	return &LegacyQueryResult{Stream: finalStream, Plans: shardPlans, streamPlans: streamPlans}, nil
+}
+
+type legacySearchCollector struct {
+	mu      sync.Mutex
+	results map[string][]*internalpb.SearchResults
+}
+
+func newLegacySearchCollector() *legacySearchCollector {
+	return &legacySearchCollector{
+		results: make(map[string][]*internalpb.SearchResults),
+	}
+}
+
+func (c *legacySearchCollector) Add(shardID qviews.ShardID, resp *viewpb.SearchOnViewResponse) error {
+	result := resp.GetLegacyResults()
+	if result == nil {
+		return merr.WrapErrServiceInternalMsg("missing legacy search result for shard %s", shardID.String())
+	}
+	if !merr.Ok(result.GetStatus()) {
+		return merr.Error(result.GetStatus())
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.results[shardID.String()] = append(c.results[shardID.String()], result)
+	return nil
+}
+
+func (c *legacySearchCollector) ResetShard(shardID qviews.ShardID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.results, shardID.String())
+}
+
+func (c *legacySearchCollector) Finish() (*internalpb.SearchResults, error) {
+	return nil, merr.WrapErrServiceInternalMsg("legacy search collector does not reduce results")
+}
+
+type legacyQueryCollector struct {
+	mu      sync.Mutex
+	results map[string][]*internalpb.RetrieveResults
+}
+
+func newLegacyQueryCollector() *legacyQueryCollector {
+	return &legacyQueryCollector{
+		results: make(map[string][]*internalpb.RetrieveResults),
+	}
+}
+
+func (c *legacyQueryCollector) Add(shardID qviews.ShardID, resp *viewpb.QueryOnViewResponse) error {
+	result := resp.GetLegacyResults()
+	if result == nil {
+		return merr.WrapErrServiceInternalMsg("missing legacy query result for shard %s", shardID.String())
+	}
+	if !merr.Ok(result.GetStatus()) {
+		return merr.Error(result.GetStatus())
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.results[shardID.String()] = append(c.results[shardID.String()], result)
+	return nil
+}
+
+func (c *legacyQueryCollector) ResetShard(shardID qviews.ShardID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.results, shardID.String())
+}
+
+func (c *legacyQueryCollector) Finish() (*internalpb.RetrieveResults, error) {
+	return nil, merr.WrapErrServiceInternalMsg("legacy query collector does not reduce results")
+}
+
+// Requery failure aborts the whole parent operation. Retrying Phase 1 here would
+// mix its old reduced search results with a new schema or data snapshot.
+func (c *legacyClient) queryRetainedPlans(ctx context.Context, req *LegacyQueryRequest) (*LegacyQueryResult, error) {
+	collector := newLegacyQueryCollector()
+	group, groupCtx := errgroup.WithContext(ctx)
+	for _, plan := range req.Plans {
+		for _, node := range plan.WorkNodes {
+			group.Go(func() error {
+				request := proto.Clone(req.Req).(*internalpb.RetrieveRequest)
+				request.MvccTimestamp = legacyMVCCForNode(plan.Mvcc, node)
+				response, err := c.shardClient.queryServiceClient.QueryOnView(groupCtx, node, &viewpb.QueryOnViewRequest{
+					SegmentSelection: qviews.WorkNodeSelection(&viewpb.QueryPlan{WorkNodes: plan.Selections}, node).GetSegmentSelection(),
+					LegacyReq:        request, ShardId: plan.ShardID.IntoProto(), Version: plan.Version, Mvcc: plan.Mvcc,
+				})
+				if err != nil {
+					return err
+				}
+				if isEmptySuccessfulQueryResponse(response) {
+					return nil
+				}
+				return collector.Add(plan.ShardID, response)
+			})
+		}
+	}
+	if err := group.Wait(); err != nil {
+		return nil, err
+	}
+	results, err := collector.Reduce(ctx, req, req.Plans)
+	if err != nil {
+		return nil, err
+	}
+	return &LegacyQueryResult{Results: results, Plans: req.Plans}, nil
+}

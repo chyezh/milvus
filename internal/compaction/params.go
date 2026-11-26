@@ -35,6 +35,7 @@ func (p Params) MarshalLogObject(enc mlog.ObjectEncoder) error {
 	enc.AddString("storageFormat", p.StorageFormat)
 	enc.AddUint64("binlogMaxSize", p.BinLogMaxSize)
 	enc.AddBool("useMergeSort", p.UseMergeSort)
+	enc.AddBool("enableDeferredBloomFilter", p.EnableDeferredBloomFilter)
 	enc.AddInt("maxSegmentMergeSort", p.MaxSegmentMergeSort)
 	enc.AddFloat64("preferSegmentSizeRatio", p.PreferSegmentSizeRatio)
 	enc.AddInt("bloomFilterApplyBatchSize", p.BloomFilterApplyBatchSize)
@@ -43,6 +44,7 @@ func (p Params) MarshalLogObject(enc mlog.ObjectEncoder) error {
 	enc.AddInt64("textInlineThreshold", p.TextInlineThreshold)
 	enc.AddInt64("textMaxLobFileBytes", p.TextMaxLobFileBytes)
 	enc.AddInt64("textFlushThresholdBytes", p.TextFlushThresholdBytes)
+	enc.AddInt64("segmentMaxRows", p.SegmentMaxRows)
 	if cfg := p.StorageConfig; cfg != nil {
 		enc.AddString("storageType", cfg.GetStorageType())
 		enc.AddString("storageAddress", cfg.GetAddress())
@@ -53,6 +55,7 @@ func (p Params) MarshalLogObject(enc mlog.ObjectEncoder) error {
 }
 
 type Params struct {
+	EnableDeferredBloomFilter bool                   `json:"enable_deferred_bloom_filter,omitempty"`
 	StorageVersion            int64                  `json:"storage_version,omitempty"`
 	StorageFormat             string                 `json:"storage_format,omitempty"`
 	BinLogMaxSize             uint64                 `json:"binlog_max_size,omitempty"`
@@ -66,6 +69,11 @@ type Params struct {
 	TextInlineThreshold       int64                  `json:"text_inline_threshold,omitempty"`
 	TextMaxLobFileBytes       int64                  `json:"text_max_lob_file_bytes,omitempty"`
 	TextFlushThresholdBytes   int64                  `json:"text_flush_threshold_bytes,omitempty"`
+	// SegmentMaxRows is dataCoord.segment.maxRows, the number of rows an
+	// output segment is cut at, 0 for no row limit. Mix compaction carries
+	// its row cut in the plan (MaxSegmentRows); in a clustering plan that
+	// field is the row budget of a bucket, so the cut is carried here.
+	SegmentMaxRows int64 `json:"segment_max_rows,omitempty"`
 }
 
 func GenParams() Params {
@@ -74,6 +82,7 @@ func GenParams() Params {
 		storageVersion = storage.StorageV3
 	}
 	return Params{
+		EnableDeferredBloomFilter: paramtable.Get().DataNodeCfg.EnableDeferredBloomFilter.GetAsBool(),
 		StorageVersion:            storageVersion,
 		StorageFormat:             paramtable.Get().DataNodeCfg.StorageFormat.GetValue(),
 		BinLogMaxSize:             paramtable.Get().DataNodeCfg.BinLogMaxSize.GetAsUint64(),
@@ -87,6 +96,7 @@ func GenParams() Params {
 		TextInlineThreshold:       getTextInlineThreshold(),
 		TextMaxLobFileBytes:       getTextMaxLobFileBytes(),
 		TextFlushThresholdBytes:   getTextFlushThresholdBytes(),
+		SegmentMaxRows:            max(paramtable.Get().DataCoordCfg.SegmentMaxRows.GetAsInt64(), 0),
 	}
 }
 
@@ -134,8 +144,10 @@ func CreateStorageConfig() *indexpb.StorageConfig {
 			// primary storage is local, so the connection cap still applies.
 			MaxConnections:              uint32(paramtable.Get().MinioCfg.MaxConnections.GetAsInt()),
 			TalonMode:                   paramtable.Get().CommonCfg.StorageTalonMode.GetAsUint32(),
+			TalonEnabledStages:          paramtable.Get().CommonCfg.StorageTalonEnabledStages.GetAsUint32(),
 			TalonSmallReadThreshold:     paramtable.Get().CommonCfg.StorageTalonSmallReadThreshold.GetAsUint32(),
 			TalonCoordinator:            paramtable.Get().CommonCfg.StorageTalonCoordinator.GetValue(),
+			TalonNamespace:              paramtable.Get().CommonCfg.TalonNamespace(),
 			TalonBlockSize:              paramtable.Get().CommonCfg.StorageTalonBlockSize.GetAsUint32(),
 			TalonMaxIdlePerAddr:         paramtable.Get().CommonCfg.StorageTalonMaxIdlePerAddr.GetAsUint32(),
 			TalonEnableForExternalTable: paramtable.Get().CommonCfg.StorageTalonEnableForExternalTable.GetAsBool(),
@@ -161,8 +173,10 @@ func CreateStorageConfig() *indexpb.StorageConfig {
 			SslTlsMinVersion:            paramtable.Get().MinioCfg.SslTLSMinVersion.GetValue(),
 			UseCrc32CChecksum:           paramtable.Get().MinioCfg.UseCRC32C.GetAsBool(),
 			TalonMode:                   paramtable.Get().CommonCfg.StorageTalonMode.GetAsUint32(),
+			TalonEnabledStages:          paramtable.Get().CommonCfg.StorageTalonEnabledStages.GetAsUint32(),
 			TalonSmallReadThreshold:     paramtable.Get().CommonCfg.StorageTalonSmallReadThreshold.GetAsUint32(),
 			TalonCoordinator:            paramtable.Get().CommonCfg.StorageTalonCoordinator.GetValue(),
+			TalonNamespace:              paramtable.Get().CommonCfg.TalonNamespace(),
 			TalonBlockSize:              paramtable.Get().CommonCfg.StorageTalonBlockSize.GetAsUint32(),
 			TalonMaxIdlePerAddr:         paramtable.Get().CommonCfg.StorageTalonMaxIdlePerAddr.GetAsUint32(),
 			TalonEnableForExternalTable: paramtable.Get().CommonCfg.StorageTalonEnableForExternalTable.GetAsBool(),

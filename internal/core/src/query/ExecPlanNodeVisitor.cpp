@@ -264,6 +264,14 @@ ExecPlanNodeVisitor::visit(RetrievePlanNode& node) {
     retrieve_result.total_data_cnt_ = 0;
 
     auto active_count = segment->get_active_count(timestamp_);
+    if (retrieve_candidate_budget_ && active_count == 0) {
+        retrieve_result.has_more_result = false;
+        retrieve_result.element_level_ =
+            dynamic_cast<const plan::ElementFilterBitsNode*>(
+                node.plannodes_.get()) != nullptr;
+        retrieve_result_opt_ = std::move(retrieve_result);
+        return;
+    }
 
     // Get plan
     auto plan = plan::PlanFragment(node.plannodes_);
@@ -284,10 +292,13 @@ ExecPlanNodeVisitor::visit(RetrievePlanNode& node) {
         entity_ttl_physical_time_us_);
 
     // Pin the sealed published snapshot exactly once for this request.
+    query_context->set_read_schema(read_schema_);
     query_context->set_read_snapshot(segment->CaptureReadSnapshot());
 
     // Set op context to query context
     auto op_context = milvus::OpContext(cancel_token_);
+    op_context.runtime_load_priority =
+        milvus::proto::common::LoadPriority::HIGH;
     query_context->set_op_context(&op_context);
 
     // Do task execution
@@ -304,6 +315,10 @@ ExecPlanNodeVisitor::setupRetrieveResult(
     RetrieveResult& tmp_retrieve_result,
     const segcore::SegmentInternalInterface* segment,
     std::shared_ptr<milvus::exec::QueryContext> query_context) {
+    // Preserve element mode even when execution produces no rows.
+    tmp_retrieve_result.element_level_ =
+        dynamic_cast<const plan::ElementFilterBitsNode*>(
+            node.plannodes_.get()) != nullptr;
     if (result == nullptr) {
         // Return empty field_data arrays with correct schema (0 rows, N columns)
         // to ensure result structure matches the expected output type.
@@ -319,6 +334,7 @@ ExecPlanNodeVisitor::setupRetrieveResult(
                 tmp_retrieve_result.field_data_[i] = std::move(data_array);
             }
         }
+        tmp_retrieve_result.has_more_result = false;
         retrieve_result_opt_ = std::move(tmp_retrieve_result);
         return;
     }
@@ -339,7 +355,9 @@ ExecPlanNodeVisitor::setupRetrieveResult(
             auto struct_element_offsets =
                 query_context->get_struct_element_offsets();
             auto [doc_offsets, element_indices, has_more] =
-                segment->find_first_n_element(node.limit_,
+                segment->find_first_n_element(retrieve_candidate_budget_
+                                                  ? segcore::Unlimited
+                                                  : node.limit_,
                                               view,
                                               struct_element_offsets.get(),
                                               node.query_iterator_cursor_);
@@ -348,7 +366,23 @@ ExecPlanNodeVisitor::setupRetrieveResult(
             tmp_retrieve_result.has_more_result = has_more;
         } else {
             tracer::AutoSpan _("Find Limit Pk", tracer::GetRootSpan());
-            auto results_pair = segment->find_first_n(node.limit_, view);
+            auto limit = node.limit_;
+            if (retrieve_candidate_budget_) {
+                // Candidate extraction stays complete; Grep applies its soft
+                // scan threshold after optional index filtering.
+                const auto reserved_rows = view.size() - view.count();
+                limit = segcore::Unlimited;
+                if (reserved_rows >
+                    static_cast<uint64_t>(*retrieve_candidate_budget_) /
+                        sizeof(int64_t)) {
+                    ThrowInfo(InvalidParameter,
+                              "grep candidate offsets exceed the retrieve byte "
+                              "budget "
+                              "(limit={} bytes); add a more selective filter",
+                              *retrieve_candidate_budget_);
+                }
+            }
+            auto results_pair = segment->find_first_n(limit, view);
             tmp_retrieve_result.result_offsets_ = std::move(results_pair.first);
             tmp_retrieve_result.has_more_result = results_pair.second;
         }
@@ -438,6 +472,7 @@ ExecPlanNodeVisitor::visit(VectorPlanNode& node) {
                 entity_ttl_physical_time_us_);
 
             // Pin the sealed published snapshot exactly once for this request.
+            query_context->set_read_schema(read_schema_);
             query_context->set_read_snapshot(segment->CaptureReadSnapshot());
 
             if (enable_expr_cache_) {
@@ -446,6 +481,8 @@ ExecPlanNodeVisitor::visit(VectorPlanNode& node) {
             }
 
             auto op_context = milvus::OpContext(cancel_token_);
+            op_context.runtime_load_priority =
+                milvus::proto::common::LoadPriority::HIGH;
             op_context.trace_span = trace_span_;
             query_context->set_op_context(&op_context);
 
@@ -498,6 +535,7 @@ ExecPlanNodeVisitor::visit(VectorPlanNode& node) {
         entity_ttl_physical_time_us_);
 
     // Pin the sealed published snapshot exactly once for this request.
+    query_context->set_read_schema(read_schema_);
     query_context->set_read_snapshot(segment->CaptureReadSnapshot());
 
     query_context->set_search_info(node.search_info_);
@@ -509,6 +547,8 @@ ExecPlanNodeVisitor::visit(VectorPlanNode& node) {
 
     // Set op context to query context
     auto op_context = milvus::OpContext(cancel_token_);
+    op_context.runtime_load_priority =
+        milvus::proto::common::LoadPriority::HIGH;
     op_context.trace_span = trace_span_;
     query_context->set_op_context(&op_context);
 

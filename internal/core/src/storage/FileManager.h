@@ -103,7 +103,7 @@ struct FileManagerContext {
      */
     void
     set_loon_ffi_properties(
-        std::shared_ptr<milvus_storage::api::Properties> properties) {
+        std::shared_ptr<const milvus_storage::api::Properties> properties) {
         loon_ffi_properties = std::move(properties);
     }
 
@@ -126,7 +126,7 @@ struct FileManagerContext {
     std::optional<bool> use_async_load;
     bool for_loading_index{false};
     std::shared_ptr<CPluginContext> plugin_context;
-    std::shared_ptr<milvus_storage::api::Properties> loon_ffi_properties;
+    std::shared_ptr<const milvus_storage::api::Properties> loon_ffi_properties;
     std::string stats_base_path;
     StorageColumnMappings storage_column_mappings;
 };
@@ -240,8 +240,10 @@ class FileManagerImpl : public milvus::FileManager {
      * remote object path.
      */
     std::shared_ptr<OutputStream>
-    OpenOutputStream(const std::string& local_full_file_path) override final {
-        return OpenOutputStream(local_full_file_path, /*is_index_file=*/true);
+    OpenOutputStream(
+        const std::string& local_full_file_path,
+        milvus::OutputStreamOptions /*options*/ = {}) override final {
+        return CreateOutputStream(local_full_file_path, /*is_index_file=*/true);
     }
 
     std::shared_ptr<InputStream>
@@ -263,9 +265,9 @@ class FileManagerImpl : public milvus::FileManager {
                 std::move(remote_file.ValueOrDie())));
     }
 
-    std::shared_ptr<OutputStream>
-    OpenOutputStream(const std::string& local_full_file_path,
-                     bool is_index_file) {
+    std::shared_ptr<RemoteOutputStream>
+    CreateOutputStream(const std::string& local_full_file_path,
+                       bool is_index_file) {
         AssertInfo(fs_, "fs_ is nullptr, cannot open output stream");
         auto local_file_name = GetFileName(local_full_file_path);
         auto remote_file_path = is_index_file ? GetRemoteIndexObjectPrefix()
@@ -317,7 +319,7 @@ class FileManagerImpl : public milvus::FileManager {
             }
         }
         return std::make_unique<IndexEntryDirectStreamWriter>(
-            OpenOutputStream(filename, is_index_file));
+            CreateOutputStream(filename, is_index_file));
     }
 
     virtual std::string
@@ -417,7 +419,7 @@ class FileManagerImpl : public milvus::FileManager {
     ChunkManagerPtr rcm_;
     milvus_storage::ArrowFileSystemPtr fs_;
     std::optional<bool> use_async_load_;
-    std::shared_ptr<milvus_storage::api::Properties> loon_ffi_properties_;
+    std::shared_ptr<const milvus_storage::api::Properties> loon_ffi_properties_;
     std::shared_ptr<CPluginContext> plugin_context_;
     StorageColumnMappings storage_column_mappings_;
 

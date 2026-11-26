@@ -9,6 +9,8 @@
 // is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 // or implied. See the License for the specific language governing permissions and limitations under the License
 
+#include "index/test_utils/IndexCacheTestUtils.h"
+
 #include <gtest/gtest.h>
 
 #include <arrow/filesystem/localfs.h>
@@ -34,7 +36,7 @@
 #include "index/contracts/Registry.h"
 #include "index/contracts/build/ScalarBuildInput.h"
 #include "index/contracts/query/IScalarPredicateReader.h"
-#include "segcore/storagev2translator/StorageV2Config.h"
+#include "storage/LoadConfig.h"
 #include "storage/AsyncLoadExecutor.h"
 #include "storage/LocalFileIOPool.h"
 #include "storage/MemFileManagerImpl.h"
@@ -84,9 +86,9 @@ class PackedScalarLoadRoutingTest : public ::testing::Test {
             std::filesystem::temp_directory_path().string(),
             "scalar-load-route-XXXXXX",
             "scalar load routing test");
-        storage::StorageConfig config;
-        config.storage_type = "local";
-        config.root_path = root_->Path();
+        auto config = std::make_shared<milvus_storage::api::Properties>();
+        (*config)[PROPERTY_FS_STORAGE_TYPE] = std::string("local");
+        (*config)[PROPERTY_FS_ROOT_PATH] = std::string(root_->Path());
         storage::FieldDataMeta field{1, 2, 3, 101};
         field.field_schema.set_data_type(proto::schema::DataType::Int32);
         context_ =
@@ -94,12 +96,12 @@ class PackedScalarLoadRoutingTest : public ::testing::Test {
                                         storage::IndexMeta{3, 101, 1, 1},
                                         storage::CreateChunkManager(config),
                                         storage::InitArrowFileSystem(config));
-        previous_mode_ = StorageV2AsyncLoadEnabled();
+        previous_mode_ = milvus::storage::LoadAsyncReadEnabled();
     }
 
     void
     TearDown() override {
-        SetStorageV2AsyncLoadEnabled(previous_mode_);
+        milvus::storage::SetLoadAsyncReadEnabled(previous_mode_);
         storage::LocalFileIOPool::GetInstance().Configure(0);
     }
 
@@ -149,7 +151,9 @@ class PackedScalarLoadRoutingTest : public ::testing::Test {
             .Lookup(index::families::kSort)
             .Load({index::IndexFiles{
                        context_, {path}, index::PackedIndexStorageConfig{}},
-                   options});
+                   options,
+                   milvus::index::test::TestIndexCacheConfig()})
+            ->CreateReader(nullptr);
     }
 
     std::shared_ptr<storage::LocalDirectory> root_;
@@ -181,7 +185,7 @@ TEST_F(PackedScalarLoadRoutingTest,
     auto fs = std::make_shared<RecordingOpenFileSystem>(context_.fs);
     context_.fs = fs;
     for (const bool global_async : {false, true}) {
-        SetStorageV2AsyncLoadEnabled(global_async);
+        milvus::storage::SetLoadAsyncReadEnabled(global_async);
         for (const std::optional<bool> pinned : {std::optional<bool>{},
                                                  std::optional<bool>{false},
                                                  std::optional<bool>{true}}) {
@@ -240,35 +244,22 @@ struct LoadContext {
     std::shared_ptr<LoadObservation> observation;
 };
 
-class PayloadReader final : public index::IIndexReaderBase {
+class PayloadIndex final : public index::IIndex {
  public:
-    index::ReaderCaps
-    Caps() const override {
-        return {};
+    index::IndexMetadata
+    Metadata() const override {
+        return {{}, index::Domain::Row, DataType::INT32, 1};
     }
-    index::Domain
-    CoordDomain() const override {
-        return index::Domain::Row;
+    index::IIndexReaderBasePtr
+    CreateReader(OpContext*) const override {
+        return nullptr;
     }
-    int64_t
-    Count() const override {
-        return 1;
-    }
-    DataType
-    ValueType() const override {
-        return DataType::INT32;
-    }
-    int64_t
-    MemoryUsage() const override {
-        return sizeof(int32_t);
-    }
-    cachinglayer::ResourceUsage
-    CellByteSize() const override {
-        return {sizeof(int32_t), 0};
+    void
+    CancelWarmup() const override {
     }
 };
 
-folly::coro::Task<index::IIndexReaderBasePtr>
+folly::coro::Task<index::IndexPtr>
 FinishPayload(index::IndexLoadPlan& plan, const storage::LoadOptions&, bool) {
     auto state = std::any_cast<std::shared_ptr<LoadContext>>(plan.load_context)
                      ->observation;
@@ -291,7 +282,7 @@ FinishPayload(index::IndexLoadPlan& plan, const storage::LoadOptions&, bool) {
     if (state->cancel_on_finish) {
         state->cancel_on_finish->requestCancellation();
     }
-    co_return std::make_unique<PayloadReader>();
+    co_return std::make_shared<PayloadIndex>();
 }
 
 TEST_F(PackedScalarLoadRoutingTest,
@@ -421,7 +412,7 @@ TEST_F(PackedScalarLoadRoutingTest,
 }
 
 TEST_F(PackedScalarLoadRoutingTest, SortedMmapLoadsWithSingleLocalFileWorker) {
-    SetStorageV2AsyncLoadEnabled(true);
+    milvus::storage::SetLoadAsyncReadEnabled(true);
     storage::LocalFileIOPool::GetInstance().Configure(1);
     const auto path = WriteSorted();
     OpContext operation;

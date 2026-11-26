@@ -50,6 +50,8 @@
 #include "exec/expression/LikeConjunctExpr.h"
 #include "exec/expression/UnaryExpr.h"
 #include "expr/ITypeExpr.h"
+#include "index/SingleCellIndexStorageTranslator.h"
+#include "index/scalar/sort/SortedIndexReader.h"
 #include "pb/plan.pb.h"
 #include "segcore/SegmentSealed.h"
 #include "test_utils/DataGen.h"
@@ -64,8 +66,7 @@ constexpr int64_t kBatchSize = 1024;
 
 ExprResCacheManager::Key
 RawCacheKey(const SegmentExpr& input) {
-    return {input.GetSegment()->get_segment_id(),
-            input.GetSignatureForRawExprCache()};
+    return input.MakeExprCacheKey(input.GetSignatureForRawExprCache());
 }
 
 class CountingCPUThreadPoolExecutor final
@@ -106,7 +107,9 @@ class CountingRawExpr final : public SegmentExpr {
                       active_count,
                       kBatchSize,
                       0),
-          signature_(std::move(signature)) {
+          signature_(std::move(signature)),
+          owned_snapshot_(segment->CaptureReadSnapshot()) {
+        SetSnapshot(owned_snapshot_.get());
     }
 
     void
@@ -204,6 +207,7 @@ class CountingRawExpr final : public SegmentExpr {
 
  private:
     std::string signature_;
+    std::shared_ptr<const segcore::SegmentReadSnapshot> owned_snapshot_;
     int64_t cursor_pos_{0};
 };
 
@@ -286,6 +290,8 @@ TEST_F(RawExprCacheAdapterTest,
        SequentialCaptureUsesInternalCursorAndHitBypassesEval) {
     QueryContext query_context(
         "raw_cache_test", segment_.get(), kActiveCount, MAX_TIMESTAMP);
+    query_context.set_read_snapshot(
+        query_context.get_segment()->CaptureReadSnapshot());
     ExecContext exec_context(&query_context);
     EvalCtx eval_context(&exec_context);
 
@@ -345,6 +351,8 @@ TEST_F(RawExprCacheAdapterTest,
 
     QueryContext query_context(
         "raw_cache_test", segment_.get(), kActiveCount, MAX_TIMESTAMP);
+    query_context.set_read_snapshot(
+        query_context.get_segment()->CaptureReadSnapshot());
     ExecContext exec_context(&query_context);
     EvalCtx eval_context(&exec_context);
 
@@ -376,6 +384,8 @@ TEST_F(RawExprCacheAdapterTest, MemoryGaugeTracksCaptureAndHitLifetime) {
     const auto pair_bytes = 2 * ((kActiveCount + 63) / 64) * 8;
     QueryContext query_context(
         "raw_cache_test", segment_.get(), kActiveCount, MAX_TIMESTAMP);
+    query_context.set_read_snapshot(
+        query_context.get_segment()->CaptureReadSnapshot());
     ExecContext exec_context(&query_context);
     EvalCtx eval_context(&exec_context);
     VectorPtr result;
@@ -410,6 +420,8 @@ TEST_F(RawExprCacheAdapterTest, MemoryGaugeTracksCaptureAndHitLifetime) {
 TEST_F(RawExprCacheAdapterTest, ReadOnlyPolicyStillServesExistingEntry) {
     QueryContext query_context(
         "raw_cache_test", segment_.get(), kActiveCount, MAX_TIMESTAMP);
+    query_context.set_read_snapshot(
+        query_context.get_segment()->CaptureReadSnapshot());
     ExecContext exec_context(&query_context);
     EvalCtx eval_context(&exec_context);
 
@@ -433,6 +445,8 @@ TEST_F(RawExprCacheAdapterTest, ReadOnlyPolicyStillServesExistingEntry) {
 TEST_F(RawExprCacheAdapterTest, JsonNestedPathSignaturesDoNotCollide) {
     QueryContext query_context(
         "raw_cache_test", segment_.get(), kActiveCount, MAX_TIMESTAMP);
+    query_context.set_read_snapshot(
+        query_context.get_segment()->CaptureReadSnapshot());
     ExecContext exec_context(&query_context);
     EvalCtx eval_context(&exec_context);
 
@@ -458,6 +472,8 @@ TEST_F(RawExprCacheAdapterTest, JsonNestedPathSignaturesDoNotCollide) {
 TEST_F(RawExprCacheAdapterTest, ExternalMoveCursorPoisonsFullCoverage) {
     QueryContext query_context(
         "raw_cache_test", segment_.get(), kActiveCount, MAX_TIMESTAMP);
+    query_context.set_read_snapshot(
+        query_context.get_segment()->CaptureReadSnapshot());
     ExecContext exec_context(&query_context);
     EvalCtx eval_context(&exec_context);
 
@@ -493,6 +509,8 @@ TEST_F(RawExprCacheAdapterTest, AdmissionIsObservedOncePerExpression) {
 
     QueryContext query_context(
         "raw_cache_test", segment_.get(), kActiveCount, MAX_TIMESTAMP);
+    query_context.set_read_snapshot(
+        query_context.get_segment()->CaptureReadSnapshot());
     ExecContext exec_context(&query_context);
     EvalCtx eval_context(&exec_context);
     auto [first_input, first_adapter] = MakeAdapter("raw:admission");
@@ -527,6 +545,8 @@ TEST_F(RawExprCacheAdapterTest, ReadOnlyMissDoesNotObserveAdmissionOrWrite) {
 
     QueryContext query_context(
         "raw_cache_test", segment_.get(), kActiveCount, MAX_TIMESTAMP);
+    query_context.set_read_snapshot(
+        query_context.get_segment()->CaptureReadSnapshot());
     ExecContext exec_context(&query_context);
     EvalCtx eval_context(&exec_context);
     auto read_only_input = std::make_shared<CountingRawExpr>(
@@ -574,6 +594,8 @@ TEST_F(RawExprCacheAdapterTest, MoveOnlyExpressionDoesNotCountForAdmission) {
 
     QueryContext query_context(
         "raw_cache_test", segment_.get(), kActiveCount, MAX_TIMESTAMP);
+    query_context.set_read_snapshot(
+        query_context.get_segment()->CaptureReadSnapshot());
     ExecContext exec_context(&query_context);
     EvalCtx eval_context(&exec_context);
     auto [skipped_input, skipped_adapter] =
@@ -600,6 +622,8 @@ TEST_F(RawExprCacheAdapterTest, MoveOnlyExpressionDoesNotCountForAdmission) {
 TEST_F(RawExprCacheAdapterTest, PartialBitmapInputDoesNotPopulateCache) {
     QueryContext query_context(
         "raw_cache_test", segment_.get(), kActiveCount, MAX_TIMESTAMP);
+    query_context.set_read_snapshot(
+        query_context.get_segment()->CaptureReadSnapshot());
     ExecContext exec_context(&query_context);
     EvalCtx eval_context(&exec_context);
 
@@ -632,6 +656,8 @@ TEST_F(RawExprCacheAdapterTest, EvaluationExceptionDoesNotPutPartialResult) {
     const auto pair_bytes = 2 * ((kActiveCount + 63) / 64) * 8;
     QueryContext query_context(
         "raw_cache_test", segment_.get(), kActiveCount, MAX_TIMESTAMP);
+    query_context.set_read_snapshot(
+        query_context.get_segment()->CaptureReadSnapshot());
     ExecContext exec_context(&query_context);
     EvalCtx eval_context(&exec_context);
 
@@ -661,6 +687,8 @@ TEST_F(RawExprCacheAdapterTest, EvaluationExceptionDoesNotPutPartialResult) {
 TEST_F(RawExprCacheAdapterTest, CacheHitGathersOffsetsAndValidity) {
     QueryContext query_context(
         "raw_cache_test", segment_.get(), kActiveCount, MAX_TIMESTAMP);
+    query_context.set_read_snapshot(
+        query_context.get_segment()->CaptureReadSnapshot());
     ExecContext exec_context(&query_context);
     EvalCtx sequential_context(&exec_context);
 
@@ -696,6 +724,8 @@ TEST_F(RawExprCacheAdapterTest, CacheHitGathersOffsetsAndValidity) {
 TEST_F(RawExprCacheAdapterTest, CacheHitPreservesEmptyOffsetExhaustion) {
     QueryContext query_context(
         "raw_cache_test", segment_.get(), kActiveCount, MAX_TIMESTAMP);
+    query_context.set_read_snapshot(
+        query_context.get_segment()->CaptureReadSnapshot());
     ExecContext exec_context(&query_context);
     EvalCtx sequential_context(&exec_context);
 
@@ -719,6 +749,8 @@ TEST_F(RawExprCacheAdapterTest, CacheHitPreservesEmptyOffsetExhaustion) {
 TEST_F(RawExprCacheAdapterTest, CacheHitReturnsLogicalValueDespiteWorkMask) {
     QueryContext query_context(
         "raw_cache_test", segment_.get(), kActiveCount, MAX_TIMESTAMP);
+    query_context.set_read_snapshot(
+        query_context.get_segment()->CaptureReadSnapshot());
     ExecContext exec_context(&query_context);
     EvalCtx fill_context(&exec_context);
 
@@ -749,6 +781,8 @@ TEST_F(RawExprCacheAdapterTest, CacheHitReturnsLogicalValueDespiteWorkMask) {
 TEST_F(RawExprCacheAdapterTest, CacheHitSkipsWrappedRawPrefetch) {
     QueryContext query_context(
         "raw_cache_test", segment_.get(), kActiveCount, MAX_TIMESTAMP);
+    query_context.set_read_snapshot(
+        query_context.get_segment()->CaptureReadSnapshot());
     ExecContext exec_context(&query_context);
     EvalCtx eval_context(&exec_context);
 
@@ -784,6 +818,109 @@ TEST_F(RawExprCacheAdapterTest, CacheMissPrefetchUsesSinglePoolTask) {
     EXPECT_EQ(pool->submitted_tasks(), 1);
 }
 
+TEST_F(RawExprCacheAdapterTest, ScalarPrefetchLoadsStorageBeforeEvaluation) {
+    ExprResCacheManager::SetEnabled(false);
+    const cachinglayer::ResourceUsage limit{16 * 1024 * 1024, 0};
+    auto dlist = std::make_shared<cachinglayer::internal::DList>(
+        false, limit, limit, limit, cachinglayer::EvictionConfig{});
+    int load_count = 0;
+    using Storage = index::SortedIndexStorage<std::string_view>;
+    auto load = [&](OpContext*) -> folly::coro::Task<std::unique_ptr<Storage>> {
+        ++load_count;
+        auto offsets = std::make_shared<const std::vector<int32_t>>(
+            std::initializer_list<int32_t>{0, 1, 0});
+        Storage::OpenArgs args;
+        args.state.valid_bitset = std::make_shared<TargetBitmap>(3, true);
+        args.state.idx_to_offsets = offsets->data();
+        args.state.idx_to_offsets_size = offsets->size();
+        args.state.idx_to_offsets_owner = std::move(offsets);
+        args.state.total_num_rows = 3;
+        args.storage.layout = index::SortedStringLayout::FromHeap(
+            {"apple", "banana"}, {{0, 2}, {1}}, 3);
+        co_return std::make_unique<Storage>(std::move(args));
+    };
+    index::IndexCacheConfig cache{
+        "scalar-expression-prefetch",
+        cachinglayer::Meta{cachinglayer::StorageType::MEMORY,
+                           cachinglayer::CellIdMappingMode::IDENTICAL,
+                           cachinglayer::CellDataType::OTHER,
+                           CacheWarmupPolicy::CacheWarmupPolicy_Disable,
+                           true},
+        {1024 * 1024, 0},
+        {},
+        128};
+    auto slot = std::make_shared<cachinglayer::CacheSlot<Storage>>(
+        std::make_unique<index::SingleCellIndexStorageTranslator<Storage>>(
+            cache, false, load),
+        dlist.get(),
+        true,
+        true,
+        true,
+        std::chrono::seconds(5),
+        std::chrono::seconds(5));
+    const index::ReaderCaps caps{.predicate = true,
+                                 .pattern_match = true,
+                                 .value_lookup = true,
+                                 .cheap_value_lookup = true};
+    auto owner = std::make_shared<index::SortedIndex<std::string_view>>(
+        slot,
+        index::IndexMetadata{caps, index::Domain::Row, DataType::VARCHAR, 3});
+    auto schema = std::make_shared<Schema>();
+    const auto field_id = schema->AddDebugField("text", DataType::VARCHAR);
+    auto field =
+        milvus::test::expr_index::StringField({"apple", "banana", "apple"});
+    milvus::test::expr_index::RawFieldFiles raw_files;
+    auto segment = segcore::CreateSealedSegment(schema);
+    segment->LoadFieldData(raw_files.Prepare(field_id, {field}));
+    milvus::test::expr_index::InstallIndex(*segment,
+                                           field_id,
+                                           DataType::VARCHAR,
+                                           {owner,
+                                            owner->CreateReader(nullptr),
+                                            std::string(index::families::kSort),
+                                            Config::object(),
+                                            caps});
+
+    proto::plan::GenericValue value;
+    value.set_string_val("apple");
+    auto logical = std::make_shared<expr::UnaryRangeFilterExpr>(
+        expr::ColumnInfo(field_id, DataType::VARCHAR),
+        proto::plan::OpType::Equal,
+        value);
+    OpContext op_ctx;
+    QueryContext query_context(
+        "scalar_index_prefetch", segment.get(), 3, MAX_TIMESTAMP);
+    query_context.set_op_context(&op_ctx);
+    ExecContext exec_context(&query_context);
+    auto compiled = CompileExpressions({logical}, &exec_context, {}, false);
+    ASSERT_EQ(compiled.size(), 1);
+    auto expression = std::dynamic_pointer_cast<SegmentExpr>(compiled[0]);
+    ASSERT_NE(expression, nullptr);
+    ASSERT_EQ(load_count, 0);
+    auto pool = std::make_shared<CountingCPUThreadPoolExecutor>(1);
+    compiled[0]->PrefetchAsync(pool);
+    compiled[0]->WaitPrefetch();
+    ASSERT_EQ(expression->GetExecPath(), ExprExecPath::ScalarIndex);
+    ASSERT_EQ(load_count, 1);
+    const auto scanned_bytes = op_ctx.storage_usage.scanned_total_bytes.load();
+    ASSERT_GT(scanned_bytes, 0);
+
+    EvalCtx eval_context(&exec_context);
+    VectorPtr result;
+    compiled[0]->Eval(eval_context, result);
+    auto column = std::dynamic_pointer_cast<ColumnVector>(result);
+    ASSERT_NE(column, nullptr);
+    ASSERT_EQ(column->size(), 3);
+    TargetBitmapView matches(column->GetRawData(), column->size());
+    TargetBitmapView valid(column->GetValidRawData(), column->size());
+    EXPECT_TRUE(valid.all());
+    EXPECT_EQ(matches.count(), 2);
+    EXPECT_TRUE(matches[0]);
+    EXPECT_TRUE(matches[2]);
+    EXPECT_EQ(load_count, 1);
+    EXPECT_EQ(op_ctx.storage_usage.scanned_total_bytes.load(), scanned_bytes);
+}
+
 TEST_F(RawExprCacheAdapterTest, RawPrefetchContributesToLatencyAdmission) {
     auto& manager = ExprResCacheManager::Instance();
     CacheConfig config;
@@ -797,6 +934,8 @@ TEST_F(RawExprCacheAdapterTest, RawPrefetchContributesToLatencyAdmission) {
 
     QueryContext query_context(
         "raw_cache_test", segment_.get(), kActiveCount, MAX_TIMESTAMP);
+    query_context.set_read_snapshot(
+        query_context.get_segment()->CaptureReadSnapshot());
     ExecContext exec_context(&query_context);
     EvalCtx eval_context(&exec_context);
     auto pool = std::make_shared<folly::CPUThreadPoolExecutor>(1);
@@ -833,6 +972,8 @@ TEST_F(RawExprCacheAdapterTest, RawPrefetchContributesToLatencyAdmission) {
 TEST_F(RawExprCacheAdapterTest, CacheHitRetainsBitmapsAcrossGlobalClear) {
     QueryContext query_context(
         "raw_cache_test", segment_.get(), kActiveCount, MAX_TIMESTAMP);
+    query_context.set_read_snapshot(
+        query_context.get_segment()->CaptureReadSnapshot());
     ExecContext exec_context(&query_context);
     EvalCtx eval_context(&exec_context);
 
@@ -870,6 +1011,8 @@ TEST_F(RawExprCacheAdapterTest, MemoryModeRejectsGrowingByDefault) {
 
     QueryContext query_context(
         "raw_cache_growing", growing.get(), kActiveCount, MAX_TIMESTAMP);
+    query_context.set_read_snapshot(
+        query_context.get_segment()->CaptureReadSnapshot());
     ExecContext exec_context(&query_context);
     EvalCtx eval_context(&exec_context);
 
@@ -925,6 +1068,8 @@ TEST_F(RawExprCacheAdapterTest, MemoryModeCachesGrowingWhenEnabled) {
 
     QueryContext query_context(
         "raw_cache_growing", growing.get(), kActiveCount, MAX_TIMESTAMP);
+    query_context.set_read_snapshot(
+        query_context.get_segment()->CaptureReadSnapshot());
     ExecContext exec_context(&query_context);
     EvalCtx eval_context(&exec_context);
 
@@ -981,6 +1126,8 @@ TEST_F(RawExprCacheAdapterTest, GrowingAdmissionSkipsCaptureForNewSnapshots) {
                                    growing.get(),
                                    active_count,
                                    MAX_TIMESTAMP);
+        query_context.set_read_snapshot(
+            query_context.get_segment()->CaptureReadSnapshot());
         ExecContext exec_context(&query_context);
         EvalCtx eval_context(&exec_context);
         auto input = std::make_shared<CountingRawExpr>(
@@ -1063,6 +1210,8 @@ TEST_F(RawExprCacheAdapterTest, DiskModeCachesSealedButRejectsGrowing) {
 
     QueryContext sealed_query(
         "raw_cache_disk_sealed", segment_.get(), kActiveCount, MAX_TIMESTAMP);
+    sealed_query.set_read_snapshot(
+        sealed_query.get_segment()->CaptureReadSnapshot());
     ExecContext sealed_exec_context(&sealed_query);
     EvalCtx sealed_eval_context(&sealed_exec_context);
     auto [sealed_miss_input, sealed_miss_adapter] =
@@ -1086,6 +1235,8 @@ TEST_F(RawExprCacheAdapterTest, DiskModeCachesSealedButRejectsGrowing) {
                     std::make_shared<InsertRecordProto>(*data.raw_));
     QueryContext growing_query(
         "raw_cache_disk_growing", growing.get(), kActiveCount, MAX_TIMESTAMP);
+    growing_query.set_read_snapshot(
+        growing_query.get_segment()->CaptureReadSnapshot());
     ExecContext growing_exec_context(&growing_query);
     EvalCtx growing_eval_context(&growing_exec_context);
     auto growing_input = std::make_shared<CountingRawExpr>(
@@ -1117,6 +1268,8 @@ TEST_F(RawExprCacheAdapterTest,
     ExprResCacheManager::SetEnabled(false);
     QueryContext disabled_query(
         "raw_cache_disabled", segment_.get(), kActiveCount, MAX_TIMESTAMP);
+    disabled_query.set_read_snapshot(
+        disabled_query.get_segment()->CaptureReadSnapshot());
     ExecContext disabled_context(&disabled_query);
     auto disabled = CompileExpressions({logical}, &disabled_context, {}, false);
     ASSERT_EQ(disabled.size(), 1);
@@ -1128,6 +1281,8 @@ TEST_F(RawExprCacheAdapterTest,
     ExprResCacheManager::SetEnabled(true);
     QueryContext enabled_query(
         "raw_cache_enabled", segment_.get(), kActiveCount, MAX_TIMESTAMP);
+    enabled_query.set_read_snapshot(
+        enabled_query.get_segment()->CaptureReadSnapshot());
     ExecContext enabled_context(&enabled_query);
     auto enabled = CompileExpressions({logical}, &enabled_context, {}, false);
     ASSERT_EQ(enabled.size(), 1);
@@ -1137,6 +1292,8 @@ TEST_F(RawExprCacheAdapterTest,
     QueryContext two_stage_query(
         "raw_cache_two_stage", segment_.get(), kActiveCount, MAX_TIMESTAMP);
     two_stage_query.set_enable_sub_expr_cache_write(false);
+    two_stage_query.set_read_snapshot(
+        two_stage_query.get_segment()->CaptureReadSnapshot());
     ExecContext two_stage_context(&two_stage_query);
     auto two_stage =
         CompileExpressions({logical}, &two_stage_context, {}, false);
@@ -1168,6 +1325,8 @@ TEST_F(RawExprCacheAdapterTest, InitialRawExpressionScopeIsDecorated) {
 
     QueryContext query_context(
         "raw_cache_scope", segment_.get(), kActiveCount, MAX_TIMESTAMP);
+    query_context.set_read_snapshot(
+        query_context.get_segment()->CaptureReadSnapshot());
     ExecContext exec_context(&query_context);
     auto compiled = CompileExpressions(logical_exprs, &exec_context, {}, false);
     ASSERT_EQ(compiled.size(), logical_exprs.size());
@@ -1182,6 +1341,8 @@ TEST_F(RawExprCacheAdapterTest,
     auto& manager = ExprResCacheManager::Instance();
     QueryContext query_context(
         "raw_cache_unscoped", segment_.get(), kActiveCount, MAX_TIMESTAMP);
+    query_context.set_read_snapshot(
+        query_context.get_segment()->CaptureReadSnapshot());
     ExecContext exec_context(&query_context);
     EvalCtx eval_context(&exec_context);
 
@@ -1193,8 +1354,10 @@ TEST_F(RawExprCacheAdapterTest,
         }
         // Other execution paths use plain ToString(). An entry without raw
         // null semantics must not alias either mode's lookup or insertion.
-        ExprResCacheManager::Key unscoped{segment_->get_segment_id(),
-                                          input->ToString()};
+        ExprResCacheManager::Key unscoped{
+            segment_->get_segment_id(),
+            input->ToString(),
+            segment_->CaptureReadSnapshot()->GetExprCacheGeneration()};
         ExprResCacheManager::Value value;
         value.active_count = kActiveCount;
         value.result = std::make_shared<TargetBitmap>(kActiveCount, true);
@@ -1226,6 +1389,8 @@ TEST_F(RawExprCacheAdapterTest,
 
     QueryContext query_context(
         "raw_cache_null_modes", segment_.get(), kActiveCount, MAX_TIMESTAMP);
+    query_context.set_read_snapshot(
+        query_context.get_segment()->CaptureReadSnapshot());
     ExecContext exec_context(&query_context);
     EvalCtx eval_context(&exec_context);
     auto pool = std::make_shared<folly::CPUThreadPoolExecutor>(1);
@@ -1316,6 +1481,8 @@ TEST_P(RawExprCacheNullRejectionTest, SkippedNullsRemainUnknownUnderNot) {
         expr::LogicalUnaryExpr::OpType::LogicalNot, predicate);
     QueryContext query_context(
         "raw_cache_nullable_skip", segment.get(), kActiveCount, MAX_TIMESTAMP);
+    query_context.set_read_snapshot(
+        query_context.get_segment()->CaptureReadSnapshot());
     ExecContext exec_context(&query_context);
 
     auto evaluate = [&](bool negate) {
@@ -1401,6 +1568,8 @@ TEST_F(RawExprCacheAdapterTest, CachedLikeChildrenStillUseBatchNgram) {
         expr::LogicalBinaryExpr::OpType::And, like("alpha"), like("beta"));
     QueryContext query_context(
         "cached_like_ngram", segment.get(), rows.size(), MAX_TIMESTAMP);
+    query_context.set_read_snapshot(
+        query_context.get_segment()->CaptureReadSnapshot());
     ExecContext exec_context(&query_context);
     auto compiled = CompileExpressions({logical}, &exec_context, {}, false);
     ASSERT_EQ(compiled.size(), 1);
@@ -1443,6 +1612,8 @@ TEST_F(RawExprCacheAdapterTest, UnaryAllSkipRawResultIsCapturedAndReused) {
 
     QueryContext query_context(
         "raw_cache_real_unary", segment_.get(), kActiveCount, MAX_TIMESTAMP);
+    query_context.set_read_snapshot(
+        query_context.get_segment()->CaptureReadSnapshot());
     ExecContext exec_context(&query_context);
 
     auto evaluate = [&](const ExprPtr& physical_expr) {

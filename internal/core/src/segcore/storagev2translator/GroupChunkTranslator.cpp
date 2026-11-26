@@ -14,9 +14,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 #include "segcore/storagev2translator/GroupChunkTranslator.h"
-#include "segcore/default_fs.h"
 
 #include <assert.h>
+#include <folly/coro/BlockingWait.h>
+#include <folly/coro/WithCancellation.h>
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
@@ -44,7 +45,7 @@
 #include "log/Log.h"
 #include "milvus-storage/common/config.h"
 #include "milvus-storage/common/constants.h"
-#include "milvus-storage/filesystem/fs.h"
+#include "milvus-storage/format/parquet/file_reader.h"
 #include "mmap/Types.h"
 #include "segcore/InsertRecord.h"
 #include "segcore/Utils.h"
@@ -52,9 +53,11 @@
 #include "segcore/storagev2translator/GroupCTMeta.h"
 #include "storage/EntryStreamUtils.h"
 #include "storage/KeyRetriever.h"
+#include "storage/StatusToErrorCode.h"
 #include "storage/LoadOverheadController.h"
-#include "segcore/storagev2translator/StorageV2Config.h"
+#include "storage/LoadConfig.h"
 #include "storage/Util.h"
+#include "storage/ThreadPools.h"
 
 namespace milvus::segcore::storagev2translator {
 
@@ -70,6 +73,7 @@ GroupChunkTranslator::GroupChunkTranslator(
     GroupChunkType group_chunk_type,
     const std::unordered_map<FieldId, FieldMeta>& field_metas,
     FieldDataInfo column_group_info,
+    milvus_storage::ArrowFileSystemPtr fs,
     std::vector<std::string> insert_files,
     std::vector<milvus_storage::RowGroupMetadataVector>&& row_group_meta_list,
     bool use_mmap,
@@ -100,6 +104,7 @@ GroupChunkTranslator::GroupChunkTranslator(
       }()),
       field_metas_(field_metas),
       column_group_info_(column_group_info),
+      fs_(std::move(fs)),
       insert_files_(std::move(insert_files)),
       row_group_meta_list_(std::move(row_group_meta_list)),
       meta_(num_fields,
@@ -142,6 +147,8 @@ GroupChunkTranslator::GroupChunkTranslator(
                                    })),
       writeback_mode_(writeback_mode),
       load_priority_(load_priority) {
+    AssertInfo(insert_files_.size() == row_group_meta_list_.size(),
+               "[StorageV2] Files must match row group metadata");
     // Build prefix sum for O(1) lookup in get_cid_from_file_and_row_group_index
     file_row_group_prefix_sum_.reserve(row_group_meta_list_.size() + 1);
     file_row_group_prefix_sum_.push_back(
@@ -237,7 +244,8 @@ GroupChunkTranslator::GroupChunkTranslator(
 
     // This legacy loader always uses synchronous workers. In async mode its
     // scratch remains request-local rather than borrowing admission limits.
-    if (!StorageV2AsyncLoadEnabled() && !meta_.chunk_memory_size_.empty()) {
+    if (!milvus::storage::LoadAsyncReadEnabled() &&
+        !meta_.chunk_memory_size_.empty()) {
         int64_t max_cell_sz = *std::max_element(
             meta_.chunk_memory_size_.begin(), meta_.chunk_memory_size_.end());
         auto max_overhead_size = loading_overhead_bytes(max_cell_sz);
@@ -276,19 +284,25 @@ GroupChunkTranslator::cell_id_of(milvus::cachinglayer::uid_t uid) const {
     return uid;
 }
 
-std::pair<milvus::cachinglayer::ResourceUsage,
-          milvus::cachinglayer::ResourceUsage>
-GroupChunkTranslator::estimated_byte_size_of_cell(
-    milvus::cachinglayer::cid_t cid) const {
-    assert(cid < meta_.chunk_memory_size_.size());
-    auto cell_sz = meta_.chunk_memory_size_[cid];
-    auto overhead_sz = loading_overhead_bytes(cell_sz);
-
-    if (use_mmap_) {
-        return {{0, cell_sz}, {overhead_sz, cell_sz}};
-    } else {
-        return {{cell_sz, 0}, {overhead_sz, 0}};
+milvus::cachinglayer::LoadingResourceUsage
+GroupChunkTranslator::estimated_loading_usage(
+    const std::vector<milvus::cachinglayer::cid_t>& cids) const {
+    int64_t cell_bytes = 0;
+    int64_t overhead_bytes = 0;
+    for (const auto cid : cids) {
+        assert(cid < meta_.chunk_memory_size_.size());
+        const auto size = meta_.chunk_memory_size_[cid];
+        cell_bytes += size;
+        overhead_bytes += loading_overhead_bytes(size);
     }
+    const cachinglayer::ResourceUsage overhead{overhead_bytes,
+                                               use_mmap_ ? cell_bytes : 0};
+    return {use_mmap_ ? cachinglayer::ResourceUsage{0, cell_bytes}
+                      : cachinglayer::ResourceUsage{cell_bytes, 0},
+            meta_.loading_overhead_config ? cachinglayer::ResourceUsage{}
+                                          : overhead,
+            meta_.loading_overhead_config ? overhead
+                                          : cachinglayer::ResourceUsage{}};
 }
 
 const std::string&
@@ -345,6 +359,21 @@ GroupChunkTranslator::get_global_row_group_idx(size_t file_idx,
 std::vector<std::pair<cachinglayer::cid_t, std::unique_ptr<milvus::GroupChunk>>>
 GroupChunkTranslator::get_cells(milvus::OpContext* ctx,
                                 const std::vector<cachinglayer::cid_t>& cids) {
+    return folly::coro::blockingWait(get_cells_async(ctx, cids));
+}
+
+folly::coro::Task<std::vector<
+    std::pair<cachinglayer::cid_t, std::unique_ptr<milvus::GroupChunk>>>>
+GroupChunkTranslator::get_cells_async(
+    milvus::OpContext* ctx, const std::vector<cachinglayer::cid_t>& cids) {
+    const auto priority = ResolveLoadPriority(ctx, load_priority_);
+    const auto caller_token =
+        co_await folly::coro::co_current_cancellation_token;
+    milvus::OpContext operation(folly::cancellation_token_merge(
+        ctx ? ctx->cancellation_token : folly::CancellationToken{},
+        caller_token));
+    operation.runtime_load_priority = priority;
+    ctx = &operation;
     // Check for cancellation before loading group chunks
     CheckCancellation(ctx, segment_id_, "GroupChunkTranslator::get_cells()");
 
@@ -352,6 +381,10 @@ GroupChunkTranslator::get_cells(milvus::OpContext* ctx,
                           std::unique_ptr<milvus::GroupChunk>>>
         cells;
     cells.reserve(cids.size());
+
+    if (cids.empty()) {
+        co_return cells;
+    }
 
     auto max_cid = *std::max_element(cids.begin(), cids.end());
     if (max_cid >= meta_.chunk_memory_size_.size()) {
@@ -379,64 +412,76 @@ GroupChunkTranslator::get_cells(milvus::OpContext* ctx,
     }
 
     // Submit cell-batch loading tasks
-    auto fs = milvus::segcore::GetDefaultArrowFileSystem();
-
-    auto factory = milvus::segcore::MakeFileReaderFactory(insert_files_, fs);
+    // Preserve file_idx while preparing only files touched by this operation.
+    // Batch tasks share the contexts, but the translator never retains them.
+    auto& pool = ThreadPools::GetExecutor(PriorityForLoad(priority));
+    auto prepare =
+        folly::via(&pool, [this, ctx, &cell_specs] {
+            PreparedParquetFiles prepared_files(insert_files_.size());
+            for (const auto& spec : cell_specs) {
+                if (prepared_files[spec.file_idx]) {
+                    continue;
+                }
+                CheckCancellation(
+                    ctx, segment_id_, "GroupChunkTranslator::prepare");
+                const auto& path = insert_files_[spec.file_idx];
+                auto result = milvus_storage::PreparedParquetFile::Open(
+                    fs_, path, storage::GetReaderProperties());
+                if (!result.ok()) {
+                    ThrowInfo(storage::ArrowStatusToErrorCode(result.status()),
+                              "[StorageV2] Failed to prepare file {}: {}",
+                              path,
+                              result.status().ToString());
+                }
+                prepared_files[spec.file_idx] = std::move(result).ValueOrDie();
+            }
+            return prepared_files;
+        }).semi();
+    // Issued blocking I/O must finish before the borrowed context/specs unwind.
+    auto prepared_files = co_await folly::coro::co_withCancellation(
+        folly::CancellationToken{}, std::move(prepare));
+    CheckCancellation(ctx, segment_id_, "GroupChunkTranslator::prepare");
+    auto factory =
+        milvus::segcore::MakeFileReaderFactory(std::move(prepared_files));
     auto finalize_cell =
-        [this](const std::vector<std::shared_ptr<arrow::Table>>& tables,
-               int64_t cid) {
+        [this, priority](
+            const std::vector<std::shared_ptr<arrow::Table>>& tables,
+            int64_t cid) {
             return load_group_chunk(
-                tables, static_cast<milvus::cachinglayer::cid_t>(cid));
+                tables,
+                static_cast<milvus::cachinglayer::cid_t>(cid),
+                priority);
         };
-    auto load_futures = milvus::segcore::LoadCellBatchAsync(
+    auto loaded_batches = co_await milvus::segcore::LoadCellBatchesAsync(
         ctx,
         std::move(cell_specs),
         std::move(factory),
         FieldDataLoadBatchSplitTargetBytes(),
-        load_priority_,
+        priority,
         std::move(finalize_cell));
 
     LOG_INFO(
-        "[StorageV2] translator {} submits {} batch tasks for column group {}",
+        "[StorageV2] translator {} completed {} batch tasks for column group "
+        "{}",
         key_,
-        load_futures.size(),
+        loaded_batches.size(),
         column_group_info_.field_id);
 
     std::unordered_map<cachinglayer::cid_t, std::unique_ptr<milvus::GroupChunk>>
         completed_cells;
     completed_cells.reserve(cids.size());
 
-    std::exception_ptr first_error = nullptr;
-    for (auto& future : load_futures) {
-        try {
-            auto loaded_cells = future.get();
-            if (first_error) {
-                continue;
-            }
-            for (auto& loaded_cell : loaded_cells) {
-                try {
-                    CheckCancellation(
-                        ctx, segment_id_, "GroupChunkTranslator::get_cells()");
-                    AssertInfo(loaded_cell.chunk != nullptr,
-                               "[StorageV2] translator {} cell {} is not "
-                               "finalized by batch task",
-                               key_,
-                               loaded_cell.cid);
-                    completed_cells[loaded_cell.cid] =
-                        std::move(loaded_cell.chunk);
-                } catch (...) {
-                    first_error = std::current_exception();
-                    break;
-                }
-            }
-        } catch (...) {
-            if (!first_error) {
-                first_error = std::current_exception();
-            }
+    for (auto& loaded_cells : loaded_batches) {
+        for (auto& loaded_cell : loaded_cells) {
+            CheckCancellation(
+                ctx, segment_id_, "GroupChunkTranslator::get_cells()");
+            AssertInfo(loaded_cell.chunk != nullptr,
+                       "[StorageV2] translator {} cell {} is not finalized by "
+                       "batch task",
+                       key_,
+                       loaded_cell.cid);
+            completed_cells[loaded_cell.cid] = std::move(loaded_cell.chunk);
         }
-    }
-    if (first_error) {
-        std::rethrow_exception(first_error);
     }
 
     for (auto cid : cids) {
@@ -448,13 +493,14 @@ GroupChunkTranslator::get_cells(milvus::OpContext* ctx,
         cells.emplace_back(cid, std::move(it->second));
     }
 
-    return cells;
+    co_return cells;
 }
 
 std::unique_ptr<milvus::GroupChunk>
 GroupChunkTranslator::load_group_chunk(
     const std::vector<std::shared_ptr<arrow::Table>>& tables,
-    const milvus::cachinglayer::cid_t cid) {
+    const milvus::cachinglayer::cid_t cid,
+    milvus::proto::common::LoadPriority priority) {
     assert(!tables.empty());
     // Use the first table's schema as reference for field iteration
     const auto& schema = tables[0]->schema();
@@ -563,7 +609,7 @@ GroupChunkTranslator::load_group_chunk(
                                     array_vecs,
                                     mmap_populate_,
                                     filepath.string(),
-                                    load_priority_,
+                                    priority,
                                     writeback_mode_);
     }
     return std::make_unique<milvus::GroupChunk>(std::move(chunks));

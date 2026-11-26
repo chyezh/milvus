@@ -5,6 +5,7 @@ import (
 
 	"github.com/cockroachdb/errors"
 
+	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/redo"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/shard/shards"
@@ -19,6 +20,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message/messageutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
 const interceptorName = "shard"
@@ -35,6 +37,7 @@ type shardInterceptor struct {
 func (impl *shardInterceptor) initOpTable() {
 	impl.ops = map[message.MessageType]interceptors.AppendInterceptorCall{
 		message.MessageTypeCreateCollection:   impl.handleCreateCollection,
+		message.MessageTypeRestoreSnapshot:    impl.handleRestoreSnapshot,
 		message.MessageTypeDropCollection:     impl.handleDropCollection,
 		message.MessageTypeCreatePartition:    impl.handleCreatePartition,
 		message.MessageTypeDropPartition:      impl.handleDropPartition,
@@ -47,8 +50,28 @@ func (impl *shardInterceptor) initOpTable() {
 		message.MessageTypeCreateSegment:      impl.handleCreateSegment,
 		message.MessageTypeFlush:              impl.handleFlushSegment,
 		message.MessageTypeFlushAll:           impl.handleFlushAllMessage,
+		message.MessageTypeAlterWAL:           impl.handleFlushAllMessage,
 		message.MessageTypeTruncateCollection: impl.handleTruncateCollectionMessage,
 	}
+}
+
+func (impl *shardInterceptor) handleRestoreSnapshot(ctx context.Context, msg message.MutableMessage, appendOp interceptors.Append) (message.MessageID, error) {
+	body := message.MustAsMutableRestoreSnapshotMessageV2(msg).MustBody()
+	if body.GetCollection() == nil {
+		return appendOp(ctx, msg)
+	}
+	if body.GetCollectionHeader() == nil || body.GetCollection().GetCollectionSchema() == nil {
+		return nil, status.NewUnrecoverableError("restore snapshot creation payload is incomplete")
+	}
+	id, err := appendOp(ctx, msg)
+	if err != nil {
+		return id, err
+	}
+	created := messageutil.RestoreCollectionMessage(msg.IntoImmutableMessage(id))
+	impl.shardManager.CreateCollection(created)
+	collectionID := created.Header().GetCollectionId()
+	impl.allocFunctionRunners(collectionID, created.VChannel(), impl.shardManager.GetCollectionSchemaSnapshot(collectionID))
+	return id, nil
 }
 
 // Name returns the name of the interceptor.
@@ -75,7 +98,8 @@ func (impl *shardInterceptor) handleCreateCollection(ctx context.Context, msg me
 	if body.GetCollectionSchema() == nil && len(body.GetSchema()) == 0 {
 		return nil, status.NewUnrecoverableError("create collection message does not contain collection schema")
 	}
-	schema := messageutil.MustGetSchemaFromCreateCollectionMessageBody(body)
+	// Validate legacy serialized schemas before appending the creation message.
+	messageutil.MustGetSchemaFromCreateCollectionMessageBody(body)
 	header := createCollectionMsg.Header()
 	if err := impl.shardManager.CheckIfCollectionCanBeCreated(header.GetCollectionId()); err != nil {
 		impl.shardManager.Logger().Warn(ctx, "collection already exists when creating collection", mlog.FieldCollectionID(header.GetCollectionId()))
@@ -89,10 +113,9 @@ func (impl *shardInterceptor) handleCreateCollection(ctx context.Context, msg me
 		return msgID, err
 	}
 	impl.shardManager.CreateCollection(message.MustAsImmutableCreateCollectionMessageV1(msg.IntoImmutableMessage(msgID)))
-	// Legacy CreateCollection messages keep the schema in the serialized Schema
-	// field instead of CollectionSchema. Resolve both formats so Alloc always
-	// registers the WAL lifecycle key before later schema updates.
-	impl.allocFunctionRunners(header.GetCollectionId(), createCollectionMsg.VChannel(), schema)
+	// Register the immutable snapshot retained by the shard manager, including
+	// schemas decoded from legacy CreateCollection messages.
+	impl.allocFunctionRunners(header.GetCollectionId(), createCollectionMsg.VChannel(), impl.shardManager.GetCollectionSchemaSnapshot(header.GetCollectionId()))
 	return msgID, nil
 }
 
@@ -354,7 +377,7 @@ func (impl *shardInterceptor) handleAlterCollection(ctx context.Context, msg mes
 		return msgID, err
 	}
 	if messageutil.IsSchemaChange(header) {
-		if schema := putCollectionMsg.MustBody().GetUpdates().GetSchema(); schema != nil {
+		if schema := impl.shardManager.GetCollectionSchemaSnapshot(header.GetCollectionId()); schema != nil {
 			impl.updateFunctionRunners(header.GetCollectionId(), putCollectionMsg.VChannel(), schema)
 		}
 	}
@@ -369,6 +392,15 @@ func (impl *shardInterceptor) handleCreateSegment(ctx context.Context, msg messa
 		// The segment can not be created at current shard, ignored
 		return nil, status.NewUnrecoverableError(err.Error())
 	}
+
+	// The worker can start before a schema DDL. The outer VChannel lock
+	// serializes this append (including registration) with the DDL.
+	schema := impl.shardManager.GetCollectionSchemaSnapshot(h.GetCollectionId())
+	h.SchemaVersion = schema.GetVersion()
+	if typeutil.HasTextField(schema) {
+		h.StorageVersion = storage.StorageV3
+	}
+	createSegmentMsg.OverwriteHeader(h)
 
 	msgID, err := appendOp(ctx, msg)
 	if err != nil {

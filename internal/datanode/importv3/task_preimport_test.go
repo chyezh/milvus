@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/bytedance/mockey"
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
@@ -35,6 +36,8 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
+	"github.com/milvus-io/milvus/pkg/v3/taskcommon"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 // TestPreImportV3TaskProducesImportV3FileStats pins the count-only preimport
@@ -62,7 +65,7 @@ func TestPreImportV3TaskProducesImportV3FileStats(t *testing.T) {
 		ImportFiles:   []*internalpb.ImportFile{{Id: 7, Paths: []string{"data.csv"}}},
 		StorageConfig: &indexpb.StorageConfig{},
 	}
-	task := NewPreImportTask(req, cm)
+	task := NewPreImportTask(req, cm, taskcommon.Resource{})
 
 	res, err := task.Execute(context.Background())
 	require.NoError(t, err)
@@ -102,7 +105,7 @@ func TestPreImportV3TaskSizeOnlyBackup(t *testing.T) {
 		ImportFiles: []*internalpb.ImportFile{{Id: 7, Paths: []string{"insert", "delta"}}},
 		Options:     []*commonpb.KeyValuePair{{Key: importutilv2.BackupFlag, Value: "true"}},
 	}
-	task := NewPreImportTask(req, cm)
+	task := NewPreImportTask(req, cm, taskcommon.Resource{})
 
 	res, err := task.Execute(context.Background())
 	require.NoError(t, err)
@@ -130,7 +133,7 @@ func TestPreImportCheapRowCountDispatchesByFileType(t *testing.T) {
 
 	var parquetCalls, numpyCalls int
 	parquetMock := mockey.Mock(parquet.NumRowsAndBytes).To(
-		func(context.Context, storage.ChunkManager, string) (int64, int64, int64, error) {
+		func(context.Context, storage.ChunkManager, *schemapb.CollectionSchema, string) (int64, int64, int64, error) {
 			parquetCalls++
 			return 11, 22, 33, nil
 		}).Build()
@@ -143,7 +146,7 @@ func TestPreImportCheapRowCountDispatchesByFileType(t *testing.T) {
 	defer numpyMock.UnPatch()
 
 	t.Run("parquet reads the footer", func(t *testing.T) {
-		rows, bytes, size, cheap, err := task.simpleRowCount(context.Background(),
+		rows, bytes, size, cheap, err := task.simpleRowCount(context.Background(), task.cm,
 			&internalpb.ImportFile{Paths: []string{"a.parquet"}})
 		require.NoError(t, err)
 		require.True(t, cheap)
@@ -153,7 +156,7 @@ func TestPreImportCheapRowCountDispatchesByFileType(t *testing.T) {
 	})
 
 	t.Run("numpy reads the header", func(t *testing.T) {
-		rows, bytes, size, cheap, err := task.simpleRowCount(context.Background(),
+		rows, bytes, size, cheap, err := task.simpleRowCount(context.Background(), task.cm,
 			&internalpb.ImportFile{Id: 9, Paths: []string{"a.npy"}})
 		require.NoError(t, err)
 		require.True(t, cheap)
@@ -164,7 +167,7 @@ func TestPreImportCheapRowCountDispatchesByFileType(t *testing.T) {
 
 	t.Run("csv and json take the scan path", func(t *testing.T) {
 		for _, path := range []string{"a.csv", "a.jsonl"} {
-			rows, bytes, size, cheap, err := task.simpleRowCount(context.Background(),
+			rows, bytes, size, cheap, err := task.simpleRowCount(context.Background(), task.cm,
 				&internalpb.ImportFile{Paths: []string{path}})
 			require.NoError(t, err)
 			require.False(t, cheap, "%s has no metadata fast path", path)
@@ -175,7 +178,7 @@ func TestPreImportCheapRowCountDispatchesByFileType(t *testing.T) {
 	})
 
 	t.Run("unknown extension is rejected", func(t *testing.T) {
-		_, _, _, cheap, err := task.simpleRowCount(context.Background(),
+		_, _, _, cheap, err := task.simpleRowCount(context.Background(), task.cm,
 			&internalpb.ImportFile{Paths: []string{"a.txt"}})
 		require.Error(t, err)
 		require.False(t, cheap)
@@ -183,4 +186,25 @@ func TestPreImportCheapRowCountDispatchesByFileType(t *testing.T) {
 
 	require.Equal(t, 1, parquetCalls, "only the parquet case may touch the parquet footer")
 	require.Equal(t, 1, numpyCalls, "only the numpy case may touch the numpy header")
+}
+
+// TestPreImportV3RejectsNumpyNamingNoField pins that a file set naming no
+// required field fails the preimport instead of finishing a zero-row job.
+func TestPreImportV3RejectsNumpyNamingNoField(t *testing.T) {
+	schema := &schemapb.CollectionSchema{Fields: []*schemapb.FieldSchema{
+		{FieldID: 100, Name: "pk", DataType: schemapb.DataType_Int64, IsPrimaryKey: true},
+	}}
+	// No expectation: the rejection must not open any object.
+	cm := mocks.NewChunkManager(t)
+	req := &datapb.PreImportRequest{
+		JobID: 1, TaskID: 2, CollectionID: 3,
+		Schema:        schema,
+		ImportFiles:   []*internalpb.ImportFile{{Id: 7, Paths: []string{"id.npy"}}},
+		StorageConfig: &indexpb.StorageConfig{},
+	}
+
+	_, err := NewPreImportTask(req, cm, taskcommon.Resource{}).Execute(context.Background())
+	require.Error(t, err)
+	require.True(t, errors.Is(err, merr.ErrImportFailed),
+		"a file set naming no field must be a terminal input error: %v", err)
 }

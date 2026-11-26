@@ -19,8 +19,6 @@ package querynodev2
 import (
 	"context"
 	"fmt"
-	"os"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -31,10 +29,10 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 	clientv3 "go.etcd.io/etcd/client/v3"
-	"gopkg.in/yaml.v3"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/json"
 	"github.com/milvus-io/milvus/internal/mocks/util/mock_segcore"
 	"github.com/milvus-io/milvus/internal/mocks/util/searchutil/mock_optimizers"
 	"github.com/milvus-io/milvus/internal/querynodev2/segments"
@@ -170,14 +168,18 @@ func (suite *QueryNodeSuite) TestInit_QueryHook() {
 	suite.node.queryHook = mockHook
 	suite.node.handleQueryHookEvent()
 
-	configPath := "../../configs/milvus.yaml"
-	origConfig, err := os.ReadFile(configPath)
-	suite.Require().NoError(err)
+	// Drive the create, update and delete cases through Save and Remove. Their
+	// runtime config events reach the same hook callbacks synchronously,
+	// without rewriting configs/milvus.yaml (which other test packages read) or
+	// relying on the background file refresh, which test builds do not run.
+	pt := paramtable.Get()
+	tuningKey := pt.AutoIndexConfig.AutoIndexTuningConfig.KeyPrefix + "1238"
+	searchKey := pt.AutoIndexConfig.AutoIndexSearchConfig.Key
 	suite.T().Cleanup(func() {
-		os.WriteFile(configPath, origConfig, 0o600) //nolint:gosec // configPath is a hardcoded test path
+		pt.Reset(tuningKey)
+		pt.Reset(searchKey)
 	})
 
-	yamlWriter := newYamlConfigWriter(configPath)
 	var x1, x2, x3 int32
 	suite.Equal(atomic.LoadInt32(&x1), int32(0))
 	suite.Equal(atomic.LoadInt32(&x2), int32(0))
@@ -188,42 +190,37 @@ func (suite *QueryNodeSuite) TestInit_QueryHook() {
 	}).Return(nil)
 
 	// create tuning conf
-	yamlWriter.set("autoIndex.params.tuning.1238", "xxxx")
-	yamlWriter.writeConfig()
+	pt.Save(tuningKey, "xxxx")
 	suite.Eventually(func() bool {
 		return atomic.LoadInt32(&x1) == int32(6)
-	}, 20*time.Second, time.Second)
+	}, 20*time.Second, 10*time.Millisecond)
 
 	mockHook.EXPECT().Init(mock.Anything).Run(func(params string) {
 		atomic.StoreInt32(&x2, 5)
 	}).Return(nil)
-	yamlWriter.set("autoIndex.params.search", "aaaa")
-	yamlWriter.writeConfig()
+	pt.Save(searchKey, "aaaa")
 	suite.Eventually(func() bool {
 		return atomic.LoadInt32(&x2) == int32(5)
-	}, 20*time.Second, time.Second)
-	yamlWriter.set("autoIndex.params.search", "")
-	yamlWriter.writeConfig()
+	}, 20*time.Second, 10*time.Millisecond)
+	pt.Save(searchKey, "")
 
 	atomic.StoreInt32(&x1, 0)
 	suite.Equal(atomic.LoadInt32(&x1), int32(0))
 	// update tuning conf
-	yamlWriter.set("autoIndex.params.tuning.1238", "yyyy")
-	yamlWriter.writeConfig()
+	pt.Save(tuningKey, "yyyy")
 	suite.Eventually(func() bool {
 		return atomic.LoadInt32(&x1) == int32(6)
-	}, 20*time.Second, time.Second)
+	}, 20*time.Second, 10*time.Millisecond)
 
 	mockHook.EXPECT().DeleteTuningConfig(mock.Anything).Run(func(params string) {
 		atomic.StoreInt32(&x3, 7)
 	}).Return(nil)
 
 	// delete tuning conf
-	yamlWriter.set("autoIndex.params.tuning", "")
-	yamlWriter.writeConfig()
+	pt.Remove(tuningKey)
 	suite.Eventually(func() bool {
 		return atomic.LoadInt32(&x3) == int32(7)
-	}, 20*time.Second, time.Second)
+	}, 20*time.Second, 10*time.Millisecond)
 }
 
 func (suite *QueryNodeSuite) TestStop() {
@@ -259,6 +256,7 @@ func (suite *QueryNodeSuite) TestStop() {
 
 func (suite *QueryNodeSuite) TestHasOtherActiveQueryNode() {
 	metaRoot := fmt.Sprintf("milvus-ut/test-has-other-active-qn/%d", time.Now().UnixNano())
+	defer suite.etcd.Delete(context.Background(), metaRoot, clientv3.WithPrefix())
 
 	// Create and register the current node's session.
 	sess := sessionutil.NewSessionWithEtcd(suite.node.ctx, metaRoot, suite.etcd)
@@ -277,29 +275,25 @@ func (suite *QueryNodeSuite) TestHasOtherActiveQueryNode() {
 	suite.NoError(err)
 	suite.False(hasOther)
 
-	// Simulate a second active query node by writing session data directly to etcd.
-	otherSessionKey := fmt.Sprintf("%s/session/%s-%d", metaRoot, typeutil.QueryNodeRole, 99999)
-	activeSessionJSON := `{"ServerID":99999,"ServerName":"querynode","Address":"addr2","Stopping":false}`
-	_, err = suite.etcd.Put(context.Background(), otherSessionKey, activeSessionJSON)
-	suite.Require().NoError(err)
-	defer suite.etcd.Delete(context.Background(), otherSessionKey)
-
 	// Another active node exists — should return true.
+	suite.putQueryNodeSession(metaRoot, 99999, false, nil)
 	hasOther, err = node.hasOtherActiveQueryNode()
 	suite.NoError(err)
 	suite.True(hasOther)
 
-	// Update the other session to stopping state.
-	stoppingSessionJSON := `{"ServerID":99999,"ServerName":"querynode","Address":"addr2","Stopping":true}`
-	_, err = suite.etcd.Put(context.Background(), otherSessionKey, stoppingSessionJSON)
-	suite.Require().NoError(err)
-
 	// Only stopping node exists — should return false.
+	suite.putQueryNodeSession(metaRoot, 99999, true, nil)
 	hasOther, err = node.hasOtherActiveQueryNode()
 	suite.NoError(err)
 	suite.False(hasOther)
 
-	// Context cancellation stops the retry loop instead of being treated as no active node.
+	// An active query node embedded in a streaming node means the cluster is still serving.
+	suite.putQueryNodeSession(metaRoot, 99998, false, map[string]string{sessionutil.LabelStreamingNodeEmbeddedQueryNode: "1"})
+	hasOther, err = node.hasOtherActiveQueryNode()
+	suite.NoError(err)
+	suite.True(hasOther)
+
+	// Context cancellation is an unknown answer, not "no active node".
 	canceledCtx, cancel := context.WithCancel(node.ctx)
 	cancel()
 	node.ctx = canceledCtx
@@ -307,39 +301,54 @@ func (suite *QueryNodeSuite) TestHasOtherActiveQueryNode() {
 	suite.Error(err)
 	suite.False(hasOther)
 
-	// Transient lookup errors should be retried inside the helper until a session
-	// result is available.
+	// A lookup error is returned at once; the migrate loop retries on its next tick.
 	node.ctx = context.Background()
 	attempts := 0
 	patch := mockey.Mock((*sessionutil.Session).GetSessions).To(func(_ *sessionutil.Session, _ context.Context, _ string) (map[string]*sessionutil.Session, int64, error) {
 		attempts++
-		if attempts == 1 {
-			return nil, 0, errors.New("transient session lookup failure")
-		}
-		return map[string]*sessionutil.Session{}, 0, nil
+		return nil, 0, errors.New("transient session lookup failure")
 	}).Build()
 	defer patch.UnPatch()
 
 	hasOther, err = node.hasOtherActiveQueryNode()
-	suite.NoError(err)
+	suite.Error(err)
 	suite.False(hasOther)
-	suite.Equal(2, attempts)
+	suite.Equal(1, attempts)
 }
 
-func (suite *QueryNodeSuite) TestStopStandaloneMigrateTimeout() {
-	// Set standalone role and a very short migrate timeout so test finishes quickly.
-	paramtable.SetRole(typeutil.StandaloneRole)
-	defer paramtable.SetRole("")
-	paramtable.Get().Save(paramtable.Get().QueryNodeCfg.GracefulStopTimeout.Key, "10")
-	paramtable.Get().Save(paramtable.Get().QueryNodeCfg.StandaloneMigrateDataTimeout.Key, "0s")
-	// Use a non-rocksmq WAL so the migrate data loop is entered.
-	paramtable.Get().Save("mq.type", "pulsar")
+// putQueryNodeSession writes a query node session directly to etcd.
+func (suite *QueryNodeSuite) putQueryNodeSession(metaRoot string, serverID int64, stopping bool, labels map[string]string) {
+	value, err := json.Marshal(&sessionutil.SessionRaw{
+		ServerID:     serverID,
+		ServerName:   typeutil.QueryNodeRole,
+		Address:      fmt.Sprintf("addr-%d", serverID),
+		Stopping:     stopping,
+		ServerLabels: labels,
+	})
+	suite.Require().NoError(err)
+	key := fmt.Sprintf("%s/session/%s-%d", metaRoot, typeutil.QueryNodeRole, serverID)
+	_, err = suite.etcd.Put(context.Background(), key, string(value))
+	suite.Require().NoError(err)
+}
 
-	metaRoot := fmt.Sprintf("milvus-ut/test-standalone-migrate/%d", time.Now().UnixNano())
+// prepareMigratingNode registers suite.node under metaRoot and loads a sealed
+// segment, so Stop enters the migrate data loop and checks for other active
+// query nodes right away. The caller deletes metaRoot from etcd.
+func (suite *QueryNodeSuite) prepareMigratingNode(metaRoot string, gracefulStopTimeout string) {
+	params := paramtable.Get()
+	params.Save(params.QueryNodeCfg.GracefulStopTimeout.Key, gracefulStopTimeout)
+	params.Save(params.QueryNodeCfg.MigrateDataTimeout.Key, "0s")
+	// Use a non-rocksmq WAL so the migrate data loop is entered.
+	params.Save("mq.type", "pulsar")
+	suite.T().Cleanup(func() {
+		params.Reset(params.QueryNodeCfg.GracefulStopTimeout.Key)
+		params.Reset(params.QueryNodeCfg.MigrateDataTimeout.Key)
+		params.Reset("mq.type")
+	})
 
 	// Set up a registered session on suite.node so GoingStop succeeds and the migrate loop runs.
 	sess := sessionutil.NewSessionWithEtcd(suite.node.ctx, metaRoot, suite.etcd)
-	sess.Init(typeutil.QueryNodeRole, "addr-standalone", false)
+	sess.Init(typeutil.QueryNodeRole, "addr-stopping", false)
 	sess.Register()
 	suite.node.session = sess
 	suite.node.serverID = sess.ServerID
@@ -351,7 +360,7 @@ func (suite *QueryNodeSuite) TestStopStandaloneMigrateTimeout() {
 	suite.Require().NoError(err)
 
 	// Put a sealed segment so the migrate data loop has something to wait for.
-	schema := mock_segcore.GenTestCollectionSchema("test_standalone_stop", schemapb.DataType_Int64, true)
+	schema := mock_segcore.GenTestCollectionSchema("test_migrate_stop", schemapb.DataType_Int64, true)
 	collection, err := segments.NewCollection(1, schema, nil, &querypb.LoadMetaInfo{
 		LoadType: querypb.LoadType_LoadCollection,
 	})
@@ -372,14 +381,78 @@ func (suite *QueryNodeSuite) TestStopStandaloneMigrateTimeout() {
 	)
 	suite.Require().NoError(err)
 	suite.node.manager.Segment.Put(context.Background(), segments.SegmentTypeSealed, segment)
+}
 
-	// Stop should exit as soon as the first successful session lookup confirms
-	// there is no other active query node.
+func (suite *QueryNodeSuite) TestStopWithoutOtherActiveQueryNode() {
+	for _, role := range []string{typeutil.StandaloneRole, typeutil.QueryNodeRole} {
+		suite.Run(role, func() {
+			paramtable.SetRole(role)
+			defer paramtable.SetRole("")
+			metaRoot := fmt.Sprintf("milvus-ut/test-stop-no-other-qn/%s/%d", role, time.Now().UnixNano())
+			defer suite.etcd.Delete(context.Background(), metaRoot, clientv3.WithPrefix())
+			suite.node = NewQueryNode(context.Background(), suite.factory)
+			suite.prepareMigratingNode(metaRoot, "10")
+			suite.putQueryNodeSession(metaRoot, 99999, true, nil)
+
+			// Stop should exit as soon as the first successful session lookup confirms
+			// there is no other active query node.
+			start := time.Now()
+			err := suite.node.Stop()
+			elapsed := time.Since(start)
+			suite.NoError(err)
+			suite.Less(elapsed, time.Second, "stop should exit after the first successful session lookup without other active query node")
+		})
+	}
+}
+
+func (suite *QueryNodeSuite) TestStopWaitsUntilOtherQueryNodeStops() {
+	metaRoot := fmt.Sprintf("milvus-ut/test-stop-other-qn-stops/%d", time.Now().UnixNano())
+	defer suite.etcd.Delete(context.Background(), metaRoot, clientv3.WithPrefix())
+	suite.prepareMigratingNode(metaRoot, "10")
+	embedded := map[string]string{sessionutil.LabelStreamingNodeEmbeddedQueryNode: "1"}
+	suite.putQueryNodeSession(metaRoot, 99999, false, embedded)
+
+	// The streaming node starts stopping later, as when a whole cluster is stopped.
+	go func() {
+		time.Sleep(time.Second)
+		suite.putQueryNodeSession(metaRoot, 99999, true, embedded)
+	}()
+
 	start := time.Now()
-	err = suite.node.Stop()
+	err := suite.node.Stop()
 	elapsed := time.Since(start)
 	suite.NoError(err)
-	suite.Less(elapsed, time.Second, "standalone stop should exit after the first successful empty session result")
+	suite.GreaterOrEqual(elapsed, time.Second, "stop should keep migrating while another active query node exists")
+	suite.Less(elapsed, 5*time.Second, "stop should exit once the other query node is stopping")
+}
+
+func (suite *QueryNodeSuite) TestStopKeepsMigratingOnLookupFailure() {
+	for _, role := range []string{typeutil.StandaloneRole, typeutil.QueryNodeRole} {
+		suite.Run(role, func() {
+			paramtable.SetRole(role)
+			defer paramtable.SetRole("")
+			metaRoot := fmt.Sprintf("milvus-ut/test-stop-lookup-failure/%s/%d", role, time.Now().UnixNano())
+			defer suite.etcd.Delete(context.Background(), metaRoot, clientv3.WithPrefix())
+			suite.node = NewQueryNode(context.Background(), suite.factory)
+			suite.prepareMigratingNode(metaRoot, "2")
+			attempts := atomic.Int32{}
+			patch := mockey.Mock((*sessionutil.Session).GetSessions).To(func(_ *sessionutil.Session, _ context.Context, _ string) (map[string]*sessionutil.Session, int64, error) {
+				attempts.Add(1)
+				return nil, 0, errors.New("etcd unavailable")
+			}).Build()
+			defer patch.UnPatch()
+
+			// A failed lookup must not skip migration, and must not block the loop,
+			// so the graceful stop timeout ends it.
+			start := time.Now()
+			err := suite.node.Stop()
+			elapsed := time.Since(start)
+			suite.NoError(err)
+			suite.GreaterOrEqual(elapsed, 2*time.Second)
+			suite.Less(elapsed, 5*time.Second)
+			suite.Greater(attempts.Load(), int32(0))
+		})
+	}
 }
 
 func TestResizeThreadPools(t *testing.T) {
@@ -403,7 +476,7 @@ func TestResizeThreadPools(t *testing.T) {
 func TestRegisterSegcoreConfigWatcher(t *testing.T) {
 	paramtable.Init()
 	pt := paramtable.Get()
-	node := &QueryNode{}
+	node := &QueryNode{ctx: t.Context()}
 
 	assert.NotPanics(t, func() { node.RegisterSegcoreConfigWatcher() })
 
@@ -427,60 +500,20 @@ func TestRegisterSegcoreConfigWatcher(t *testing.T) {
 		pt.Save(pt.CommonCfg.ArrowReaderRangeSizeLimitBytes.Key, "1048576")
 	})
 	assert.NotPanics(t, func() {
-		pt.Save(pt.CommonCfg.LoadTransientBudgetBytes.Key, "67108864")
+		pt.Save(pt.QueryNodeCfg.LoadTransientBudgetBytes.Key, "67108864")
 	})
-	pt.Reset(pt.CommonCfg.LoadTransientBudgetBytes.Key)
+	pt.Reset(pt.QueryNodeCfg.LoadTransientBudgetBytes.Key)
+
+	var cellTarget int64
+	updateCellTarget := mockey.Mock(initcore.UpdateLoadFieldDataCellTargetSizeBytes).To(func(bytes int64) {
+		cellTarget = bytes
+	}).Build()
+	defer updateCellTarget.UnPatch()
+	defer pt.Reset(pt.QueryNodeCfg.LoadFieldDataCellTargetSizeBytes.Key)
+	assert.NoError(t, pt.Save(pt.QueryNodeCfg.LoadFieldDataCellTargetSizeBytes.Key, "8388608"))
+	assert.EqualValues(t, 8388608, cellTarget)
 }
 
 func TestQueryNode(t *testing.T) {
 	suite.Run(t, new(QueryNodeSuite))
-}
-
-// yamlConfigWriter is a minimal viper replacement for test config manipulation.
-type yamlConfigWriter struct {
-	path string
-	data map[string]interface{}
-}
-
-func newYamlConfigWriter(path string) *yamlConfigWriter {
-	w := &yamlConfigWriter{path: path}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		panic(err)
-	}
-	w.data = make(map[string]interface{})
-	if err := yaml.Unmarshal(raw, &w.data); err != nil {
-		panic(err)
-	}
-	return w
-}
-
-func (w *yamlConfigWriter) set(key string, value interface{}) {
-	parts := strings.Split(key, ".")
-	m := w.data
-	for _, p := range parts[:len(parts)-1] {
-		child, ok := m[p]
-		if !ok {
-			child = make(map[string]interface{})
-			m[p] = child
-		}
-		if cm, ok := child.(map[string]interface{}); ok {
-			m = cm
-		} else {
-			nm := make(map[string]interface{})
-			m[p] = nm
-			m = nm
-		}
-	}
-	m[parts[len(parts)-1]] = value
-}
-
-func (w *yamlConfigWriter) writeConfig() {
-	out, err := yaml.Marshal(w.data)
-	if err != nil {
-		panic(err)
-	}
-	if err := os.WriteFile(w.path, out, 0o600); err != nil {
-		panic(err)
-	}
 }

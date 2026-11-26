@@ -18,6 +18,7 @@ package common
 
 import (
 	"encoding/binary"
+	"math"
 	"math/bits"
 	"strconv"
 	"strings"
@@ -252,6 +253,10 @@ const (
 	// Layout: {rootPath}/walsummary/{pchannel}/{chunk|manifest}/...
 	WalSummaryRootPath = "walsummary"
 
+	// PKIndexPath storage path const for primary key index manifests and SSTs.
+	// Layout: {rootPath}/pk_index/{collectionID}/{vchannel}/{manifest|sst}/...
+	PKIndexPath = "pk_index"
+
 	DefaultResourceGroupName = "__default_resource_group"
 )
 
@@ -295,6 +300,7 @@ var InternalStorageRootSegments = []string{
 	WoodpeckerRootPath,
 	ExternalRefreshResultsRootPath,
 	WalSummaryRootPath,
+	PKIndexPath,
 }
 
 // LocalOnlyStorageRootSegments lists top-level directories that are rooted at
@@ -327,6 +333,38 @@ const (
 	// Version 3: metadata moved to separate meta.json file (instead of parquet metadata)
 	JSONStatsDataFormatVersion = 3
 )
+
+const (
+	// TalonStageLoadOpen selects QueryNode format-reader open metadata.
+	TalonStageLoadOpen uint32 = 1 << 0
+	// TalonStageManifest selects QueryNode segment-manifest reads during load.
+	TalonStageManifest uint32 = 1 << 1
+	// TalonStagesAll enables every Talon read stage.
+	TalonStagesAll uint32 = math.MaxUint32
+)
+
+// ParseTalonEnabledStages parses comma-separated stage names into a mask.
+// Invalid names or combinations return zero and false, never a partial mask.
+func ParseTalonEnabledStages(value string) (uint32, bool) {
+	stages := strings.Split(value, ",")
+	var mask uint32
+	for _, stage := range stages {
+		switch strings.TrimSpace(stage) {
+		case "all":
+			if len(stages) != 1 {
+				return 0, false
+			}
+			mask = TalonStagesAll
+		case "load_open":
+			mask |= TalonStageLoadOpen
+		case "manifest":
+			mask |= TalonStageManifest
+		default:
+			return 0, false
+		}
+	}
+	return mask, true
+}
 
 // Search, Index parameter keys
 const (
@@ -385,12 +423,14 @@ const (
 const (
 	EnableAnalyzerKey = `enable_analyzer`
 	AnalyzerParamKey  = `analyzer_params`
+	EnableMatchKey    = `enable_match`
 )
 
 //  Collection properties key
 
 const (
 	CollectionTTLConfigKey      = "collection.ttl.seconds"
+	CollectionAutoReleaseTTIKey = "collection.autorelease.tti.seconds"
 	CollectionAutoCompactionKey = "collection.autocompaction.enabled"
 	CollectionDescription       = "collection.description"
 	CollectionExternalSource    = "collection.external_source"
@@ -474,6 +514,13 @@ const (
 	AllowInsertAutoIDKey    = "allow_insert_auto_id"
 	DisableFuncRuntimeCheck = "disable_func_runtime_check"
 	MaxFieldIDKey           = "max_field_id"
+
+	// StructSubFieldAddedKey is an internal type param of a struct sub-field
+	// that was added after its struct appeared (AlterCollectionSchema with a
+	// field named s[b]). Rootcoord writes it; users cannot set or delete
+	// it, and DescribeCollection does not return it. See
+	// internal/util/schemautil/struct_subfield_origin.go.
+	StructSubFieldAddedKey = "__struct_sub_field_added__"
 
 	// query mode
 	QueryModeKey       = "query_mode"
@@ -812,18 +859,6 @@ func IsDisableFuncRuntimeCheck(kvs ...*commonpb.KeyValuePair) (bool, error) {
 	return false, nil
 }
 
-func IsPartitionKeyIsolationPropEnabled(props map[string]string) (bool, error) {
-	val, ok := props[PartitionKeyIsolationKey]
-	if !ok {
-		return false, nil
-	}
-	iso, parseErr := strconv.ParseBool(val)
-	if parseErr != nil {
-		return false, merr.WrapErrParameterInvalidMsg("failed to parse partition key isolation property: %v", parseErr)
-	}
-	return iso, nil
-}
-
 func GetNamespaceMode(kvs ...*commonpb.KeyValuePair) string {
 	for _, kv := range kvs {
 		if kv.GetKey() == NamespaceModeKey {
@@ -843,6 +878,12 @@ func IsNamespaceModePartitionKey(kvs ...*commonpb.KeyValuePair) bool {
 
 func IsNamespaceModePartition(kvs ...*commonpb.KeyValuePair) bool {
 	return GetNamespaceMode(kvs...) == NamespaceModePartition
+}
+
+// UsesNamespacePartitionKey reports whether rows carry the namespace as a partition
+// key. In partition mode the physical partition identifies the namespace instead.
+func UsesNamespacePartitionKey(schema *schemapb.CollectionSchema) bool {
+	return schema.GetEnableNamespace() && IsNamespaceModePartitionKey(schema.GetProperties()...)
 }
 
 func ValidateNamespaceMode(kvs ...*commonpb.KeyValuePair) error {
@@ -1087,6 +1128,23 @@ func GetStringValue(kvs []*commonpb.KeyValuePair, key string) (result string, ex
 	return kv.GetValue(), true
 }
 
+// GetCollectionAutoReleaseTTI returns zero when the property is absent,
+// a positive duration for an override, or -time.Second to disable auto release.
+func GetCollectionAutoReleaseTTI(kvs []*commonpb.KeyValuePair) (time.Duration, error) {
+	var tti time.Duration
+	for _, kv := range kvs {
+		if kv.GetKey() != CollectionAutoReleaseTTIKey {
+			continue
+		}
+		seconds, err := strconv.ParseInt(kv.GetValue(), 10, 64)
+		if err != nil || seconds < -1 || seconds == 0 || seconds > math.MaxInt64/int64(time.Second) {
+			return 0, merr.WrapErrParameterInvalidMsg("%s must be -1 or an integer between 1 and %d seconds, got %q", CollectionAutoReleaseTTIKey, math.MaxInt64/int64(time.Second), kv.GetValue())
+		}
+		tti = time.Duration(seconds) * time.Second
+	}
+	return tti, nil
+}
+
 func GetCollectionTTL(kvs []*commonpb.KeyValuePair) (time.Duration, error) {
 	value, parseErr, exist := GetInt64Value(kvs, CollectionTTLConfigKey)
 	if parseErr != nil {
@@ -1098,20 +1156,6 @@ func GetCollectionTTL(kvs []*commonpb.KeyValuePair) (time.Duration, error) {
 	}
 
 	return time.Duration(value) * time.Second, nil
-}
-
-func GetCollectionTTLFromMap(kvs map[string]string) (time.Duration, error) {
-	value, exist := kvs[CollectionTTLConfigKey]
-	if !exist {
-		return -1, nil
-	}
-
-	ttlSeconds, err := strconv.ParseInt(value, 10, 64)
-	if err != nil {
-		return 0, err
-	}
-
-	return time.Duration(ttlSeconds) * time.Second, nil
 }
 
 func CheckNamespace(schema *schemapb.CollectionSchema, namespace *string) error {
